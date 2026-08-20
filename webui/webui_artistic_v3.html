@@ -247,8 +247,8 @@
 .meme-sidebar-section{font-size:11px;font-weight:700;color:var(--ink4);text-transform:uppercase;letter-spacing:0.08em;margin:14px 0 6px 4px}
 .meme-main{min-width:0}
 .meme-grid{min-height:180px}
-.meme-masonry{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:14px;grid-auto-rows:10px;grid-auto-flow:dense;align-items:start}
-.meme-masonry .meme-card-wrap{grid-row-end:span 16;will-change:grid-row-end}
+.meme-masonry{display:flex;flex-wrap:wrap;gap:14px;align-items:flex-start}
+.meme-masonry .meme-card-wrap{flex:1 1 calc(25% - 14px);min-width:150px;will-change:transform}
 .meme-filter-status{font-size:12px;color:var(--ink3);margin:6px 2px}
 .tag-cloud{display:flex;flex-wrap:wrap;gap:8px}
 .tag-pill{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border:1px solid var(--ink5);border-radius:999px;font-size:12px;color:var(--ink2);background:transparent;cursor:pointer;transition:all 150ms ease}
@@ -2889,19 +2889,9 @@ function mountMemes(root) {
   function applyMasonrySpan() {
     const grid = document.getElementById('memeGrid');
     if (!grid || !grid.classList.contains('meme-masonry')) return;
+    grid.style.gridAutoFlow = 'row';
     const cards = grid.querySelectorAll('.meme-card-wrap');
-    cards.forEach(card => {
-      const img = card.querySelector('img');
-      const setSpan = () => {
-        if (grid.classList.contains('meme-masonry')) {
-          const h = card.offsetHeight;
-          if (h > 0) card.style.gridRowEnd = 'span ' + Math.max(10, Math.round(h / 10));
-        }
-      };
-      if (img && img.complete && img.naturalWidth > 0) setSpan();
-      else if (img) { img.addEventListener('load', setSpan); setTimeout(setSpan, 800); }
-      else setTimeout(setSpan, 100);
-    });
+    cards.forEach(card => { card.style.gridRowEnd = 'auto'; });
   }
   function updateGroupStatus(memes) {
     const el = document.getElementById('memeGroupStatus');
