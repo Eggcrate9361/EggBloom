@@ -247,8 +247,7 @@
 .meme-sidebar-section{font-size:11px;font-weight:700;color:var(--ink4);text-transform:uppercase;letter-spacing:0.08em;margin:14px 0 6px 4px}
 .meme-main{min-width:0}
 .meme-grid{min-height:180px}
-.meme-masonry{display:flex;flex-wrap:wrap;gap:14px;align-items:flex-start}
-.meme-masonry .meme-card-wrap{flex:1 1 calc(25% - 14px);min-width:150px;will-change:transform}
+.meme-masonry{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:14px;grid-auto-rows:10px}
 .meme-filter-status{font-size:12px;color:var(--ink3);margin:6px 2px}
 .tag-cloud{display:flex;flex-wrap:wrap;gap:8px}
 .tag-pill{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border:1px solid var(--ink5);border-radius:999px;font-size:12px;color:var(--ink2);background:transparent;cursor:pointer;transition:all 150ms ease}
@@ -2886,13 +2885,7 @@ function mountMemes(root) {
     updateGroupStatus(memes);
     applyMasonrySpan();
   }
-  function applyMasonrySpan() {
-    const grid = document.getElementById('memeGrid');
-    if (!grid || !grid.classList.contains('meme-masonry')) return;
-    grid.style.gridAutoFlow = 'row';
-    const cards = grid.querySelectorAll('.meme-card-wrap');
-    cards.forEach(card => { card.style.gridRowEnd = 'auto'; });
-  }
+  function applyMasonrySpan() {}
   function updateGroupStatus(memes) {
     const el = document.getElementById('memeGroupStatus');
     if (!el) return;
@@ -2987,8 +2980,8 @@ function mountMemes(root) {
     showToast(r && r.ok === false ? '导入失败' : '已导入', r && r.ok === false ? 'error' : 'info');
     renderMemes(); loadDirs(); loadTagCloud();
   });
-  document.getElementById('memeViewGrid').addEventListener('click', () => { state.view = 'grid'; const g = document.getElementById('memeGrid'); g.className = 'grid grid-4 meme-grid'; g.querySelectorAll('.meme-card-wrap').forEach(c => { c.style.gridRowEnd = ''; }); });
-  document.getElementById('memeViewMasonry').addEventListener('click', () => { state.view = 'masonry'; document.getElementById('memeGrid').className = 'meme-masonry'; applyMasonrySpan(); });
+  document.getElementById('memeViewGrid').addEventListener('click', () => { state.view = 'grid'; document.getElementById('memeGrid').className = 'grid grid-4 meme-grid'; });
+  document.getElementById('memeViewMasonry').addEventListener('click', () => { state.view = 'masonry'; document.getElementById('memeGrid').className = 'meme-masonry'; });
   document.getElementById('memeGrid').addEventListener('dragover', e => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; });
   document.getElementById('memeGrid').addEventListener('drop', async e => { e.preventDefault(); const files = Array.from(e.dataTransfer.files || []).filter(f => f.type.startsWith('image/')); if (!files.length) return; for (const file of files) { const reader = new FileReader(); const dataUrl = await new Promise((resolve) => { reader.onload = () => resolve(reader.result); reader.readAsDataURL(file); }); const name = file.name; await API('/memes/upload', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name, data: dataUrl, tags: [] }) }); } renderMemes(); loadDirs(); loadTagCloud(); });
   document.addEventListener('keydown', e => { if (e.key === 'Escape') { const lb = document.querySelector('.lightbox'); if (lb) lb.remove(); } });
