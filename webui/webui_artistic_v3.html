@@ -233,12 +233,16 @@
 .emotion-tab:hover{border-color:var(--gold);color:var(--ink)}
 .emotion-tab.ac{background:var(--gold);color:var(--bg);border-color:var(--gold);font-weight:600}
 /* Meme card hover overlay */
-.meme-card-wrap{position:relative;border-radius:2px;overflow:hidden}
-.meme-card-wrap img{transition:transform 200ms ease,opacity 200ms ease}
-.meme-card-wrap:hover img{transform:scale(1.04);opacity:0.85}
-.meme-card-overlay{position:absolute;inset:0;background:linear-gradient(to top,rgba(0,0,0,0.55) 0%,transparent 50%);opacity:0;transition:opacity 180ms ease;display:flex;align-items:flex-end;justify-content:center;padding:8px;gap:6px}
-.meme-card-wrap:hover .meme-card-overlay{opacity:1}
-.meme-card-overlay .btn{font-size:11px;padding:4px 10px;backdrop-filter:blur(4px)}
+/* Meme grid - clean rewrite */
+.meme-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:12px;align-content:start}
+.meme-card{background:var(--surface);border:1px solid var(--ink5);border-radius:8px;overflow:hidden;cursor:pointer}
+.meme-card:hover{border-color:var(--gold)}
+.meme-card-img{width:100%;height:160px;overflow:hidden;background:var(--bg)}
+.meme-card-img img{width:100%;height:100%;object-fit:cover;display:block}
+.meme-card-name{font-size:12px;color:var(--ink2);padding:6px 8px 0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.meme-card-tags{padding:4px 8px 8px;display:flex;flex-wrap:wrap;gap:4px;min-height:26px}
+.meme-card-actions{display:none;padding:0 8px 8px;gap:4px}
+.meme-card:hover .meme-card-actions{display:flex}
 /* Meme page layout */
 .meme-layout{display:grid;grid-template-columns:240px 1fr;gap:16px;min-height:0}
 .meme-sidebar{background:var(--surface);border:1px solid var(--ink5);border-radius:12px;padding:14px;overflow:auto;max-height:calc(100vh - 200px);position:sticky;top:12px}
@@ -2735,266 +2739,196 @@ function mountGroupManager(root){
   window.__gmTimer = setInterval(loadGroups, 15000);
 }
 function mountMemes(root) {
-  root.innerHTML = '<div class="meme-layout">' +
-    '<aside class="meme-sidebar">' +
-      '<div class="field" style="padding:4px 0">' +
-        '<input class="input" id="memeSearch" placeholder="搜索标签、文件名、情绪...">' +
-      '</div>' +
-      '<div class="settings-section-label">目录</div>' +
-      '<div id="memeDirList" class="meme-sidebar-list"></div>' +
-      '<div class="settings-section-label" style="margin-top:14px">标签云</div>' +
-      '<div id="memeTagCloud" class="tag-cloud"></div>' +
-      '<div class="settings-section-label" style="margin-top:14px">情绪筛选</div>' +
-      '<div id="memeEmotions" class="meme-sidebar-list"></div>' +
-      '<div class="meme-sidebar-section">分组状态</div>' +
-      '<div id="memeGroupStatus" class="meme-filter-status">加载中...</div>' +
-    '</aside>' +
-    '<section class="meme-main">' +
-      '<div class="cmd-bar" style="justify-content:space-between;align-items:center">' +
-        '<div style="display:flex;gap:8px;align-items:center">' +
-          '<button class="btn" id="memeViewGrid">网格</button>' +
-          '<button class="btn" id="memeViewMasonry">Masonry</button>' +
-        '</div>' +
-        '<div style="display:flex;gap:8px;align-items:center">' +
-          '<label class="btn" style="cursor:pointer">导入图片<input type="file" id="memeImportFile" multiple accept="image/*" style="display:none"></label>' +
-          '<button class="btn" id="memeImportDir">导入目录</button>' +
-          '<button class="btn" id="memeImportUrl">URL 导入</button>' +
-          '<span class="badge muted" id="memeCount">0 张</span>' +
-        '</div>' +
-      '</div>' +
-      '<div id="memeFilterStatus" class="meme-filter-status"></div>' +
-      '<div id="memeGrid" class="grid grid-4 meme-grid"></div>' +
-    '</section>' +
+  root.innerHTML = '<div class="meme-layout">'+
+    '<aside class="meme-sidebar">'+
+      '<div class="field" style="padding:4px 0"><input class="input" id="memeSearch" placeholder="搜索标签、文件名、情绪..."></div>'+
+      '<div class="settings-section-label">目录</div>'+
+      '<div id="memeDirList" class="meme-sidebar-list"></div>'+
+      '<div class="settings-section-label" style="margin-top:14px">标签云</div>'+
+      '<div id="memeTagCloud" class="tag-cloud"></div>'+
+      '<div class="settings-section-label" style="margin-top:14px">情绪筛选</div>'+
+      '<div id="memeEmotions" class="meme-sidebar-list"></div>'+
+      '<div class="meme-sidebar-section">分组状态</div>'+
+      '<div id="memeGroupStatus" class="meme-filter-status">加载中...</div>'+
+    '</aside>'+
+    '<section class="meme-main">'+
+      '<div class="cmd-bar" style="justify-content:space-between;align-items:center">'+
+        '<div style="display:flex;gap:8px;align-items:center">'+
+          '<label class="btn" style="cursor:pointer">导入图片<input type="file" id="memeImportFile" multiple accept="image/*" style="display:none"></label>'+
+          '<button class="btn" id="memeImportDir">导入目录</button>'+
+          '<button class="btn" id="memeImportUrl">URL 导入</button>'+
+          '<span class="badge muted" id="memeCount">0 张</span>'+
+        '</div>'+
+      '</div>'+
+      '<div id="memeFilterStatus" class="meme-filter-status"></div>'+
+      '<div id="memeGrid" class="meme-grid"></div>'+
+    '</section>'+
   '</div>';
-  var state = { dir: '', emotion: '', query: '', view: 'grid', selected: new Set() };
-  async function loadEmotions() {
-    const r = await API('/memes');
-    const memes = (r && r.memes !== undefined ? r.memes : []) || [];
-    const emotions = new Set();
-    memes.forEach(m => {
-      const parts = (m.name || '').split('/');
-      if (parts.length >= 2) emotions.add(parts[1]);
-      (m.tags || []).forEach(t => { const s = String(t).trim(); if (s) emotions.add(s); });
-    });
-    const bar = document.getElementById('memeEmotions');
-    if (!bar) return;
-    const list = Array.from(emotions).sort((a, b) => a.localeCompare(b));
-    bar.innerHTML = '<button class="emotion-tab ac" data-emotion="">全部</button>' + list.map(e => '<button class="emotion-tab" data-emotion="' + escapeHtml(e) + '">' + escapeHtml(e) + '</button>').join('');
-    bar.querySelectorAll('.emotion-tab').forEach(btn => {
-      btn.addEventListener('click', () => {
-        bar.querySelectorAll('.emotion-tab').forEach(b => b.classList.remove('ac'));
-        btn.classList.add('ac');
-        state.emotion = btn.dataset.emotion || '';
-        renderMemes();
-      });
-    });
-  }
-  async function loadDirs() {
-    const r = await API('/memes');
-    const memes = (r && r.memes !== undefined ? r.memes : []) || [];
-    const counts = {};
-    memes.forEach(m => {
-      const name = m.name || '';
-      const parts = name.split('/');
-      const dir = parts.length > 1 ? parts[0] : '(根目录)';
-      counts[dir] = (counts[dir] || 0) + 1;
-    });
-    const bar = document.getElementById('memeDirList');
-    if (!bar) return;
-    const items = Object.keys(counts).sort((a, b) => (a === '(根目录)' ? -1 : b === '(根目录)' ? 1 : a.localeCompare(b)));
-    bar.innerHTML = '<button class="emotion-tab ac" data-dir="">全部 (' + memes.length + ')</button>' + items.map(d => '<button class="emotion-tab" data-dir="' + escapeHtml(d) + '">' + escapeHtml(d) + ' (' + counts[d] + ')</button>').join('');
-    bar.querySelectorAll('.emotion-tab').forEach(btn => {
-      btn.addEventListener('click', () => {
-        bar.querySelectorAll('.emotion-tab').forEach(b => b.classList.remove('ac'));
-        btn.classList.add('ac');
-        state.dir = btn.dataset.dir || '';
-        renderMemes();
-      });
-    });
-  }
-  async function loadTagCloud() {
-    const r = await API('/memes');
-    const memes = (r && r.memes !== undefined ? r.memes : []) || [];
-    const counts = {};
-    memes.forEach(m => (m.tags || []).forEach(t => { const s = String(t).trim(); if (s) counts[s] = (counts[s] || 0) + 1; }));
-    const bar = document.getElementById('memeTagCloud');
-    if (!bar) return;
-    const tags = Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 40);
-    bar.innerHTML = tags.map(([t, n]) => '<button class="tag-pill" data-tag="' + escapeHtml(t) + '">' + escapeHtml(t) + ' <span class="meta">' + n + '</span></button>').join('');
-    bar.querySelectorAll('.tag-pill').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const q = document.getElementById('memeSearch');
-        const base = (q && q.value ? q.value.trim() : '').toLowerCase();
-        const add = btn.dataset.tag;
-        const next = base ? (base + ' ' + add).trim() : add;
-        if (q) q.value = next;
-        state.query = next.toLowerCase();
-        renderMemes();
-      });
-    });
-  }
-  async function renderMemes() {
-    if (window._renderingMemes) return;
-    window._renderingMemes = true;
-    try {
-    const r = await API('/memes');
-    const memes = (r && r.memes !== undefined ? r.memes : []) || [];
-    updateMemeCount(memes.length);
-    const grid = document.getElementById('memeGrid');
-    if (!grid) return;
-    var list = memes;
-    if (state.dir) list = list.filter(m => (m.name || '').split('/')[0] === state.dir);
-    const query = (document.getElementById('memeSearch').value || '').trim().toLowerCase();
-    state.query = query;
-    const keywords = query ? query.split(/\s+/).filter(Boolean) : [];
-    if (keywords.length) list = list.filter(m => keywords.every(k => [m.name, ...(m.tags || [])].some(s => String(s).toLowerCase().includes(k))));
-    if (state.emotion) {
-      const emotionLower = state.emotion.toLowerCase();
-      list = list.filter(m => {
-        const parts = (m.name || '').split('/');
-        const dirEmotion = parts.length >= 2 ? parts[1] : '';
-        return dirEmotion.toLowerCase() === emotionLower || (m.tags || []).some(t => String(t).toLowerCase() === emotionLower);
-      });
+  var state = { dir: '', emotion: '', query: '', memes: [] };
+  var _grid = document.getElementById('memeGrid');
+  function esc(s){ return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+  function _render(){
+    var list = state.memes;
+    if (state.dir) list = list.filter(function(m){ return (m.name||'').split('/')[0] === state.dir; });
+    var q = state.query.toLowerCase();
+    if (q){
+      var kw = q.split(/\s+/).filter(Boolean);
+      if (kw.length) list = list.filter(function(m){ return kw.every(function(k){ return m.name.toLowerCase().includes(k) || (m.tags||[]).some(function(t){ return String(t).toLowerCase().includes(k); }); }); });
     }
-    const statusEl = document.getElementById('memeFilterStatus');
-    if (statusEl) {
-      const parts = [];
-      if (state.dir) parts.push('目录：' + state.dir);
-      if (state.emotion) parts.push('情绪：' + state.emotion);
-      if (keywords.length) parts.push('关键词：' + keywords.join(' '));
-      statusEl.textContent = parts.length ? (parts.join('  |  ') + '  →  ' + list.length + ' 个结果') : '共 ' + memes.length + ' 个表情';
+    if (state.emotion){
+      var e = state.emotion.toLowerCase();
+      list = list.filter(function(m){ var p=(m.name||'').split('/'); return (p.length>=2?p[1]:'').toLowerCase()===e || (m.tags||[]).some(function(t){return String(t).toLowerCase()===e;}); });
     }
-    if (!list.length) { grid.innerHTML = '<div class="empty" style="grid-column:1/-1"><div class="empty-icon">📦</div><div class="empty-title">还没有表情</div><div class="empty-desc">导入图片开始添加</div><div class="cmd-bar" style="margin-top:10px"><button class="btn primary" id="emptyImportBtn">立即导入</button></div></div>'; attachEmptyImport(); updateGroupStatus(memes); return; }
-    grid.innerHTML = list.map(m => {
-      const parts = (m.name || '').split('/');
-      const fileName = parts.pop() || m.name;
-      const dirPart = parts.join('/');
-      const url = '/memes' + (dirPart ? '/' + dirPart + '/' : '/') + encodeURI(fileName);
-      const tags = (m.tags || []).slice(0, 4).map(t => '<span class="tag-pill muted">' + escapeHtml(t) + '</span>').join('');
-      return '<div class="card meme-card-wrap" data-name="' + escapeHtml(m.name) + '" style="padding:10px">' +
-        '<div style="aspect-ratio:1;background:var(--bg);border:1px solid var(--ink5);overflow:hidden;border-radius:2px;position:relative">' +
-          '<img src="' + url + '" style="width:100%;height:100%;object-fit:cover;opacity:0.9" draggable="false">' +
-          '<div class="meme-card-overlay">' +
-            '<button class="btn ghost" data-meme-tag="' + escapeHtml(m.name) + '" style="color:var(--ink)">标签</button>' +
-            '<button class="btn ghost" data-meme-del="' + escapeHtml(m.name) + '" style="color:#ffaaaa">删除</button>' +
-          '</div>' +
-        '</div>' +
-        '<div style="margin-top:8px;font-size:12px;color:var(--ink2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + escapeHtml(m.name) + '">' + escapeHtml(m.name) + '</div>' +
-        '<div style="margin-top:6px;min-height:22px;display:flex;flex-wrap:wrap;gap:4px">' + tags + '</div>' +
+    var st = document.getElementById('memeFilterStatus');
+    if (st) st.textContent = list.length + ' / ' + state.memes.length + ' 个表情';
+    document.getElementById('memeCount').textContent = state.memes.length + ' 张';
+    if (!list.length){ _grid.innerHTML = '<div class="empty" style="grid-column:1/-1"><div class="empty-icon">📦</div><div class="empty-title">没有匹配的表情</div></div>'; return; }
+    _grid.innerHTML = list.map(function(m){
+      var parts = (m.name||'').split('/');
+      var fn = parts.pop() || m.name;
+      var dir = parts.join('/');
+      var url = '/memes' + (dir?'/'+dir+'/':'/') + encodeURI(fn);
+      var tags = (m.tags||[]).slice(0,4).map(function(t){ return '<span class="tag-pill muted">'+esc(t)+'</span>'; }).join('');
+      return '<div class="meme-card" data-name="'+esc(m.name)+'">'+
+        '<div class="meme-card-img"><img src="'+url+'" draggable="false"></div>'+
+        '<div class="meme-card-name">'+esc(m.name)+'</div>'+
+        '<div class="meme-card-tags">'+tags+'</div>'+
+        '<div class="meme-card-actions">'+
+          '<button class="btn ghost" data-meme-tag="'+esc(m.name)+'">标签</button>'+
+          '<button class="btn ghost" style="color:#ffaaaa" data-meme-del="'+esc(m.name)+'">删除</button>'+
+        '</div>'+
       '</div>';
     }).join('');
-    bindMemeActions();
-    openLightboxOnClick();
-    updateGroupStatus(memes);
-    applyMasonrySpan();
-  } finally { window._renderingMemes = false; }
-  }
-  function applyMasonrySpan() {}
-  var _renderMemesTimer = null;
-  function _debounceRenderMemes() {
-    clearTimeout(_renderMemesTimer);
-    _renderMemesTimer = setTimeout(renderMemes, 200);
-  }
-  function updateGroupStatus(memes) {
-    const el = document.getElementById('memeGroupStatus');
-    if (!el) return;
-    const emotionCounts = {};
-    memes.forEach(m => (m.tags || []).forEach(t => { const s = String(t).trim(); if (s) emotionCounts[s] = (emotionCounts[s] || 0) + 1; }));
-    const total = memes.length;
-    const grouped = Object.values(emotionCounts).reduce((a, b) => a + b, 0);
-    const parts = [];
-    parts.push('总计 ' + total + ' 张');
-    parts.push('已标记 ' + grouped + ' 次');
-    parts.push('未分组 ' + Math.max(0, total - Object.keys(emotionCounts).length) + ' 个标签');
-    el.textContent = parts.join('  |  ');
-  }
-  function attachEmptyImport() {
-    const btn = document.getElementById('emptyImportBtn');
-    if (btn) btn.addEventListener('click', () => document.getElementById('memeImportFile') && document.getElementById('memeImportFile').click());
-  }
-  function bindMemeActions() {
-    const grid = document.getElementById('memeGrid');
-    if (!grid) return;
-    grid.querySelectorAll('[data-meme-del]').forEach(btn => {
-      btn.addEventListener('click', async () => {
-        const name = btn.dataset.memeDel;
-        const ok = await new Promise(resolve => showConfirm('删除表情 ' + name + ' ?', resolve));
+    _grid.querySelectorAll('[data-meme-del]').forEach(function(b){
+      b.addEventListener('click', async function(){
+        var name = b.dataset.memeDel;
+        var ok = await new Promise(function(r){ showConfirm('删除 '+name+' ?', r); });
         if (!ok) return;
-        const r = await API('/memes/delete', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name }) });
-        showToast(r && r.ok === false ? '删除失败' : '已删除', r && r.ok === false ? 'error' : 'info');
-        renderMemes(); loadDirs(); loadTagCloud();
+        await API('/memes/delete', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:name})});
+        state.memes = (await API('/memes')).memes || [];
+        _render(); _loadSidebar();
       });
     });
-    grid.querySelectorAll('[data-meme-tag]').forEach(btn => {
-      btn.addEventListener('click', async () => {
-        const name = btn.dataset.memeTag;
-        const r = await API('/memes/tags', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name, tags: [] }) });
-        const current = (r && r.tags !== undefined ? r.tags : []) || [];
-        const raw = await showPrompt('编辑标签: ' + name, current.join(', '));
+    _grid.querySelectorAll('[data-meme-tag]').forEach(function(b){
+      b.addEventListener('click', async function(){
+        var name = b.dataset.memeTag;
+        var r = await API('/memes/tags', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:name,tags:[]})});
+        var cur = (r&&r.tags)||[];
+        var raw = await new Promise(function(r){ showPrompt('编辑标签: '+name, cur.join(', ')).then(r); });
         if (raw === null) return;
-        const tags = raw.split(',').map(s => s.trim()).filter(Boolean);
-        const rr = await API('/memes/tags', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name, tags }) });
-        showToast(rr && rr.ok === false ? '保存失败' : '标签已更新', rr && rr.ok === false ? 'error' : 'info');
-        renderMemes(); loadTagCloud();
+        var tags = raw.split(',').map(function(s){return s.trim();}).filter(Boolean);
+        await API('/memes/tags', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:name,tags:tags})});
+        state.memes = (await API('/memes')).memes || [];
+        _render(); _loadSidebar();
       });
     });
-  }
-  function openLightboxOnClick() {
-    const grid = document.getElementById('memeGrid');
-    if (!grid) return;
-    grid.querySelectorAll('.meme-card-wrap').forEach(card => {
-      card.addEventListener('click', e => {
+    _grid.querySelectorAll('.meme-card').forEach(function(c){
+      c.addEventListener('click', function(e){
         if (e.target.closest('button')) return;
-        const img = card.querySelector('img');
-        const name = card.dataset.name || '';
-        const url = img ? img.src : '';
-        const overlay = document.createElement('div');
-        overlay.className = 'lightbox';
-        overlay.innerHTML = '<div class="lightbox-backdrop"></div><div class="lightbox-body"><img src="' + escapeHtml(url) + '"><div class="lightbox-meta">' + escapeHtml(name) + '</div><div class="cmd-bar"><button class="btn ghost" data-lb-tag="' + escapeHtml(name) + '">标签</button><button class="btn ghost" data-lb-del="' + escapeHtml(name) + '" style="color:#ffaaaa">删除</button><button class="btn primary" data-lb-close>关闭</button></div></div>';
-        document.body.appendChild(overlay);
-        overlay.addEventListener('click', e => { if (e.target.closest('[data-lb-close]') || e.target === overlay.querySelector('.lightbox-backdrop')) overlay.remove(); });
-        overlay.querySelector('[data-lb-del]') && overlay.querySelector('[data-lb-del]').addEventListener('click', async () => { const ok = await new Promise(resolve => showConfirm('删除表情 ' + name + ' ?', resolve)); if (!ok) return; const rr = await API('/memes/delete', { method:'POST', headers:{'Content-Type':'application/json' }, body: JSON.stringify({ name }) }); showToast(rr && rr.ok === false ? '删除失败' : '已删除', rr && rr.ok === false ? 'error' : 'info'); overlay.remove(); renderMemes(); loadDirs(); loadTagCloud(); });
-        overlay.querySelector('[data-lb-tag]') && overlay.querySelector('[data-lb-tag]').addEventListener('click', async () => { const r = await API('/memes/tags', { method:'POST', headers:{'Content-Type':'application/json' }, body: JSON.stringify({ name, tags: [] }) }); const current = (r && r.tags !== undefined ? r.tags : []) || []; const raw = await showPrompt('编辑标签: ' + name, current.join(', ')); if (raw === null) return; const tags = raw.split(',').map(s => s.trim()).filter(Boolean); const rr = await API('/memes/tags', { method:'POST', headers:{'Content-Type':'application/json' }, body: JSON.stringify({ name, tags }) }); showToast(rr && rr.ok === false ? '保存失败' : '标签已更新', rr && rr.ok === false ? 'error' : 'info'); renderMemes(); loadTagCloud(); });
+        var img = c.querySelector('img');
+        var name = c.dataset.name || '';
+        var url = img ? img.src : '';
+        var ov = document.createElement('div');
+        ov.className = 'lightbox';
+        ov.innerHTML = '<div class="lightbox-backdrop"></div><div class="lightbox-body"><img src="'+esc(url)+'"><div class="lightbox-meta">'+esc(name)+'</div><div class="cmd-bar"><button class="btn ghost" data-lb-tag="'+esc(name)+'">标签</button><button class="btn ghost" style="color:#ffaaaa" data-lb-del="'+esc(name)+'">删除</button><button class="btn primary" data-lb-close>关闭</button></div></div>';
+        document.body.appendChild(ov);
+        ov.addEventListener('click', function(e2){ if (e2.target.closest('[data-lb-close]')||e2.target===ov.querySelector('.lightbox-backdrop')) ov.remove(); });
+        var lbDel = ov.querySelector('[data-lb-del]');
+        if (lbDel) lbDel.addEventListener('click', async function(){ var ok = await new Promise(function(r){showConfirm('删除 '+name+' ?',r);}); if(!ok)return; await API('/memes/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:name})}); state.memes=(await API('/memes')).memes||[]; ov.remove(); _render(); _loadSidebar(); });
+        var lbTag = ov.querySelector('[data-lb-tag]');
+        if (lbTag) lbTag.addEventListener('click', async function(){ var r=await API('/memes/tags',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:name,tags:[]})}); var cur=(r&&r.tags)||[]; var raw=await new Promise(function(r2){showPrompt('编辑标签: '+name,cur.join(', ')).then(r2);}); if(raw===null)return; var tags=raw.split(',').map(function(s){return s.trim();}).filter(Boolean); await API('/memes/tags',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:name,tags:tags})}); state.memes=(await API('/memes')).memes||[]; ov.remove(); _render(); _loadSidebar(); });
       });
     });
   }
-  document.getElementById('memeSearch').addEventListener('input', () => _debounceRenderMemes());
-  const importFile = document.getElementById('memeImportFile');
-  if (importFile) importFile.addEventListener('change', async e => {
-    const files = e.target.files || []; if (!files.length) return;
-    for (const file of files) {
-      const reader = new FileReader();
-      const dataUrl = await new Promise((resolve) => { reader.onload = () => resolve(reader.result); reader.readAsDataURL(file); });
-      const name = file.name;
-      const r = await API('/memes/upload', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name, data: dataUrl, tags: [] }) });
-      showToast(r && r.ok === false ? (name + ' 失败') : (name + ' 已导入'), r && r.ok === false ? 'error' : 'info');
+  function _loadSidebar(){
+    var memes = state.memes;
+    var dirs = {}, tags = {}, emos = {};
+    memes.forEach(function(m){
+      var d = (m.name||'').split('/')[0] || '(根目录)';
+      dirs[d] = (dirs[d]||0)+1;
+      (m.tags||[]).forEach(function(t){ var s=String(t).trim(); if(s){ tags[s]=(tags[s]||0)+1; emos[s]=(emos[s]||0)+1; } });
+      var p = (m.name||'').split('/');
+      if (p.length>=2) emos[p[1]] = (emos[p[1]]||0)+1;
+    });
+    var dl = document.getElementById('memeDirList');
+    if (dl){
+      var keys = Object.keys(dirs).sort(function(a,b){ return a==='(根目录)'?-1:b==='(根目录)'?1:a.localeCompare(b); });
+      dl.innerHTML = '<button class="emotion-tab ac" data-dir="">全部 ('+memes.length+')</button>'+keys.map(function(d){ return '<button class="emotion-tab" data-dir="'+esc(d)+'">'+esc(d)+' ('+dirs[d]+')</button>'; }).join('');
+      dl.querySelectorAll('.emotion-tab').forEach(function(b){
+        b.addEventListener('click', function(){
+          dl.querySelectorAll('.emotion-tab').forEach(function(x){x.classList.remove('ac');});
+          b.classList.add('ac');
+          state.dir = b.dataset.dir||'';
+          _render();
+        });
+      });
     }
-    renderMemes(); loadDirs(); loadTagCloud();
+    var tc = document.getElementById('memeTagCloud');
+    if (tc){
+      var tarr = Object.entries(tags).sort(function(a,b){return b[1]-a[1];}).slice(0,40);
+      tc.innerHTML = tarr.map(function(t){ return '<button class="tag-pill" data-tag="'+esc(t[0])+'">'+esc(t[0])+' <span class="meta">'+t[1]+'</span></button>'; }).join('');
+      tc.querySelectorAll('.tag-pill').forEach(function(b){
+        b.addEventListener('click', function(){
+          var q = document.getElementById('memeSearch');
+          var base = (q?q.value:'').trim();
+          var add = b.dataset.tag;
+          if (q) q.value = base ? (base+' '+add).trim() : add;
+          state.query = (q?q.value:'').toLowerCase();
+          _render();
+        });
+      });
+    }
+    var el = document.getElementById('memeEmotions');
+    if (el){
+      var earr = Object.keys(emos).sort(function(a,b){return a.localeCompare(b);});
+      el.innerHTML = '<button class="emotion-tab ac" data-emotion="">全部</button>'+earr.map(function(e){ return '<button class="emotion-tab" data-emotion="'+esc(e)+'">'+esc(e)+'</button>'; }).join('');
+      el.querySelectorAll('.emotion-tab').forEach(function(b){
+        b.addEventListener('click', function(){
+          el.querySelectorAll('.emotion-tab').forEach(function(x){x.classList.remove('ac');});
+          b.classList.add('ac');
+          state.emotion = b.dataset.emotion||'';
+          _render();
+        });
+      });
+    }
+    var gs = document.getElementById('memeGroupStatus');
+    if (gs) gs.textContent = '总计 '+memes.length+' 张  |  已标记 '+Object.keys(tags).length+' 个标签';
+  }
+  document.getElementById('memeSearch').addEventListener('input', function(){ state.query = this.value.toLowerCase(); _render(); });
+  var importFile = document.getElementById('memeImportFile');
+  if (importFile) importFile.addEventListener('change', async function(e){
+    var files = e.target.files||[];
+    for (var i=0;i<files.length;i++){
+      (function(file){
+        var reader = new FileReader();
+        reader.onload = async function(){ var dataUrl=reader.result; await API('/memes/upload',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:file.name,data:dataUrl,tags:[]})}); };
+        reader.readAsDataURL(file);
+      })(files[i]);
+    }
+    state.memes = (await API('/memes')).memes || [];
+    _render(); _loadSidebar();
   });
-  const importDirBtn = document.getElementById('memeImportDir');
-  if (importDirBtn) importDirBtn.addEventListener('click', async () => {
-    const path = await showPrompt('导入目录源路径', '');
-    if (path === null) return;
-    const category = await showPrompt('目标分类目录', '');
-    const keep = await new Promise(resolve => showConfirm('保留目录结构？', resolve));
-    showToast('目录导入仅示例，请对接后端 /memes/import-dir', 'info');
+  document.getElementById('memeGrid').addEventListener('dragover', function(e){ e.preventDefault(); e.dataTransfer.dropEffect='copy'; });
+  document.getElementById('memeGrid').addEventListener('drop', async function(e){
+    e.preventDefault();
+    var files = Array.from(e.dataTransfer.files||[]).filter(function(f){return f.type.startsWith('image/');});
+    if (!files.length) return;
+    for (var i=0;i<files.length;i++){
+      (function(file){
+        var reader = new FileReader();
+        reader.onload = async function(){ var dataUrl=reader.result; await API('/memes/upload',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:file.name,data:dataUrl,tags:[]})}); };
+        reader.readAsDataURL(file);
+      })(files[i]);
+    }
+    state.memes = (await API('/memes')).memes || [];
+    _render(); _loadSidebar();
   });
-  const importUrlBtn = document.getElementById('memeImportUrl');
-  if (importUrlBtn) importUrlBtn.addEventListener('click', async () => {
-    const url = await showPrompt('图片 URL', '');
-    if (url === null) return;
-    const name = await showPrompt('保存名称', '');
-    if (name === null) return;
-    const r = await API('/memes/upload', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name, data: url, tags: [] }) });
-    showToast(r && r.ok === false ? '导入失败' : '已导入', r && r.ok === false ? 'error' : 'info');
-    renderMemes(); loadDirs(); loadTagCloud();
-  });
-  document.getElementById('memeViewGrid').addEventListener('click', () => { state.view = 'grid'; document.getElementById('memeGrid').className = 'grid grid-4 meme-grid'; });
-  document.getElementById('memeViewMasonry').addEventListener('click', () => { state.view = 'masonry'; document.getElementById('memeGrid').className = 'meme-masonry'; });
-  document.getElementById('memeGrid').addEventListener('dragover', e => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; });
-  document.getElementById('memeGrid').addEventListener('drop', async e => { e.preventDefault(); const files = Array.from(e.dataTransfer.files || []).filter(f => f.type.startsWith('image/')); if (!files.length) return; for (const file of files) { const reader = new FileReader(); const dataUrl = await new Promise((resolve) => { reader.onload = () => resolve(reader.result); reader.readAsDataURL(file); }); const name = file.name; await API('/memes/upload', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name, data: dataUrl, tags: [] }) }); } renderMemes(); loadDirs(); loadTagCloud(); });
-  document.addEventListener('keydown', e => { if (e.key === 'Escape') { const lb = document.querySelector('.lightbox'); if (lb) lb.remove(); } });
-  Promise.all([loadDirs(), loadEmotions(), loadTagCloud()]).then(function(){ renderMemes(); }).catch(function(e){ renderMemes(); });
+  document.addEventListener('keydown', function(e){ if (e.key==='Escape'){ var lb=document.querySelector('.lightbox'); if(lb) lb.remove(); }});
+  (async function init(){
+    state.memes = (await API('/memes')).memes || [];
+    _loadSidebar();
+    _render();
+  })();
 }
 
   function updateMemeCount(total) {
