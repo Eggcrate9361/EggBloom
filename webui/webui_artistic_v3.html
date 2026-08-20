@@ -234,15 +234,18 @@
 .emotion-tab.ac{background:var(--gold);color:var(--bg);border-color:var(--gold);font-weight:600}
 /* Meme card hover overlay */
 /* Meme grid - clean rewrite */
-.meme-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:12px;align-content:start}
-.meme-card{background:var(--surface);border:1px solid var(--ink5);border-radius:8px;overflow:hidden;cursor:pointer}
-.meme-card:hover{border-color:var(--gold)}
-.meme-card-img{width:100%;height:160px;overflow:hidden;background:var(--bg)}
-.meme-card-img img{width:100%;height:100%;object-fit:cover;display:block}
-.meme-card-name{font-size:12px;color:var(--ink2);padding:6px 8px 0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.meme-card-tags{padding:4px 8px 8px;display:flex;flex-wrap:wrap;gap:4px;min-height:26px}
-.meme-card-actions{display:none;padding:0 8px 8px;gap:4px}
+.meme-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;align-content:start}
+.meme-card{background:var(--surface);border:1px solid var(--ink5);border-radius:6px;overflow:hidden;cursor:pointer;transition:transform 150ms ease,border-color 150ms ease,box-shadow 150ms ease}
+.meme-card:hover{transform:translateY(-2px);border-color:var(--gold);box-shadow:0 4px 16px rgba(201,169,110,0.15)}
+.meme-card-img{width:100%;height:140px;overflow:hidden;background:var(--bg)}
+.meme-card-img img{width:100%;height:100%;object-fit:cover;display:block;transition:transform 200ms ease}
+.meme-card:hover .meme-card-img img{transform:scale(1.06)}
+.meme-card-name{font-size:11px;color:var(--ink2);padding:4px 6px 0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.meme-card-tags{padding:3px 6px 6px;display:flex;flex-wrap:wrap;gap:3px;min-height:22px}
+.meme-card-tags .tag-pill{font-size:10px;padding:2px 6px}
+.meme-card-actions{display:none;padding:0 6px 6px;gap:3px}
 .meme-card:hover .meme-card-actions{display:flex}
+.meme-card-actions .btn{font-size:10px;padding:2px 8px}
 /* Meme page layout */
 .meme-layout{display:grid;grid-template-columns:240px 1fr;gap:16px;min-height:0}
 .meme-sidebar{background:var(--surface);border:1px solid var(--ink5);border-radius:12px;padding:14px;overflow:auto;max-height:calc(100vh - 200px);position:sticky;top:12px}
