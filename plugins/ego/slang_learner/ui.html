@@ -1,0 +1,701 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>黑话学习器</title>
+  <style>
+    :root{
+      --bg:#0a0a0f;--surface:#111118;--paper:#16161f;--elevated:#1e1e28;--input:#14141b;
+      --ink:#f0f0f5;--ink2:#b8b8c8;--ink3:#8a8f9a;--ink4:#3a3f48;--ink5:#26262f;
+      --gold:#c9a96e;--gold-dim:#8a7350;--slate:#5a7a8a;--crimson:#8b3a3a;--warm:#7a6a5a;
+      --font-d:'Outfit','Noto Sans SC','PingFang SC',system-ui,sans-serif;
+      --font-m:'JetBrains Mono','Consolas',monospace;
+      --shadow:0 4px 14px rgba(0,0,0,0.45);--radius:14px;--ease:cubic-bezier(.4,0,.2,1);
+    }
+    *{box-sizing:border-box}
+    html,body{margin:0;height:100%}
+    body{background:var(--bg);color:var(--ink);font-family:var(--font-d)}
+    .wrap{max-width:980px;margin:0 auto;padding:22px}
+    .panel{background:linear-gradient(180deg,var(--surface),var(--paper));border:1px solid var(--ink4);border-radius:var(--radius);padding:18px;box-shadow:var(--shadow)}
+    .panel-title{font-size:17px;font-weight:700;margin-bottom:14px;display:flex;align-items:center;justify-content:space-between;gap:10px}
+    .meta{font-size:12px;color:var(--ink3)}
+    .section-gap{margin-top:18px}
+    .grid{display:grid;gap:14px}
+    .grid-2{grid-template-columns:repeat(2,1fr)}
+    .grid-3{grid-template-columns:repeat(3,1fr)}
+    .grid-4{grid-template-columns:repeat(4,1fr)}
+    @media (max-width:860px){ .grid-2,.grid-3,.grid-4{grid-template-columns:1fr} }
+    .card{background:var(--elevated);border:1px solid var(--ink4);border-radius:var(--radius);padding:14px;transition:transform .25s var(--ease),border-color .25s var(--ease)}
+    .card:hover{border-color:color-mix(in srgb, var(--gold) 40%, transparent)}
+    .card-label{font-size:12px;color:var(--ink3);margin-bottom:8px}
+    .card-value{font-family:var(--font-m);font-size:22px;color:var(--ink)}
+    .cmd-bar{margin-top:14px;display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+    .btn{appearance:none;border:1px solid var(--ink4);background:var(--elevated);color:var(--ink);padding:10px 16px;border-radius:10px;font-family:var(--font-d);font-size:14px;cursor:pointer;transition:transform .15s var(--ease),background .2s}
+    .btn:hover{background:#26262f}
+    .btn.primary{background:color-mix(in srgb, var(--gold) 85%, #000);border-color:color-mix(in srgb, var(--gold) 60%, transparent);color:#0a0a0f;font-weight:700}
+    .btn.ghost{background:transparent;border-color:var(--ink4);color:var(--ink2)}
+    .btn:disabled{opacity:.6;cursor:not-allowed}
+    .input,select,textarea{background:var(--input);border:1px solid var(--ink4);color:var(--ink);padding:10px 12px;border-radius:10px;font-family:var(--font-d);font-size:14px;outline:none;width:100%}
+    .input:focus,select:focus,textarea:focus{border-color:var(--gold)}
+    textarea{resize:vertical}
+    .field{margin-top:10px}
+    .field-label{font-size:12px;color:var(--ink3);margin-bottom:6px}
+    .badge{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:999px;font-size:12px;border:1px solid var(--ink4);color:var(--ink2)}
+    .badge.ok{color:#7ee7a6;border-color:#7ee7a6}
+    .badge.muted{color:var(--ink3);border-color:var(--ink4)}
+    .badge.warn{color:#e7c97e;border-color:#e7c97e}
+    .badge.bad{color:#e79e7e;border-color:#e79e7e}
+    .empty{color:var(--ink3);font-size:13px;padding:18px 0}
+    .list{display:flex;flex-direction:column;gap:10px;margin-top:10px}
+    .row{background:var(--elevated);border:1px solid var(--ink4);border-radius:var(--radius);padding:12px 14px;display:flex;gap:12px;align-items:flex-start;justify-content:space-between}
+    .row-main{flex:1;min-width:0}
+    .row-title{font-weight:600;color:var(--ink);word-break:break-all}
+    .row-meta{font-size:12px;color:var(--ink3);margin-top:6px}
+    .row-actions{display:flex;gap:8px;align-items:center}
+    .toast{position:fixed;right:18px;bottom:18px;background:var(--elevated);border:1px solid var(--ink4);color:var(--ink);padding:10px 14px;border-radius:10px;font-size:13px;box-shadow:var(--shadow);opacity:0;transform:translateY(8px);transition:opacity .2s,transform .2s;z-index:9999}
+    .toast.show{opacity:1;transform:translateY(0)}
+    .chips{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
+    .chip{background:var(--input);border:1px solid var(--ink4);color:var(--ink2);padding:6px 10px;border-radius:999px;font-size:12px;cursor:pointer;transition:background .2s,border-color .2s;user-select:none}
+    .chip.on{color:#0a0a0f;background:color-mix(in srgb, var(--gold) 85%, #000);border-color:color-mix(in srgb, var(--gold) 60%, transparent)}
+    .field{display:flex;flex-direction:column;gap:6px}
+    .filter-bar{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end}
+    .quality-dot{width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:6px;vertical-align:middle}
+    .quality-high{background:#7ee7a6}
+    .quality-mid{background:#e7c97e}
+    .quality-low{background:#e79e7e}
+    .empty-state{text-align:center;padding:30px 10px;color:var(--ink3);font-size:13px}
+    .stats-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px;margin-top:10px}
+    .stat-item{background:var(--input);border:1px solid var(--ink5);border-radius:10px;padding:10px 12px;text-align:center}
+    .stat-value{font-family:var(--font-m);font-size:18px;color:var(--ink)}
+    .stat-label{font-size:11px;color:var(--ink3);margin-top:4px}
+    .source-tag{font-size:11px;color:var(--ink3);background:var(--input);border:1px solid var(--ink5);padding:2px 8px;border-radius:999px;margin-right:6px}
+  
+  /* eggb-motion */
+  @media (prefers-reduced-motion: reduce){*,*::before,*::after{animation-duration:0.01ms !important;animation-iteration-count:1 !important;transition-duration:0.01ms !important;scroll-behavior:auto !important}}
+  .btn-ripple{position:absolute;border-radius:50%;background:rgba(201,169,110,0.3);transform:scale(0);pointer-events:none;animation:rippleAnim 550ms ease-out forwards}
+  @keyframes rippleAnim{to{transform:scale(3);opacity:0}}
+  .card,.panel,.stat-card,.tool-item,.list-item{transition:transform 160ms cubic-bezier(0.22,1,0.36,1),box-shadow 200ms ease,border-color 200ms ease}
+  .card:hover,.panel:hover,.stat-card:hover{transform:translateY(-2px);box-shadow:0 4px 14px rgba(0,0,0,0.45)}
+  .tool-item:hover,.list-item:hover{transform:translateX(2px)}
+  button{transition:all 160ms cubic-bezier(0.4,0,0.2,1)}
+  button:active:not(:disabled){transform:scale(0.96)}
+  .tab{transition:transform 160ms ease,background 160ms ease,color 160ms ease,border-color 160ms ease}
+  .tab:hover{transform:translateY(-1px)}
+  .tab.active{transform:scale(1.05)}
+  .toast{display:flex;align-items:center;gap:8px;overflow:hidden;position:relative}
+  .toast::before{content:attr(data-icon);width:18px;text-align:center;font-size:13px;line-height:1;flex-shrink:0}
+  .toast::after{content:'';position:absolute;left:0;bottom:0;height:2px;width:100%;transform:scaleX(0);transform-origin:left;animation:toastProgress 2s linear forwards}
+  .toast.success::after{background:#6ecf8e}
+  .toast.error::after{background:#ff8a80}
+  .toast.info::after{background:#c9a96e}
+  @keyframes toastProgress{to{transform:scaleX(1)}}
+  .toast.show{animation:toastIn 260ms cubic-bezier(0.34,1.56,0.64,1)}
+  @keyframes toastIn{from{opacity:0;transform:translateY(-14px) scale(0.92)}to{opacity:1;transform:translateY(0) scale(1)}}
+  .panel-title{position:relative}
+  .panel-title::after{content:'';position:absolute;bottom:-2px;left:0;width:34px;height:2px;background:linear-gradient(90deg,#c9a96e,transparent);border-radius:2px;transition:width 300ms cubic-bezier(0.22,1,0.36,1)}
+  .panel:hover .panel-title::after{width:60px}
+  
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="panel">
+      <div class="panel-title">网络黑话学习器 <span class="meta">slang_learner v0.4.0</span></div>
+
+      <div class="section-gap">
+        <div class="panel-title" style="margin-top:6px; font-size:14px">联网查梗（DeepSeek 网页版）</div>
+        <div class="badge" id="webEnvBadge" style="margin-bottom:8px">环境检测中...</div>
+        <div id="webHints" style="font-size:12px; color:var(--ink3); margin-bottom:10px"></div>
+        <div class="grid grid-3">
+          <div>
+            <div class="field-label">游戏名（可逗号分隔多个）</div>
+            <input class="input" id="webGame" placeholder="明日方舟, 原神, 鸣潮...">
+          </div>
+          <div>
+            <div class="field-label">每个游戏条数</div>
+            <input class="input" id="webBatch" type="number" min="1" max="10" value="5">
+          </div>
+          <div>
+            <div class="field-label">提问模板</div>
+            <select class="input" id="webTemplateSelect"></select>
+          </div>
+        </div>
+        <div class="field" style="margin-top:10px">
+          <div class="field-label">自定义提问内容（支持 {game} {batch} {want} {banned}，留空用默认）</div>
+          <textarea class="input" id="webTemplateText" rows="4" placeholder="选择模板后这里显示内容，可编辑后点击下方"保存模板"></textarea>
+        </div>
+        <div class="cmd-bar" style="margin-top:8px">
+          <button class="btn ghost" id="btnSaveTemplate">保存为自定义模板</button>
+        </div>
+        <div class="cmd-bar" style="margin-top:12px">
+          <button class="btn primary" id="btnWebEnrich">联网查新梗</button>
+          <button class="btn ghost" id="btnWebStatus">重新检测环境</button>
+        </div>
+        <div id="webResult" style="margin-top:10px"></div>
+      </div>
+
+      <div class="section-gap">
+        <div class="panel-title" style="margin-top:6px; font-size:14px">手动录入新梗</div>
+        <div class="grid grid-2">
+          <div>
+            <div class="field-label">梗词/词条</div>
+            <input class="input" id="manualTerm" placeholder="输入要收录的梗词">
+          </div>
+          <div>
+            <div class="field-label">来源标签</div>
+            <input class="input" id="manualSource" placeholder="如：游戏圈 / 手动输入">
+          </div>
+        </div>
+        <div class="field" style="margin-top:10px">
+          <div class="field-label">释义</div>
+          <textarea class="input" id="manualMeaning" rows="3" placeholder="解释这个梗的意思、用法、来源平台、文化影响..."></textarea>
+        </div>
+        <div class="cmd-bar" style="margin-top:10px">
+          <button class="btn primary" id="btnManualAdd">加入候选池</button>
+        </div>
+        <div id="manualResult" style="margin-top:8px"></div>
+      </div>
+
+      <div class="section-gap">
+        <div class="panel-title" style="margin-top:6px; font-size:14px">回复模板（对方说这个词时，AI 可以这样回）</div>
+        <div class="grid grid-2">
+          <div>
+            <div class="field-label">梗词</div>
+            <input class="input" id="replyTerm" placeholder="输入词条（如 kskbl）">
+          </div>
+          <div>
+            <div class="field-label">回复（多句用逗号分隔）</div>
+            <input class="input" id="replyText" placeholder="如：真的假的, zdjd">
+          </div>
+        </div>
+        <div class="cmd-bar" style="margin-top:10px">
+          <button class="btn primary" id="btnReplySave">保存该词回复模板</button>
+          <button class="btn ghost" id="btnReplyDelete">删除该词模板</button>
+          <button class="btn ghost" id="btnReplySearch">查询</button>
+        </div>
+        <div id="replyResult" style="margin-top:8px; font-size:12px; color:var(--ink3)"></div>
+        <div class="list" id="replyList" style="margin-top:10px"></div>
+      </div>
+
+      <div class="grid grid-3 section-gap">
+        <div class="card">
+          <div class="card-label">待确认</div>
+          <div class="card-value" id="statPending">--</div>
+        </div>
+        <div class="card">
+          <div class="card-label">已注入</div>
+          <div class="card-value" id="statInjected">--</div>
+        </div>
+        <div class="card">
+          <div class="card-label">最近学习</div>
+          <div class="card-value" id="statHistory">--</div>
+        </div>
+      </div>
+
+      <div class="section-gap">
+        <div class="panel-title" style="margin-top:6px">学习控制台</div>
+        <div class="field">
+          <div class="field-label">学习主题</div>
+          <div class="chips" id="topicChips"></div>
+        </div>
+        <div class="cmd-bar">
+          <button class="btn primary" id="btnLearn">开始学习</button>
+          <button class="btn ghost" id="btnRefresh">刷新状态</button>
+          <button class="btn ghost" id="btnLlmEnrich" title="会调用 LLM，注意 token 消耗">LLM 追新梗</button>
+        </div>
+        <div id="llmConfig" class="panel" style="margin-top:12px; padding:14px; border:1px solid var(--ink4); border-radius:var(--radius); background:var(--paper);">
+          <div class="panel-title" style="margin-bottom:10px">LLM 追新梗设置</div>
+          <div class="grid grid-3">
+            <div>
+              <div class="field-label">启用 LLM 追新梗</div>
+              <label class="toggle" style="margin-top:6px; display:inline-flex">
+                <input type="checkbox" id="llm_enrich">
+                <span class="slider"></span>
+              </label>
+            </div>
+            <div>
+              <div class="field-label">每次生成条数</div>
+              <input class="input" id="llm_batch_size" type="number" min="1" max="20" value="6" style="margin-top:6px">
+            </div>
+            <div>
+              <div class="field-label">当前模型</div>
+              <div id="llm_model_info" style="margin-top:6px; font-size:13px; color:var(--ink2)">读取中...</div>
+            </div>
+          </div>
+          <div class="cmd-bar" style="margin-top:12px; justify-content:flex-end">
+            <button class="btn primary" id="btnSaveLlm">保存设置</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="section-gap">
+        <div class="panel-title" style="margin-top:6px">候选池管理</div>
+        <div class="filter-bar">
+          <div style="flex:1;min-width:180px">
+            <div class="field-label">搜索词条</div>
+            <input class="input" id="searchInput" placeholder="输入关键词过滤...">
+          </div>
+          <div style="min-width:140px">
+            <div class="field-label">来源筛选</div>
+            <select class="input" id="sourceFilter">
+              <option value="">全部来源</option>
+              <option value="游戏圈">游戏圈</option>
+              <option value="直播圈">直播圈</option>
+              <option value="抽象圈">抽象圈</option>
+              <option value="电竞圈">电竞圈</option>
+              <option value="弹幕圈">弹幕圈</option>
+            </select>
+          </div>
+          <div style="min-width:140px">
+            <div class="field-label">最低质量</div>
+            <select class="input" id="qualityFilter">
+              <option value="0">全部</option>
+              <option value="0.3">≥ 0.3</option>
+              <option value="0.5">≥ 0.5</option>
+              <option value="0.7">≥ 0.7</option>
+            </select>
+          </div>
+        </div>
+        <div class="cmd-bar" style="margin-top:10px">
+          <button class="btn primary" id="btnInject">注入选中</button>
+          <button class="btn ghost" id="btnInjectAll">批量注入高质量</button>
+          <button class="btn ghost" id="btnReject">拒绝选中</button>
+          <button class="btn ghost" id="btnRejectLow">批量拒绝低质量</button>
+        </div>
+        <div class="list" id="pendingList"></div>
+        <div id="pendingStats" style="margin-top:8px;font-size:12px;color:var(--ink3)"></div>
+      </div>
+
+      <div class="section-gap">
+        <div class="panel-title" style="margin-top:6px">已注入词条</div>
+        <div class="cmd-bar" style="margin-top:8px">
+          <button class="btn ghost" id="btnClearInjected">清空已注入</button>
+        </div>
+        <div class="list" id="injectedList"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <div id="llm-warning-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.6); z-index:9999; align-items:center; justify-content:center;">
+    <div style="background:var(--paper); border:1px solid var(--ink4); border-radius:14px; padding:18px; max-width:420px; width:90%; box-shadow:var(--shadow);">
+      <div style="font-weight:700; font-size:15px; margin-bottom:8px;">⚠️ LLM 追新梗会消耗 token</div>
+      <div style="font-size:13px; color:var(--ink2); line-height:1.6; margin-bottom:12px;">
+        该功能会调用现有 LLM 提供商生成新梗词条，可能产生 API 费用。<br>
+        当前为小体量模式，每次仅生成 <b id="llmBatchInfo">6</b> 条候选，但仍建议确认配额。<br>
+        生成结果会进入候选池，<b>不会自动注入</b>，需你手动确认。
+      </div>
+      <div style="display:flex; gap:8px; justify-content:flex-end;">
+        <button class="btn ghost" id="btnLlmCancel">取消</button>
+        <button class="btn primary" id="btnLlmConfirm">确认继续</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const API_BASE = '';
+    let topics = ["游戏圈", "直播圈", "抽象圈", "电竞圈", "弹幕圈"];
+    let selectedTopics = new Set(["游戏圈", "直播圈", "抽象圈"]);
+    let selectedIds = new Set();
+    let pending = [];
+    let injected = [];
+    let currentFilter = { search: '', source: '', min_quality: 0 };
+    let promptTemplates = {};
+    function updateTemplateTextarea(key){
+      const txt = $('webTemplateText');
+      const t = (promptTemplates[key] && promptTemplates[key].template) || '';
+      txt.value = t;
+    }
+    async function loadPromptTemplates(){
+      try{
+        const r = await api('/api/plugins/action', {method:'POST', body: JSON.stringify({plugin_id:'slang_learner', action:'get_templates'})});
+        promptTemplates = (r && r.templates) || {};
+        const sel = $('webTemplateSelect');
+        sel.innerHTML='';
+        Object.keys(promptTemplates).forEach(k=>{
+          const opt = document.createElement('option');
+          opt.value = k;
+          const name = (promptTemplates[k] && promptTemplates[k].name) || k;
+          opt.textContent = name + (k==='default' ? '（默认）' : '');
+          sel.appendChild(opt);
+        });
+        updateTemplateTextarea(sel.value || 'default');
+      }catch(e){ console.warn('[slang] templates', e); }
+    }
+    $('webTemplateSelect')?.addEventListener('change', ()=>{ updateTemplateTextarea($('webTemplateSelect').value); });
+    $('btnSaveTemplate')?.addEventListener('click', async ()=>{
+      const key = $('webTemplateSelect').value || 'custom';
+      const template = $('webTemplateText').value;
+      const name = promptTemplates[key] ? promptTemplates[key].name : key;
+      const r = await api('/api/plugins/action', {method:'POST', body: JSON.stringify({plugin_id:'slang_learner', action:'set_template', params:{key:key, name:name, template:template}})});
+      if(r && r.ok === true){ toast('模板已保存'); loadPromptTemplates(); }
+      else{ toast('保存失败'); }
+    });
+
+    function $(id){ return document.getElementById(id) }
+    function esc(s){ return String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\"/g,'&quot;') }
+    function toast(msg){ const el=$('toast'); el.textContent=msg; el.classList.add('show'); setTimeout(()=>el.classList.remove('show'),1800) }
+    function qualityClass(q){ return q >= 0.7 ? 'quality-high' : q >= 0.5 ? 'quality-mid' : 'quality-low' }
+    function qualityLabel(q){ return q >= 0.7 ? '高' : q >= 0.5 ? '中' : '低' }
+    function api(path, opts){ return fetch(API_BASE + path, Object.assign({headers:{'Content-Type':'application/json'}}, opts)).then(r=>r.json()) }
+
+    function renderTopics(){
+      const root=$('topicChips'); root.innerHTML='';
+      topics.forEach(t=>{
+        const el=document.createElement('div'); el.className='chip ' + (selectedTopics.has(t)?'on':'');
+        el.textContent=t; el.onclick=()=>{ selectedTopics.has(t)?selectedTopics.delete(t):selectedTopics.add(t); renderTopics(); };
+        root.appendChild(el);
+      });
+    }
+
+    function getFilteredPending(){
+      return pending.filter(item => {
+        if ((item.status || "pending") !== "pending") return false;
+        if (currentFilter.search) {
+          const s = currentFilter.search.toLowerCase();
+          if (!(item.id || "").toLowerCase().includes(s) && !(item.meaning || "").toLowerCase().includes(s)) return false;
+        }
+        if (currentFilter.source && (item.source || "") !== currentFilter.source) return false;
+        if ((item.quality || 0) < currentFilter.min_quality) return false;
+        return true;
+      });
+    }
+
+    function renderPending(){
+      const root=$('pendingList'); root.innerHTML='';
+      selectedIds.clear();
+      const filtered = getFilteredPending();
+      if(!filtered.length){ 
+        root.innerHTML='<div class="empty-state">暂无符合条件的候选，先点学习或调整筛选条件</div>'; 
+        $('statPending').textContent='0';
+        $('pendingStats').textContent = `共 ${pending.filter(i=>(i.status||"")==="pending").length} 条待确认`;
+        return; 
+      }
+      $('statPending').textContent=String(filtered.length);
+      $('pendingStats').textContent = `显示 ${filtered.length} / ${pending.filter(i=>(i.status||"")==="pending").length} 条`;
+      
+      filtered.forEach(item=>{
+        const row=document.createElement('div'); row.className='row';
+        const q = item.quality || 0.5;
+        const qClass = qualityClass(q);
+        const qLabel = qualityLabel(q);
+        row.innerHTML='<div class="row-main"><div class="row-title"><span class="quality-dot '+qClass+'"></span>'+esc(item.id)+'</div><div class="row-meta">'+esc(item.meaning)+' · <span class="source-tag">'+esc(item.source||'')+'</span> 质量：'+qLabel+' ('+q.toFixed(2)+')</div></div>'+
+          '<div class="row-actions"><label style="color:var(--ink3);font-size:12px;display:flex;align-items:center;gap:6px"><input type="checkbox" data-id="'+esc(item.id)+'"> 选中</label></div>';
+        root.appendChild(row);
+      });
+      root.querySelectorAll('input[type="checkbox"]').forEach(cb=>{
+        cb.onchange=()=>{ cb.checked?selectedIds.add(cb.dataset.id):selectedIds.delete(cb.dataset.id); };
+      });
+    }
+
+    function renderInjected(){
+      const root=$('injectedList'); root.innerHTML='';
+      $('statInjected').textContent=String(injected.length);
+      if(!injected.length){ root.innerHTML='<div class="empty-state">暂无已注入词条</div>'; return; }
+      injected.slice(-200).reverse().forEach(item=>{
+        const row=document.createElement('div'); row.className='row';
+        row.innerHTML='<div class="row-main"><div class="row-title">'+esc(item.id)+'</div><div class="row-meta">'+esc(item.meaning)+' · '+esc(item.source||'')+'</div></div>';
+        root.appendChild(row);
+      });
+    }
+
+    $('btnClearInjected')?.addEventListener('click', async ()=>{
+      if(!confirm('确定清空所有已注入黑话？')) return;
+      try{
+        const r = await api('/api/plugins/action', {method:'POST', body: JSON.stringify({plugin_id:'slang_learner', action:'clear_injected'})});
+        if(r && r.ok !== false){
+          injected = [];
+          renderInjected();
+          toast('已清空已注入词条');
+        }else{
+          toast('清空失败');
+        }
+      }catch(e){ toast('清空失败'); }
+    });
+
+    async function loadWebStatus(){
+      try{
+        const r = await api('/api/plugins/action', {method:'POST', body: JSON.stringify({plugin_id:'slang_learner', action:'web_status'})});
+        const badge = $('webEnvBadge');
+        const hints = $('webHints');
+        if (!r || r.error){
+          badge.className = 'badge bad'; badge.textContent = '环境不可用';
+          hints.textContent = (r && r.error) ? r.error : '环境检测失败';
+          return;
+        }
+        const b = r.browsers || {};
+        const parts = [];
+        if (b.cdp_edge) parts.push('CDP Edge');
+        if (b.cdp_chrome) parts.push('CDP Chrome');
+        if (b.edge) parts.push('系统 Edge');
+        if (b.chrome) parts.push('系统 Chrome');
+        if (b.chromium) parts.push('自带 Chromium');
+        if (b.firefox) parts.push('Firefox');
+        const anyBrowser = parts.length > 0;
+        badge.className = 'badge ' + (anyBrowser ? 'ok' : 'bad');
+        badge.textContent = anyBrowser ? '浏览器：' + parts.join(' / ') : '未检测到浏览器';
+        hints.innerHTML = Array.isArray(r.hints) && r.hints.length
+          ? r.hints.map(h=>'· '+esc(h)).join('<br>')
+          : '';
+        return r;
+      }catch(e){
+        const badge = $('webEnvBadge');
+        badge.className = 'badge bad'; badge.textContent = '环境检测失败';
+        $('webHints').textContent = String(e);
+      }
+    }
+
+    async function runWebEnrich(){
+      try{
+        $('btnWebEnrich').disabled = true;
+        $('webResult').textContent = '联网查梗中（需在浏览器完成搜索，可能数十秒）...';
+        const games = ($('webGame').value || '明日方舟').split(/[,，]/).map(s=>s.trim()).filter(Boolean);
+        const batch = parseInt($('webBatch').value || '5', 10) || 5;
+        const fallback = ($('webFallback').value || '1') === '1';
+        const template = ($('webTemplateText').value || '').trim();
+        const r = await api('/api/plugins/action', {method:'POST', body: JSON.stringify({plugin_id:'slang_learner', action:'llm_enrich', params: {topics: games, games: games, batch: batch, fallback: fallback, template: template}})});
+        if (!r || r.ok === false){
+          $('webResult').textContent = '联网查梗失败：' + ((r && r.error) || JSON.stringify((r && r.errors) || r));
+          return;
+        }
+        const errors = Array.isArray(r.errors) && r.errors.length ? '<br>注意：' + r.errors.join('<br>') : '';
+        $('webResult').textContent = '新增 ' + String(r.added || 0) + ' 条候选，已进入候选池待确认。' + errors;
+        await loadAll();
+      }catch(e){
+        $('webResult').textContent = '联网查梗失败：' + String(e);
+      }finally{
+        $('btnWebEnrich').disabled = false;
+      }
+    }
+
+    $('btnWebEnrich')?.addEventListener('click', runWebEnrich);
+    $('btnWebStatus')?.addEventListener('click', ()=>{ loadWebStatus().then(r=>{ if(r && r.login === false) toast('DeepSeek 未登录，请在打开的浏览器里登录'); }); });
+    $('btnManualAdd')?.addEventListener('click', async ()=>{
+      const term = $('manualTerm').value.trim();
+      const meaning = $('manualMeaning').value.trim();
+      if (!term || !meaning){ toast('请填写梗词和释义'); return; }
+      const r = await api('/api/plugins/action', {method:'POST', body: JSON.stringify({plugin_id:'slang_learner', action:'add_manual', params: {term: term, meaning: meaning, source: ($('manualSource').value.trim() || '手动输入')}})});
+      if (r && r.ok === true){
+        $('manualTerm').value=''; $('manualMeaning').value='';
+        $('manualResult').textContent = '已加入候选池：「' + term + '」'; $('manualResult').style.color = 'var(--ink2)';
+        await loadAll();
+      }else{
+        $('manualResult').textContent = '添加失败：' + ((r && r.error) || '未知错误'); $('manualResult').style.color = 'var(--crimson)';
+      }
+    });
+
+    function renderReplyList(entries){
+      const root=$('replyList');
+      if(!entries || !Object.keys(entries).length){ root.innerHTML='<div class="empty-state">暂无回复模板</div>'; return; }
+      root.innerHTML='';
+      Object.keys(entries).forEach(term=>{
+        const row=document.createElement('div'); row.className='row';
+        const replies=entries[term];
+        row.innerHTML='<div class="row-main"><div class="row-title">'+esc(term)+'</div><div class="row-meta">'+esc(Array.isArray(replies)?replies.join(' / '):replies)+'</div></div>'+
+          '<div class="row-actions"><button class="btn ghost" style="padding:4px 10px;font-size:12px" data-edit="'+esc(term)+'">编辑</button></div>';
+        row.querySelector('[data-edit]').onclick=()=>{
+          $('replyTerm').value=term;
+          $('replyText').value=Array.isArray(replies)?replies.join(','):String(replies||'');
+          toast('已填入编辑框');
+        };
+        root.appendChild(row);
+      });
+    }
+
+    async function loadReplyTemplates(){
+      try{
+        const r = await api('/api/plugins/action', {method:'POST', body: JSON.stringify({plugin_id:'slang_learner', action:'get_replies', params:{}})});
+        renderReplyList(r && r.entries);
+      }catch(e){ console.warn('[slang] load replies failed', e); }
+    }
+
+    $('btnReplySave')?.addEventListener('click', async ()=>{
+      const term=$('replyTerm').value.trim();
+      if(!term){ toast('请填写梗词'); return; }
+      const r = await api('/api/plugins/action', {method:'POST', body: JSON.stringify({plugin_id:'slang_learner', action:'set_reply', params:{term:term, replies:$('replyText').value}})});
+      if(r && r.ok !== false){
+        $('replyResult').textContent='已保存「'+term+'」的回复模板'; $('replyResult').style.color='var(--ink2)';
+        await loadReplyTemplates();
+      } else {
+        $('replyResult').textContent='保存失败：'+((r&&r.error)||'未知'); $('replyResult').style.color='var(--crimson)';
+      }
+    });
+    $('btnReplyDelete')?.addEventListener('click', async ()=>{
+      const term=$('replyTerm').value.trim();
+      if(!term){ toast('请填写梗词'); return; }
+      if(!confirm('确定删除「'+term+'」的回复模板？')) return;
+      const r = await api('/api/plugins/action', {method:'POST', body: JSON.stringify({plugin_id:'slang_learner', action:'delete_reply', params:{term:term}})});
+      toast('已删除'); await loadReplyTemplates();
+    });
+    $('btnReplySearch')?.addEventListener('click', async ()=>{
+      const term=$('replyTerm').value.trim();
+      const r = await api('/api/plugins/action', {method:'POST', body: JSON.stringify({plugin_id:'slang_learner', action:'get_replies', params:{term:term}})});
+      if(r && r.term && r.replies && r.replies.length){
+        $('replyText').value=Array.isArray(r.replies)?r.replies.join(','):String(r.replies);
+        $('replyResult').textContent='「'+term+'」当前模板已填入'; $('replyResult').style.color='var(--ink2)';
+      }else{
+        $('replyResult').textContent='「'+(term||'')+'」暂无模板'; $('replyResult').style.color='var(--ink3)';
+      }
+    });
+
+    async function loadAll(){
+      try{
+        const p = await api('/api/plugins/action', {method:'POST', body: JSON.stringify({plugin_id:'slang_learner', action:'pending', params: currentFilter})});
+        pending = Array.isArray(p.pending) ? p.pending : [];
+      }catch(e){ pending=[]; }
+      try{
+        const p = await api('/api/plugins/action', {method:'POST', body: JSON.stringify({plugin_id:'slang_learner', action:'injected'})});
+        injected = Array.isArray(p.injected) ? p.injected : [];
+      }catch(e){ injected=[]; }
+      renderPending();
+      renderInjected();
+      try{
+        const p = await api('/api/plugins/action', {method:'POST', body: JSON.stringify({plugin_id:'slang_learner', action:'history'})});
+        $('statHistory').textContent = String((p && p.history ? p.history.length : 0));
+      }catch(e){ $('statHistory').textContent='0' }
+    }
+
+    $('btnLearn').onclick = async ()=>{
+      $('btnLearn').disabled=true; toast('学习中...');
+      try{
+        const r = await api('/api/plugins/action', {method:'POST', body: JSON.stringify({plugin_id:'slang_learner', action:'learn', params: {topics: Array.from(selectedTopics)}})});
+        toast('新增 '+String(r.added||0)+' 条候选');
+        await loadAll();
+      }catch(e){ toast('学习失败'); }
+      $('btnLearn').disabled=false;
+    };
+    const llmModal = $('llm-warning-modal');
+    const llmBatchInfo = $('llmBatchInfo');
+    let llmConfirmResolver = null;
+    function showLlmWarning(){
+      return new Promise((resolve)=>{
+        llmConfirmResolver = { resolve };
+        const batch = parseInt(($('llm_batch_size')?.value || '6'), 10) || 6;
+        const el = $('llmBatchInfo');
+        if (el) el.textContent = String(batch);
+        llmModal.style.display = 'flex';
+      });
+    }
+    function hideLlmWarning(result){
+      llmModal.style.display = 'none';
+      if (llmConfirmResolver) {
+        llmConfirmResolver.resolve(result);
+        llmConfirmResolver = null;
+      }
+    }
+    $('btnLlmCancel')?.addEventListener('click', ()=>{ hideLlmWarning(false); });
+    $('btnLlmConfirm')?.addEventListener('click', ()=>{ hideLlmWarning(true); });
+    $('btnLlmEnrich')?.addEventListener('click', async ()=>{
+      const ok = await showLlmWarning();
+      if (!ok) return;
+      await runLlmEnrich();
+    });
+    async function loadSlangConfig(){
+      try{
+        const r = await api('/api/plugins/action', {method:'POST', body: JSON.stringify({plugin_id:'slang_learner', action:'get_config'})});
+        const cfg = (r && (r.config || r)) || {};
+        const enrichEl = $('llm_enrich');
+        const batchEl = $('llm_batch_size');
+        const modelEl = $('llm_model_info');
+        if (enrichEl) enrichEl.checked = !!(cfg.llm_enrich || cfg.get('llm_enrich'));
+        if (batchEl) batchEl.value = String(cfg.llm_batch_size || cfg.get('llm_batch_size') || 6);
+        if (modelEl){
+          try{
+            const mi = await api('/api/plugins/action', {method:'POST', body: JSON.stringify({plugin_id:'slang_learner', action:'model_info'})});
+            modelEl.textContent = mi.provider === 'bot_config' ? '项目共用模型' : (mi.provider || '未知');
+          }catch(e){ modelEl.textContent = '未知'; }
+        }
+      }catch(e){ console.warn('[slang] load config failed', e); }
+    }
+    $('btnSaveLlm')?.addEventListener('click', async ()=>{
+      try{
+        const params = {
+          llm_enrich: !!($('llm_enrich')?.checked),
+          llm_batch_size: parseInt(($('llm_batch_size')?.value || '6'), 10) || 6,
+        };
+        await api('/api/plugins/action', {method:'POST', body: JSON.stringify({plugin_id:'slang_learner', action:'set_config', params})});
+        toast('LLM 设置已保存');
+      }catch(e){ toast('保存失败'); }
+    });
+    async function runLlmEnrich(){
+      $('btnLlmEnrich').disabled = true; toast('LLM 追新梗中...');
+      try{
+        const r = await api('/api/plugins/action', {method:'POST', body: JSON.stringify({plugin_id:'slang_learner', action:'llm_enrich', params: {topics: Array.from(selectedTopics)}})});
+        toast('LLM 新增 '+String(r.added||0)+' 条候选');
+        await loadAll();
+      }catch(e){ toast('LLM 追新梗失败'); }
+      $('btnLlmEnrich').disabled = false;
+    }
+    $('btnRefresh').onclick = loadAll;
+    $('btnInject').onclick = async ()=>{
+      if(!selectedIds.size){ toast('请先选中'); return; }
+      const r = await api('/api/plugins/action', {method:'POST', body: JSON.stringify({plugin_id:'slang_learner', action:'inject', params: {ids: Array.from(selectedIds)}})});
+      toast('已注入 '+String(r.injected||0)+' 条');
+      await loadAll();
+    };
+    $('btnInjectAll').onclick = async ()=>{
+      const minQ = parseFloat($('qualityFilter').value || '0');
+      const r = await api('/api/plugins/action', {method:'POST', body: JSON.stringify({plugin_id:'slang_learner', action:'inject_all', params: {min_quality: minQ}})});
+      toast('批量注入 '+String(r.injected||0)+' 条');
+      await loadAll();
+    };
+    $('btnReject').onclick = async ()=>{
+      if(!selectedIds.size){ toast('请先选中'); return; }
+      const r = await api('/api/plugins/action', {method:'POST', body: JSON.stringify({plugin_id:'slang_learner', action:'reject', params: {ids: Array.from(selectedIds)}})});
+      toast('已拒绝 '+String(r.rejected||0)+' 条');
+      await loadAll();
+    };
+    $('btnRejectLow').onclick = async ()=>{
+      const minQ = parseFloat($('qualityFilter').value || '0');
+      const r = await api('/api/plugins/action', {method:'POST', body: JSON.stringify({plugin_id:'slang_learner', action:'reject_all', params: {min_quality: minQ}})});
+      toast('批量拒绝 '+String(r.rejected||0)+' 条低质量词条');
+      await loadAll();
+    };
+
+    // 搜索防抖
+    let searchTimer;
+    $('searchInput').oninput = ()=>{
+      clearTimeout(searchTimer);
+      searchTimer = setTimeout(()=>{
+        currentFilter.search = $('searchInput').value.trim();
+        renderPending();
+      }, 200);
+    };
+    $('sourceFilter').onchange = ()=>{
+      currentFilter.source = $('sourceFilter').value;
+      renderPending();
+    };
+    $('qualityFilter').onchange = ()=>{
+      currentFilter.min_quality = parseFloat($('qualityFilter').value || '0');
+      renderPending();
+    };
+
+    renderTopics();
+    loadAll();
+    loadSlangConfig();
+    loadWebStatus();
+    loadReplyTemplates();
+    loadPromptTemplates();
+  </script>
+<script>
+(function(){
+  if (window.__eggbMotion) return; window.__eggbMotion = true;
+  document.addEventListener('click', function(e){
+    var btn = e.target && e.target.closest ? e.target.closest('button, .btn, .tool-item') : null;
+    if(!btn || btn.disabled) return;
+    var rect = btn.getBoundingClientRect();
+    var size = Math.max(rect.width, rect.height) * 1.2;
+    var r = document.createElement('span');
+    r.className = 'btn-ripple';
+    r.style.width = r.style.height = size + 'px';
+    r.style.left = (e.clientX - rect.left - size/2) + 'px';
+    r.style.top = (e.clientY - rect.top - size/2) + 'px';
+    btn.appendChild(r);
+    setTimeout(function(){ r.remove(); }, 600);
+  });
+})();
+</script>
+</body>
+</html>

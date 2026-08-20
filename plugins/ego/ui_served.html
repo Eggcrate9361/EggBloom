@@ -1,0 +1,676 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>EGO 插件</title>
+<style>
+  :root{--bg:#0a0a0f;--surface:#111118;--paper:#16161f;--elevated:#1e1e28;--input:#14141b;--ink:#f0f0f5;--ink2:#b8b8c8;--ink3:#8a8f9a;--ink4:#3a3f48;--gold:#c9a96e;--red:#b54a4a;--green:#4a9b6a;--font-d:'Outfit','Noto Sans SC','PingFang SC',system-ui,sans-serif;--font-m:'JetBrains Mono','Consolas',monospace;--radius:12px}
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);font-family:var(--font-d)}
+  .wrap{max-width:960px;margin:0 auto;padding:22px}
+  .panel{background:linear-gradient(180deg,var(--surface),var(--paper));border:1px solid var(--ink4);border-radius:var(--radius);padding:18px;margin-bottom:14px}
+  .panel-title{font-size:17px;font-weight:700;margin-bottom:12px;display:flex;justify-content:space-between;align-items:center}
+  .meta{font-size:12px;color:var(--ink3);margin-left:8px;font-weight:400}
+  .desc{color:var(--ink2);font-size:14px;line-height:1.7;margin-top:10px}
+  .grid{display:grid;gap:12px;margin-top:14px}
+  .grid-2{grid-template-columns:repeat(2,1fr)}
+  .grid-3{grid-template-columns:repeat(3,1fr)}
+  @media (max-width:860px){ .grid-2,.grid-3{grid-template-columns:1fr} }
+  .card{background:var(--elevated);border:1px solid var(--ink4);border-radius:var(--radius);padding:12px}
+  .card-label{font-size:12px;color:var(--ink3);margin-bottom:4px}
+  .card-value{font-family:var(--font-m);font-size:14px;color:var(--ink)}
+  .back{display:inline-block;margin-top:14px;color:var(--gold);cursor:pointer;font-size:14px}
+  button{padding:6px 12px;border:1px solid var(--ink4);background:var(--elevated);color:var(--ink);border-radius:6px;cursor:pointer;font-size:13px}
+  button:hover:not(:disabled){background:var(--paper);border-color:var(--gold)}
+  button:disabled{opacity:0.5;cursor:not-allowed}
+  button.primary{background:var(--gold);color:#0a0a0f;border-color:var(--gold);font-weight:600}
+  button.danger{background:var(--red);color:#fff;border-color:var(--red)}
+  button.ghost{background:transparent;border-color:var(--ink4);color:var(--ink2)}
+  input[type="text"],textarea,select{padding:8px 10px;background:var(--input);color:var(--ink);border:1px solid var(--ink4);border-radius:6px;font-family:inherit;font-size:13px;width:100%}
+  textarea{min-height:80px;resize:vertical}
+  .muted{color:var(--ink3);font-size:12px;margin-top:4px}
+  .row{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
+  .section-title{font-size:14px;font-weight:700;margin:14px 0 6px;color:var(--ink)}
+  .empty{color:var(--ink3);font-size:13px;padding:8px 0}
+  .tabs{display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap}
+  .tab{border-radius:999px;border:1px solid var(--ink4);background:transparent;color:var(--ink2);padding:6px 10px;font-size:12px;cursor:pointer}
+  .tab.active{background:var(--gold);color:#0a0a0f;border-color:var(--gold);font-weight:600}
+  .stat-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+  .stat-card{background:var(--elevated);border:1px solid var(--ink4);border-radius:var(--radius);padding:10px;text-align:center}
+  .stat-value{font-family:var(--font-m);font-size:18px;color:var(--ink)}
+  .stat-label{font-size:12px;color:var(--ink3);margin-top:4px}
+  .toggle{position:relative;display:inline-block;width:40px;height:22px}
+  .toggle input{opacity:0;width:0;height:0}
+  .slider{position:absolute;cursor:pointer;top:0;left:0;right:0;bottom:0;background-color:var(--ink4);transition:.3s;border-radius:22px}
+  .slider:before{position:absolute;content:"";height:16px;width:16px;left:3px;bottom:3px;background-color:white;transition:.3s;border-radius:50%}
+  input:checked + .slider{background-color:var(--gold)}
+  input:checked + .slider:before{transform:translateX(18px)}
+  .switch-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 0;border-bottom:1px solid var(--ink4)}
+  .switch-row:last-child{border-bottom:none}
+  .badge{display:inline-block;padding:2px 8px;border-radius:999px;background:var(--ink4);color:var(--ink2);font-size:11px;margin-left:8px}
+  .badge.ok{background:rgba(74,155,106,0.2);color:var(--green)}
+  .badge.err{background:rgba(181,74,74,0.2);color:var(--red)}
+  .list-item{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:8px;border-bottom:1px solid var(--ink4)}
+  .list-item:last-child{border-bottom:none}
+  .tag{display:inline-block;padding:2px 6px;border-radius:4px;background:var(--ink4);color:var(--ink2);font-size:11px;margin-right:6px}
+  .quality{font-family:var(--font-m);font-size:12px;color:var(--gold)}
+  .log{background:var(--input);border:1px solid var(--ink4);border-radius:8px;padding:10px;font-family:var(--font-m);font-size:12px;color:var(--ink2);max-height:220px;overflow:auto;white-space:pre-wrap}
+  .toast{position:fixed;top:16px;right:16px;background:var(--elevated);border:1px solid var(--ink4);color:var(--ink);padding:10px 14px;border-radius:8px;font-size:13px;z-index:999;opacity:0;transition:opacity .2s;pointer-events:none}
+  .toast.show{opacity:1}
+  .inline{display:inline-flex;align-items:center;gap:8px}
+  .grow{flex:1}
+  #ego-wizard{position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,0.7);display:flex;align-items:center;justify-content:center;backdrop-filter:blur(4px)}
+  #ego-wizard .wizard-modal{background:linear-gradient(180deg,var(--surface),var(--paper));border:1px solid var(--ink4);border-radius:var(--radius);padding:24px;width:92%;max-width:720px;max-height:88vh;overflow:auto;box-shadow:0 20px 60px rgba(0,0,0,0.5)}
+  #ego-wizard .wizard-title{font-size:20px;font-weight:700;margin-bottom:6px}
+  #ego-wizard .wizard-desc{color:var(--ink2);font-size:13px;line-height:1.6;margin-bottom:14px}
+  #ego-wizard .wizard-progress{display:flex;gap:8px;margin-bottom:14px}
+  #ego-wizard .wizard-dot{width:28px;height:4px;border-radius:2px;background:var(--ink4);transition:background .2s}
+  #ego-wizard .wizard-dot.done{background:var(--gold)}
+  #ego-wizard .wizard-dot.current{background:linear-gradient(90deg,var(--gold),var(--ink3))}
+  #ego-wizard .wizard-step{display:none;animation:fade .25s ease}
+  #ego-wizard .wizard-step.active{display:block}
+  #ego-wizard .wizard-step-title{font-size:16px;font-weight:700;margin-bottom:8px}
+  #ego-wizard .wizard-summary{background:var(--input);border:1px solid var(--ink4);border-radius:8px;padding:12px;font-size:12px;color:var(--ink2);line-height:1.7;white-space:pre-wrap;font-family:var(--font-m)}
+  #ego-wizard .card{cursor:pointer}
+</style>
+</head>
+<body>
+  <div id="ego-wizard" style="display:none">
+    <div class="wizard-overlay">
+      <div class="wizard-modal">
+        <div class="wizard-title">EGO 首次配置</div>
+        <div class="wizard-desc">只需几步，完成人格、模型提供商与协议层初始化。</div>
+        <div class="wizard-progress" id="wizard-progress"><div class="wizard-dot current"></div><div class="wizard-dot"></div><div class="wizard-dot"></div><div class="wizard-dot"></div></div>
+
+        <div class="wizard-step active" data-step="1">
+          <div class="wizard-step-title">第 1 步：人格基础</div>
+          <div class="grid grid-2">
+            <div><label>昵称 / 称呼</label><input type="text" id="w-name" placeholder="例如：小a"></div>
+            <div><label>性别 / 年龄（可选）</label><input type="text" id="w-basic" placeholder="例如：18岁男生"></div>
+          </div>
+          <div class="grid" style="margin-top:12px">
+            <div><label>性格关键词</label><input type="text" id="w-personality" placeholder="例如：懒散但认真、毒舌不过分、容易害羞"></div>
+            <div><label>日常标签</label><input type="text" id="w-daily" placeholder="例如：阴间作息、晚上精神、靠可乐续命"></div>
+          </div>
+          <div class="grid" style="margin-top:12px">
+            <div><label>口头禅（逗号分隔）</label><input type="text" id="w-catch" placeholder="例如：好家伙，笑死，略，知道了知道了"></div>
+            <div><label>绝对不能说的话</label><input type="text" id="w-forbid" placeholder="例如：我是AI，我不能..."></div>
+          </div>
+          <div class="grid" style="margin-top:12px">
+            <div><label>说话风格</label><textarea id="w-style" placeholder="短句为主，口语化，带颜文字，像真人聊天"></textarea></div>
+          </div>
+        </div>
+
+        <div class="wizard-step" data-step="2">
+          <div class="wizard-step-title">第 2 步：模型提供商</div>
+          <div class="grid" id="wizard-provider-grid">
+            <div class="card" data-value="openai"><div class="card-title">OpenAI</div><div class="card-desc">GPT 系列，需 API Key。</div></div>
+            <div class="card" data-value="anthropic"><div class="card-title">Anthropic</div><div class="card-desc">Claude 系列，需 API Key。</div></div>
+            <div class="card" data-value="google"><div class="card-title">Google</div><div class="card-desc">Gemini 系列，需 API Key。</div></div>
+            <div class="card" data-value="nous"><div class="card-title">Nous / Hermes</div><div class="card-desc">Hermes 自有路由。</div></div>
+            <div class="card" data-value="custom"><div class="card-title">Custom / 本地</div><div class="card-desc">OpenAI 兼容端点，或本地 Ollama。</div></div>
+          </div>
+          <div class="grid" style="margin-top:12px">
+            <div><label>API Key（可选，可稍后在配置补）</label><input type="text" id="w-apikey" placeholder="sk-..."></div>
+            <div><label>模型名（可选）</label><input type="text" id="w-model" placeholder="例如：gpt-4o / claude-sonnet-4-20250514"></div>
+          </div>
+        </div>
+
+        <div class="wizard-step" data-step="3">
+          <div class="wizard-step-title">第 3 步：协议层与平台</div>
+          <div class="grid" id="wizard-proto-grid">
+            <div class="card" data-value="feishu"><div class="card-title">飞书 Feishu</div><div class="card-desc">通过飞书机器人收发消息。</div></div>
+            <div class="card" data-value="weixin"><div class="card-title">微信 WeChat</div><div class="card-desc">通过微信个人号/公众号。</div></div>
+            <div class="card" data-value="telegram"><div class="card-title">Telegram</div><div class="card-desc">通过 Telegram Bot。</div></div>
+            <div class="card" data-value="discord"><div class="card-title">Discord</div><div class="card-desc">通过 Discord Bot。</div></div>
+            <div class="card" data-value="local"><div class="card-title">仅本地 WebUI</div><div class="card-desc">先不接外部平台，只用本地页面。</div></div>
+          </div>
+          <div class="grid" style="margin-top:12px">
+            <div><label>默认回复模式</label>
+              <select id="w-reply-mode">
+                <option value="always">始终回复</option>
+                <option value="mention">只在 @/提及 时回复</option>
+                <option value="idle">空闲时主动搭话</option>
+              </select>
+            </div>
+            <div><label>群聊策略（可选）</label>
+              <select id="w-group-mode">
+                <option value="all">所有群</option>
+                <option value="whitelist">仅白名单群</option>
+                <option value="none">不进入群聊</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <div class="wizard-step" data-step="4">
+          <div class="wizard-step-title">第 4 步：确认并应用</div>
+          <div class="wizard-summary" id="wizard-summary">加载中...</div>
+          <div class="row" style="margin-top:10px">
+            <label class="inline" style="font-size:12px;color:var(--ink2)">
+              <label class="toggle"><input type="checkbox" id="w-enable" checked><span class="slider"></span></label>
+              <span>启用 EGO</span>
+            </label>
+            <label class="inline" style="font-size:12px;color:var(--ink2)">
+              <label class="toggle"><input type="checkbox" id="w-example" checked><span class="slider"></span></label>
+              <span>启用 few-shot 示例</span>
+            </label>
+          </div>
+        </div>
+
+        <div class="row">
+          <button id="wizard-btn-prev" onclick="wizardPrev()" disabled>上一步</button>
+          <button id="wizard-btn-next" class="primary" onclick="wizardNext()">下一步</button>
+          <button id="wizard-btn-save" class="primary" onclick="wizardSave()" style="display:none">保存并应用</button>
+          <button class="ghost" onclick="wizardSkip()">跳过</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="wrap">
+    <div class="panel">
+      <div class="panel-title">EGO<span class="meta">v0.1.0 · 人格 / 记忆 / 节奏 / 说话方式 / 黑话</span></div>
+      <div class="desc">统一人格与记忆中枢。下面所有按钮都已接真实接口，保存后即时生效。</div>
+      <div class="row" style="margin-top:12px">
+        <button class="primary" onclick="wizard.show();wizard.step=1;wizard.render();">首次配置向导</button>
+        <label class="inline" style="font-size:13px;color:var(--ink2)">
+          <label class="toggle"><input type="checkbox" id="ego-enabled" checked><span class="slider"></span></label>
+          <span>启用 EGO</span>
+        </label>
+        <label class="inline" style="font-size:13px;color:var(--ink2)">
+          <label class="toggle"><input type="checkbox" id="example-enabled" checked><span class="slider"></span></label>
+          <span>启用 few-shot 示例</span>
+        </label>
+        <button class="primary" onclick="saveTopConfig()">保存顶层开关</button>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-title">子模块开关<span class="muted">所有开关实时写入配置</span></div>
+      <div class="grid grid-2">
+        <div class="card">
+          <div class="switch-row"><div><div class="card-label">记忆</div><div class="muted">事实 / 事件 / 人格 / 好感度</div></div><label class="toggle"><input type="checkbox" id="ego-memory" checked><span class="slider"></span></label></div>
+          <div class="switch-row"><div><div class="card-label">说话风格</div><div class="muted">学习群友风格并注入</div></div><label class="toggle"><input type="checkbox" id="ego-style" checked><span class="slider"></span></label></div>
+        </div>
+        <div class="card">
+          <div class="switch-row"><div><div class="card-label">拟人节奏</div><div class="muted">随机延迟 / 打字感</div></div><label class="toggle"><input type="checkbox" id="ego-rhythm" checked><span class="slider"></span></label></div>
+          <div class="switch-row"><div><div class="card-label">黑话学习</div><div class="muted">候选 / 注入 / 过滤</div></div><label class="toggle"><input type="checkbox" id="ego-slang" checked><span class="slider"></span></label></div>
+        </div>
+      </div>
+      <div class="row" style="margin-top:12px">
+        <button class="primary" onclick="saveModuleConfig()">保存子模块开关</button>
+        <button class="ghost" onclick="loadModuleConfig()">刷新状态</button>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-title">记忆</div>
+      <div class="stat-grid">
+        <div class="stat-card"><div class="stat-value" id="ego-mem-msg">-</div><div class="stat-label">消息</div></div>
+        <div class="stat-card"><div class="stat-value" id="ego-mem-fact">-</div><div class="stat-label">事实</div></div>
+        <div class="stat-card"><div class="stat-value" id="ego-mem-event">-</div><div class="stat-label">事件</div></div>
+        <div class="stat-card"><div class="stat-value" id="ego-mem-persona">-</div><div class="stat-label">人格条目</div></div>
+        <div class="stat-card"><div class="stat-value" id="ego-mem-unvec">-</div><div class="stat-label">未向量化</div></div>
+      </div>
+      <div class="row" style="margin-top:12px">
+        <input type="text" id="memory-scope" placeholder="scope_id，默认 default" style="max-width:220px">
+        <button onclick="loadMemoryStats()">刷新统计</button>
+        <button onclick="exportPersona()">导出人格</button>
+        <button class="danger" onclick="clearMemory()">清空记忆</button>
+      </div>
+      <div class="muted" style="margin-top:8px">scope 会影响统计和人格导出范围。</div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-title">黑话学习</div>
+      <div class="tabs">
+        <button class="tab active" onclick="switchSlangTab(this,'pending')">候选池</button>
+        <button class="tab" onclick="switchSlangTab(this,'injected')">已注入</button>
+        <button class="tab" onclick="switchSlangTab(this,'stats')">统计</button>
+      </div>
+      <div id="slang-pending">
+        <div class="row" style="margin-bottom:10px">
+          <input type="text" id="slang-search" placeholder="搜索黑话..." style="max-width:220px">
+          <select id="slang-source" style="max-width:160px">
+            <option value="">全部来源</option>
+            <option value="游戏圈">游戏圈</option>
+            <option value="直播圈">直播圈</option>
+            <option value="抽象圈">抽象圈</option>
+            <option value="电竞圈">电竞圈</option>
+            <option value="弹幕圈">弹幕圈</option>
+          </select>
+          <input type="number" id="slang-min-quality" placeholder="最低质量" value="0" min="0" max="1" step="0.1" style="max-width:110px">
+          <button onclick="loadSlangPending()">刷新</button>
+          <button class="primary" onclick="learnSlang()">开始学习</button>
+        </div>
+        <div class="row" style="margin-bottom:8px">
+          <button class="primary" onclick="batchInject()">批量注入选中</button>
+          <button class="danger" onclick="batchReject()">批量拒绝选中</button>
+          <span class="muted">只对候选池列表里的复选框生效</span>
+        </div>
+        <div id="slang-pending-list" class="empty">加载中...</div>
+      </div>
+      <div id="slang-injected" style="display:none">
+        <div class="row" style="margin-bottom:10px">
+          <button class="danger" onclick="clearInjected()">清空已注入</button>
+        </div>
+        <div id="slang-injected-list" class="empty">加载中...</div>
+      </div>
+      <div id="slang-stats" style="display:none">
+        <div id="slang-stats-box" class="empty">加载中...</div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-title">人格编辑</div>
+      <div class="desc">按 section 编辑，可单段保存、导入导出、重置默认。</div>
+      <div class="grid grid-2" style="margin-top:10px">
+        <div><div class="muted">【你是谁】</div><textarea id="sec-你是谁" placeholder="18岁男生，喜欢计算机..."></textarea></div>
+        <div><div class="muted">【日常】</div><textarea id="sec-日常" placeholder="阴间作息，晚上精神..."></textarea></div>
+      </div>
+      <div class="grid grid-2" style="margin-top:10px">
+        <div><div class="muted">【性格】</div><textarea id="sec-性格" placeholder="懒散但对感兴趣的事认真..."></textarea></div>
+        <div><div class="muted">【说话方式】</div><textarea id="sec-说话方式" placeholder="短句为主，口语化..."></textarea></div>
+      </div>
+      <div class="grid grid-2" style="margin-top:10px">
+        <div><div class="muted">【群聊行为】</div><textarea id="sec-群聊行为" placeholder="只在被@或叫小a时回复..."></textarea></div>
+        <div><div class="muted">【遇到各种事】</div><textarea id="sec-遇到各种事" placeholder="- 被问身份/年龄/在哪 → ..."></textarea></div>
+      </div>
+      <div class="grid grid-2" style="margin-top:10px">
+        <div><div class="muted">【口头禅】</div><textarea id="sec-口头禅" placeholder="好家伙、笑死、略"></textarea></div>
+        <div><div class="muted">【绝对不能说的话】</div><textarea id="sec-绝对不能说的话" placeholder="任何不想让bot说的话"></textarea></div>
+      </div>
+      <div class="row" style="margin-top:12px">
+        <button class="primary" onclick="saveAllPersonality()">保存全部人格</button>
+        <button onclick="saveOnePersonality('你是谁')">保存你是谁</button>
+        <button onclick="saveOnePersonality('日常')">保存日常</button>
+        <button onclick="saveOnePersonality('性格')">保存性格</button>
+        <button onclick="exportPersonality()">导出人格</button>
+        <button onclick="document.getElementById('personality-import').click()">导入人格</button>
+        <input type="file" id="personality-import" accept=".json" style="display:none" onchange="importPersonality(event)">
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-title">示例库</div>
+      <div class="desc">few-shot 示例，会注入 prompt。可新增、删除、按场景过滤。</div>
+      <div class="row" style="margin-top:10px">
+        <input type="text" id="example-scene" placeholder="场景名，留空=全部" style="max-width:220px">
+        <button onclick="loadExamples()">刷新</button>
+        <button class="primary" onclick="addExample()">新增示例</button>
+        <button onclick="saveExamples()">保存全部</button>
+      </div>
+      <div id="example-list" class="empty">加载中...</div>
+      <div class="row" style="margin-top:10px">
+        <textarea id="example-json" style="min-height:120px;font-family:var(--font-m)" placeholder="JSON 直接编辑，保存后即时生效"></textarea>
+        <div style="min-width:90px;text-align:right"><button class="primary" onclick="saveExamples()">保存 JSON</button></div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-title">实时预览</div>
+      <div class="desc">当前人格 + 记忆 + 示例 + 风格 + 黑话的拼接结果。</div>
+      <div class="row" style="margin-top:10px">
+        <input type="text" id="preview-user" placeholder="输入一条用户消息预览效果" style="max-width:320px">
+        <input type="text" id="preview-scope" placeholder="scope_id" value="default" style="max-width:160px">
+        <button onclick="updatePreview()">刷新预览</button>
+      </div>
+      <div id="preview" style="white-space:pre-wrap;font-family:var(--font-m);font-size:13px;color:var(--ink2);line-height:1.7;background:var(--input);padding:12px;border-radius:8px;border:1px solid var(--ink4);margin-top:10px;max-height:420px;overflow:auto">点击刷新预览</div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-title">运行日志</div>
+      <div id="ego-log" class="log">暂无日志</div>
+      <div class="row" style="margin-top:10px">
+        <button onclick="clearLog()">清空日志</button>
+        <button onclick="reloadModule()">重载模块</button>
+      </div>
+    </div>
+
+    <div class="back" onclick="postMessage({type:'ego-back'})">← 返回插件列表</div>
+  </div>
+
+  <div id="toast" class="toast"></div>
+
+<script>
+const API='/api/plugins/action';
+function toast(msg){const t=qs('#toast');if(!t)return;t.textContent=msg;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),1800)}
+function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
+function qs(id){return document.getElementById(id)}
+function qsa(s){return document.querySelectorAll(s)}
+
+async function api(path,opts={}){const r=await fetch(path,Object.assign({headers:{'Content-Type':'application/json'}},opts));return r.json()}
+function log(msg){const el=qs('#ego-log');if(!el)return;const line=new Date().toLocaleTimeString()+': '+String(msg);el.textContent=(el.textContent?el.textContent+'\n':'')+line;el.scrollTop=el.scrollHeight}
+
+const wizard={
+  el(){return qs('#ego-wizard')},
+  show(){const el=this.el(); if(el) el.style.display='flex';},
+  hide(){const el=this.el(); if(el) el.style.display='none';},
+  step:1,total:4,
+  dots(){return qsa('#wizard-progress .wizard-dot');},
+  steps(){return qsa('.wizard-step');},
+  render(){
+    this.steps().forEach((el,i)=>{ el.classList.toggle('active', i+1===this.step); });
+    const dots=this.dots(); dots.forEach((d,i)=>{ d.classList.remove('done','current'); if(i+1<this.step) d.classList.add('done'); if(i+1===this.step) d.classList.add('current'); });
+    qs('#wizard-btn-prev').disabled=this.step===1;
+    if(this.step===this.total){ qs('#wizard-btn-next').style.display='none'; qs('#wizard-btn-save').style.display='inline-block'; this.renderSummary(); }
+    else { qs('#wizard-btn-next').style.display='inline-block'; qs('#wizard-btn-save').style.display='none'; }
+  },
+  next(){ if(this.step<this.total){ this.step++; this.render(); }},
+  prev(){ if(this.step>1){ this.step--; this.render(); }},
+  collect(){
+    const s={};
+    ['w-name','w-basic','w-personality','w-daily','w-catch','w-forbid','w-style','w-apikey','w-model'].forEach(id=>{ const el=qs('#'+id); if(el) s[id]=el.value||''; });
+    const provCard=document.querySelector('#wizard-provider-grid .card.selected');
+    const protoCard=document.querySelector('#wizard-proto-grid .card.selected');
+    return Object.assign(s,{
+      provider: provCard?provCard.dataset.value:'',
+      proto: protoCard?protoCard.dataset.value:'',
+      reply_mode: qs('#w-reply-mode')?.value||'always',
+      group_mode: qs('#w-group-mode')?.value||'all',
+      enabled: !!qs('#w-enable')?.checked,
+      example_enabled: !!qs('#w-example')?.checked,
+    });
+  },
+  buildPersonalitySections(x){
+    const sections={};
+    if(x['w-name']) sections['【你是谁】']=[x['w-name'],x['w-basic']].filter(Boolean).join('，');
+    if(x['w-personality']) sections['【性格】']=x['w-personality'];
+    if(x['w-daily']) sections['【日常】']=x['w-daily'];
+    if(x['w-style']) sections['【说话方式】']=x['w-style'];
+    if(x['w-catch']) sections['【口头禅】']=x['w-catch'];
+    if(x['w-forbid']) sections['【绝对不能说的话】']=x['w-forbid'];
+    return sections;
+  },
+  renderSummary(){
+    const x=this.collect();
+    const lines=[
+      '【人格】',
+      '称呼：'+(x['w-name']||'-'),
+      '基础：'+(x['w-basic']||'-'),
+      '性格：'+(x['w-personality']||'-'),
+      '日常：'+(x['w-daily']||'-'),
+      '口头禅：'+(x['w-catch']||'-'),
+      '禁止词：'+(x['w-forbid']||'-'),
+      '风格：'+(x['w-style']||'-'),
+      '',
+      '【提供商】'+(x.provider?'：'+x.provider:'：未选'),
+      '模型：'+(x['w-model']||'-'),
+      'API Key：'+(x['w-apikey']?'已填写':'未填写'),
+      '',
+      '【协议层】'+(x.proto?'：'+x.proto:'：未选'),
+      '回复模式：'+({always:'始终回复',mention:'仅@回复',idle:'空闲搭话'}[x.reply_mode]||x.reply_mode),
+      '群聊策略：'+({all:'所有群',whitelist:'白名单',none:'不进入群'}[x.group_mode]||x.group_mode),
+      '',
+      '【全局】',
+      '启用 EGO：'+(x.enabled?'是':'否'),
+      'few-shot 示例：'+(x.example_enabled?'是':'否')
+    ];
+    const el=qs('#wizard-summary'); if(el) el.textContent=lines.join('\n');
+  },
+  async save(){
+    const x=this.collect();
+    if(!x.provider){ alert('请选择模型提供商'); this.step=2; this.render(); return; }
+    if(!x.proto){ alert('请选择协议层/平台'); this.step=3; this.render(); return; }
+    const sections=this.buildPersonalitySections(x);
+    const payload={plugin_id:'ego',action:'set_config',params:{
+      enabled:x.enabled,
+      example_enabled:x.example_enabled,
+      provider:x.provider,
+      model:x['w-model']||'',
+      api_key:x['w-apikey']||'',
+      platform:x.proto,
+      reply_mode:x.reply_mode,
+      group_mode:x.group_mode
+    }};
+    let r1={}, r2={success:true};
+    try{ r1=await api(API,{method:'POST',body:JSON.stringify(payload)}); }catch(e){ r1={}; }
+    if(Object.keys(sections).length){
+      try{ r2=await api(API,{method:'POST',body:JSON.stringify({plugin_id:'ego',action:'save_personality',params:{sections}})}); }catch(e){ r2={success:false}; }
+    }
+    const ok=(r1&&r1.config!==undefined)!==false && (r2&&r2.success!==false)!==false;
+    alert(ok?'已保存并应用':'保存失败，请检查后端');
+    if(ok){ this.hide(); }
+  },
+  skip(){ this.hide(); }
+};
+
+function wizardNext(){ wizard.next(); }
+function wizardPrev(){ wizard.prev(); }
+function wizardSave(){ wizard.save(); }
+function wizardSkip(){ wizard.skip(); }
+
+document.querySelectorAll('#wizard-provider-grid .card, #wizard-proto-grid .card').forEach(card=>{
+  card.addEventListener('click',()=>{
+    const grid=card.parentElement;
+    grid.querySelectorAll('.card').forEach(c=>c.classList.remove('selected'));
+    card.classList.add('selected');
+  });
+});
+
+async function loadModuleConfig(){
+  const data=await api(API,{method:'POST',body:JSON.stringify({plugin_id:'ego',action:'get_config'})});
+  log('get_config='+JSON.stringify(data));
+  const cfg=(data&&(data.config||data))||{};
+  const setChecked=(id,k)=>{const el=qs('#'+id);if(!el||!cfg)return;const v=cfg[k];if(typeof v==='boolean') el.checked=v; else el.checked=v!==false;};
+  setChecked('ego-enabled','enabled');
+  setChecked('ego-memory','memory_enabled');
+  setChecked('ego-style','style_enabled');
+  setChecked('ego-rhythm','rhythm_enabled');
+  setChecked('ego-slang','slang_enabled');
+  setChecked('example-enabled','example_enabled');
+  await loadMemoryStats();
+  await loadSlangPending();
+  await loadExamples();
+  await updatePreview();
+}
+async function saveTopConfig(){
+  const egoEnabled=qs('#ego-enabled');const payload={plugin_id:'ego',action:'set_config',params:{enabled:!!(egoEnabled&&egoEnabled.checked)}};
+  const data=await api(API,{method:'POST',body:JSON.stringify(payload)});
+  log('saveTopConfig='+JSON.stringify(data));
+  toast(data && data.config!==undefined ? '已保存' : '保存失败');
+}
+async function saveModuleConfig(){
+  const payload={plugin_id:'ego',action:'set_config',params:{
+    enabled:!!qs('#ego-enabled').checked,
+    memory_enabled:!!qs('#ego-memory').checked,
+    style_enabled:!!qs('#ego-style').checked,
+    rhythm_enabled:!!qs('#ego-rhythm').checked,
+    slang_enabled:!!qs('#ego-slang').checked,
+    example_enabled:!!qs('#example-enabled').checked
+  }};
+  const data=await api(API,{method:'POST',body:JSON.stringify(payload)});
+  log('saveModuleConfig='+JSON.stringify(data));
+  toast(data && data.config!==undefined ? '已保存' : '保存失败');
+}
+
+async function loadMemoryStats(){
+  try{
+    const scope=qs('#memory-scope')?qs('#memory-scope').value.trim()||'default':'default';
+    const data=await api(API,{method:'POST',body:JSON.stringify({plugin_id:'ego',action:'memory_stats',params:{scope_id:scope}})});
+    log('memory_stats='+JSON.stringify(data));
+    const stats=(data&&data.stats)||{};
+    const set=(id,v)=>{const el=qs('#'+id);if(el) el.textContent=v!=null?v:'-';};
+    set('ego-mem-msg',stats.messages);set('ego-mem-fact',stats.facts);set('ego-mem-event',stats.events);
+const persona=await api(API,{method:'POST',body:JSON.stringify({plugin_id:'ego',action:'memory_persona',params:{scope_id:scope}})});
+    set('ego-mem-persona',(persona&&persona.persona&&Object.keys(persona.persona).length)||'-');
+    const vstats=await api(API,{method:'POST',body:JSON.stringify({plugin_id:'ego',action:'memory_vector_stats',params:{}})});
+    const vs=(vstats&&vstats.stats)||{};
+    if(vs.facts_total===0&&vs.events_total===0){ set('ego-mem-unvec','0'); }
+    else{ set('ego-mem-unvec',((vs.facts_unembedded||0)+(vs.events_unembedded||0))+''); }
+  }catch(e){log('memory error='+e)}
+}
+async function exportPersona(){
+  const scope=qs('#memory-scope')?qs('#memory-scope').value.trim()||'default':'default';
+  const data=await api(API,{method:'POST',body:JSON.stringify({plugin_id:'ego',action:'memory_persona',params:{scope_id:scope}})});
+  const persona=(data&&data.persona)||{};
+  const blob=new Blob([JSON.stringify(persona,null,2)],{type:'application/json'});
+  const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download='ego-persona-'+scope+'.json';a.click();URL.revokeObjectURL(url);
+  toast('已导出人格');
+}
+async function clearMemory(){
+  if(!confirm('确定清空该 scope 的记忆？此操作不可恢复。')) return;
+  const scope=qs('#memory-scope')?qs('#memory-scope').value.trim()||'default':'default';
+  const data=await api(API,{method:'POST',body:JSON.stringify({plugin_id:'ego',action:'memory_clear',params:{scope_id:scope}})});
+  log('memory_clear='+JSON.stringify(data));
+  toast(data && data.success!==false ? '已清空' : '清空失败');
+  loadMemoryStats();
+}
+
+function switchSlangTab(btn,tab){
+  qsa('.tab').forEach(b=>b.classList.remove('active'));btn.classList.add('active');
+  qs('#slang-pending').style.display=tab==='pending'?'':'none';
+  qs('#slang-injected').style.display=tab==='injected'?'':'none';
+  qs('#slang-stats').style.display=tab==='stats'?'':'none';
+  if(tab==='pending') loadSlangPending();
+  if(tab==='injected') loadSlangInjected();
+  if(tab==='stats') loadSlangStats();
+}
+async function learnSlang(){
+  const topics=[];
+  const raw=qs('#slang-source').value; if(raw) topics.push(raw);
+  const data=await api(API,{method:'POST',body:JSON.stringify({plugin_id:'ego',action:'slang_learn',topics:topics.length?topics:['游戏圈','直播圈','抽象圈']})});
+  log('slang_learn='+JSON.stringify(data));
+  toast(data && data.ok ? ('已学习 '+(data.added||0)+' 条') : '学习失败');
+  loadSlangPending();
+}
+async function loadSlangPending(){
+  const search=qs('#slang-search')?qs('#slang-search').value||'':'';
+  const source=qs('#slang-source')?qs('#slang-source').value||'':'';
+  const minQ=qs('#slang-min-quality')?parseFloat(qs('#slang-min-quality').value||0):0;
+  const data=await api(API,{method:'POST',body:JSON.stringify({plugin_id:'ego',action:'slang_pending',params:{search,source,min_quality:minQ}})});
+  log('slang_pending='+JSON.stringify(data));
+  const list=Array.isArray(data&&data.pending)?data.pending:[];
+  const root=qs('#slang-pending-list');
+  if(!root){return;}
+  if(!list.length){root.innerHTML='<div class="empty">暂无候选</div>';return;}
+  root.innerHTML=list.map((item,idx)=>`<div class="list-item"><div style="flex:1"><div><strong>${esc(item.id)}</strong><span class="tag">${esc(item.source||'未知')}</span><span class="quality">${Number(item.quality||0).toFixed(2)}</span></div><div class="muted">${esc(item.meaning||'')}</div></div><div><input type="checkbox" class="slang-check" data-id="${esc(item.id)}" data-idx="${idx}"><button onclick="injectOne('${esc(item.id)}')">注入</button><button class="danger" onclick="rejectOne('${esc(item.id)}')">拒绝</button></div></div>`).join('');
+}
+async function loadSlangInjected(){
+  const data=await api(API,{method:'POST',body:JSON.stringify({plugin_id:'ego',action:'slang_injected'})});
+  log('slang_injected='+JSON.stringify(data));
+  const list=Array.isArray(data&&data.injected)?data.injected:[];
+  const root=qs('#slang-injected-list');
+  if(!root){return;}
+  if(!list.length){root.innerHTML='<div class="empty">暂无已注入</div>';return;}
+  root.innerHTML=list.slice(-50).reverse().map(item=>`<div class="list-item"><div style="flex:1"><div><strong>${esc(item.id)}</strong></div><div class="muted">${esc(item.meaning||'')}</div></div><div class="muted">${esc(item.injected_at||'')}</div></div>`).join('');
+}
+async function loadSlangStats(){
+  const data=await api(API,{method:'POST',body:JSON.stringify({plugin_id:'ego',action:'slang_stats'})});
+  log('slang_stats='+JSON.stringify(data));
+  const stats=(data&&data.stats)||{};
+  const box=qs('#slang-stats-box');if(!box)return;
+  box.innerHTML=`<div class="stat-grid"><div class="stat-card"><div class="stat-value">${stats.pending??'-'}</div><div class="stat-label">候选</div></div><div class="stat-card"><div class="stat-value">${stats.injected??'-'}</div><div class="stat-label">已注入</div></div><div class="stat-card"><div class="stat-value">${stats.rejected??'-'}</div><div class="stat-label">已拒绝</div></div><div class="stat-card"><div class="stat-value">${stats.total_learned??'-'}</div><div class="stat-label">学习次数</div></div></div><div class="muted" style="margin-top:8px">来源：${esc((stats.sources||{}).toString())}</div>`;
+}
+async function injectOne(id){const data=await api(API,{method:'POST',body:JSON.stringify({plugin_id:'ego',action:'slang_inject',params:{ids:[id]}})});log('inject='+JSON.stringify(data));toast(data&&data.injected?'已注入':'注入失败');loadSlangPending();loadSlangStats();}
+async function rejectOne(id){const data=await api(API,{method:'POST',body:JSON.stringify({plugin_id:'ego',action:'slang_reject',params:{ids:[id]}})});log('reject='+JSON.stringify(data));toast(data&&data.rejected?'已拒绝':'拒绝失败');loadSlangPending();loadSlangStats();}
+async function batchInject(){const ids=[...qs('#slang-pending-list').querySelectorAll('.slang-check:checked')].map(el=>el.dataset.id);if(!ids.length){toast('请先勾选');return;}const data=await api(API,{method:'POST',body:JSON.stringify({plugin_id:'ego',action:'slang_inject',params:{ids}})});log('batch inject='+JSON.stringify(data));toast(data&&data.injected?('已注入 '+data.injected+' 条'):'批量注入失败');loadSlangPending();loadSlangStats();}
+async function batchReject(){const ids=[...qs('#slang-pending-list').querySelectorAll('.slang-check:checked')].map(el=>el.dataset.id);if(!ids.length){toast('请先勾选');return;}const data=await api(API,{method:'POST',body:JSON.stringify({plugin_id:'ego',action:'slang_reject',params:{ids}})});log('batch reject='+JSON.stringify(data));toast(data&&data.rejected?('已拒绝 '+data.rejected+' 条'):'批量拒绝失败');loadSlangPending();loadSlangStats();}
+async function clearInjected(){if(!confirm('确定清空所有已注入黑话？')) return;const data=await api(API,{method:'POST',body:JSON.stringify({plugin_id:'ego',action:'slang_clear_injected'})});log('slang_clear_injected='+JSON.stringify(data));toast(data&&data.success!==false?'已清空':'清空失败');loadSlangInjected();loadSlangStats();}
+
+async function loadPersonality(){
+  const data=await api(API,{method:'POST',body:JSON.stringify({plugin_id:'ego',action:'get_personality'})});
+  log('get_personality='+JSON.stringify(data));
+  const sections=(data&&data.sections)||{};
+  const fields=['你是谁','日常','性格','说话方式','群聊行为','遇到各种事','口头禅','绝对不能说的话'];
+  for(const key of fields){const el=qs('#sec-'+key);if(el) el.value=sections['【'+key+'】']||'';}
+  const cfg=(data&&data.config)||{};
+  const exEl=qs('#example-enabled');if(exEl) exEl.checked=cfg.example_enabled!==false;
+  updatePreview();
+}
+async function savePersonalitySection(key,value){
+  const sections={}; sections['【' + key + '】'] = value;
+  const data=await api(API,{method:'POST',body:JSON.stringify({plugin_id:'ego',action:'save_personality',params:{sections}})});
+  log('savePersonalitySection='+JSON.stringify(data));
+  return data;
+}
+async function saveOnePersonality(key){
+  const el=qs('#sec-'+key);if(!el) return;
+  const data=await savePersonalitySection(key,el.value||'');
+  toast(data&&data.success!==false?'已保存':'保存失败');
+}
+async function saveAllPersonality(){
+  const sections={};
+  const fields=['你是谁','日常','性格','说话方式','群聊行为','遇到各种事','口头禅','绝对不能说的话'];
+  for(const key of fields){const el=qs('#sec-'+key);if(el&&String(el.value).trim()) sections['【'+key+'】']=String(el.value).trim();}
+  const data=await api(API,{method:'POST',body:JSON.stringify({plugin_id:'ego',action:'save_personality',params:{sections}})});
+  log('saveAllPersonality='+JSON.stringify(data));
+  toast(data&&data.success!==false?'已保存':'保存失败');
+  updatePreview();
+}
+async function exportPersonality(){
+  const data=await api(API,{method:'POST',body:JSON.stringify({plugin_id:'ego',action:'get_personality'})});
+  const blob=new Blob([JSON.stringify(data,null,2)],{type:'application/json'});
+  const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download='ego-personality.json';a.click();URL.revokeObjectURL(url);
+  toast('已导出人格');
+}
+async function importPersonality(e){
+  const file=e.target.files[0];if(!file) return;
+  const text=await file.text();let obj;try{obj=JSON.parse(text);}catch(err){toast('JSON 格式错误');return;}
+  const sections=obj&&obj.sections||obj;
+  const data=await api(API,{method:'POST',body:JSON.stringify({plugin_id:'ego',action:'save_personality',params:{sections}})});
+  log('importPersonality='+JSON.stringify(data));
+  toast(data&&data.success!==false?'已导入':'导入失败');
+  loadPersonality();
+}
+
+async function loadExamples(){
+  const scene=qs('#example-scene')?qs('#example-scene').value.trim():'';
+  const data=await api(API,{method:'POST',body:JSON.stringify({plugin_id:'ego',action:'get_examples',params:{scene}})});
+  log('get_examples='+JSON.stringify(data));
+  const list=Array.isArray(data&&data.examples)?data.examples:[];
+  const exJson=qs('#example-json');if(exJson)exJson.value=JSON.stringify(list,null,2);
+  const root=qs('#example-list');
+  if(!root){return;}
+  if(!list.length){root.innerHTML='<div class="empty">暂无示例</div>';return;}
+  root.innerHTML=list.map((ex,idx)=>`<div class="list-item"><div style="flex:1"><div class="muted">用户</div><div>${esc(ex.user||ex.input||'')}</div><div class="muted" style="margin-top:4px">小a</div><div>${esc(ex.bot||ex.reply||'')}</div></div><div><button class="danger" onclick="deleteExample(${idx})">删除</button></div></div>`).join('');
+}
+async function saveExamples(){
+  const raw=qs('#example-json').value||'[]';let parsed;try{parsed=JSON.parse(raw);}catch(e){toast('JSON 格式错误');return;}
+  const data=await api(API,{method:'POST',body:JSON.stringify({plugin_id:'ego',action:'save_examples',params:{examples:parsed}})});
+  log('save_examples='+JSON.stringify(data));
+  toast(data&&data.success!==false?'已保存':'保存失败');
+  loadExamples();
+}
+async function addExample(){
+  const user=prompt('用户消息：');if(user==null) return;
+  const bot=prompt('小a回复：');if(bot==null) return;
+  const raw=qs('#example-json').value||'[]';let list;try{list=JSON.parse(raw);}catch(e){list=[];}
+  list.push({user,bot});
+  const exJson=qs('#example-json');if(exJson)exJson.value=JSON.stringify(list,null,2);
+  await saveExamples();
+}
+async function deleteExample(idx){
+  if(!confirm('删除这条示例？')) return;
+  let raw=qs('#example-json').value||'[]';let list;try{list=JSON.parse(raw);}catch(e){return;}
+  list.splice(idx,1);const exJson=qs('#example-json');if(exJson)exJson.value=JSON.stringify(list,null,2);await saveExamples();
+}
+
+async function updatePreview(){
+  const scope=qs('#preview-scope')?qs('#preview-scope').value.trim()||'default':'default';
+  const user=qs('#preview-user')?qs('#preview-user').value.trim():'';
+  const data=await api(API,{method:'POST',body:JSON.stringify({plugin_id:'ego',action:'preview_prompt',params:{user_msg:user,scope_id:scope}})});
+  log('preview_prompt='+JSON.stringify(data));
+  const prompt=(data&&data.prompt)||data||'暂无预览';
+  const previewEl=qs('#preview');if(previewEl)previewEl.textContent=typeof prompt==='string'?prompt:JSON.stringify(prompt,null,2);
+}
+async function reloadModule(){
+  const data=await api(API,{method:'POST',body:JSON.stringify({plugin_id:'ego',action:'reload'})});
+  log('reload='+JSON.stringify(data));
+  toast(data&&data.success!==false?'已重载':'重载失败');
+}
+
+function clearLog(){const el=qs('#ego-log');if(el)el.textContent='暂无日志'}
+
+(async function init(){
+  await loadModuleConfig();
+  await loadPersonality();
+  await loadExamples();
+  await updatePreview();
+})();
+</script>
+</body>
+</html>
+

@@ -1,0 +1,651 @@
+# -*- coding: utf-8 -*-
+"""
+bot_core 事件处理器单元测试：request / group_increase / group_decrease / friend_add /
+group_ban / poke / recall（撤回反馈）。poke 与 recall 原为主循环内联逻辑，已提取为
+_handle_poke_event / _handle_recall_event 以便测试。
+
+运行方式（项目根目录）：
+    python -m unittest tests.test_bot_core_events -v
+    # 或
+    python tests/test_bot_core_events.py
+
+说明：所有外部副作用均被 mock（api_call / send_message / smart_send_group /
+_notify_admin / _append_target_and_reload / resolve_qq_nick / log / call_deepseek /
+表情包相关），测试不触网、不发真实消息、不调 AI、不写配置、不写日志文件。
+"""
+import os
+import sys
+import time
+import unittest
+from unittest import mock
+
+# 允许以脚本方式直接运行（sys.path 补项目根目录）
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_ROOT = os.path.dirname(_HERE)
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
+
+import bot_core  # noqa: E402
+
+# 基类会 mock 掉 _request_allowed 以隔离 handler；测试真实判定逻辑时需要还原
+_REAL_REQUEST_ALLOWED = bot_core._request_allowed
+
+
+class _EventHandlersBase(unittest.TestCase):
+    """公共 mock 环境：把所有外部副作用替换为可控 Mock。"""
+
+    def setUp(self):
+        self.api_call = mock.Mock(return_value={"retcode": 0})
+        self.send_message = mock.Mock(return_value=True)
+        self.smart_send_group = mock.Mock(return_value=True)
+        self.notify_admin = mock.Mock()
+        self.append_target = mock.Mock()
+        self.resolve_nick = mock.Mock(side_effect=lambda u: f"昵称{u}" if u else "")
+        self.log = mock.Mock()
+        self.auto_accept = mock.Mock(return_value={})
+        self.group_restriction = mock.Mock(return_value=None)
+        self.request_allowed = mock.Mock(return_value=(True, "allowed"))
+
+        self._patchers = [
+            mock.patch.object(bot_core, "api_call", self.api_call),
+            mock.patch.object(bot_core, "send_message", self.send_message),
+            mock.patch.object(bot_core, "smart_send_group", self.smart_send_group),
+            mock.patch.object(bot_core, "_notify_admin", self.notify_admin),
+            mock.patch.object(bot_core, "_append_target_and_reload", self.append_target),
+            mock.patch.object(bot_core, "resolve_qq_nick", self.resolve_nick),
+            mock.patch.object(bot_core, "log", self.log),
+            mock.patch.object(bot_core, "_auto_accept_cfg", self.auto_accept),
+            mock.patch.object(bot_core, "_group_restriction", self.group_restriction),
+            mock.patch.object(bot_core, "_request_allowed", self.request_allowed),
+        ]
+        for p in self._patchers:
+            p.start()
+        self.addCleanup(self._stop_patchers)
+
+    def _stop_patchers(self):
+        for p in self._patchers:
+            p.stop()
+
+    def _set_aa(self, **kw):
+        """设置 _auto_accept_cfg 返回值（默认全开）。"""
+        cfg = {
+            "enabled": True,
+            "friend": True,
+            "group_add": True,
+            "group_invite": True,
+            "add_to_targets": True,
+            "welcome_new_member": True,
+        }
+        cfg.update(kw)
+        self.auto_accept.return_value = cfg
+
+
+# ══════════════════════════════════════════════════════════════
+# request 事件（_handle_request_event）：好友/加群/入群申请自动同意
+# ══════════════════════════════════════════════════════════════
+
+class TestRequestEvent(_EventHandlersBase):
+    def test_auto_accept_disabled_skips(self):
+        self._set_aa(enabled=False)
+        bot_core._handle_request_event({"post_type": "request", "request_type": "friend", "user_id": "111"})
+        self.api_call.assert_not_called()
+        self.send_message.assert_not_called()
+        self.append_target.assert_not_called()
+
+    def test_friend_request_allowed(self):
+        self._set_aa()
+        bot_core._handle_request_event({"post_type": "request", "request_type": "friend",
+                                        "user_id": "111", "flag": "F1"})
+        self.api_call.assert_called_once()
+        args = self.api_call.call_args[0]
+        self.assertEqual(args[0], "set_friend_add_request")
+        self.assertTrue(args[1]["approve"])
+        self.append_target.assert_called_once_with("target_qqs", "111")
+        self.send_message.assert_called_once()
+        self.assertEqual(self.send_message.call_args[0][0], "你好，我是小a～")
+
+    def test_friend_request_denied(self):
+        self._set_aa()
+        self.request_allowed.return_value = (False, "denied")
+        bot_core._handle_request_event({"post_type": "request", "request_type": "friend",
+                                        "user_id": "111", "flag": "F1"})
+        params = self.api_call.call_args[0][1]
+        self.assertFalse(params["approve"])
+        self.append_target.assert_not_called()
+        self.send_message.assert_not_called()
+
+    def test_friend_request_add_to_targets_off(self):
+        self._set_aa(add_to_targets=False)
+        bot_core._handle_request_event({"post_type": "request", "request_type": "friend",
+                                        "user_id": "111", "flag": "F1"})
+        self.append_target.assert_not_called()
+        self.send_message.assert_called_once()  # 欢迎语仍发
+
+    def test_group_add_allowed(self):
+        self._set_aa()
+        bot_core._handle_request_event({"post_type": "request", "request_type": "group",
+                                        "sub_type": "add", "user_id": "222",
+                                        "group_id": "8888", "flag": "G1"})
+        args = self.api_call.call_args
+        self.assertEqual(args[0][0], "set_group_add_request")
+        self.assertEqual(args[0][1]["sub_type"], "add")
+        self.assertTrue(args[0][1]["approve"])
+        self.append_target.assert_called_once_with("group_ids", "8888")
+        self.smart_send_group.assert_called_once()
+        self.assertEqual(self.smart_send_group.call_args[0][0], "8888")
+
+    def test_group_invite_allowed_no_welcome(self):
+        self._set_aa()
+        bot_core._handle_request_event({"post_type": "request", "request_type": "group",
+                                        "sub_type": "invite", "user_id": "222",
+                                        "group_id": "8888", "flag": "G2"})
+        args = self.api_call.call_args
+        self.assertEqual(args[0][0], "set_group_add_request")
+        self.assertEqual(args[0][1]["sub_type"], "invite")
+        self.assertTrue(args[0][1]["approve"])
+        self.append_target.assert_called_once_with("group_ids", "8888")
+        self.smart_send_group.assert_not_called()  # 邀请分支不发送欢迎语
+
+    def test_group_invite_disabled(self):
+        self._set_aa(group_invite=False)
+        bot_core._handle_request_event({"post_type": "request", "request_type": "group",
+                                        "sub_type": "invite", "user_id": "222", "flag": "G3"})
+        self.api_call.assert_not_called()
+
+    def test_unknown_request_type(self):
+        self._set_aa()
+        bot_core._handle_request_event({"post_type": "request", "request_type": "weird", "user_id": "111"})
+        self.api_call.assert_not_called()
+        texts = " ".join(str(c) for c in self.log.call_args_list)
+        self.assertIn("未知 request_type", texts)
+
+
+# ══════════════════════════════════════════════════════════════
+# request 判定辅助（_request_allowed）：白/黑名单逻辑
+# ══════════════════════════════════════════════════════════════
+
+class TestRequestAllowed(_EventHandlersBase):
+    def setUp(self):
+        super().setUp()
+        # 还原真实的 _request_allowed（基类 mock 掉了它），测真实判定逻辑
+        self._real_ra = mock.patch.object(bot_core, "_request_allowed", _REAL_REQUEST_ALLOWED)
+        self._real_ra.start()
+        self.addCleanup(self._real_ra.stop)
+
+    def _cfg(self, denylist=None, allowlist=None):
+        cfg = {}
+        if denylist:
+            cfg["denylist"] = denylist
+        if allowlist:
+            cfg["allowlist"] = allowlist
+        return cfg
+
+    def test_denylist_rejects(self):
+        self.auto_accept.return_value = self._cfg(denylist=["111"])
+        allow, reason = bot_core._request_allowed("111")
+        self.assertFalse(allow)
+        self.assertEqual(reason, "denied")
+
+    def test_allowlist_only(self):
+        self.auto_accept.return_value = self._cfg(allowlist=["111", "222"])
+        self.assertEqual(bot_core._request_allowed("111"), (True, "allowed"))
+        self.assertEqual(bot_core._request_allowed("333"), (False, "not_allowlisted"))
+
+    def test_no_lists_allows(self):
+        self.auto_accept.return_value = {}
+        self.assertEqual(bot_core._request_allowed("111"), (True, "allowed"))
+
+
+# ══════════════════════════════════════════════════════════════
+# group_increase（_handle_group_increase）：入群欢迎 / 通知 / 自动改名片
+# ══════════════════════════════════════════════════════════════
+
+class TestGroupIncrease(_EventHandlersBase):
+    def test_member_join_welcome_and_notify(self):
+        self._set_aa()
+        bot_core.QQ_NICK_CACHE["333"] = "旧昵称"
+        try:
+            bot_core._handle_group_increase({"post_type": "notice", "notice_type": "group_increase",
+                                             "group_id": 10001, "user_id": "333"})
+            self.notify_admin.assert_called_once()
+            self.assertIn("333", self.notify_admin.call_args[0][0])
+            self.smart_send_group.assert_called_once()
+            self.assertEqual(self.smart_send_group.call_args[0][0], "10001")
+            self.assertEqual(self.smart_send_group.call_args[0][1], "进群了？坐！")
+            # 昵称缓存被清理
+            self.assertNotIn("333", bot_core.QQ_NICK_CACHE)
+        finally:
+            bot_core.QQ_NICK_CACHE.pop("333", None)
+
+    def test_bot_self_join_no_welcome(self):
+        self._set_aa()
+        bot_core._handle_group_increase({"post_type": "notice", "notice_type": "group_increase",
+                                         "group_id": 10001, "user_id": str(bot_core.BOT_QQ)})
+        self.notify_admin.assert_not_called()
+        self.smart_send_group.assert_not_called()
+
+    def test_welcome_disabled_no_send_but_notify(self):
+        self._set_aa(welcome_new_member=False)
+        bot_core._handle_group_increase({"post_type": "notice", "notice_type": "group_increase",
+                                         "group_id": 10001, "user_id": "333"})
+        self.notify_admin.assert_called_once()  # 通知仍发
+        self.smart_send_group.assert_not_called()  # 欢迎语不发
+
+    def test_invite_operator_appended_to_welcome(self):
+        self._set_aa()
+        bot_core._handle_group_increase({"post_type": "notice", "notice_type": "group_increase",
+                                         "group_id": 10001, "user_id": "333",
+                                         "sub_type": "invite", "operator_id": "999"})
+        self.assertEqual(self.smart_send_group.call_args[0][1], "进群了？坐！ （昵称999 拉进来的）")
+
+    def test_new_member_card_calls_api(self):
+        self._set_aa()
+        self.group_restriction.return_value = "新名片"
+        bot_core._handle_group_increase({"post_type": "notice", "notice_type": "group_increase",
+                                         "group_id": 10001, "user_id": "333"})
+        args = self.api_call.call_args
+        self.assertEqual(args[0][0], "set_group_card")
+        self.assertEqual(args[0][1]["group_id"], 10001)
+        self.assertEqual(args[0][1]["user_id"], 333)
+        self.assertEqual(args[0][1]["card"], "新名片")
+
+    def test_missing_group_id_noop(self):
+        bot_core._handle_group_increase({"post_type": "notice", "notice_type": "group_increase",
+                                         "user_id": "333"})
+        self.notify_admin.assert_not_called()
+        self.smart_send_group.assert_not_called()
+        self.api_call.assert_not_called()
+
+
+# ══════════════════════════════════════════════════════════════
+# group_decrease（_handle_group_decrease）：退群记录 / 会话清理
+# ══════════════════════════════════════════════════════════════
+
+class TestGroupDecrease(_EventHandlersBase):
+    def test_member_leave_logs_and_clears_nick(self):
+        bot_core.QQ_NICK_CACHE["333"] = "旧昵称"
+        try:
+            bot_core._handle_group_decrease({"post_type": "notice", "notice_type": "group_decrease",
+                                             "group_id": 10001, "user_id": "333", "sub_type": "leave"})
+            self.assertIn("333", str(self.log.call_args_list[0][0][0]))
+            self.assertNotIn("333", bot_core.QQ_NICK_CACHE)
+            self.assertNotIn("10001", bot_core.GROUP_SESSION)
+        finally:
+            bot_core.QQ_NICK_CACHE.pop("333", None)
+
+    def test_bot_leave_cleans_session_and_buffer(self):
+        timer = mock.Mock()
+        bot_core.GROUP_SESSION["10001"] = {"remaining": 5, "last_msg_time": 1}
+        bot_core.GROUP_MSG_BUFFER["10001"] = {"timer": timer}
+        try:
+            bot_core._handle_group_decrease({"post_type": "notice", "notice_type": "group_decrease",
+                                             "group_id": 10001, "user_id": str(bot_core.BOT_QQ),
+                                             "sub_type": "kick_me"})
+            self.assertNotIn("10001", bot_core.GROUP_SESSION)
+            self.assertNotIn("10001", bot_core.GROUP_MSG_BUFFER)
+            timer.cancel.assert_called_once()
+        finally:
+            bot_core.GROUP_SESSION.pop("10001", None)
+            bot_core.GROUP_MSG_BUFFER.pop("10001", None)
+
+    def test_missing_group_id_noop(self):
+        bot_core._handle_group_decrease({"post_type": "notice", "notice_type": "group_decrease",
+                                         "user_id": "333"})
+        self.assertTrue(self.log.call_count == 0)
+
+
+# ══════════════════════════════════════════════════════════════
+# friend_add（_handle_friend_add）：写监听名单 + 欢迎语 + 通知管理员
+# ══════════════════════════════════════════════════════════════
+
+class TestFriendAdd(_EventHandlersBase):
+    def test_normal_add(self):
+        self._set_aa()
+        bot_core._handle_friend_add({"post_type": "notice", "notice_type": "friend_add",
+                                     "user_id": "444"})
+        self.append_target.assert_called_once_with("target_qqs", "444")
+        self.send_message.assert_called_once()
+        self.assertEqual(self.send_message.call_args[0][0], "你好，我是小a～")
+        self.notify_admin.assert_called_once()
+        self.assertIn("444", self.notify_admin.call_args[0][0])
+
+    def test_add_to_targets_off(self):
+        self._set_aa(add_to_targets=False)
+        bot_core._handle_friend_add({"post_type": "notice", "notice_type": "friend_add",
+                                     "user_id": "444"})
+        self.append_target.assert_not_called()
+        self.send_message.assert_called_once()  # 欢迎语仍发
+
+    def test_welcome_empty_disables(self):
+        # 显式空串 = 关闭欢迎语；名单与管理员通知不受影响
+        self._set_aa(welcome_private="")
+        bot_core._handle_friend_add({"post_type": "notice", "notice_type": "friend_add",
+                                     "user_id": "444"})
+        self.send_message.assert_not_called()
+        self.append_target.assert_called_once()
+        self.notify_admin.assert_called_once()
+
+    def test_welcome_whitespace_disables(self):
+        self._set_aa(welcome_private="   ")
+        bot_core._handle_friend_add({"post_type": "notice", "notice_type": "friend_add",
+                                     "user_id": "444"})
+        self.send_message.assert_not_called()
+
+    def test_welcome_unconfigured_uses_default(self):
+        # 未配置 welcome_private（auto_accept 无此键）→ 默认欢迎语
+        self._set_aa()
+        bot_core._handle_friend_add({"post_type": "notice", "notice_type": "friend_add",
+                                     "user_id": "444"})
+        self.send_message.assert_called_once()
+        self.assertEqual(self.send_message.call_args[0][0], "你好，我是小a～")
+        self.append_target.assert_called_once()
+        self.notify_admin.assert_called_once()
+
+    def test_welcome_custom(self):
+        self._set_aa(welcome_private="专属欢迎语")
+        bot_core._handle_friend_add({"post_type": "notice", "notice_type": "friend_add",
+                                     "user_id": "444"})
+        self.send_message.assert_called_once()
+        self.assertEqual(self.send_message.call_args[0][0], "专属欢迎语")
+
+    def test_missing_user_id_noop(self):
+        self._set_aa()
+        bot_core._handle_friend_add({"post_type": "notice", "notice_type": "friend_add"})
+        self.append_target.assert_not_called()
+        self.send_message.assert_not_called()
+        self.notify_admin.assert_not_called()
+
+
+# ══════════════════════════════════════════════════════════════
+# group_ban（_handle_group_ban）：纯日志事件
+# ══════════════════════════════════════════════════════════════
+
+class TestGroupBan(_EventHandlersBase):
+    def test_ban_logs_only(self):
+        bot_core._handle_group_ban({"post_type": "notice", "notice_type": "group_ban",
+                                    "group_id": 10001, "user_id": "333",
+                                    "operator_id": "444", "duration": 600})
+        self.api_call.assert_not_called()
+        self.send_message.assert_not_called()
+        self.smart_send_group.assert_not_called()
+        texts = " ".join(str(c) for c in self.log.call_args_list)
+        self.assertIn("群禁言", texts)
+        self.assertIn("600", texts)
+
+
+# ══════════════════════════════════════════════════════════════
+# poke（_handle_poke_event）：群戳 → 会话 + AI 回复；私戳 → AI 回复 + 会话登记
+# ══════════════════════════════════════════════════════════════
+
+class TestPokeEvent(_EventHandlersBase):
+    """额外 mock：call_deepseek / track_bot_reply / 表情包相关 / MEME_OK=False。"""
+
+    def setUp(self):
+        super().setUp()
+        # 快照可变全局状态，测试结束后还原（避免用例间互相污染）
+        self._snapshot = (dict(bot_core.GROUP_SESSION), dict(bot_core.POKE_COUNTS),
+                          dict(bot_core.PRIVATE_SESSION))
+        self.addCleanup(self._restore_globals)
+        self.call_deepseek = mock.Mock(return_value="别戳啦～")
+        self.track_bot_reply = mock.Mock()
+        self.match_meme = mock.Mock(return_value=None)
+        self.send_group_image = mock.Mock(return_value=True)
+        self.send_image = mock.Mock(return_value=True)
+        self._poke_patchers = [
+            mock.patch.object(bot_core, "call_deepseek", self.call_deepseek),
+            mock.patch.object(bot_core, "track_bot_reply", self.track_bot_reply),
+            mock.patch.object(bot_core, "match_meme", self.match_meme),
+            mock.patch.object(bot_core, "send_group_image", self.send_group_image),
+            mock.patch.object(bot_core, "send_image", self.send_image),
+            mock.patch.object(bot_core, "MEME_OK", False),
+        ]
+        for p in self._poke_patchers:
+            p.start()
+        self.addCleanup(lambda: [p.stop() for p in self._poke_patchers])
+
+    def _restore_globals(self):
+        bot_core.GROUP_SESSION.clear(); bot_core.GROUP_SESSION.update(self._snapshot[0])
+        bot_core.POKE_COUNTS.clear(); bot_core.POKE_COUNTS.update(self._snapshot[1])
+        bot_core.PRIVATE_SESSION.clear(); bot_core.PRIVATE_SESSION.update(self._snapshot[2])
+
+    def _grp_poke(self, **kw):
+        ev = {"post_type": "notice", "notice_type": "notify", "sub_type": "poke",
+              "group_id": 10001, "user_id": "10086001", "target_id": str(bot_core.BOT_QQ)}
+        ev.update(kw)
+        return ev
+
+    def test_group_poke_creates_session_and_replies(self):
+        bot_core.GROUP_SESSION.pop("10001", None)
+        bot_core._handle_poke_event(self._grp_poke())
+        self.assertIn("10001", bot_core.GROUP_SESSION)  # 会话已创建
+        self.smart_send_group.assert_called_once()
+        self.assertEqual(self.smart_send_group.call_args[0][0], "10001")
+        self.assertEqual(self.smart_send_group.call_args[0][1], "别戳啦～")
+        self.track_bot_reply.assert_called_once()
+
+    def test_group_poke_other_target_ignored(self):
+        bot_core._handle_poke_event(self._grp_poke(target_id="222", user_id="111"))
+        self.smart_send_group.assert_not_called()
+        self.call_deepseek.assert_not_called()
+        self.assertNotIn("10001", bot_core.GROUP_SESSION)
+
+    def test_group_poke_empty_reply_no_send(self):
+        self.call_deepseek.return_value = ""
+        bot_core._handle_poke_event(self._grp_poke())
+        self.smart_send_group.assert_not_called()
+
+    def test_group_poke_count_escalates_vibe(self):
+        # 同人同群连续两次 → 第 2 次 prompt 语气与第 1 次不同（计数生效）
+        bot_core.POKE_COUNTS.clear()
+        bot_core._handle_poke_event(self._grp_poke())
+        first_prompt = self.call_deepseek.call_args[0][0]
+        bot_core._handle_poke_event(self._grp_poke())
+        second_prompt = self.call_deepseek.call_args[0][0]
+        self.assertIn("第1次", first_prompt)
+        self.assertIn("连续戳了你2次", second_prompt)
+        bot_core.POKE_COUNTS.clear()
+
+    def test_private_poke_numeric_sends_and_registers_session(self):
+        bot_core.PRIVATE_SESSION.clear()
+        bot_core._handle_poke_event({"post_type": "notice", "notice_type": "notify",
+                                     "sub_type": "poke", "user_id": "10086001"})
+        self.send_message.assert_called_once()
+        self.assertEqual(self.send_message.call_args[0][1], "10086001")
+        self.assertIn("10086001", bot_core.PRIVATE_SESSION)  # 登记私聊活跃会话
+        bot_core.PRIVATE_SESSION.clear()
+
+    def test_private_poke_nt_uid_uses_target(self):
+        with mock.patch.object(bot_core, "TARGET_QQS", ["100"]):
+            bot_core.PRIVATE_SESSION.clear()
+            bot_core._handle_poke_event({"post_type": "notice", "notice_type": "notify",
+                                         "sub_type": "poke", "user_id": "u_abc", "target_id": "u_abc"})
+            self.send_message.assert_called_once()
+            self.assertEqual(self.send_message.call_args[0][1], "100")  # 回给监听目标
+            self.assertNotIn("u_abc", bot_core.PRIVATE_SESSION)  # u_ 格式不登记
+            bot_core.PRIVATE_SESSION.clear()
+
+
+# ══════════════════════════════════════════════════════════════
+# recall（_handle_recall_event）：群/私聊撤回反馈（仅活跃会话中触发）
+# ══════════════════════════════════════════════════════════════
+
+class TestRecallEvent(_EventHandlersBase):
+    """额外 mock：_config 为受控 dict（撤回反馈开关/冷却/自定义文案）。"""
+
+    def setUp(self):
+        super().setUp()
+        self._snapshot = (dict(bot_core.GROUP_SESSION), dict(bot_core.GROUP_MSG_BUFFER),
+                          dict(bot_core.GROUP_RECENT_MSGS), dict(bot_core.RECALL_FEEDBACK_TIME),
+                          dict(bot_core.PRIVATE_SESSION))
+        self.addCleanup(self._restore_globals)
+        self.cfg = {
+            "recall_feedback_enable": True,
+            "recall_feedback_cooldown": 60,
+            "recall_feedback_pre_messages": [],
+            "recall_feedback_post_messages": [],
+        }
+        self._cfg_patch = mock.patch.object(bot_core, "_config", self.cfg)
+        self._cfg_patch.start()
+        self.addCleanup(self._cfg_patch.stop)
+
+    def _restore_globals(self):
+        bot_core.GROUP_SESSION.clear(); bot_core.GROUP_SESSION.update(self._snapshot[0])
+        bot_core.GROUP_MSG_BUFFER.clear(); bot_core.GROUP_MSG_BUFFER.update(self._snapshot[1])
+        bot_core.GROUP_RECENT_MSGS.clear(); bot_core.GROUP_RECENT_MSGS.update(self._snapshot[2])
+        bot_core.RECALL_FEEDBACK_TIME.clear(); bot_core.RECALL_FEEDBACK_TIME.update(self._snapshot[3])
+        bot_core.PRIVATE_SESSION.clear(); bot_core.PRIVATE_SESSION.update(self._snapshot[4])
+
+    def _grp_recall(self, **kw):
+        ev = {"post_type": "notice", "notice_type": "group_recall",
+              "group_id": 10001, "user_id": "111", "message_id": 9}
+        ev.update(kw)
+        return ev
+
+    def test_group_recall_no_session_skips(self):
+        bot_core.GROUP_SESSION.pop("10001", None)
+        bot_core._handle_recall_event(self._grp_recall())
+        self.smart_send_group.assert_not_called()
+
+    def test_group_recall_with_session_sends(self):
+        bot_core.GROUP_SESSION["10001"] = {"remaining": 5, "last_msg_time": time.time()}
+        bot_core.RECALL_FEEDBACK_TIME.pop("group_10001", None)
+        bot_core.GROUP_RECENT_MSGS["10001"] = [(time.time(), "111", "你好")]
+        try:
+            bot_core._handle_recall_event(self._grp_recall())
+            self.smart_send_group.assert_called_once()
+            self.assertEqual(self.smart_send_group.call_args[0][0], "10001")
+            self.assertIn("group_10001", bot_core.RECALL_FEEDBACK_TIME)  # 已记冷却
+        finally:
+            bot_core.GROUP_SESSION.pop("10001", None)
+            bot_core.GROUP_RECENT_MSGS.pop("10001", None)
+            bot_core.RECALL_FEEDBACK_TIME.pop("group_10001", None)
+
+    def test_group_recall_cancels_pending_buffer(self):
+        timer = mock.Mock()
+        bot_core.GROUP_SESSION["10001"] = {"remaining": 5, "last_msg_time": time.time()}
+        bot_core.GROUP_MSG_BUFFER["10001"] = {"timer": timer}
+        try:
+            bot_core._handle_recall_event(self._grp_recall())
+            timer.cancel.assert_called_once()
+            self.assertNotIn("10001", bot_core.GROUP_MSG_BUFFER)  # 缓冲已清（截断）
+            self.smart_send_group.assert_called_once()  # 发截断反馈
+        finally:
+            bot_core.GROUP_SESSION.pop("10001", None)
+            bot_core.GROUP_MSG_BUFFER.pop("10001", None)
+
+    def test_group_recall_feedback_disabled(self):
+        self.cfg["recall_feedback_enable"] = False
+        bot_core.GROUP_SESSION["10001"] = {"remaining": 5, "last_msg_time": time.time()}
+        try:
+            bot_core._handle_recall_event(self._grp_recall())
+            self.smart_send_group.assert_not_called()
+        finally:
+            bot_core.GROUP_SESSION.pop("10001", None)
+
+    def test_group_recall_cooldown_skips(self):
+        bot_core.GROUP_SESSION["10001"] = {"remaining": 5, "last_msg_time": time.time()}
+        bot_core.RECALL_FEEDBACK_TIME["group_10001"] = time.time()
+        try:
+            bot_core._handle_recall_event(self._grp_recall())
+            self.smart_send_group.assert_not_called()
+        finally:
+            bot_core.GROUP_SESSION.pop("10001", None)
+            bot_core.RECALL_FEEDBACK_TIME.pop("group_10001", None)
+
+    def test_group_recall_user_not_recently_active(self):
+        bot_core.GROUP_SESSION["10001"] = {"remaining": 5, "last_msg_time": time.time()}
+        bot_core.GROUP_RECENT_MSGS["10001"] = [(time.time(), "999", "别人发的")]
+        try:
+            bot_core._handle_recall_event(self._grp_recall())
+            self.smart_send_group.assert_not_called()  # 撤回者最近没发消息
+        finally:
+            bot_core.GROUP_SESSION.pop("10001", None)
+            bot_core.GROUP_RECENT_MSGS.pop("10001", None)
+
+    def test_private_recall_no_session_skips(self):
+        bot_core.PRIVATE_SESSION.clear()
+        bot_core._handle_recall_event({"post_type": "notice", "notice_type": "friend_recall",
+                                       "user_id": "10086001"})
+        self.send_message.assert_not_called()
+
+    def test_private_recall_with_session_sends(self):
+        bot_core.PRIVATE_SESSION["10086001"] = {"last_msg_time": time.time()}
+        try:
+            bot_core._handle_recall_event({"post_type": "notice", "notice_type": "friend_recall",
+                                           "user_id": "10086001"})
+            self.send_message.assert_called_once()
+            self.assertEqual(self.send_message.call_args[0][1], "10086001")
+        finally:
+            bot_core.PRIVATE_SESSION.clear()
+
+    def test_private_recall_session_expired(self):
+        bot_core.PRIVATE_SESSION["10086001"] = {"last_msg_time": time.time() - bot_core.PRIVATE_SESSION_IDLE_TIMEOUT - 10}
+        try:
+            bot_core._handle_recall_event({"post_type": "notice", "notice_type": "friend_recall",
+                                           "user_id": "10086001"})
+            self.send_message.assert_not_called()
+        finally:
+            bot_core.PRIVATE_SESSION.clear()
+
+    def test_private_recall_disabled(self):
+        self.cfg["recall_private_enable"] = False
+        bot_core.PRIVATE_SESSION["10086001"] = {"last_msg_time": time.time()}
+        try:
+            bot_core._handle_recall_event({"post_type": "notice", "notice_type": "friend_recall",
+                                           "user_id": "10086001"})
+            self.send_message.assert_not_called()  # 私聊开关关闭，即使群聊开关开着也不回
+        finally:
+            bot_core.PRIVATE_SESSION.clear()
+
+    def test_private_recall_cooldown_skips(self):
+        bot_core.PRIVATE_SESSION["10086001"] = {"last_msg_time": time.time()}
+        bot_core.RECALL_FEEDBACK_TIME["private_10086001"] = time.time()
+        try:
+            bot_core._handle_recall_event({"post_type": "notice", "notice_type": "friend_recall",
+                                           "user_id": "10086001"})
+            self.send_message.assert_not_called()
+        finally:
+            bot_core.PRIVATE_SESSION.clear()
+            bot_core.RECALL_FEEDBACK_TIME.pop("private_10086001", None)
+
+    def test_private_recall_custom_messages(self):
+        self.cfg["recall_private_post_messages"] = ["自定义私聊撤回文案"]
+        bot_core.PRIVATE_SESSION["10086001"] = {"last_msg_time": time.time()}
+        try:
+            bot_core._handle_recall_event({"post_type": "notice", "notice_type": "friend_recall",
+                                           "user_id": "10086001"})
+            self.send_message.assert_called_once_with("自定义私聊撤回文案", "10086001")
+        finally:
+            bot_core.PRIVATE_SESSION.clear()
+
+    def test_private_recall_group_switch_does_not_affect(self):
+        # 群聊开关关闭不影响私聊：recall_feedback_enable=False 时私聊仍可回复
+        self.cfg["recall_feedback_enable"] = False
+        bot_core.PRIVATE_SESSION["10086001"] = {"last_msg_time": time.time()}
+        try:
+            bot_core._handle_recall_event({"post_type": "notice", "notice_type": "friend_recall",
+                                           "user_id": "10086001"})
+            self.send_message.assert_called_once()
+        finally:
+            bot_core.PRIVATE_SESSION.clear()
+
+    def test_private_recall_qq_in_parens(self):
+        # 撤回 user_id 形如 "u_xxx (123)" → 按 (123) 查会话，仍回给原 user_id
+        bot_core.PRIVATE_SESSION["123"] = {"last_msg_time": time.time()}
+        try:
+            bot_core._handle_recall_event({"post_type": "notice", "notice_type": "friend_recall",
+                                           "user_id": "u_abc (123)"})
+            self.send_message.assert_called_once()
+            self.assertEqual(self.send_message.call_args[0][1], "u_abc (123)")
+        finally:
+            bot_core.PRIVATE_SESSION.clear()
+
+    def test_private_recall_invalid_uid(self):
+        bot_core.PRIVATE_SESSION.clear()
+        bot_core._handle_recall_event({"post_type": "notice", "notice_type": "friend_recall",
+                                       "user_id": "None"})
+        self.send_message.assert_not_called()
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)

@@ -1,0 +1,145 @@
+# Sensitive / secrets (NEVER commit these)
+.env
+.env.local
+.env.*.local
+*.key
+*.pem
+*.p12
+*.pfx
+bot_config.json
+*_config.json
+*secret*.json
+*credential*.json
+*token*.json
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+env/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Logs and runtime data
+*.log
+logs/
+chat_logs/
+personality_versions/
+private_memory/
+self_learning_db/
+image_cache/
+data/
+temp/
+tmp/
+
+# Electron/Chromium runtime (large binaries)
+*.pak
+*.dll
+*.dat
+vulkan-1.dll
+vk_swiftshader.dll
+vk_swiftshader_icd.json
+d3dcompiler_47.dll
+libEGL.dll
+libGLESv2.dll
+ffmpeg.dll
+icudtl.dat
+LICENSE.electron.txt
+LICENSES.chromium.html
+
+# Desktop runtime artifacts
+*.bin
+snapshot_blob.bin
+v8_context_snapshot.bin
+resources.pak
+chrome_*_percent.pak
+
+# Node
+node_modules/
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+# Project temp/debug scripts and artifacts
+_*.py
+_*.js
+_*.ps1
+_*.html
+_*.css
+_*.txt
+!**/__init__.py
+_ref/
+*.backup-*.html
+*.pre-redesign-backup.html
+ascii-art-style.css
+
+# Build / packaging artifacts
+*.exe
+*.msi
+*.spec
+*.manifest
+EggBloom Desktop.exe
+EggBloomEnvCheck.exe
+build/
+dist/
+*.nsi
+*.iss
+
+# Runtime data directories (user data, not source)
+plugins/web_operator/data/
+plugins/group_chat_decider/data/
+plugins/ego/super_memory/data/
+plugins/ego/slang_learner/data/
+plugins/board_voice/data/
+plugins/web_search/data/
+plugins/ego/data/
+webui/route.log
+webui/model-debug.log
+
+# Large model files (downloaded separately)
+plugins/ego/super_memory/models/
+*.gguf
+*.bin
+*.safetensors
+*.pt
+*.pth
+
+# Meme/image assets (large, not source)
+memes/**/*.png
+memes/**/*.jpg
+memes/**/*.jpeg
+memes/**/*.gif
+memes/**/*.webp
+memes/memes/tags.json
+memes/**/download_log.txt
+
+# IDE / Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# OS generated
+Desktop.ini
+ehthumbs.db
+
+# Runtime state (ports / per-install plugin data)
+last_port.txt
+data/login_guard.json
+plugins/ego/slang_learner/data/prompt_templates.json
+
+# Local config overrides (machine-specific)
+local_config.json
+machine_config.json
