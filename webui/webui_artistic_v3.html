@@ -2834,6 +2834,9 @@ function mountMemes(root) {
     });
   }
   async function renderMemes() {
+    if (window._renderingMemes) return;
+    window._renderingMemes = true;
+    try {
     const r = await API('/memes');
     const memes = (r && r.memes !== undefined ? r.memes : []) || [];
     updateMemeCount(memes.length);
@@ -2870,7 +2873,7 @@ function mountMemes(root) {
       const tags = (m.tags || []).slice(0, 4).map(t => '<span class="tag-pill muted">' + escapeHtml(t) + '</span>').join('');
       return '<div class="card meme-card-wrap" data-name="' + escapeHtml(m.name) + '" style="padding:10px">' +
         '<div style="aspect-ratio:1;background:var(--bg);border:1px solid var(--ink5);overflow:hidden;border-radius:2px;position:relative">' +
-          '<img src="' + url + '" loading="lazy" style="width:100%;height:100%;object-fit:cover;opacity:0.9" draggable="false">' +
+          '<img src="' + url + '" style="width:100%;height:100%;object-fit:cover;opacity:0.9" draggable="false">' +
           '<div class="meme-card-overlay">' +
             '<button class="btn ghost" data-meme-tag="' + escapeHtml(m.name) + '" style="color:var(--ink)">标签</button>' +
             '<button class="btn ghost" data-meme-del="' + escapeHtml(m.name) + '" style="color:#ffaaaa">删除</button>' +
@@ -2884,8 +2887,14 @@ function mountMemes(root) {
     openLightboxOnClick();
     updateGroupStatus(memes);
     applyMasonrySpan();
+  } finally { window._renderingMemes = false; }
   }
   function applyMasonrySpan() {}
+  var _renderMemesTimer = null;
+  function _debounceRenderMemes() {
+    clearTimeout(_renderMemesTimer);
+    _renderMemesTimer = setTimeout(renderMemes, 200);
+  }
   function updateGroupStatus(memes) {
     const el = document.getElementById('memeGroupStatus');
     if (!el) return;
@@ -2949,7 +2958,7 @@ function mountMemes(root) {
       });
     });
   }
-  document.getElementById('memeSearch').addEventListener('input', () => renderMemes());
+  document.getElementById('memeSearch').addEventListener('input', () => _debounceRenderMemes());
   const importFile = document.getElementById('memeImportFile');
   if (importFile) importFile.addEventListener('change', async e => {
     const files = e.target.files || []; if (!files.length) return;
