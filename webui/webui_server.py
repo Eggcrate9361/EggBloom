@@ -394,7 +394,7 @@ _EMBED_DEFAULT_EXE = Path(str(load_config().get("embed_exe") or "")).resolve()
 _EMBED_DEFAULT_MODEL = Path(str(load_config().get("embed_model_path") or "")).resolve()
 # 内置默认：模型随 EGO super_memory 打包分发（体量小）；llama-server 为 HTTP 兜底
 _EMBED_BUILTIN_MODEL = PROJECT / "plugins" / "ego" / "super_memory" / "models" / "bge-small-zh-v1.5-f16.gguf"
-_EMBED_BUILTIN_EXE = Path("")
+_EMBED_BUILTIN_EXE = Path(r"D:\llama-b10068\llama-server.exe")
 _EMBED_PORT = 8083
 _embed_proc = None
 
@@ -1130,6 +1130,66 @@ try:
 except Exception as _e:
     HTML = "<!DOCTYPE html><html><body><h1>EggBloom WebUI</h1><p>Failed to load frontend: " + str(_e) + "</p></body></html>"
 _html_mtime = 0
+
+# Meme image in-memory cache: rel-path -> (bytes, content_type, mtime_ms)
+_meme_cache = {}
+_MEME_CACHE_MAX = 1200
+
+def _meme_dirs():
+    return [PROJECT / 'memes' / 'memes', PROJECT.parent / 'memes' / 'memes'] if PROJECT else []
+
+def _serve_meme(self, rel):
+    """Serve a meme file with in-memory caching. Returns True if served."""
+    for meme_dir in _meme_dirs():
+        file_path = meme_dir / rel
+        if file_path.is_file():
+            key = str(file_path)
+            st = file_path.stat()
+            cached = _meme_cache.get(key)
+            if cached and cached[2] == st.st_mtime_ns and cached[3] == st.st_size:
+                data, ct, _, _ = cached
+            else:
+                data = file_path.read_bytes()
+                ext = file_path.suffix.lower()
+                ct = {'jpg': 'image/jpeg', 'jpeg': 'image/jpeg', 'png': 'image/png', 'gif': 'image/gif', 'webp': 'image/webp'}.get(ext[1:], 'application/octet-stream')
+                _meme_cache[key] = (data, ct, st.st_mtime_ns, st.st_size)
+                if len(_meme_cache) > _MEME_CACHE_MAX:
+                    _meme_cache.clear()
+            self.send_response(200)
+            self.send_header('Content-Type', ct)
+            self.send_header('Content-Length', str(len(data)))
+            self.send_header('Cache-Control', 'public, max-age=86400')
+            self.end_headers()
+            try:
+                self.wfile.write(data)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+            return True
+    # Fallback: search by filename across meme dirs (slower path, no caching)
+    try:
+        base = Path(rel).name
+        if base:
+            for meme_dir in _meme_dirs():
+                if not meme_dir.exists():
+                    continue
+                for candidate in meme_dir.rglob(base):
+                    if candidate.is_file():
+                        ext = candidate.suffix.lower()
+                        ct = {'jpg': 'image/jpeg', 'jpeg': 'image/jpeg', 'png': 'image/png', 'gif': 'image/gif', 'webp': 'image/webp'}.get(ext[1:], 'application/octet-stream')
+                        data = candidate.read_bytes()
+                        self.send_response(200)
+                        self.send_header('Content-Type', ct)
+                        self.send_header('Content-Length', str(len(data)))
+                        self.send_header('Cache-Control', 'public, max-age=86400')
+                        self.end_headers()
+                        try:
+                            self.wfile.write(data)
+                        except (BrokenPipeError, ConnectionResetError):
+                            pass
+                        return True
+    except Exception:
+        pass
+    return False
 
 def _get_html_mtime():
     try:
@@ -2412,12 +2472,8 @@ class Handler(BaseHTTPRequestHandler):
             # Decode percent-encoded UTF-8 paths
             try:
                 rel = unquote(rel)
-            except Exception as e:
-                try:
-                    with open(str(HERE / 'meme-debug.log'), 'a', encoding='utf-8') as df:
-                        df.write('[UNQUOTE ERROR] ' + str(e) + '\n')
-                except Exception:
-                    pass
+            except Exception:
+                pass
             # On Windows the request path may arrive as raw UTF-8 bytes decoded to str
             # or as latin1 mojibake; normalize to proper filesystem path.
             try:
@@ -2425,140 +2481,7 @@ class Handler(BaseHTTPRequestHandler):
                     rel = rel.encode('latin1').decode('utf8')
             except Exception:
                 pass
-            # Debug logging to diagnose meme 404s
-            debug_line = '[MEME DEBUG] path=' + str(path) + ' rel=' + repr(rel) + ' exists='
-            print(debug_line)
-            try:
-                with open(str(HERE / 'meme-debug.log'), 'a', encoding='utf-8') as df:
-                    df.write(debug_line + '\n')
-            except Exception:
-                pass
-            # Check both PROJECT/memes/memes and parent/memes/memes (Desktop layout)
-            meme_dirs = [PROJECT / 'memes' / 'memes', PROJECT.parent / 'memes' / 'memes']
-            served = False
-            for meme_dir in meme_dirs:
-                file_path = meme_dir / rel
-                exists = str(file_path.exists())
-                print('exists=' + exists)
-                try:
-                    with open(str(HERE / 'meme-debug.log'), 'a', encoding='utf-8') as df:
-                        df.write('  candidate=' + str(file_path) + ' exists=' + exists + '\n')
-                except Exception:
-                    pass
-                if file_path.exists() and file_path.is_file():
-                    ext = file_path.suffix.lower()
-                    ct = {'jpg': 'image/jpeg', 'jpeg': 'image/jpeg', 'png': 'image/png', 'gif': 'image/gif', 'webp': 'image/webp'}.get(ext[1:], 'application/octet-stream')
-                    data = file_path.read_bytes()
-                    self.send_response(200)
-                    self.send_header('Content-Type', ct)
-                    self.send_header('Content-Length', str(len(data)))
-                    self.send_header('Cache-Control', 'public, max-age=86400')
-                    self.end_headers()
-                    self.wfile.write(data)
-                    served = True
-                    break
-            print('served=' + str(served))
-            try:
-                with open(str(HERE / 'meme-debug.log'), 'a', encoding='utf-8') as df:
-                    df.write('  served=' + str(served) + '\n')
-            except Exception:
-                pass
-            if served:
-                return
-            # Fallback: search by filename stem/suffix across meme dirs
-            try:
-                base = Path(rel).name
-                fallback_line = '[MEME FALLBACK] base=' + repr(base)
-                print(fallback_line)
-                with open(str(HERE / 'meme-debug.log'), 'a', encoding='utf-8') as df:
-                    df.write(fallback_line + '\n')
-                if base:
-                    for meme_dir in meme_dirs:
-                        if not meme_dir.exists():
-                            continue
-                        for candidate in meme_dir.rglob(base):
-                            if candidate.is_file():
-                                ext = candidate.suffix.lower()
-                                ct = {'jpg': 'image/jpeg', 'jpeg': 'image/jpeg', 'png': 'image/png', 'gif': 'image/gif', 'webp': 'image/webp'}.get(ext[1:], 'application/octet-stream')
-                                data = candidate.read_bytes()
-                                self.send_response(200)
-                                self.send_header('Content-Type', ct)
-                                self.send_header('Content-Length', str(len(data)))
-                                self.send_header('Cache-Control', 'public, max-age=86400')
-                                self.end_headers()
-                                self.wfile.write(data)
-                                served = True
-                                fallback_served = '[MEME FALLBACK] served=' + str(candidate)
-                                print(fallback_served)
-                                with open(str(HERE / 'meme-debug.log'), 'a', encoding='utf-8') as df:
-                                    df.write(fallback_served + '\n')
-                                break
-                        if served:
-                            break
-            except Exception:
-                pass
-            if served:
-                return
-
-        if path == "/api/port/status":
-            # 端口状态检测：返回关键端口占用情况
-            import socket
-            key_ports = [
-                (8080, "WebUI 管理面板"),
-                (3000, "OneBot HTTP API (SnowLuma/LLOneBot)"),
-                (3001, "OneBot WS 事件 (SnowLuma/LLOneBot)"),
-                (3005, "bot_core 事件转发"),
-                (3100, "NapCat HTTP API"),
-                (3101, "NapCat WebSocket"),
-                (5099, "SnowLuma WebUI"),
-                (6099, "NapCat WebUI"),
-                (7000, "LLOneBot WebUI"),
-                (8081, "llama-server (本地 LLM)"),
-                (8083, "llama-server Embedding"),
-                (11434, "Ollama API"),
-                (1234, "LM Studio API"),
-            ]
-            result = []
-            for port, name in key_ports:
-                try:
-                    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                        s.settimeout(0.5)
-                        s.bind(("127.0.0.1", port))
-                    result.append({"port": port, "name": name, "status": "free"})
-                except OSError:
-                    # 尝试获取占用进程
-                    pid = None
-                    try:
-                        import subprocess
-                        out = subprocess.run(
-                            ["netstat", "-ano"],
-                            capture_output=True, text=True, timeout=3,
-                            creationflags=0x08000000 if sys.platform == "win32" else 0
-                        )
-                        for line in out.stdout.splitlines():
-                            if f":{port} " in line and "LISTENING" in line:
-                                parts = line.split()
-                                if len(parts) >= 5:
-                                    try:
-                                        pid = int(parts[-1])
-                                    except ValueError:
-                                        pass
-                                break
-                    except Exception:
-                        pass
-                    result.append({"port": port, "name": name, "status": "busy", "pid": pid})
-            self._send_json(200, {"ports": result})
-            return
-
-        if path == "/api/config/check":
-            # 配置完整性检查
-            try:
-                from config import config_check
-                result = config_check()
-                self._send_json(200, result)
-                return
-            except Exception as e:
-                self._send_json(200, {"ok": False, "error": str(e)})
+            if _serve_meme(self, rel):
                 return
 
         self.send_response(404)
