@@ -22,6 +22,9 @@ dependencies = [
 dev = [
     # ── 测试/开发工具 ──
     "playwright==1.62.0",        # UI 自动化测试
+    "pytest>=8.0",               # 单元测试框架
+    "pytest-cov>=5.0",           # 覆盖率
+    "pyright>=1.1",              # 类型检查
 ]
 
 [build-system]
@@ -58,15 +61,18 @@ exclude = [
 select = ["F"]
 
 [tool.ruff.lint.per-file-ignores]
-# bot_core.py 为 6400+ 行存量,部分 F 级为人工后续清理(不阻断提交)
+# bot_core.py 为 7500+ 行存量,部分 F 级为人工后续清理(不阻断提交)
+# TODO(P1): 优先清理 F821/F823（未定义名称/变量引用错误，是潜在 bug）
 "bot_core.py" = ["F401", "F841", "F811", "F821", "F823"]
 # 插件/组件/遗留模块存量(未用 import/变量/重定义),逐步清理;真错误级保留
 "plugins/*/__init__.py" = ["F401", "F841", "F811"]
 "plugins/__init__.py" = ["F401", "F841", "F811"]
 "webui/plugins/ego/__init__.py" = ["F401", "F841", "F811"]
 "plugins/ego/*/__init__.py" = ["F401", "F841", "F811"]
+# TODO(P1): 清理 webui_server.py 的 F821 豁免
 "webui/webui_server.py" = ["F401", "F841", "F811", "F821"]
 "components/*.py" = ["F401", "F841", "F811"]
+# TODO(P1): 清理 nexsandglass 的 F821 豁免（外部依赖，低优先级）
 "nexsandglass/*.py" = ["F401", "F841", "F811", "F821"]
 # 存量未用变量/重复 key(无害),人工后续清理;保留 F821 等潜在 bug 级
 "animator.py" = ["F841"]
@@ -85,3 +91,35 @@ select = ["F"]
 [tool.pyinstaller]
 # 打包入口与参数见 EggBloom-debug.spec,此处仅声明
 name = "EggBloom Desktop"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"
+markers = [
+    "integration: 集成测试（需手动运行: -m integration）",
+]
+
+[tool.pyright]
+pythonVersion = "3.13"
+typeCheckingMode = "basic"
+include = [
+    "config.py",
+    "data_store.py",
+    "protocols/",
+    "plugins/",
+]
+exclude = [
+    "bot_core.py",
+    "webui/",
+    "nexsandglass/",
+    "components/",
+    "memes/",
+    "**/__pycache__",
+]
+reportMissingImports = true
+reportMissingTypeStubs = false
+reportUnusedImport = "warning"
+reportUnusedVariable = "warning"

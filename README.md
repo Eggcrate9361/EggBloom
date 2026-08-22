@@ -241,7 +241,7 @@ EggBloom/
 
 ## 技术栈
 
-- Python 3.10+（主逻辑，标准库为主，无第三方 HTTP 框架依赖）
+- Python 3.13（主逻辑，标准库为主，无第三方 HTTP 框架依赖）
 - HTML/CSS/JS 单页应用（Glassmorphism + Chart.js + Vanilla JS）
 - OneBot v11 标准协议
 - Electron 桌面外壳
@@ -264,7 +264,7 @@ EggBloom/
 
 | 组件 | 版本要求 | 说明 |
 |------|----------|------|
-| Python | 3.10+（推荐 3.13） | 标准库为主，依赖见 pyproject.toml |
+| Python | 3.13 | 标准库为主，依赖见 pyproject.toml |
 | Node.js | 18+ (LTS) | 运行 SnowLuma 等协议驱动 |
 | Windows | 10/11 (x64) | 主要目标平台，含 VC++ 2015-2022 运行时 |
 | QQ | QQNT（最新版） | 协议驱动需匹配 QQ 版本 |

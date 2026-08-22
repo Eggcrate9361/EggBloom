@@ -1,0 +1,101 @@
+# EggBloom Desktop — AI Agent 规则
+
+## 项目概述
+
+EggBloom 是一个面向 QQ 的 AI 桌面助手，基于 OneBot v11 协议。
+核心组件：bot_core.py（AI 核心）、webui/（管理面板）、protocols/（协议适配层）、plugins/（插件体系）。
+
+## 技术栈
+
+- Python 3.13（主逻辑，标准库为主）
+- HTML/CSS/JS 单页应用（无构建步骤）
+- OneBot v11 标准协议
+- Electron 桌面外壳
+- SQLite 本地存储
+
+## 架构概览
+
+```
+CustomTkinter 桌面端 (main_window.py)
+    │
+WebUI 管理面板 (webui_server.py :8080)
+    │ 代理
+bot_core.py (:3005)   AI 核心 + 联系人管理 + 事件服务
+    │ OneBot v11 (HTTP 动作 + WS 事件桥)
+协议适配层 (protocols/): snowluma / napcat / llonebot
+    │
+QQ 客户端 (QQNT)
+```
+
+## 模块职责
+
+| 模块 | 职责 | 注意事项 |
+|------|------|----------|
+| `bot_core.py` | AI 核心、消息处理、指令系统 | 7500+ 行，禁止大幅修改，仅做最小必要改动 |
+| `config.py` | 配置加载（凭据管理器 → 程序目录 → AppData → .env） | 修改配置需同步更新 `bot_config.json.example` |
+| `data_store.py` | 数据目录管理（Electron userData / 平台标准目录 / 开发模式） | 涉及文件路径，注意跨平台兼容 |
+| `webui/webui_server.py` | WebUI HTTP 服务 + API 路由 | 手写 http.server，路由在文件内 |
+| `webui/webui_artistic_v3.html` | 前端 SPA（单文件） | 3900+ 行，修改需小心不破坏其他页面 |
+| `protocols/` | 协议适配层（OneBot v11） | 新驱动继承 `OneBotStdAdapter` |
+| `plugins/` | 插件体系（钩子：before_reply / after_reply） | 插件不得修改本体，见 `docs/PLUGIN_GUIDE.md` |
+| `cred_store.py` | Windows 凭据管理器读写 | API Key 不落盘明文 |
+| `nexsandglass/` | 沙漏记忆（外部开源项目，vendored） | 不修改，视为只读依赖 |
+
+## 开发规范
+
+### Python
+- 版本：Python 3.13
+- 风格：PEP 8，使用 `ruff` 检查
+- 导入顺序：标准库 → 第三方 → 本地模块
+- 类型注解：新增公共 API 必须加
+- 命名：`snake_case` 函数/变量，`PascalCase` 类，`UPPER_SNAKE_CASE` 常量
+
+### 插件开发
+- 目录：`plugins/<name>/__init__.py`
+- 必须声明 `PLUGIN_META` dict
+- 钩子函数必须 `try/except` 包裹，异常时返回 `None`
+- 禁止修改 `bot_core.py`
+- 详见 `docs/PLUGIN_GUIDE.md`
+
+### 配置管理
+- 配置优先级：Windows 凭据管理器 > 程序目录 `bot_config.json` > AppData > `.env` > 默认值
+- 新增配置项必须更新 `bot_config.json.example` 和 `.env.example`
+- 新增配置项需在 `config.py` 的 `DEFAULT_CONFIG` 中添加默认值
+
+## 禁忌操作
+
+1. **不要修改 `bot_core.py` 的核心逻辑**，除非用户明确要求且范围极小
+2. **不要修改 `nexsandglass/` 目录**，这是外部依赖
+3. **不要在钩子函数中阻塞**，所有 I/O 加 timeout
+4. **不要硬编码 API Key**，用 `cred_store.py`
+5. **不要在插件里 import 其他插件的内部模块**
+6. **不要使用裸 `print()` 做日志**，使用 `logging.getLogger(__name__)`
+
+## 测试
+
+- 测试目录：`tests/`
+- 运行：`python -m pytest tests/ -v`
+- 命名：`test_<function>_<scenario>`
+- 核心模块覆盖率目标 ≥ 80%
+
+## 端口表
+
+| 端口 | 服务 |
+|------|------|
+| 8080 | WebUI 管理面板 |
+| 3005 | bot_core 事件服务 |
+| 3000/3001 | SnowLuma / LLOneBot |
+| 3100/3101 | NapCat |
+
+## 常用命令
+
+```bash
+# 代码风格检查
+ruff check .
+
+# 运行测试
+python -m pytest tests/ -v
+
+# 启动应用
+python launch.py
+```
