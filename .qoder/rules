@@ -59,6 +59,7 @@ QQ 客户端 (QQNT)
 
 ### 配置管理
 - 配置优先级：Windows 凭据管理器 > 程序目录 `bot_config.json` > AppData > `.env` > 默认值
+- 详细配置回退链见 `docs/CONFIG_PRIORITY.md`
 - 新增配置项必须更新 `bot_config.json.example` 和 `.env.example`
 - 新增配置项需在 `config.py` 的 `DEFAULT_CONFIG` 中添加默认值
 
@@ -69,7 +70,13 @@ QQ 客户端 (QQNT)
 3. **不要在钩子函数中阻塞**，所有 I/O 加 timeout
 4. **不要硬编码 API Key**，用 `cred_store.py`
 5. **不要在插件里 import 其他插件的内部模块**
-6. **不要使用裸 `print()` 做日志**，使用 `logging.getLogger(__name__)`
+6. **不要使用裸 `print()` 做日志**，使用 `logging.getLogger(__name__)` 或 `log_utils.get_plugin_logger()`
+
+## 插件开发补充
+
+- 插件类型定义：`plugins/types.py`（PluginProtocol + PluginMeta TypedDict）
+- 插件日志：`from log_utils import get_plugin_logger`
+- 插件元数据校验：`plugins.types.validate_plugin_meta()`
 
 ## 测试
 
