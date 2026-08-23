@@ -244,8 +244,10 @@ app.whenReady().then(async () => {
   }
 
   const bundledPython = path.join(__dirname, 'python', 'python.exe');
+  const bundledPythonRoot = path.join(__dirname, '..', 'python', 'python.exe'); // Full/Standard 包：python 在包根目录
   const pythonCandidates = [
-    bundledPython,      // 优先 bundled，避免逐个探测系统 Python 拖慢启动
+    bundledPythonRoot,   // 优先 bundled（包根目录，Full/Standard 布局），避免依赖系统 Python
+    bundledPython,
     'pythonw.exe',
     'python.exe',
     'python',
@@ -253,6 +255,8 @@ app.whenReady().then(async () => {
   ];
   let chosenPython = null;
   for (const candidate of pythonCandidates) {
+    // 文件路径先验存在性，减少 spawn 失败与等待
+    if (path.isAbsolute(candidate) && !fs.existsSync(candidate)) { logLine('skip python candidate (not exists): ' + candidate); continue; }
     try {
       await new Promise((resolve, reject) => {
         const child = spawn(candidate, ['--version'], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
