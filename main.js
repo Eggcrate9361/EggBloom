@@ -37,11 +37,13 @@ function waitForServer(url, timeout = 10000) {
   return new Promise((resolve, reject) => {
     const start = Date.now();
     const interval = setInterval(() => {
-      http.get(url, (res) => {
+      const req = http.get(url, (res) => {
+        req.destroy();
         if (res.statusCode === 200) { clearInterval(interval); resolve(); }
-      }).on('error', () => {
-        if (Date.now() - start > timeout) { clearInterval(interval); reject(new Error('Server did not become ready in time')); }
       });
+      req.setTimeout(1200, () => req.destroy()); // 连接挂起时强制断开，避免永不 reject
+      req.on('error', () => {});
+      if (Date.now() - start > timeout) { clearInterval(interval); reject(new Error('Server did not become ready in time')); }
     }, 500);
   });
 }
@@ -153,7 +155,7 @@ function fullQuit() {
 function createWindow() {
   win = new BrowserWindow({
     width: 1280, height: 860, minWidth: 960, minHeight: 640,
-    title: 'EggBloom Desktop', backgroundColor: '#0a0a0f', show: false,
+    title: 'EggBloom Desktop', backgroundColor: '#0a0a0f',
     frame: false,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -161,9 +163,14 @@ function createWindow() {
       nodeIntegration: true,
     },
   });
-  win.once('ready-to-show', () => { if (win && !win.isDestroyed()) win.show(); });
   win.setMenu(null);
   win.loadURL('http://localhost:8080?v=' + Date.now());
+  // 连不上服务时轮询重试（后端守护重启期间），而不是白屏等待用户手动刷新
+  win.webContents.on('did-fail-load', () => {
+    if (win && !win.isDestroyed() && !isQuitting) {
+      setTimeout(() => { if (win && !win.isDestroyed()) win.loadURL('http://localhost:8080?v=' + Date.now()); }, 2000);
+    }
+  });
 
   // 最大化状态变化 → 通知前端切换标题栏按钮图标
   const sendMaxState = () => {
@@ -238,9 +245,8 @@ app.whenReady().then(async () => {
 
   const bundledPython = path.join(__dirname, 'python', 'python.exe');
   const pythonCandidates = [
+    bundledPython,      // 优先 bundled，避免逐个探测系统 Python 拖慢启动
     'pythonw.exe',
-    'pythonw',
-    bundledPython,
     'python.exe',
     'python',
     'python3',
@@ -249,10 +255,10 @@ app.whenReady().then(async () => {
   for (const candidate of pythonCandidates) {
     try {
       await new Promise((resolve, reject) => {
-        const child = spawn(candidate, ['--version'], { stdio: ['ignore', 'pipe', 'pipe'] });
-        child.on('close', (code) => { code === 0 ? resolve() : reject(); });
-        child.on('error', reject);
-        setTimeout(() => { child.kill(); reject(); }, 3000);
+        const child = spawn(candidate, ['--version'], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+        const timer = setTimeout(() => { try { child.kill(); } catch (e) {} reject(); }, 2000);
+        child.on('close', (code) => { clearTimeout(timer); code === 0 ? resolve() : reject(); });
+        child.on('error', () => { clearTimeout(timer); reject(); });
       });
       chosenPython = candidate; break;
     } catch (e) {}
@@ -288,12 +294,9 @@ app.whenReady().then(async () => {
 
   startServer();
 
-  try { await waitForServer('http://localhost:8080'); }
-  catch (e) {
-    // 首次启动失败可能是 webui_server 仍在自愈，守护会自动重启；先给一次等待
-    try { await waitForServer('http://localhost:8080', 15000); }
-    catch (e2) { showErrorPage('服务启动失败: ' + e2.message); return; }
-  }
+  // 先给窗口 8s 等服务就绪；超时也直接开窗（页面会自动轮询重试），避免慢启动时用户长时间无任何反馈
+  try { await waitForServer('http://localhost:8080', 8000); logLine('server ready (first wait)'); }
+  catch (e) { logLine('first wait timed out, opening window anyway: ' + e.message); }
 
   createTray();
   createWindow();
