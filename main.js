@@ -243,11 +243,13 @@ app.whenReady().then(async () => {
     try { if (!c.includes('.asar') && fs.existsSync(c)) { serverPath = c; break; } } catch (e) {}
   }
 
-  const bundledPython = path.join(__dirname, 'python', 'python.exe');
-  const bundledPythonRoot = path.join(__dirname, '..', 'python', 'python.exe'); // Full/Standard 包：python 在包根目录
+  const bundledPython = path.join(__dirname, 'python', 'python.exe');           // resources/app/python 布局
+  const bundledPythonRoot = path.join(__dirname, '..', '..', 'python', 'python.exe'); // Full/Standard 包：python 在包根目录（resources 上一级）
+  const bundledPythonMid = path.join(__dirname, '..', 'python', 'python.exe');   // resources/python 布局（保底）
   const pythonCandidates = [
-    bundledPythonRoot,   // 优先 bundled（包根目录，Full/Standard 布局），避免依赖系统 Python
+    bundledPythonRoot,   // 优先 bundled（包根目录，Full/Standard/dist 布局），避免依赖系统 Python
     bundledPython,
+    bundledPythonMid,
     'pythonw.exe',
     'python.exe',
     'python',
