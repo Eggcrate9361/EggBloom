@@ -5,8 +5,8 @@ group_chat_decider free_models.py
 免费模型预设注册表——群聊决策插件内置多家免费/低成本的文本与视觉模型，
 通过 data/config.json 的 `active_model` 切换，插件完全自包含，不依赖其他插件。
 
-每家预设都是 OpenAI 兼容格式，密钥从插件自己的 data/secret.json 读取
-（secret.json 已写入 .gitignore，不会入库）。
+每家预设都是 OpenAI 兼容格式，密钥优先存 Windows 凭据管理器（cred_store.py，
+DPAPI 加密）；凭据管理器不可用时才回退插件 data/secret.json（旧版兼容）。
 
 预设说明（2026-08 核实，均为免费或免费额度）：
   - zhipu    智谱 BigModel：glm-4-flash 文本免费 / glm-4v-flash 视觉免费，不限量
@@ -81,8 +81,21 @@ def load_plugin_config() -> dict:
     return {}
 
 
+def _cred_store():
+    """惰性导入项目根 cred_store（Windows 凭据管理器封装），非 Windows 返回 (None, None, None)。"""
+    try:
+        import sys
+        _root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        if _root not in sys.path:
+            sys.path.insert(0, _root)
+        from cred_store import read_cred, write_cred, delete_cred
+        return read_cred, write_cred, delete_cred
+    except Exception:
+        return None, None, None
+
+
 def _load_secret() -> dict:
-    """读取插件 data/secret.json（各 provider 的 key）"""
+    """读取插件 data/secret.json（旧版明文，仅凭据管理器不可用时使用）"""
     try:
         if SECRET_FILE.exists():
             data = json.loads(SECRET_FILE.read_text(encoding="utf-8")) or {}
@@ -91,6 +104,20 @@ def _load_secret() -> dict:
     except Exception:
         pass
     return {}
+
+
+def _read_key(key_name: str) -> str:
+    """按优先级解析某 provider 的 key：环境变量 > 凭据管理器 > secret.json(旧版兼容)。"""
+    _read, _write, _delete = _cred_store()
+    if _read:
+        try:
+            v = (_read(key_name) or "").strip()
+            if v:
+                return v
+        except Exception:
+            pass
+    secret = _load_secret()
+    return (secret.get(key_name, "") or "").strip()
 
 
 def save_plugin_config(updates: dict) -> dict:
@@ -109,11 +136,25 @@ def save_plugin_config(updates: dict) -> dict:
 
 
 def save_secret_key(provider_id: str, api_key: str) -> bool:
-    """写入某 provider 的 key 到 data/secret.json。key 为空表示清除。"""
+    """写入某 provider 的 key：优先 Windows 凭据管理器（不落盘明文）；
+    凭据管理器不可用时回退 data/secret.json。key 为空表示清除。"""
     if provider_id not in FREE_MODELS:
         return False
+    api_key = (api_key or "").strip()
+    _read, _write, _delete = _cred_store()
+    if _write:
+        try:
+            if api_key:
+                return bool(_write(provider_id, api_key))
+            return bool(_delete(provider_id))
+        except Exception as e:
+            print(f"[free_models] 凭据管理器写入失败: {e}")
+    # 回退：明文 secret.json（仅凭据管理器不可用时）
     secret = _load_secret()
-    secret[provider_id] = (api_key or "").strip()
+    if api_key:
+        secret[provider_id] = api_key
+    else:
+        secret.pop(provider_id, None)
     try:
         DATA_DIR.mkdir(parents=True, exist_ok=True)
         SECRET_FILE.write_text(
@@ -139,14 +180,13 @@ def get_provider(provider_id: str = None) -> dict:
     if pid == "ollama":
         base["api_key"] = "ollama"  # Ollama 用占位 key
         return base
-    # 解析 key：环境变量 > secret.json
+    # 解析 key：环境变量 > 凭据管理器 > secret.json(旧版兼容)
     key = ""
     env_name = base.get("key_env") or ""
     if env_name:
         key = (os.environ.get(env_name) or "").strip()
     if not key:
-        secret = _load_secret()
-        key = (secret.get(base.get("key_name", "")) or "").strip()
+        key = _read_key(base.get("key_name", ""))
     base["api_key"] = key
     base["provider_id"] = pid
     return base

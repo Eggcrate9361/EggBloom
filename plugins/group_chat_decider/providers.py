@@ -95,7 +95,7 @@ def _call_chat(provider_id: str, messages: list, model: str, timeout: float,
         return None, f"provider 解析失败: {e}"
     api_key = p.get("api_key")
     if not api_key:
-        return None, f"{provider_id} 未配置 key（secret.json / 环境变量）"
+        return None, f"{provider_id} 未配置 key（凭据管理器 / 环境变量）"
     url = f"{p['base_url'].rstrip('/')}/chat/completions"
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     payload = {"model": model, "messages": messages, "max_tokens": max_tokens}
