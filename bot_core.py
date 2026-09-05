@@ -5227,7 +5227,8 @@ def summarize_group_history(group_id):
                 {"role": "system", "content": "你是群聊记录压缩器，输出50字以内的极简摘要。"},
                 {"role": "user", "content": summary_prompt}
             ],
-            "max_tokens": 100,
+            # 推理模型（如 deepseek-v4-flash）会先消耗 reasoning tokens，预算给足避免摘要空返回
+            "max_tokens": 256,
             "temperature": 0.3
         }
         req = urllib.request.Request(_lc.get("api_url") or DEEPSEEK_URL,

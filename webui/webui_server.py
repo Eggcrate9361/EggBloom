@@ -3107,7 +3107,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(200, {"ok": False, "error": "未配置 API URL 或 API Key（请在 LLM 配置页填写）"})
                 return
             import urllib.request
-            payload = {"model": model, "messages": [{"role": "user", "content": "你好"}], "max_tokens": 8}
+            # 推理模型会先消耗 reasoning tokens：预算给足 64，避免 content 空返回被误判为失败
+            payload = {"model": model, "messages": [{"role": "user", "content": "你好"}], "max_tokens": 64}
             req = urllib.request.Request(api_url, data=json.dumps(payload).encode("utf-8"),
                 headers={"Content-Type": "application/json", "Authorization": "Bearer " + api_key})
             try:
