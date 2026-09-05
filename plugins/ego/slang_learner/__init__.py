@@ -321,18 +321,21 @@ class SlangLearner:
         """小体量 LLM 引导：给 topic 生成少量高传播度候选词条，保持同一格式。"""
         candidates: List[dict] = []
 
-        # 读取项目级 provider 配置，复用现有 LLM 能力，不硬编码新依赖
+        # 读取项目级 provider 配置，复用现有 LLM 能力，不硬编码新依赖。
+        # key 统一走凭据管理器（get_provider_api_key：专属 > 全局），不再读 JSON 里的明文。
         try:
-            bot_config_path = os.path.join(os.path.dirname(PLUGIN_DIR), "..", "bot_config.json")
+            import sys as _sys
+            # PLUGIN_DIR=.../app/plugins/ego/slang_learner → 上溯 3 层到 app 根
+            _root = os.path.dirname(os.path.dirname(os.path.dirname(PLUGIN_DIR)))
+            if _root not in _sys.path:
+                _sys.path.insert(0, _root)
+            from config import get_provider_api_key as _gpak
+            bot_config_path = os.path.join(_root, "bot_config.json")
             bot_config = _load_json(bot_config_path, {})
-            provider = (bot_config.get("api_provider") or bot_config.get("provider") or "deepseek")
-            provider_cfg = next(
-                (p for p in (bot_config.get("providers") or []) if p.get("id") == provider),
-                {},
-            )
-            api_url = provider_cfg.get("base_url") or bot_config.get("api_url") or "https://api.deepseek.com/chat/completions"
-            api_key = provider_cfg.get("api_key") or bot_config.get("api_key") or ""
-            model = provider_cfg.get("model") or bot_config.get("model") or "deepseek-chat"
+            provider = (bot_config.get("api_provider") or "deepseek")
+            api_url = bot_config.get("api_url") or "https://api.deepseek.com/chat/completions"
+            api_key = _gpak(provider) or ""
+            model = bot_config.get("model_name") or "deepseek-chat"
         except Exception:
             api_url = "https://api.deepseek.com/chat/completions"
             api_key = ""

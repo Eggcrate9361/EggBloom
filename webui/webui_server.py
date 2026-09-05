@@ -2265,7 +2265,7 @@ class Handler(BaseHTTPRequestHandler):
                 "comfyui_checkpoint": cfg.get("comfyui_checkpoint", ""),
                 "workflow_path": cfg.get("workflow_path", ""),
                 "prompt_node_id": cfg.get("prompt_node_id", "353"),
-                "llm_model": cfg.get("llm_model", cfg.get("model_name", "deepseek-chat")),
+                "llm_model": "local" if cfg.get("use_local_image_llm") else "deepseek",
                 "llm_url": cfg.get("llm_url", cfg.get("api_url", "https://api.deepseek.com/chat/completions")),
                 "nsfw_enabled": cfg.get("nsfw_enabled", True),
             })
@@ -3090,6 +3090,40 @@ class Handler(BaseHTTPRequestHandler):
                     S.plugin_active = max(0, S.plugin_active - 1)
                     S.add_activity("rose", f"插件<b>{name}</b> 已停用")
             self._send_json(200, {"success": True, "enabled": bool(enabled)})
+            return
+
+        if path == "/api/llm/test":
+            # 真实连通性测试：用当前 provider 的 URL/模型/每提供商专属 key 发一条最小请求
+            cfg = load_config()
+            provider_id = str(cfg.get("api_provider") or "")
+            try:
+                from config import get_provider_api_key
+                api_key = get_provider_api_key(provider_id) or ""
+            except Exception:
+                api_key = cfg.get("api_key") or ""
+            api_url = (cfg.get("api_url") or "").strip()
+            model = (cfg.get("model_name") or "").strip()
+            if not api_url or not api_key:
+                self._send_json(200, {"ok": False, "error": "未配置 API URL 或 API Key（请在 LLM 配置页填写）"})
+                return
+            import urllib.request
+            payload = {"model": model, "messages": [{"role": "user", "content": "你好"}], "max_tokens": 8}
+            req = urllib.request.Request(api_url, data=json.dumps(payload).encode("utf-8"),
+                headers={"Content-Type": "application/json", "Authorization": "Bearer " + api_key})
+            try:
+                with urllib.request.urlopen(req, timeout=20) as r:
+                    resp = json.loads(r.read().decode("utf-8"))
+                content = (resp.get("choices") or [{}])[0].get("message", {}).get("content", "") or ""
+                self._send_json(200, {"ok": True, "model": model, "url": api_url, "reply": str(content)[:80]})
+            except urllib.error.HTTPError as e:
+                body = ""
+                try:
+                    body = e.read().decode("utf-8", errors="replace")[:300]
+                except Exception:
+                    pass
+                self._send_json(200, {"ok": False, "error": f"HTTP {e.code}: {body}"})
+            except Exception as e:
+                self._send_json(200, {"ok": False, "error": str(e)})
             return
 
         if path == "/api/command":

@@ -46,16 +46,17 @@ IMAGE_CACHE = os.path.join(SCRIPT_DIR, "image_cache")
 os.makedirs(IMAGE_CACHE, exist_ok=True)
 
 class AIClient:
-    def __init__(self, api_url, api_key, model="deepseek-chat", personality="", max_retries=3, provider="openai"):
+    def __init__(self, api_url, api_key, model="deepseek-chat", personality="", max_retries=3, provider="openai", temperature=None):
         self.api_url = api_url
         self.api_key = api_key
         self.model = model
         self.system_prompt = personality
         self.max_retries = max_retries
+        self.temperature = temperature
         from providers import make_provider
         self._provider = make_provider(
             api_url=api_url, api_key=api_key, model=model,
-            provider=provider, max_retries=max_retries,
+            provider=provider, max_retries=max_retries, temperature=temperature,
         )
 
     def call(self, messages, tools=None, stream=False, max_tokens=800):

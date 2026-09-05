@@ -90,17 +90,17 @@ def _get_ai_client():
 
     try:
         sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        from config import load_config, get_api_key
+        from config import load_config, get_provider_api_key
         from ai_client import AIClient
 
         cfg = load_config()
         api_url = plugin_config.DECIDER_API_URL or cfg.get("api_url", "")
-        api_key = plugin_config.DECIDER_API_KEY or get_api_key()
-        model = plugin_config.DECIDER_MODEL or cfg.get("model_name", "deepseek-chat")
         provider = cfg.get("api_provider", "deepseek")
+        api_key = plugin_config.DECIDER_API_KEY or get_provider_api_key(provider)
+        model = plugin_config.DECIDER_MODEL or cfg.get("model_name", "deepseek-chat")
 
         if api_key or provider == "ollama":
-            client = AIClient(api_url, api_key, model, provider=provider)
+            client = AIClient(api_url, api_key, model, provider=provider, temperature=cfg.get("ai_temperature"))
             _ai_client_cache["client"] = client
             return client
     except Exception as e:

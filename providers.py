@@ -31,11 +31,16 @@ class Provider:
 
     name = "base"
 
-    def __init__(self, api_url="", api_key="", model="", max_retries=3):
+    def __init__(self, api_url="", api_key="", model="", max_retries=3, temperature=None):
         self.api_url = api_url
         self.api_key = api_key
         self.model = model
         self.max_retries = max_retries
+        self.temperature = temperature  # None=使用适配器默认值；由 AIClient 透传 ai_temperature
+
+    def _temp(self, fallback):
+        """解析温度：显式配置优先，否则适配器默认值。"""
+        return self.temperature if self.temperature is not None else fallback
 
     def chat(self, messages, tools=None, stream=False, max_tokens=800):
         raise NotImplementedError
@@ -83,7 +88,7 @@ class OpenAIProvider(Provider):
             "model": self.model,
             "messages": messages,
             "max_tokens": max_tokens,
-            "temperature": 0.8,
+            "temperature": self._temp(0.8),
             "presence_penalty": 0.15,
             "frequency_penalty": 0.1,
             "stream": stream,
@@ -167,7 +172,7 @@ class OllamaProvider(Provider):
             "messages": messages,
             "stream": stream,
             "options": {
-                "temperature": 0.8,
+                "temperature": self._temp(0.8),
                 "num_predict": max_tokens,
             },
         }
@@ -367,7 +372,7 @@ class AnthropicProvider(Provider):
         payload = {
             "model": self.model,
             "max_tokens": max_tokens,
-            "temperature": 0.8,
+            "temperature": self._temp(0.8),
             "messages": self._messages_to_anthropic(rest),
             "stream": stream,
         }
@@ -532,7 +537,7 @@ class GoogleProvider(Provider):
         system_text, rest = self._split_system(messages)
         payload = {
             "contents": self._messages_to_gemini(rest),
-            "generationConfig": {"maxOutputTokens": max_tokens, "temperature": 0.8},
+            "generationConfig": {"maxOutputTokens": max_tokens, "temperature": self._temp(0.8)},
         }
         if system_text:
             payload["systemInstruction"] = {"parts": [{"text": system_text}]}
@@ -612,7 +617,7 @@ _PROVIDER_REGISTRY = {
 }
 
 
-def make_provider(api_url="", api_key="", model="", provider="openai", max_retries=3):
+def make_provider(api_url="", api_key="", model="", provider="openai", max_retries=3, temperature=None):
     """按 provider 名称构造适配器；未知 provider 回退 OpenAI 兼容。"""
     cls = _PROVIDER_REGISTRY.get((provider or "openai").lower(), OpenAIProvider)
-    return cls(api_url=api_url, api_key=api_key, model=model, max_retries=max_retries)
+    return cls(api_url=api_url, api_key=api_key, model=model, max_retries=max_retries, temperature=temperature)

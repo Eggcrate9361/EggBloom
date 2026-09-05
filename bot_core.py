@@ -6551,7 +6551,7 @@ def main():
                 _au = _cfg.get("api_url", DEEPSEEK_URL)
                 _am = _cfg.get("model_name", "deepseek-chat")
                 if _ak:
-                    _ac = AIClient(_au, _ak, _am, provider=_pid)
+                    _ac = AIClient(_au, _ak, _am, provider=_pid, temperature=_cfg.get("ai_temperature"))
                     pm.set_ai_client(_ac)
                     log(f"[PluginSystem] AI 客户端已传播 ({_pid})")
         except Exception as e:
