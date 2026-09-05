@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python
+#!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
 EggBloom - OneBot + DeepSeek AI + 远程控制
@@ -278,7 +278,7 @@ if _config.get("protocol_enabled", False):
             except Exception:
                 continue
 ONE_BOT_TOKEN = _config.get("onebot_token", "")
-BOT_QQ = _config.get("bot_qq", "")
+BOT_QQ = _config.get("bot_qq", "10000001")
 TARGET_QQS = _config.get("target_qqs", [])
 DEEPSEEK_API_KEY = _config.get("api_key", "")
 DEEPSEEK_URL = _config.get("api_url", "https://api.deepseek.com/chat/completions")
@@ -4335,8 +4335,8 @@ def _persist_config_file(new_cfg):
     """把配置原子写入程序目录 bot_config.json（真实文件）。
 
     Store 版 Python（MSIX 打包）会把 %LOCALAPPDATA% 重定向到
-    WpSystem 等沙箱目录，导致 config.save_config 写入沙箱而非真实磁盘；
-    这里统一写程序目录真实文件，与 webui 保存路径一致。
+    D:\\WpSystem\\...\\LocalCache\\Local\\EggBloom_v3，导致 config.save_config
+    写入沙箱而非真实磁盘；这里统一写程序目录真实文件，与 webui 保存路径一致。
     """
     to_save = {k: v for k, v in new_cfg.items() if k != "api_key"}
     path = CONFIG_FILE
@@ -5336,6 +5336,22 @@ def _build_cached_messages(history: List[Dict], cache_key: str,
     return messages
 
 
+def _resolve_provider_type(cfg=None):
+    """判定当前请求应走的协议：openai 兼容 / anthropic / gemini。
+
+    非 OpenAI 兼容服务商（Claude、Gemini）需要专属的请求格式与鉴权方式；
+    其余（DeepSeek/国产官方/聚合/中转）统一走 OpenAI 兼容路径。
+    """
+    cfg = cfg or _config
+    pid = str(cfg.get("api_provider") or cfg.get("provider") or "").lower()
+    url = str(cfg.get("api_url") or "").lower()
+    if pid in ("anthropic", "claude") or "/messages" in url or "anthropic.com" in url:
+        return "anthropic"
+    if pid in ("google", "gemini") or "generativelanguage" in url or ("googleapis.com" in url and "openai" not in url):
+        return "gemini"
+    return "openai"
+
+
 def _llm_config(runtime_cfg=None):
     global _LLAMA_SERVER_EXE, _LLAMA_MODEL, _LLAMA_PORT
     if runtime_cfg is None:
@@ -5346,7 +5362,15 @@ def _llm_config(runtime_cfg=None):
     port = int(runtime_cfg.get("llama_port") or 8081)
     model_name = (runtime_cfg.get("llama_model_name") or "").strip()
     api_url = runtime_cfg.get("api_url") or DEEPSEEK_URL
+    provider_id = (runtime_cfg.get("api_provider") or "").strip()
     api_key = runtime_cfg.get("api_key") or DEEPSEEK_API_KEY
+    # 每提供商专属 Key（凭据管理器）优先：切换提供商不会误用上一个服务商的 Key
+    if provider_id:
+        try:
+            from config import get_provider_api_key
+            api_key = get_provider_api_key(provider_id) or api_key
+        except Exception:
+            pass
     remote_model = runtime_cfg.get("model_name") or "deepseek-chat"
 
     if use_local and driver == "ollama":
@@ -5414,6 +5438,8 @@ def _llm_config(runtime_cfg=None):
         "api_url": api_url,
         "model_name": remote_model,
         "api_key": api_key,
+        "provider_id": provider_id,
+        "provider_type": _resolve_provider_type(runtime_cfg),
     }
 
 
@@ -5469,6 +5495,17 @@ def _call_chat_sync(messages, runtime_cfg=None, max_tokens=AI_MAX_TOKENS, stream
     api_url = cfg.get("api_url") or DEEPSEEK_URL
     api_key = cfg.get("api_key") or ""
     effective_temperature = AI_TEMPERATURE
+    ptype = cfg.get("provider_type") or _resolve_provider_type(cfg)
+    if ptype in ("anthropic", "gemini"):
+        # 非 OpenAI 兼容协议（Claude / Gemini）：走 providers.py 专属适配器
+        if stream:
+            raise ValueError(f"{ptype} 流式调用请走 _stream_chat_lines")
+        from providers import make_provider
+        prov = make_provider(api_url=api_url, api_key=api_key, model=model_name,
+                             provider=ptype, max_retries=3)
+        tools = with_tools if isinstance(with_tools, list) else TOOLS
+        content, tool_calls, usage = prov.chat(messages, tools=tools, stream=False, max_tokens=max_tokens)
+        return {"content": content or "", "tool_calls": tool_calls}, usage
     payload = {
         "model": model_name,
         "messages": messages,
@@ -5493,6 +5530,16 @@ def _call_chat_sync(messages, runtime_cfg=None, max_tokens=AI_MAX_TOKENS, stream
 
 
 def _stream_chat_lines(messages, runtime_cfg=None, max_tokens=AI_MAX_TOKENS, with_tools=True, scene="private"):
+    cfg = _llm_config(runtime_cfg)
+    ptype = cfg.get("provider_type") or _resolve_provider_type(cfg)
+    if ptype in ("anthropic", "gemini"):
+        # 非 OpenAI 兼容协议：流式由 providers.py 适配器处理（SSE 格式不同）
+        from providers import make_provider
+        prov = make_provider(api_url=cfg.get("api_url") or DEEPSEEK_URL,
+                             api_key=cfg.get("api_key") or "",
+                             model=cfg.get("model_name") or "deepseek-chat",
+                             provider=ptype, max_retries=3)
+        return prov.chat_stream(messages, max_tokens=max_tokens) or ""
     api_url, api_key, payload = _call_chat_sync(messages, runtime_cfg=runtime_cfg, max_tokens=max_tokens, stream=True, with_tools=with_tools)
     r = _post_chat_stream(api_url, payload, api_key=api_key, timeout=60)
     full_reply = ""
@@ -5548,12 +5595,9 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
 
     # 动态内容全部移到下面 dynamic_parts（不污染 static_prompt，保证缓存前缀不变）
 
-    # 特定用户个性化（boss_qqs：配置了才生效）
-    _boss_qqs = [str(q) for q in (_config.get("boss_qqs") or [])]
-    for _bq in _boss_qqs:
-        if _bq in user_msg:
-            dynamic_parts.append(f"【当前对话对象】@占位名片B（QQ {_bq}）是你的老大。对他态度暧昧一点、亲近一点，但不用强制回复，和其他人一样输出 [不说话] 也可以。")
-            break
+    # 特定用户个性化
+    if "10000002" in user_msg:
+        dynamic_parts.append("【当前对话对象】@占位名片B（QQ 10000002）是你的老大。对他态度暧昧一点、亲近一点，但不用强制回复，和其他人一样输出 [不说话] 也可以。")
 
     # 群聊动态信息（时间/群成员/时间线）→ 放到 dynamic_parts
     if is_group and group_id:
@@ -5944,7 +5988,7 @@ _KNOWN_NAMES: List[str] = ["王宇航", "王雨涵"]
 
 def _group_trigger_words() -> List[str]:
     """Get configured group trigger words."""
-    return _config.get("group_trigger_words", ["小a"])
+    return _config.get("group_trigger_words", ["小a", "@占位名片A", "@10000001"])
 
 
 def _is_group_trigger(text: str) -> bool:
@@ -6584,16 +6628,17 @@ def main():
             pm = get_plugin_manager()
             if pm:
                 # 构造一个轻量客户端对象供插件使用
-                from config import load_config as _lc
+                from config import load_config as _lc, get_provider_api_key
                 from ai_client import AIClient
                 _cfg = _lc()
-                _ak = _cfg.get("api_key") or _cfg.get("deepseek_api_key", "")
+                _pid = str(_cfg.get("api_provider") or "openai")
+                _ak = get_provider_api_key(_pid) or _cfg.get("api_key") or _cfg.get("deepseek_api_key", "")
                 _au = _cfg.get("api_url", DEEPSEEK_URL)
                 _am = _cfg.get("model_name", "deepseek-chat")
                 if _ak:
-                    _ac = AIClient(_au, _ak, _am)
+                    _ac = AIClient(_au, _ak, _am, provider=_pid)
                     pm.set_ai_client(_ac)
-                    log("[PluginSystem] AI 客户端已传播")
+                    log(f"[PluginSystem] AI 客户端已传播 ({_pid})")
         except Exception as e:
             log(f"[PluginSystem] 传播 AI 客户端失败: {e}")
 
@@ -7050,7 +7095,7 @@ def main():
                     has_bot_nick = False
                     if _config.get("group_trigger_include_bot_nick", True):
                         has_bot_nick = BOT_GROUP_NICK and BOT_GROUP_NICK in text
-                    # 文本中 @Bot QQ 检测
+                    # 文本中 @Bot QQ 检测（如 @10000001）
                     if f"@{BOT_QQ}" in text:
                         is_at_bot = True
                     # 文本中 @Bot 昵称检测（仅在配置开启时）

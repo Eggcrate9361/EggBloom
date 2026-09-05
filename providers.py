@@ -4,11 +4,14 @@
 统一 chat 语义: chat(messages, tools, stream, max_tokens) -> (reply, tool_calls, usage)
 - OpenAIProvider: OpenAI 兼容 REST (/chat/completions, Bearer token, tools 原生支持)
 - OllamaProvider: 本地 Ollama (/api/chat, 无 API key, tools 原生支持)
+- AnthropicProvider: Claude Messages API (x-api-key + anthropic-version, tools 原生支持)
+- GoogleProvider: Gemini generateContent API (?key=, functionDeclarations 工具)
 新增供应商: 继承 Provider 实现 chat() 即可, AIClient 零改动。
 """
 import json
 import ssl
 import time
+import urllib.parse
 import urllib.request
 import urllib.error
 
@@ -230,6 +233,347 @@ class OllamaProvider(Provider):
         return full
 
 
+class AnthropicProvider(Provider):
+    """Anthropic Claude Messages API（/v1/messages）。
+
+    鉴权：x-api-key + anthropic-version（非 Bearer）。
+    tools：原生 tool_use / tool_result 块，与 OpenAI 格式相互转换。
+    """
+
+    name = "anthropic"
+
+    @staticmethod
+    def _split_system(messages):
+        system_parts, rest = [], []
+        for m in messages or []:
+            if m.get("role") == "system":
+                c = m.get("content")
+                if isinstance(c, list):
+                    c = "".join(x.get("text", "") for x in c if isinstance(x, dict) and x.get("type") == "text")
+                if c:
+                    system_parts.append(str(c))
+            else:
+                rest.append(m)
+        return "\n\n".join(system_parts), rest
+
+    @staticmethod
+    def _content_to_text(content):
+        if content is None:
+            return ""
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            parts = []
+            for c in content:
+                if isinstance(c, dict) and c.get("type") == "text":
+                    parts.append(str(c.get("text") or ""))
+                # image_url 等非文本块：Anthropic 适配暂不转发图片
+            return "".join(parts)
+        return str(content)
+
+    @staticmethod
+    def _tools_to_anthropic(tools):
+        out = []
+        for t in tools or []:
+            fn = t.get("function") if isinstance(t, dict) else None
+            if not fn:
+                continue
+            out.append({
+                "name": fn.get("name", ""),
+                "description": fn.get("description") or "",
+                "input_schema": fn.get("parameters") or {"type": "object", "properties": {}},
+            })
+        return out
+
+    @staticmethod
+    def _messages_to_anthropic(messages):
+        out = []
+        for m in messages or []:
+            role = m.get("role")
+            content = m.get("content")
+            if role == "user":
+                text = AnthropicProvider._content_to_text(content)
+                if m.get("tool_calls"):
+                    text = text or ""
+                out.append({"role": "user", "content": text})
+            elif role == "assistant":
+                tcs = m.get("tool_calls")
+                if tcs:
+                    blocks = []
+                    if content:
+                        blocks.append({"type": "text", "text": str(content)})
+                    for tc in tcs:
+                        fn = tc.get("function") or {}
+                        try:
+                            inp = json.loads(fn.get("arguments") or "{}")
+                        except Exception:
+                            inp = {}
+                        blocks.append({
+                            "type": "tool_use",
+                            "id": tc.get("id") or f"toolu_{abs(hash(fn.get('name','')))}",
+                            "name": fn.get("name", ""),
+                            "input": inp,
+                        })
+                    out.append({"role": "assistant", "content": blocks})
+                else:
+                    out.append({"role": "assistant", "content": str(content or "")})
+            elif role == "tool":
+                out.append({"role": "user", "content": [
+                    {"type": "tool_result", "tool_use_id": m.get("tool_call_id") or "",
+                     "content": str(content or "")}]})
+            else:
+                out.append({"role": role, "content": str(content or "")})
+        # Anthropic 要求首条为 user
+        if out and out[0]["role"] != "user":
+            out.insert(0, {"role": "user", "content": "（继续）"})
+        return out
+
+    @staticmethod
+    def _parse_resp(resp):
+        text_parts, tool_calls = [], []
+        for block in resp.get("content") or []:
+            btype = block.get("type")
+            if btype == "text":
+                text_parts.append(block.get("text") or "")
+            elif btype == "tool_use":
+                tool_calls.append({
+                    "id": block.get("id") or "",
+                    "function": {
+                        "name": block.get("name") or "",
+                        "arguments": json.dumps(block.get("input") or {}, ensure_ascii=False),
+                    },
+                })
+        usage = resp.get("usage") or {}
+        total = (usage.get("input_tokens") or 0) + (usage.get("output_tokens") or 0)
+        return "".join(text_parts), (tool_calls or None), {"total_tokens": total, **usage}
+
+    def _endpoint(self):
+        base = (self.api_url or "").rstrip("/")
+        if base.endswith("/messages"):
+            base = base[: -len("/messages")]
+        if not base.endswith("/v1"):
+            base += "/v1"
+        return base + "/messages"
+
+    def chat(self, messages, tools=None, stream=False, max_tokens=800):
+        system_text, rest = self._split_system(messages)
+        payload = {
+            "model": self.model,
+            "max_tokens": max_tokens,
+            "temperature": 0.8,
+            "messages": self._messages_to_anthropic(rest),
+            "stream": stream,
+        }
+        if system_text:
+            payload["system"] = system_text
+        if tools:
+            payload["tools"] = self._tools_to_anthropic(tools)
+        headers = {"Content-Type": "application/json",
+                   "x-api-key": self.api_key or "",
+                   "anthropic-version": "2023-06-01"}
+        body = json.dumps(payload).encode("utf-8")
+        for attempt in range(self.max_retries):
+            try:
+                req = urllib.request.Request(self._endpoint(), data=body, headers=headers)
+                with urllib.request.urlopen(req, timeout=120, context=_SSL_CTX) as r:
+                    resp = json.loads(r.read().decode("utf-8"))
+                return self._parse_resp(resp)
+            except Exception as e:
+                if attempt < self.max_retries - 1:
+                    log(f"Claude retry {attempt+1}/{self.max_retries}: {self._read_error(e)}")
+                    time.sleep(3)
+        return None, None, {}
+
+    def chat_stream(self, messages, max_tokens=800):
+        if not HAS_REQUESTS:
+            return self.chat(messages, max_tokens=max_tokens)[0]
+        system_text, rest = self._split_system(messages)
+        payload = {
+            "model": self.model,
+            "max_tokens": max_tokens,
+            "temperature": 0.7,
+            "messages": self._messages_to_anthropic(rest),
+            "stream": True,
+        }
+        if system_text:
+            payload["system"] = system_text
+        full = ""
+        try:
+            r = requests.post(
+                self._endpoint(),
+                json=payload,
+                headers={"x-api-key": self.api_key or "", "anthropic-version": "2023-06-01"},
+                stream=True, timeout=120,
+            )
+            for line in r.iter_lines(decode_unicode=True):
+                if not line:
+                    continue
+                if line.startswith("data:"):
+                    data_str = line[5:].strip()
+                    if data_str == "[DONE]":
+                        break
+                    try:
+                        chunk = json.loads(data_str)
+                        delta = chunk.get("delta") or {}
+                        if delta.get("type") == "text_delta":
+                            full += delta.get("text") or ""
+                    except json.JSONDecodeError:
+                        continue
+        except Exception as e:
+            log(f"Claude stream failed: {e}, fallback")
+            return self.chat(messages, max_tokens=max_tokens)[0]
+        return full
+
+
+class GoogleProvider(Provider):
+    """Google Gemini generateContent API（?key= 查询参数鉴权）。
+
+    tools：functionDeclarations / functionCall / functionResponse，与 OpenAI 格式互转。
+    """
+
+    name = "google"
+
+    @staticmethod
+    def _split_system(messages):
+        return AnthropicProvider._split_system(messages)
+
+    @staticmethod
+    def _content_to_text(content):
+        return AnthropicProvider._content_to_text(content)
+
+    @staticmethod
+    def _tools_to_gemini(tools):
+        fds = []
+        for t in tools or []:
+            fn = t.get("function") if isinstance(t, dict) else None
+            if not fn:
+                continue
+            fds.append({
+                "name": fn.get("name", ""),
+                "description": fn.get("description") or "",
+                "parameters": fn.get("parameters") or {"type": "object", "properties": {}},
+            })
+        return [{"functionDeclarations": fds}] if fds else None
+
+    @staticmethod
+    def _messages_to_gemini(messages):
+        out = []
+        for m in messages or []:
+            role = m.get("role")
+            content = m.get("content")
+            if role == "user":
+                parts = []
+                if m.get("tool_calls"):
+                    parts = []
+                txt = GoogleProvider._content_to_text(content)
+                if txt:
+                    parts.append({"text": txt})
+                out.append({"role": "user", "parts": parts})
+            elif role == "assistant":
+                parts = []
+                if content:
+                    parts.append({"text": str(content)})
+                for tc in m.get("tool_calls") or []:
+                    fn = tc.get("function") or {}
+                    try:
+                        args = json.loads(fn.get("arguments") or "{}")
+                    except Exception:
+                        args = {}
+                    parts.append({"functionCall": {"name": fn.get("name", ""), "args": args}})
+                out.append({"role": "model", "parts": parts})
+            elif role == "tool":
+                out.append({"role": "user", "parts": [
+                    {"functionResponse": {"name": m.get("tool_call_id") or "",
+                                          "response": {"result": str(content or "")}}}]})
+            else:
+                grole = "user" if role != "assistant" else "model"
+                out.append({"role": grole, "parts": [{"text": str(content or "")}]})
+        return out
+
+    @staticmethod
+    def _parse_resp(resp):
+        text_parts, tool_calls = [], []
+        for cand in resp.get("candidates") or []:
+            content = cand.get("content") or {}
+            for part in content.get("parts") or []:
+                if part.get("text"):
+                    text_parts.append(part["text"])
+                fc = part.get("functionCall")
+                if fc:
+                    tool_calls.append({
+                        "id": fc.get("name") or "",
+                        "function": {
+                            "name": fc.get("name") or "",
+                            "arguments": json.dumps(fc.get("args") or {}, ensure_ascii=False),
+                        },
+                    })
+        usage = resp.get("usageMetadata") or {}
+        return "".join(text_parts), (tool_calls or None), {"total_tokens": usage.get("totalTokenCount") or 0, **usage}
+
+    def _endpoint(self):
+        base = (self.api_url or "").rstrip("/")
+        if "/models/" in base:
+            base = base.split("/models/")[0]
+        model = (self.model or "").strip().split("/")[-1]
+        sep = "&" if "?" in base else "?"
+        return f"{base}/models/{urllib.parse.quote(model)}:generateContent{sep}key={urllib.parse.quote(self.api_key or '')}"
+
+    def chat(self, messages, tools=None, stream=False, max_tokens=800):
+        system_text, rest = self._split_system(messages)
+        payload = {
+            "contents": self._messages_to_gemini(rest),
+            "generationConfig": {"maxOutputTokens": max_tokens, "temperature": 0.8},
+        }
+        if system_text:
+            payload["systemInstruction"] = {"parts": [{"text": system_text}]}
+        if tools:
+            gtools = self._tools_to_gemini(tools)
+            if gtools:
+                payload["tools"] = gtools
+        body = json.dumps(payload).encode("utf-8")
+        headers = {"Content-Type": "application/json"}
+        for attempt in range(self.max_retries):
+            try:
+                req = urllib.request.Request(self._endpoint(), data=body, headers=headers)
+                with urllib.request.urlopen(req, timeout=120, context=_SSL_CTX) as r:
+                    resp = json.loads(r.read().decode("utf-8"))
+                return self._parse_resp(resp)
+            except Exception as e:
+                if attempt < self.max_retries - 1:
+                    log(f"Gemini retry {attempt+1}/{self.max_retries}: {self._read_error(e)}")
+                    time.sleep(3)
+        return None, None, {}
+
+    def chat_stream(self, messages, max_tokens=800):
+        if not HAS_REQUESTS:
+            return self.chat(messages, max_tokens=max_tokens)[0]
+        system_text, rest = self._split_system(messages)
+        payload = {
+            "contents": self._messages_to_gemini(rest),
+            "generationConfig": {"maxOutputTokens": max_tokens, "temperature": 0.7},
+        }
+        if system_text:
+            payload["systemInstruction"] = {"parts": [{"text": system_text}]}
+        full = ""
+        try:
+            r = requests.post(self._endpoint(), json=payload, stream=True, timeout=120)
+            for line in r.iter_lines(decode_unicode=True):
+                if not line:
+                    continue
+                try:
+                    chunk = json.loads(line)
+                    for cand in chunk.get("candidates") or []:
+                        for part in (cand.get("content") or {}).get("parts") or []:
+                            if part.get("text"):
+                                full += part["text"]
+                except json.JSONDecodeError:
+                    continue
+        except Exception as e:
+            log(f"Gemini stream failed: {e}, fallback")
+            return self.chat(messages, max_tokens=max_tokens)[0]
+        return full
+
+
 # ── 供应商路由 ──
 _PROVIDER_REGISTRY = {
     "openai": OpenAIProvider,
@@ -247,6 +591,11 @@ _PROVIDER_REGISTRY = {
     "hunyuan": OpenAIProvider,
     "siliconflow": OpenAIProvider,
     "openrouter": OpenAIProvider,
+    # 非 OpenAI 兼容协议：专属适配器
+    "anthropic": AnthropicProvider,
+    "claude": AnthropicProvider,
+    "google": GoogleProvider,
+    "gemini": GoogleProvider,
 }
 
 

@@ -15,35 +15,18 @@ except Exception:
     def exists_cred(name):
         return False
 
-try:
-    from data_store import get_config_dir, get_legacy_appdata_dir, get_config_paths, get_env_paths
-    _DATA_DIR = get_config_dir()
-    _LEGACY_DIR = get_legacy_appdata_dir()
-    CONFIG_FILE_NEW, CONFIG_FILE_LEGACY = get_config_paths()
-    ENV_FILE_NEW, ENV_FILE_LEGACY = get_env_paths()
-except Exception:
-    # Fallback if data_store not available
-    import os
-    _DATA_DIR = os.path.join(os.path.expanduser("~"), "AppData", "Local", "EggBloom")
-    _LEGACY_DIR = os.path.join(os.path.expanduser("~"), "AppData", "Local", "EggBloom_v3")
-    os.makedirs(_DATA_DIR, exist_ok=True)
-    os.makedirs(_LEGACY_DIR, exist_ok=True)
-    CONFIG_FILE_NEW = os.path.join(_DATA_DIR, "bot_config.json")
-    CONFIG_FILE_LEGACY = os.path.join(_LEGACY_DIR, "bot_config.json")
-    ENV_FILE_NEW = os.path.join(_DATA_DIR, ".env")
-    ENV_FILE_LEGACY = os.path.join(_LEGACY_DIR, ".env")
-
-# 兼容旧版常量名
-CONFIG_FILE = CONFIG_FILE_NEW
-ENV_FILE = ENV_FILE_NEW
-_APPDATA_DIR = _DATA_DIR
-
 if getattr(sys, 'frozen', False):
     SCRIPT_DIR = os.path.dirname(sys.executable)
 else:
     SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# 程序目录（eggbloom/resources/app）下的 bot_config.json，优先于数据目录
+_APPDATA_DIR = os.path.join(os.path.expanduser("~"), "AppData", "Local", "EggBloom_v3")
+os.makedirs(_APPDATA_DIR, exist_ok=True)
+
+CONFIG_FILE = os.path.join(_APPDATA_DIR, "bot_config.json")
+ENV_FILE = os.path.join(_APPDATA_DIR, ".env")
+
+# 程序目录（eggbloom/resources/app）下的 bot_config.json，优先于 AppData
 APP_CONFIG_FILE = os.path.join(SCRIPT_DIR, "bot_config.json")
 
 API_PROVIDERS = {
@@ -337,16 +320,14 @@ DEFAULT_CONFIG = {
     "custom_exit_phrases_idle": [],
 
     # 群触发词
-    "group_trigger_words": ["小a"],
+    "group_trigger_words": ["小a", "@占位名片A", "@10000001"],
     "group_trigger_include_bot_nick": True,
     "group_trigger_include_text_at": True,
     "group_trigger_include_quote": True,
-    "boss_qqs": [],
 
     # 界面
     "ui_language": "zh",
     "ui_theme": "default",
-    "log_level": "INFO",
 
     # 向量嵌入默认路径（可由 bot_config.json 覆盖，避免硬编码）
     "embed_exe": "",
@@ -429,11 +410,15 @@ def load_config():
             pass
 
     env = _load_env()
+    # env 只补缺，不覆盖 bot_config.json 已有值：
+    # 之前 save_env 会把 API_URL/MODEL_NAME 写进 .env，导致 WebUI 切换
+    # 非 DeepSeek 提供商后，加载时又被 .env 里的 DeepSeek 残留值覆盖（配置"不生效"）。
+    # 改为 json 优先、env 补缺；凭据管理器优先级最高（见下）。
     for ek, ck in [("API_KEY", "api_key"), ("DEEPSEEK_API_KEY", "api_key"),
                    ("API_URL", "api_url"), ("MODEL_NAME", "model_name"),
                    ("BOT_QQ", "bot_qq"), ("ONE_BOT_URL", "onebot_url"),
                    ("ONE_BOT_TOKEN", "onebot_token")]:
-        if env.get(ek):
+        if env.get(ek) and not cfg.get(ck):
             cfg[ck] = env[ek]
     # Windows 凭据管理器优先：避免明文 key 落盘
     cred_key = read_cred(MODEL_API_KEY_CRED)
@@ -486,7 +471,12 @@ def save_config(cfg, save_api_key=False):
 
 
 def save_env(api_key="", api_url="", model=""):
-    """Save sensitive config：api_key 写入 Windows 凭据管理器（不落盘明文）。"""
+    """Save sensitive config：api_key 写入 Windows 凭据管理器（不落盘明文）。
+
+    API_URL / MODEL_NAME 不再写入 .env：它们属于 bot_config.json 的普通配置，
+    写进 .env 会在 load_config 时以残留值覆盖 WebUI 新保存的提供商配置
+    （切换非 DeepSeek 提供商后 Bot 仍走 DeepSeek 的根因）。这里顺带清理旧残留。
+    """
     if api_key and api_key.strip() and "YOUR" not in api_key:
         try:
             from cred_store import write_cred, MODEL_API_KEY_CRED
@@ -502,7 +492,6 @@ def save_env(api_key="", api_url="", model=""):
         except Exception:
             lines = []
 
-    updated = set()
     new_lines = []
     for line in lines:
         s = line.strip()
@@ -511,23 +500,11 @@ def save_env(api_key="", api_url="", model=""):
             continue
         if "=" in s:
             k = s.partition("=")[0].strip()
-            if k in ("API_KEY", "DEEPSEEK_API_KEY"):
-                continue  # key 不再写入 .env 明文
-            elif k == "API_URL" and api_url:
-                new_lines.append(f"API_URL={api_url}")
-                updated.add(k)
-            elif k == "MODEL_NAME" and model:
-                new_lines.append(f"MODEL_NAME={model}")
-                updated.add(k)
-            else:
-                new_lines.append(line.rstrip())
+            if k in ("API_KEY", "DEEPSEEK_API_KEY", "API_URL", "MODEL_NAME"):
+                continue  # 敏感项走凭据管理器；URL/模型名走 bot_config.json
+            new_lines.append(line.rstrip())
         else:
             new_lines.append(line.rstrip())
-
-    if api_url and "API_URL" not in updated:
-        new_lines.append(f"API_URL={api_url}")
-    if model and "MODEL_NAME" not in updated:
-        new_lines.append(f"MODEL_NAME={model}")
 
     with open(ENV_FILE, "w", encoding="utf-8") as f:
         f.write("\n".join(new_lines) + "\n")
@@ -553,82 +530,52 @@ def migrate_plain_api_key(plain_key):
         return False
 
 
-def config_check() -> dict:
+def provider_cred_name(provider_id):
+    """每提供商专属凭据条目名：EggBloom.MODEL_API_KEY_{provider_id}。
+
+    让每个提供商可以保存独立 API Key（互不覆盖），未指定时回退全局条目。
     """
-    配置完整性检查：返回 {ok: bool, missing: list, warnings: list, redirect_url: str}
-    - ok: 核心配置是否完整
-    - missing: 缺失的关键字段
-    - warnings: 非关键但建议配置的字段
-    - redirect_url: 若不完整，建议跳转的向导页面
+    pid = (provider_id or "").strip()
+    if not pid:
+        return MODEL_API_KEY_CRED
+    return f"{MODEL_API_KEY_CRED}_{pid}"
+
+
+def get_provider_api_key(provider_id):
+    """解析某提供商实际使用的 API Key：该提供商专属凭据 > 全局凭据。
+
+    提供商切换时不会把上一个提供商的 Key 误发给新服务商。
     """
-    cfg = load_config()
-    missing = []
-    warnings = []
-
-    # 核心必填项
-    if not cfg.get("bot_qq"):
-        missing.append("bot_qq (Bot QQ 号)")
-    if not cfg.get("onebot_url"):
-        missing.append("onebot_url (OneBot HTTP API 地址)")
-    if not cfg.get("api_provider"):
-        missing.append("api_provider (API 服务商)")
-    if not cfg.get("api_url"):
-        missing.append("api_url (API 端点)")
-    if not cfg.get("model_name"):
-        missing.append("model_name (模型名称)")
-
-    # API Key：优先从凭据管理器读取，其次从配置
-    api_key = get_api_key()
-    if not api_key or "YOUR" in api_key:
-        missing.append("api_key (API 密钥，请在设置页填写)")
-
-    # 协议驱动相关（若启用了协议层）
-    if cfg.get("protocol_enabled"):
-        driver = cfg.get("protocol_driver", "napcat")
-        drv_cfg = cfg.get("protocol_drivers", {}).get(driver, {})
-        if driver == "napcat":
-            if not drv_cfg.get("exe_path"):
-                missing.append("protocol_drivers.napcat.exe_path (NapCat 可执行文件路径)")
-            if not drv_cfg.get("qq_path"):
-                warnings.append("protocol_drivers.napcat.qq_path (QQNT 路径，建议填写)")
-        elif driver == "snowluma":
-            if not drv_cfg.get("exe_path"):
-                missing.append("protocol_drivers.snowluma.exe_path (SnowLuma node.exe 路径)")
-        elif driver == "llonebot":
-            if not drv_cfg.get("exe_path"):
-                warnings.append("protocol_drivers.llonebot.exe_path (LLOneBot 可执行文件路径)")
-
-    # 本地模型路径（若使用本地模型）
-    if cfg.get("use_local_llm"):
-        if not cfg.get("llama_exe_path"):
-            warnings.append("llama_exe_path (llama-server 路径)")
-        if not cfg.get("llama_model_path"):
-            warnings.append("llama_model_path (模型文件路径)")
-
-    ok = len(missing) == 0
-    redirect_url = "/wizard.html" if not ok else ""
-
-    return {
-        "ok": ok,
-        "missing": missing,
-        "warnings": warnings,
-        "redirect_url": redirect_url,
-        "config_summary": {
-            "bot_qq": bool(cfg.get("bot_qq")),
-            "onebot_url": bool(cfg.get("onebot_url")),
-            "api_provider": cfg.get("api_provider"),
-            "model_name": cfg.get("model_name"),
-            "has_api_key": bool(api_key and "YOUR" not in api_key),
-            "protocol_enabled": cfg.get("protocol_enabled", False),
-            "protocol_driver": cfg.get("protocol_driver"),
-            "use_local_llm": cfg.get("use_local_llm", False),
-        }
-    }
+    try:
+        from cred_store import read_cred
+        k = read_cred(provider_cred_name(provider_id))
+        if k:
+            return k
+    except Exception:
+        pass
+    return get_api_key()
 
 
-def get_log_level() -> int:
-    """获取配置的日志级别，返回 logging 模块常量"""
-    import logging
-    cfg = load_config()
-    level_str = str(cfg.get("log_level", "INFO")).upper()
-    return getattr(logging, level_str, logging.INFO)
+def save_provider_api_key(provider_id, key):
+    """把某提供商的 API Key 写入凭据管理器（专属条目），成功返回 True。"""
+    key = (key or "").strip()
+    pid = (provider_id or "").strip()
+    if not pid or not key or "YOUR" in key:
+        return False
+    try:
+        from cred_store import write_cred
+        return bool(write_cred(provider_cred_name(pid), key))
+    except Exception:
+        return False
+
+
+def clear_provider_api_key(provider_id):
+    """删除某提供商的专属凭据（用于清除独立 Key / 删除提供商时清理）。"""
+    pid = (provider_id or "").strip()
+    if not pid:
+        return False
+    try:
+        from cred_store import delete_cred
+        return bool(delete_cred(provider_cred_name(pid)))
+    except Exception:
+        return False

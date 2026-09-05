@@ -1557,6 +1557,8 @@ function mountEditableList(root, items, onChange){
 function openProviderModal(existing){
   const isEdit = !!existing;
   const data = existing || {id:'custom_'+Date.now(),name:'Custom',base_url:'',models:[],api_key:''};
+  // models 可能是 {id,name} 对象或纯字符串；统一转成 id 展示，避免 join 出 "[object Object]"
+  const modelList = (data.models||[]).map(m => (typeof m === 'string' ? m : (m && (m.id || m.name)) || '')).filter(Boolean).join(', ');
   const modal = document.createElement('div');
   modal.className = 'modal-overlay';
   modal.innerHTML = '<div class="modal">'+
@@ -1566,7 +1568,11 @@ function openProviderModal(existing){
     '<div class="field"><div class="field-label">Base URL</div>'+
     '<input class="input" id="mpUrl" value="'+esc(data.base_url)+'"></div>'+
     '<div class="field"><div class="field-label">Models (comma separated)</div>'+
-    '<input class="input" id="mpModels" value="'+esc((data.models||[]).join(', '))+'"></div>'+
+    '<input class="input" id="mpModels" value="'+esc(modelList)+'"></div>'+
+    '<div class="field"><div class="field-label">API Key</div>'+
+    '<input class="input" id="mpApiKey" type="password" value="'+esc(data.api_key||'')+'" placeholder="sk-...（可选，本提供商专用；留空则用全局 Key）">'+
+    (data.has_api_key ? '<label style="display:flex;align-items:center;gap:8px;margin-top:6px;font-size:12px;color:var(--ink2);cursor:pointer"><input type="checkbox" id="mpClearKey" style="width:auto"> 清除已保存的专用 Key</label>' : '')+
+    '<div class="field-desc">每个提供商可保存独立 Key（凭据管理器），切换提供商时自动使用对应 Key</div></div>'+
     '<div class="cmd-bar"><button class="btn" id="mpCancel">Cancel</button>'+
     '<button class="btn primary" id="mpConfirm">'+(isEdit?'Save':'Add')+'</button></div></div>';
   document.body.appendChild(modal);
@@ -1575,9 +1581,14 @@ function openProviderModal(existing){
   modal.querySelector('#mpConfirm').onclick = ()=>{
     const name = modal.querySelector('#mpName').value.trim();
     const url = modal.querySelector('#mpUrl').value.trim();
-    const models = modal.querySelector('#mpModels').value.split(',').map(s=>s.trim()).filter(Boolean);
+    const clearKey = !!(modal.querySelector('#mpClearKey') && modal.querySelector('#mpClearKey').checked);
+    const apiKey = modal.querySelector('#mpApiKey').value.trim();
+    // 统一转成 {id,name} 对象，与拉取模型列表的格式一致
+    const models = modal.querySelector('#mpModels').value.split(',').map(s=>s.trim()).filter(Boolean).map(id => ({id, name: id}));
     if(!name){ showToast('Name required','error'); return; }
     const newP = {...data, name, base_url:url, models};
+    if(clearKey){ newP._clear_key = true; delete newP.api_key; }
+    else if(apiKey){ newP.api_key = apiKey; } else { delete newP.api_key; }
     if(isEdit){
       const idx = currentProviders.findIndex(x=>x.id===data.id);
       if(idx>=0) currentProviders[idx] = newP;
@@ -2267,7 +2278,11 @@ function updateProviderModels(providers, providerId){  const modelEl = $('sModel
   if(!found) return;
   if(urlEl) urlEl.value = found.base_url || '';
   if(providerEl) providerEl.value = providerId;
-  fetchRemoteModels(providerId, found.base_url || '', apiKey || '', modelEl);
+  // 优先使用该提供商自己保存的 Key；掩码占位符视为无效，回退到全局 Key
+  const pk = (found && found.api_key) || '';
+  const masked = !pk || /«redacted/.test(pk) || /\*{2,}/.test(pk);
+  const provKey = masked ? (apiKey || '') : pk;
+  fetchRemoteModels(providerId, found.base_url || '', provKey, modelEl);
 }
 async function fetchRemoteModels(providerId, baseUrl, apiKey, modelEl){
   if(!baseUrl && !providerId){

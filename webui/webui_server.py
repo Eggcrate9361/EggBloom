@@ -733,8 +733,17 @@ def _detect_provider_type(base_url, provider_id):
     pid = (provider_id or '').lower()
     # 所有 OpenAI 兼容服务商(国产官方/聚合)直接按其 id 返回,模型探测统一走 /v1/models
     if pid in {'deepseek', 'openai', 'custom', 'aliyun', 'zhipu', 'kimi', 'step',
-               'minimax', 'volcengine', 'qianfan', 'hunyuan', 'siliconflow', 'openrouter'}:
+               'minimax', 'volcengine', 'qianfan', 'hunyuan', 'siliconflow', 'openrouter',
+               'groq', 'together'}:
         return pid
+    if pid in {'anthropic', 'claude'}:
+        return 'anthropic'
+    if pid in {'google', 'gemini'}:
+        return 'gemini'
+    if pid == 'ollama':
+        return 'ollama'
+    if pid == 'lmstudio':
+        return 'lmstudio'
     url = (base_url or '').lower()
     if 'deepseek' in url:
         return 'deepseek'
@@ -742,6 +751,8 @@ def _detect_provider_type(base_url, provider_id):
         return 'openai'
     if 'anthropic' in url or '/messages' in url:
         return 'anthropic'
+    if 'generativelanguage' in url:
+        return 'gemini'
     if 'ollama' in url or '11434' in url:
         return 'ollama'
     if 'lmstudio' in url or '1234' in url:
@@ -763,11 +774,68 @@ def _model_candidate_urls(base_url, provider_type):
     except Exception:
         root = base_url.rstrip('/')
 
+    if provider_type in ('anthropic', 'claude'):
+        # Claude: GET /v1/models，需 x-api-key + anthropic-version
+        if root.endswith('/v1'):
+            return [root + '/models']
+        return [root + '/v1/models', root + '/models']
+    if provider_type in ('gemini', 'google'):
+        # Gemini: GET /v1beta/models，需 ?key= 查询参数
+        return [root + '/models', root + '/v1beta/models']
     candidates = [
         root + '/v1/models',
         root + '/models',
     ]
     return candidates
+
+
+def _provider_api_key(request_key, provider_entry):
+    """解析模型列表拉取用的 API Key：请求 Key > 提供商专属凭据 > 全局凭据。"""
+    k = (request_key or '').strip()
+    if k and not _is_redacted_key(k):
+        return k
+    if provider_entry:
+        pk = (provider_entry.get('api_key') or '').strip()
+        if pk and not _is_redacted_key(pk):
+            return pk
+    try:
+        from config import get_provider_api_key
+        pid = (provider_entry or {}).get('id') or ''
+        return get_provider_api_key(pid) or ''
+    except Exception:
+        return ''
+
+
+def _fetch_remote_models(url, api_key, provider_type):
+    """按提供商类型用正确的鉴权方式请求模型列表，返回 (models, error)。"""
+    pt = (provider_type or 'openai').lower()
+    headers = {'Accept': 'application/json'}
+    final_url = url
+    if pt in ('anthropic', 'claude'):
+        headers.update({'x-api-key': api_key or '', 'anthropic-version': '2023-06-01'})
+    elif pt in ('gemini', 'google'):
+        sep = '&' if '?' in url else '?'
+        final_url = url + sep + 'key=' + urllib.parse.quote(api_key or '')
+    else:
+        headers['Authorization'] = 'Bearer ' + (api_key or '')
+    req = urllib.request.Request(final_url, headers=headers)
+    with urllib.request.urlopen(req, timeout=15) as r:
+        data = json.loads(r.read().decode('utf-8'))
+
+    def _mid(m):
+        if pt in ('gemini', 'google'):
+            n = m.get('name') or m.get('id') or m.get('model') or ''
+            return n.split('/')[-1] if '/' in n else n
+        return m.get('id') or m.get('name') or m.get('model') or ''
+
+    raw = data.get('data') or data.get('models') or []
+    models = []
+    for m in raw:
+        mid = _mid(m)
+        if mid:
+            models.append({'id': mid, 'name': m.get('name', mid)})
+    models.sort(key=lambda x: x['id'])
+    return models, None
 
 
 def _classify_error(err):
@@ -2069,9 +2137,15 @@ class Handler(BaseHTTPRequestHandler):
             display = dict(cfg)
             providers = []
             try:
-                providers_path = PROJECT / "webui" / "providers.json"
-                if providers_path.exists():
-                    providers = json.loads(providers_path.read_text(encoding="utf-8"))
+                # 优先回传 bot_config.json 中已保存的提供商（用户在「多提供商管理」里的编辑），
+                # 其次才是静态目录 webui/providers.json —— 否则用户新增/改动的提供商刷新即丢失
+                saved = cfg.get("providers") or []
+                if saved and isinstance(saved, list):
+                    providers = [dict(p) for p in saved if isinstance(p, dict)]
+                if not providers:
+                    providers_path = PROJECT / "webui" / "providers.json"
+                    if providers_path.exists():
+                        providers = json.loads(providers_path.read_text(encoding="utf-8"))
             except Exception:
                 providers = [
                     {"id": "deepseek", "name": "DeepSeek", "models": [{"id": "deepseek-chat", "name": "DeepSeek Chat"}]},
@@ -2084,6 +2158,13 @@ class Handler(BaseHTTPRequestHandler):
                     _p.pop("models", None)
                     if _p.get("api_key"):
                         _p["api_key"] = _mask_secret(_p["api_key"])
+                    # 标记该提供商是否已在凭据管理器保存专属 Key（前端据此显示"清除 Key"入口）
+                    try:
+                        from config import provider_cred_name
+                        from cred_store import exists_cred
+                        _p["has_api_key"] = bool(_p.get("api_key")) or exists_cred(provider_cred_name(_p.get("id") or ""))
+                    except Exception:
+                        _p["has_api_key"] = False
             # 敏感值掩码：api_key / onebot_token 不回传明文（凭据管理器持有真实值）
             if display.get("api_key"):
                 display["api_key"] = _mask_secret(display["api_key"])
@@ -2112,16 +2193,24 @@ class Handler(BaseHTTPRequestHandler):
             provider_type = _detect_provider_type(base_url, provider_id)
             candidate_urls = _model_candidate_urls(base_url, provider_type)
             local_models = []
+            provider_entry = None
+            all_providers = []
             try:
-                providers_path = PROJECT / "webui" / "providers.json"
-                if providers_path.exists():
-                    all_providers = json.loads(providers_path.read_text(encoding="utf-8"))
-                else:
-                    all_providers = []
+                # 优先用 bot_config.json 里已保存的提供商（含用户编辑的 Base URL / 模型 / 专属 Key）
+                _cfg_now = load_config()
+                all_providers = _cfg_now.get("providers") or []
+                if not all_providers:
+                    providers_path = PROJECT / "webui" / "providers.json"
+                    if providers_path.exists():
+                        all_providers = json.loads(providers_path.read_text(encoding="utf-8"))
+            except Exception:
+                all_providers = []
+            try:
                 if provider_id:
-                    found = next((p for p in all_providers if p.get("id") == provider_id), None)
+                    found = next((p for p in all_providers if isinstance(p, dict) and p.get("id") == provider_id), None)
                     if found:
-                        local_models = [{"id": m.get("id", ""), "name": m.get("name", m.get("id", ""))} for m in found.get("models", []) if m.get("id")]
+                        provider_entry = found
+                        local_models = [{"id": m.get("id", ""), "name": m.get("name", m.get("id", ""))} for m in (found.get("models") or []) if m.get("id")]
                         local_models.sort(key=lambda x: x["id"])
             except Exception as e:
                 local_models = []
@@ -2131,41 +2220,29 @@ class Handler(BaseHTTPRequestHandler):
                 except Exception:
                     pass
             models = local_models
-            if candidate_urls and (not api_key or _is_redacted_key(api_key)):
-                # 前端不回传明文 key（掩码占位符）：服务端从凭据管理器解析真实 key
+            # Key 解析：请求 Key > 该提供商专属凭据（凭据管理器）> 全局凭据。
+            # 前端不回传明文 key（掩码占位符），旧版 providers 数组里的明文也会被优先使用。
+            api_key = _provider_api_key(api_key, provider_entry)
+            if candidate_urls and not api_key:
                 try:
-                    from config import get_api_key as _gak
-                    api_key = _gak() or ""
+                    with open(str(HERE / 'model-debug.log'), 'a', encoding='utf-8') as df:
+                        df.write('[SKIP] api_key empty\n')
                 except Exception:
-                    api_key = ""
-                if not api_key:
-                    try:
-                        with open(str(HERE / 'model-debug.log'), 'a', encoding='utf-8') as df:
-                            df.write('[SKIP] api_key empty\n')
-                    except Exception:
-                        pass
-                    self._send_json(400, {"models": models, "provider_type": provider_type, "error": "未配置 API Key"})
-                    return
+                    pass
+                self._send_json(400, {"models": models, "provider_type": provider_type, "error": "未配置 API Key"})
+                return
             last_err = None
             if candidate_urls:
                 for url in candidate_urls:
                     try:
                         with open(str(HERE / 'model-debug.log'), 'a', encoding='utf-8') as df:
-                            df.write('[TRY] ' + url + '\n')
-                        req = urllib.request.Request(url, headers={"Authorization": "Bearer " + api_key, "Accept": "application/json"})
-                        with urllib.request.urlopen(req, timeout=15) as r:
-                            data = json.loads(r.read().decode("utf-8"))
-                            raw = data.get("data") or data.get("models") or []
-                            remote = []
-                            for m in raw:
-                                mid = m.get("id") or m.get("name") or ""
-                                if mid:
-                                    remote.append({"id": mid, "name": m.get("name", mid)})
-                            remote.sort(key=lambda x: x["id"])
-                            if remote:
-                                models = remote
-                                last_err = None
-                                break
+                            df.write('[TRY] ' + url + ' type=' + provider_type + '\n')
+                        remote, _err = _fetch_remote_models(url, api_key, provider_type)
+                        if remote:
+                            models = remote
+                            last_err = None
+                            break
+                        last_err = "接口未返回模型"
                     except Exception as e:
                         last_err = _classify_error(e)
                         try:
@@ -2527,6 +2604,47 @@ class Handler(BaseHTTPRequestHandler):
                 except (TypeError, ValueError):
                     sil = 0
                 update["group_idle_exit_min_silence"] = max(sil, 30)
+            # 每提供商 API Key：写入凭据管理器专属条目（EggBloom.MODEL_API_KEY_{id}），
+            # providers 数组只存 id/URL/模型，不落盘明文 Key；旧明文 Key 在此自动迁移。
+            if isinstance(update.get("providers"), list):
+                try:
+                    from config import save_provider_api_key, clear_provider_api_key
+                except Exception:
+                    save_provider_api_key = clear_provider_api_key = None
+                old_provider_ids = [str(p.get("id")) for p in (cfg.get("providers") or []) if isinstance(p, dict)]
+                cleaned_providers = []
+                for _p in update["providers"]:
+                    if not isinstance(_p, dict):
+                        continue
+                    _p = dict(_p)
+                    _pid = str(_p.get("id") or "")
+                    _pk = _p.get("api_key") or ""
+                    _clear = bool(_p.pop("_clear_key", False))
+                    _p.pop("has_api_key", None)  # 展示用标记，不落盘
+                    if save_provider_api_key is not None:
+                        if _clear:
+                            clear_provider_api_key(_pid)
+                        elif _pk and not _is_redacted_key(_pk):
+                            save_provider_api_key(_pid, _pk)
+                        elif _pk:
+                            # 前端只回传掩码占位符：若旧配置里存有该提供商明文 Key，迁移进凭据管理器
+                            _old_entry = next((p for p in (cfg.get("providers") or [])
+                                               if isinstance(p, dict) and str(p.get("id")) == _pid), None)
+                            _old_plain = (_old_entry or {}).get("api_key") or ""
+                            if _old_plain and not _is_redacted_key(_old_plain):
+                                save_provider_api_key(_pid, _old_plain)
+                    _p.pop("api_key", None)  # 不落盘明文
+                    cleaned_providers.append(_p)
+                # 被删除的提供商：清理其专属凭据，避免残留 Key 占位
+                if save_provider_api_key is not None:
+                    kept_ids = [str(x.get("id")) for x in cleaned_providers]
+                    for _oid in old_provider_ids:
+                        if _oid and _oid not in kept_ids:
+                            try:
+                                clear_provider_api_key(_oid)
+                            except Exception:
+                                pass
+                update["providers"] = cleaned_providers
             cfg.update(update)
             if data.get("api_key") and not _is_redacted_key(data.get("api_key")):
                 # 新 key 写入凭据管理器，不落盘明文
