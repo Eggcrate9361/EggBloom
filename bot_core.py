@@ -292,33 +292,6 @@ PERSONALITY_FILE = os.path.join(SCRIPT_DIR, "personality.txt")
 _USER_DATA_DIR = os.path.join(os.path.expanduser("~"), "AppData", "Local", "EggBloom_v3")
 os.makedirs(_USER_DATA_DIR, exist_ok=True)
 
-# ── GIF 表情包测试模式 ──
-# 当用户发送 /test_gif <编号> 时，自动发送对应的 GIF 文件，跳过 AI 回复
-# 编号对应以下文件列表（0-indexed）
-TEST_GIF_MODE = False  # 已完成测试，关闭测试模式
-TEST_GIF_FILES = [
-    # vrchat 目录
-    "vrchat/kipfel_001.gif",
-    "vrchat/kipfel_002.gif",
-    "vrchat/kipfel_003.gif",
-    "vrchat/kipfel_004.gif",
-    "vrchat/kipfel_005.gif",
-    "vrchat/kipfel_006.gif",
-    "vrchat/kipfel_007.gif",
-    "vrchat/kipfel_008.gif",
-    "vrchat/kipfel_009.gif",
-    "vrchat/kipfel_010.gif",
-    "vrchat/vrchat_0001.gif",
-    "vrchat/vrchat_0002.gif",
-    "vrchat/vrchat_0003.gif",
-    "vrchat/vrchat_0005.gif",
-    "vrchat/vrchat_0006.gif",
-    "vrchat/vrchat_0007.gif",
-    "vrchat/vrchat_0008.gif",
-    "vrchat/vrchat_0010.gif",
-    "vrchat/vrchat_0011.gif",
-    "vrchat/vrchat_0012.gif",
-]
 MEME_DIR = os.path.join(SCRIPT_DIR, "memes", "memes")
 
 INSTRUCTION_FILE = os.path.join(_USER_DATA_DIR, "qq_instructions.json")
@@ -432,6 +405,24 @@ _nick_lock = Lock()            # QQ_NICK_CACHE, QQ_NICK_PENDING
 _meme_lock = Lock()            # MEME_LAST_SENT
 
 LAST_MSG_TIME: float = 0
+
+# 事件去重：优先按 message_id 去重（同一秒多条消息不丢）；无 id 时才回退时间戳水位线。
+# 此前按秒级时间戳 `_msg_time <= LAST_MSG_TIME` 会吞掉同一秒的第二条及后续消息。
+_SEEN_MSG_IDS: set = set()
+_SEEN_MSG_IDS_ORDER: list = []
+_SEEN_MSG_IDS_MAX = 3000
+
+
+def _mark_seen_msg_id(mid):
+    """登记已处理的消息 id；已存在返回 True（重复），否则登记并返回 False。"""
+    if mid in _SEEN_MSG_IDS:
+        return True
+    _SEEN_MSG_IDS.add(mid)
+    _SEEN_MSG_IDS_ORDER.append(mid)
+    if len(_SEEN_MSG_IDS) > _SEEN_MSG_IDS_MAX:
+        old = _SEEN_MSG_IDS_ORDER.pop(0)
+        _SEEN_MSG_IDS.discard(old)
+    return False
 chat_history: Dict[str, List[Dict[str, str]]] = {}  # {qq: [...]}  按 QQ 号隔离私聊历史
 group_chat_history: Dict[str, List[Dict[str, str]]] = {}  # {group_id: [...]}  群聊独立对话历史
 
@@ -935,22 +926,26 @@ MSG_QUEUE = queue.Queue()
 QQ_NICK_CACHE = {}  # {qq号: 昵称} 启动时预加载群成员列表填充
 QQ_NICK_PENDING = set()  # 正在请求中的 QQ 号，避免并发重复请求
 QQ_NICK_CACHE_MAX = 2000  # 防止无限增长
-GROUP_MEMBERS = {}  # {group_id: {uid: name}} 按群存储成员列表
+QQ_NICK_QUEUE = queue.Queue()  # 后台昵称解析队列（log()/主循环不阻塞网络）
 
 
-# ═══════════════════════════════════════════
-#  基础工具
-# ═══════════════════════════════════════════
+def resolve_qq_nick(qq, async_resolve=True):
+    """获取 QQ 号的昵称，优先缓存；未命中时默认入后台队列异步解析（绝不阻塞主循环）。
 
-def resolve_qq_nick(qq):
-    """获取 QQ 号的昵称，优先缓存，需要时懒加载"""
+    async_resolve=False 时同步解析（仅启动预加载等非热路径使用）。
+    """
     qq = str(qq)
     if qq in QQ_NICK_CACHE:
         return QQ_NICK_CACHE[qq]
     if qq in QQ_NICK_PENDING:
-        return None  # 正在请求中，下次再看
-    # 懒加载（注意：api_call 失败时会调 log，必须用 _fetch 标记防递归）
+        return None  # 正在解析中，下次再看
     QQ_NICK_PENDING.add(qq)
+    if async_resolve:
+        try:
+            QQ_NICK_QUEUE.put(qq)
+        except Exception:
+            QQ_NICK_PENDING.discard(qq)
+        return None
     try:
         resp = api_call("get_stranger_info", {"user_id": int(qq)})
         if resp.get("retcode") == 0:
@@ -969,6 +964,35 @@ def resolve_qq_nick(qq):
         QQ_NICK_PENDING.discard(qq)
     return None
 
+
+def _nick_worker_loop():
+    """后台昵称解析线程：log()/消息热路径只命中缓存，网络请求在此线程进行。"""
+    while True:
+        try:
+            qq = QQ_NICK_QUEUE.get(timeout=30)
+        except Exception:
+            continue
+        try:
+            resp = api_call("get_stranger_info", {"user_id": int(qq)})
+            if resp.get("retcode") == 0:
+                data = resp.get("data", {})
+                nick = data.get("nickname", "") or data.get("user_displayname", "") or data.get("card", "")
+                if nick:
+                    QQ_NICK_CACHE[qq] = nick
+                    if len(QQ_NICK_CACHE) > QQ_NICK_CACHE_MAX:
+                        oldest = list(QQ_NICK_CACHE.keys())[:QQ_NICK_CACHE_MAX // 2]
+                        for k in oldest:
+                            QQ_NICK_CACHE.pop(k, None)
+        except Exception:
+            pass
+        finally:
+            QQ_NICK_PENDING.discard(qq)
+GROUP_MEMBERS = {}  # {group_id: {uid: name}} 按群存储成员列表
+
+
+# ═══════════════════════════════════════════
+#  基础工具
+# ═══════════════════════════════════════════
 
 _log_replacing = False  # 防递归标记
 
@@ -1121,18 +1145,27 @@ def _group_action(kind: str, req: dict) -> dict:
 
 
 def _trim_incomplete(text):
-    """去掉末尾不完整的句子（没有标点结尾的部分）"""
+    """去掉末尾不完整的句子（没有标点结尾的部分），保留前面的完整段落。
+
+    修复：原实现 `rsplit('\n',1)` 后返回 `lines[0]`，多行回复会被砍到只剩第一行。
+    """
     if not text:
         return text
-    lines = text.rsplit("\n", 1)
-    if len(lines) > 1:
+    lines = text.rstrip("\n").split("\n")
+    # 从尾部移除"不完整"的句段（无结尾标点），其余行全部保留
+    while lines:
         last_line = lines[-1].strip()
         if last_line and not any(
             last_line.endswith(c) for c in
             '。！？!?…》」』)]}>~～，,；;：:、\n '
         ):
-            return lines[0].strip()
-    return text
+            lines.pop()
+        else:
+            break
+    if not lines:
+        return text  # 全部都是不完整段：保守保留原文，不返回空
+    trimmed = "\n".join(lines).strip()
+    return trimmed or text
 
 
 def _chunk_text(text):
@@ -2062,18 +2095,26 @@ def get_new_messages():
     
     # 私聊消息（多账号）
     for tqq in TARGET_QQS:
-        resp = api_call("get_friend_msg_history",
-            {"user_id": tqq, "count": 10})
+        try:
+            resp = api_call("get_friend_msg_history",
+                {"user_id": tqq, "count": 10})
+        except Exception as e:
+            log(f"轮询私聊[{tqq}]失败(跳过): {e}")
+            continue
         if resp.get("retcode") == 0:
             messages = resp.get("data", {}).get("messages", [])
             for msg in messages:
                 msg["_type"] = "private"
             all_msgs.extend(messages)
     
-    # 群聊消息
+    # 群聊消息（单个群异常/非法群号只跳过该群，不拖垮整轮轮询）
     for gid in GROUP_IDS:
-        resp = api_call("get_group_msg_history",
-            {"group_id": int(gid), "count": 10})
+        try:
+            resp = api_call("get_group_msg_history",
+                {"group_id": int(gid), "count": 10})
+        except Exception as e:
+            log(f"轮询群[{gid}]失败(跳过): {e}")
+            continue
         if resp.get("retcode") == 0:
             messages = resp.get("data", {}).get("messages", [])
             for msg in messages:
@@ -3329,22 +3370,16 @@ def _generate_english_prompt(user_description, runtime_cfg=None):
     if runtime_cfg is None:
         runtime_cfg = _config
 
-    llm_model = runtime_cfg.get("llm_model") or "deepseek"
-    use_local = llm_model == "local"
-    image_use_local = False
-    image_driver = "llama-server"
-    image_exe_path = ""
-    image_model_path = ""
-    image_port = 8081
-    image_model_name = "qwen3.6"
-    if use_local:
-        image_use_local = bool(runtime_cfg.get("use_local_image_llm"))
-        image_driver = (runtime_cfg.get("image_llm_driver") or "llama-server").strip().lower()
-        image_exe_path = (runtime_cfg.get("image_llm_exe_path") or "").strip()
-        image_model_path = (runtime_cfg.get("image_llm_model_path") or "").strip()
-        image_port = int(runtime_cfg.get("image_llm_port") or 8081)
-        image_model_name = (runtime_cfg.get("image_llm_model_name") or "qwen3.6").strip()
-    log(f"[画图] 使用模型: {llm_model}; 生图提示词本地={image_use_local}")
+    # 生图提示词 LLM 的本地/远程判定用真正的开关 use_local_image_llm，
+    # 不再用遗留字段 llm_model=="local"（旧 AppData 配置残留会把生图 prompt 悄悄切到本地 llama）
+    use_local = bool(runtime_cfg.get("use_local_image_llm"))
+    image_use_local = use_local
+    image_driver = (runtime_cfg.get("image_llm_driver") or "llama-server").strip().lower()
+    image_exe_path = (runtime_cfg.get("image_llm_exe_path") or "").strip()
+    image_model_path = (runtime_cfg.get("image_llm_model_path") or "").strip()
+    image_port = int(runtime_cfg.get("image_llm_port") or 8081)
+    image_model_name = (runtime_cfg.get("image_llm_model_name") or "qwen3.6").strip()
+    log(f"[画图] 生图提示词本地={image_use_local}")
 
     # 清洗用户描述：去掉所有噪声
     clean_desc = user_description
@@ -3657,16 +3692,24 @@ def _generate_english_prompt(user_description, runtime_cfg=None):
     ]
 
     try:
+        # 远端生图提示词 LLM：统一走 _llm_config（每提供商专属 key/url/model，不再写死 DeepSeek）
+        _ilc = _llm_config(runtime_cfg)
+        _remote_url = _ilc.get("api_url") or DEEPSEEK_URL
+        _remote_key = _ilc.get("api_key") or ""
+        _remote_model = _ilc.get("model_name") or "deepseek-chat"
         if image_use_local:
             if not _ensure_llama_server(image_exe_path, image_model_path, image_port):
-                raise RuntimeError("生图本地模型启动失败，回退 DeepSeek")
-        api_url = DEEPSEEK_URL if not image_use_local else f"http://127.0.0.1:{image_port}/v1/chat/completions"
-        model_name = runtime_cfg.get("model_name", "deepseek-chat") if not image_use_local else image_model_name
-        headers = {"Content-Type": "application/json"}
-        if not image_use_local:
-            headers["Authorization"] = f"Bearer {DEEPSEEK_API_KEY}"
-
-        req_body = {"model": model_name, "messages": messages, "max_tokens": 1500, "temperature": 0.7, "stream": False, "thinking": {"type": "enabled"}}
+                raise RuntimeError("生图本地模型启动失败")
+            api_url = f"http://127.0.0.1:{image_port}/v1/chat/completions"
+            model_name = image_model_name or "qwen3.6"
+            headers = {"Content-Type": "application/json"}
+        else:
+            api_url = _remote_url
+            model_name = _remote_model
+            headers = {"Content-Type": "application/json"}
+            if _remote_key:
+                headers["Authorization"] = f"Bearer {_remote_key}"
+        req_body = {"model": model_name, "messages": messages, "max_tokens": 1500, "temperature": 0.7, "stream": False}
 
         resp = None
         last_err = None
@@ -3933,10 +3976,9 @@ def handle_generate_image(prompt, style="default", user_ref_image=None):
         return "ComfyUI 未连接，请检查远程服务器"
     
     try:
-        # 模型选择：local / deepseek
-        llm_model = runtime_cfg.get("llm_model") or "deepseek"
-        use_local = llm_model == "local"
-        log(f"[画图] 使用模型: {llm_model}")
+        # 生图提示词 LLM 的本地判定：统一用 use_local_image_llm（不再读遗留 llm_model=="local"）
+        use_local = bool(runtime_cfg.get("use_local_image_llm"))
+        log(f"[画图] 生图提示词本地={use_local}")
 
         # 本地模型自动启停
         if use_local:
@@ -4612,17 +4654,6 @@ def _handle_friend_add(ev):
     _notify_admin(f"【新好友】{nick}（{user_id}）添加了 Bot，已加入监听名单", "friend_add")
 
 
-def _handle_group_ban(ev):
-    """群禁言：记录日志（可选扩展：AI 回应）。"""
-    group_id = ev.get("group_id")
-    user_id = str(ev.get("user_id", ""))
-    operator = ev.get("operator_id", "")
-    duration = ev.get("duration", 0)
-    sub = ev.get("sub_type", "")
-    log(f"[事件] 群禁言: group={group_id} user={user_id} operator={operator} duration={duration}s sub={sub}")
-
-
-
 def _send_poke_back(user_id, group_id=None):
     """反戳：给戳你的人戳回去（OneBot v11 poke 消息元素，仅本人目的事件无副作用）。
 
@@ -5116,6 +5147,14 @@ def _ai_worker() -> None:
             event.set()
         finally:
             _ai_task_queue.task_done()
+            # 防泄漏：任务完成后 entry 最多保留 5 分钟（超时等待者可能已放弃），随后强制清理
+            def _late_cleanup(tid=task_id):
+                try:
+                    with _ai_results_lock:
+                        _ai_results.pop(tid, None)
+                except Exception:
+                    pass
+            threading.Timer(300.0, _late_cleanup).start()
 
 
 def _submit_ai_task(params: Dict) -> int:
@@ -5145,17 +5184,6 @@ def _wait_ai_result(task_id: int, timeout: float = 60.0) -> Optional[str]:
             return entry["result"] if entry else None
     log(f"AI 任务 {task_id} 等待超时（后台任务仍将继续执行）")
     return None
-
-
-def _check_pending_ai_results() -> List[Tuple[int, Optional[str]]]:
-    """检查已完成的 AI 任务（非阻塞），返回 [(task_id, result), ...]。"""
-    done = []
-    with _ai_results_lock:
-        for task_id, entry in list(_ai_results.items()):
-            if entry["event"].is_set():
-                done.append((task_id, entry["result"]))
-                del _ai_results[task_id]
-    return done
 
 
 # 启动 AI 工作线程池（3并发，防止单条慢消息阻塞整个管道）
@@ -5191,8 +5219,10 @@ def summarize_group_history(group_id):
     
     try:
         summary_prompt = f"把以下群聊对话压缩成50字以内的摘要，只提取关键话题和结论，不要评价：\n{dialog_text}"
+        # 统一走 _llm_config：每提供商专属 key/url/model（不再写死 deepseek-chat + 全局 DeepSeek key）
+        _lc = _llm_config()
         data = {
-            "model": "deepseek-chat",
+            "model": _lc.get("model_name") or "deepseek-chat",
             "messages": [
                 {"role": "system", "content": "你是群聊记录压缩器，输出50字以内的极简摘要。"},
                 {"role": "user", "content": summary_prompt}
@@ -5200,11 +5230,11 @@ def summarize_group_history(group_id):
             "max_tokens": 100,
             "temperature": 0.3
         }
-        req = urllib.request.Request(DEEPSEEK_URL,
+        req = urllib.request.Request(_lc.get("api_url") or DEEPSEEK_URL,
             data=json.dumps(data).encode("utf-8"),
             headers={
                 "Content-Type": "application/json",
-                "Authorization": f"Bearer {DEEPSEEK_API_KEY}"
+                "Authorization": f"Bearer {_lc.get('api_key') or ''}"
             })
         with urllib.request.urlopen(req, timeout=15, context=CTX) as r:
             resp = json.loads(r.read().decode("utf-8"))
@@ -5691,21 +5721,6 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
     if _web_hint:
         messages.append({"role": "user", "content": "[系统提示] " + _web_hint})
 
-    def api_req(msgs, with_tools=True, stream=False, max_tokens=AI_MAX_TOKENS):
-        effective_temperature = personality_temperature if personality_temperature is not None else AI_TEMPERATURE
-        data = {
-            "model": "deepseek-chat",
-            "messages": msgs,
-            "max_tokens": max_tokens,
-            "temperature": effective_temperature,
-            "presence_penalty": 0.15,
-            "frequency_penalty": 0.1,
-            "stream": stream
-        }
-        if with_tools:
-            data["tools"] = with_tools if isinstance(with_tools, list) else TOOLS
-        return data
-
     # 群聊只允许配置/默认名单里的工具，私聊允许全部工具
     tools_for_call = _build_group_tools() if is_group else TOOLS
     allow_tools = True
@@ -5849,106 +5864,6 @@ def call_deepseek(user_msg: str, images: Optional[List[str]] = None,
     _q = user_msg or ""
     _is_web_task = bool(re.search(r'https?://\S+', _q)) or bool(re.search(r'(问卷|填表|填表单|答题|做.*?(问卷|题)|填写|表单|网页.*?(任务|操作)|帮我.*?(打开|填))', _q))
     return _wait_ai_result(task_id, timeout=(600.0 if _is_web_task else 30.0))
-
-
-def _stream_reply(messages, target_qq=None, group_id=None, max_tokens=AI_MAX_TOKENS):
-    """流式调用 DeepSeek。group_id 不为 None 时不自动发送仅返回文本。"""
-    if target_qq is None:
-        target_qq = TARGET_QQS[0]
-    if not REQUESTS_OK:
-        # 降级到非流式
-        data = {
-            "model": "deepseek-chat",
-            "messages": messages,
-            "max_tokens": max_tokens,
-            "temperature": AI_TEMPERATURE,
-            "stream": False
-        }
-        req = urllib.request.Request(DEEPSEEK_URL,
-            data=json.dumps(data).encode("utf-8"),
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {DEEPSEEK_API_KEY}"
-            })
-        with urllib.request.urlopen(req, timeout=60, context=CTX) as r:
-            resp = json.loads(r.read().decode("utf-8"))
-        choices = resp.get("choices", [])
-        if not choices:
-            return None
-        reply = choices[0].get("message", {}).get("content", "").strip()
-        total = resp.get("usage", {}).get("total_tokens", 0)
-        log(f"AI 回复 (非流式, {total} tokens)")
-        return reply
-
-    # 流式请求
-    try:
-        r = requests.post(
-            DEEPSEEK_URL,
-            json={
-                "model": "deepseek-chat",
-                "messages": messages,
-                "max_tokens": max_tokens,
-                "temperature": 0.7,
-                "stream": True
-            },
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {DEEPSEEK_API_KEY}"
-            },
-            stream=True,
-            timeout=60
-        )
-        r.encoding = "utf-8"
-
-        full_reply = ""
-        
-        for line in r.iter_lines(decode_unicode=True):
-            if not line or not line.startswith("data: "):
-                continue
-            data_str = line[6:]
-            if data_str == "[DONE]":
-                break
-            try:
-                chunk = json.loads(data_str)
-                delta = chunk.get("choices", [{}])[0].get("delta", {})
-                content = delta.get("content", "")
-                if content:
-                    full_reply += content
-                # 提取 token usage（可能在最后一个 chunk 中）
-                usage = chunk.get("usage")
-                if usage:
-                    total_tokens = usage.get("total_tokens", 0)
-                    prompt_tokens = usage.get("prompt_tokens", 0)
-                    completion_tokens = usage.get("completion_tokens", 0)
-            except json.JSONDecodeError:
-                continue
-        
-        # 计算 token 和费用
-        cost = total_tokens * 0.001 / 1000 if total_tokens else len(full_reply) * 0.000001
-        log(f"AI 回复 ({total_tokens} tokens, ￥{cost:.6f}, {len(full_reply)} 字)")
-        return full_reply
-    except Exception as e:
-        log(f"流式请求失败: {e}，降级非流式")
-        # 降级
-        data = {
-            "model": "deepseek-chat",
-            "messages": messages,
-            "max_tokens": max_tokens,
-            "temperature": 0.7,
-            "stream": False
-        }
-        req = urllib.request.Request(DEEPSEEK_URL,
-            data=json.dumps(data).encode("utf-8"),
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {DEEPSEEK_API_KEY}"
-            })
-        with urllib.request.urlopen(req, timeout=60, context=CTX) as r:
-            resp = json.loads(r.read().decode("utf-8"))
-        choices = resp.get("choices", [])
-        if not choices:
-            return None
-        return choices[0].get("message", {}).get("content", "").strip()
 
 
 def save_instruction(text, reply):
@@ -6642,9 +6557,15 @@ def main():
         except Exception as e:
             log(f"[PluginSystem] 传播 AI 客户端失败: {e}")
 
-    # 预加载 QQ 昵称 (debug 面板显示用)
+    # 后台昵称解析线程：log()/热路径只命中缓存，网络请求不阻塞主循环
+    try:
+        threading.Thread(target=_nick_worker_loop, daemon=True, name="qq-nick-worker").start()
+    except Exception:
+        pass
+
+    # 预加载 QQ 昵称 (debug 面板显示用)；启动阶段允许同步解析
     for qq in TARGET_QQS:
-        nick = resolve_qq_nick(qq)
+        nick = resolve_qq_nick(qq, async_resolve=False)
         if nick:
             log(f"昵称缓存: {qq} → {nick}")
     log(f"昵称缓存完毕: {len(QQ_NICK_CACHE)}/{len(TARGET_QQS)}")
@@ -6742,8 +6663,12 @@ def main():
                         if _msg_time and _msg_time < startup_time:
                             log(f"[事件] 忽略启动前历史消息 time={_msg_time} (startup={int(startup_time)})")
                             continue
-                        # 水位线去重：已在轮询处理范围内的事件直接跳过
-                        if _msg_time and _msg_time <= LAST_MSG_TIME:
+                        # 去重：优先 message_id（同一秒多条消息不丢）；无 id 时回退时间戳水位线
+                        _mid = ev.get("message_id")
+                        if _mid:
+                            if _mark_seen_msg_id(_mid):
+                                continue
+                        elif _msg_time and _msg_time <= LAST_MSG_TIME:
                             continue
                         if _msg_time > LAST_MSG_TIME:
                             LAST_MSG_TIME = _msg_time
@@ -6808,11 +6733,6 @@ def main():
                             _handle_friend_add(ev)
                         except Exception as e:
                             log(f"[事件] friend_add 处理异常: {e}")
-                    elif post_type == "notice" and ev.get("notice_type") == "group_ban":
-                        try:
-                            _handle_group_ban(ev)
-                        except Exception as e:
-                            log(f"[事件] group_ban 处理异常: {e}")
                 except Exception as e:
                     log(f"处理实时事件异常: {e}")
 
@@ -6886,29 +6806,6 @@ def main():
                         continue
                     text = extract_text(msg).strip()
                     
-                    # ── GIF 测试模式 ──
-                    if TEST_GIF_MODE and text.startswith("/test_gif"):
-                        try:
-                            parts = text.split()
-                            if len(parts) >= 2:
-                                idx = int(parts[1])
-                                if 0 <= idx < len(TEST_GIF_FILES):
-                                    gif_path = os.path.join(MEME_DIR, TEST_GIF_FILES[idx])
-                                    if os.path.exists(gif_path):
-                                        log(f"[测试模式] 发送 GIF #{idx}: {TEST_GIF_FILES[idx]}")
-                                        if send_group_image(group_id, gif_path):
-                                            log(f"[测试模式] GIF #{idx} 发送成功")
-                                        else:
-                                            log(f"[测试模式] GIF #{idx} 发送失败")
-                                    else:
-                                        log(f"[测试模式] GIF 文件不存在: {gif_path}")
-                                else:
-                                    log(f"[测试模式] 无效编号: {idx}，有效范围: 0-{len(TEST_GIF_FILES)-1}")
-                            else:
-                                log(f"[测试模式] 用法: /test_gif <编号>，可用编号: 0-{len(TEST_GIF_FILES)-1}")
-                        except ValueError:
-                            log("[测试模式] 编号必须是数字")
-                        continue  # 跳过后续处理
                     
                     # 转发消息：静默记录，不打印逐行内容
                     if "[转发消息]" in text:
@@ -7258,6 +7155,10 @@ def main():
                 
                 # 私聊
                 sender = str(msg.get("sender", {}).get("user_id", ""))
+                # NT 协议（SnowLuma 等）私聊推送的是 u_xxx 随机 UID 而非数字 QQ：
+                # 与 poke 路径处理一致，回退到主目标 QQ，否则私聊会被全部跳过
+                if sender.startswith("u_"):
+                    sender = TARGET_QQS[0] if TARGET_QQS else sender
                 if sender not in TARGET_QQS:
                     continue
                 # 好友限制：该好友自动回复已关闭（webui 联系人管理页），完全静默
@@ -7273,29 +7174,6 @@ def main():
                     log(f"私聊[{sender}] 纯转发消息，记录为上下文，不回复")
                     continue
                 
-                # ── GIF 测试模式（私聊） ──
-                if TEST_GIF_MODE and text.startswith("/test_gif"):
-                    try:
-                        parts = text.split()
-                        if len(parts) >= 2:
-                            idx = int(parts[1])
-                            if 0 <= idx < len(TEST_GIF_FILES):
-                                gif_path = os.path.join(MEME_DIR, TEST_GIF_FILES[idx])
-                                if os.path.exists(gif_path):
-                                    log(f"[测试模式] 发送 GIF #{idx}: {TEST_GIF_FILES[idx]}")
-                                    if send_image(gif_path, sender):
-                                        log(f"[测试模式] GIF #{idx} 发送成功")
-                                    else:
-                                        log(f"[测试模式] GIF #{idx} 发送失败")
-                                else:
-                                    log(f"[测试模式] GIF 文件不存在: {gif_path}")
-                            else:
-                                log(f"[测试模式] 无效编号: {idx}，有效范围: 0-{len(TEST_GIF_FILES)-1}")
-                        else:
-                            log(f"[测试模式] 用法: /test_gif <编号>，可用编号: 0-{len(TEST_GIF_FILES)-1}")
-                    except ValueError:
-                        log("[测试模式] 编号必须是数字")
-                    continue  # 跳过后续处理
                 
                 # 引用消息提取（私聊）
                 quoted_text = ""
@@ -7545,8 +7423,11 @@ def main():
         except Exception as e:
             consecutive_errors += 1
             log(f"错误: {e}\n{traceback.format_exc()}")
-            if consecutive_errors > 20:
-                break
+            # 主循环不因连续异常退出：否则任何"每轮必抛"的错误会让 Bot 在 ~60 秒内静默暴毙。
+            # 改为退避重试 + 存活性告警，异常消除后自动恢复。
+            if consecutive_errors >= 20:
+                log(f"[致命] 主循环已连续 {consecutive_errors} 次异常但保持存活（退避重试中），请检查配置/OneBot/网络/插件")
+            time.sleep(min(consecutive_errors, 10))
 
         # 优雅关闭检查
         # 定期清理（每 ~200 轮 ≈ 10分钟）
