@@ -1450,16 +1450,6 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(200, {"data": stats})
             return
 
-        if path == "/api/activities":
-            bc = fetch_from_bot_core("/api/activities")
-            if bc and bc.get("activities"):
-                self._send_json(200, {"activities": bc["activities"]})
-                return
-            with STATE_LOCK:
-                acts = list(S.activities)
-            self._send_json(200, {"activities": acts})
-            return
-
         if path == "/api/chatlogs":
             logs = get_chat_logs(200)
             self._send_json(200, {"logs": logs})
@@ -2281,128 +2271,6 @@ class Handler(BaseHTTPRequestHandler):
             })
             return
 
-        if path == "/api/imagegen/generate":
-            try:
-                payload = json.loads(self.rfile.read(length).decode("utf-8"))
-            except Exception:
-                payload = {}
-            prompt = (payload.get("prompt") or "").strip()
-            negative_prompt = (payload.get("negative_prompt") or "").strip()
-            width = int(payload.get("width") or 1024)
-            height = int(payload.get("height") or 1536)
-            steps = int(payload.get("steps") or 24)
-            cfg = float(payload.get("cfg") or 7)
-            seed = int(payload.get("seed") or 42)
-            style = (payload.get("style") or "default").strip()
-            llm_model = (payload.get("llm_model") or "deepseek").strip()
-            llm_url = (payload.get("llm_url") or "").strip()
-            comfyui_host = (payload.get("comfyui_host") or "127.0.0.1").strip()
-            comfyui_port = int(payload.get("comfyui_port") or 8000)
-            comfyui_timeout = int(payload.get("comfyui_timeout") or 120)
-            comfyui_checkpoint = (payload.get("comfyui_checkpoint") or "").strip()
-            workflow_path = (payload.get("workflow_path") or "").strip()
-            prompt_node_id = (payload.get("prompt_node_id") or "353").strip()
-            nsfw_enabled = bool(payload.get("nsfw_enabled", True))
-            if not prompt:
-                self._send_json(200, {"success": False, "error": "prompt 为空"})
-                return
-            try:
-                from comfyui_client import (
-                    get_comfyui_client,
-                    load_workflow,
-                    set_prompt_in_workflow,
-                )
-            except Exception as e:
-                self._send_json(200, {"success": False, "error": f"ComfyUI 模块未找到: {e}"})
-                return
-            try:
-                client = get_comfyui_client({
-                    "comfyui_host": comfyui_host,
-                    "comfyui_port": comfyui_port,
-                    "comfyui_timeout": comfyui_timeout,
-                })
-                if not client.is_connected():
-                    self._send_json(200, {"success": False, "error": "ComfyUI 未连接"})
-                    return
-                api_workflow = {}
-                if workflow_path and Path(workflow_path).exists():
-                    api_workflow = load_workflow(workflow_path)
-                    api_workflow = set_prompt_in_workflow(api_workflow, prompt, prompt_node_id)
-                else:
-                    api_workflow = {
-                        "1": {"class_type": "LoadImage", "inputs": {"image": "example.png", "upload": "image"}},
-                        "2": {"class_type": "UNETLoader", "inputs": {"unet_name": comfyui_checkpoint or "anima_baseV10.safetensors", "weight_dtype": "default"}},
-                        "3": {"class_type": "CLIPLoader", "inputs": {"clip_name": "qwen_3_06b_base.safetensors", "type": "stable_diffusion", "device": "default"}},
-                        "4": {"class_type": "CLIPTextEncode", "inputs": {"text": prompt, "clip": ["3", 0]}},
-                        "5": {"class_type": "CLIPTextEncode", "inputs": {"text": (negative_prompt or "lowres, bad anatomy, bad hands, text, error, worst quality, low quality, jpeg artifacts, signature, watermark"), "clip": ["3", 0]}},
-                        "6": {"class_type": "VAELoader", "inputs": {"vae_name": "qwen_image_vae.safetensors"}},
-                        "7": {"class_type": "VAEEncode", "inputs": {"pixels": ["1", 0], "vae": ["6", 0]}},
-                        "8": {"class_type": "KSampler", "inputs": {"model": ["2", 0], "positive": ["4", 0], "negative": ["5", 0], "latent_image": ["7", 0], "seed": seed, "steps": steps, "cfg": cfg, "sampler_name": "euler", "scheduler": "normal", "denoise": 0.6 if style == "img2img" else 1.0}},
-                        "9": {"class_type": "VAEDecode", "inputs": {"samples": ["8", 0], "vae": ["6", 0]}},
-                        "10": {"class_type": "SaveImage", "inputs": {"images": ["9", 0], "filename_prefix": "EggBloom"}},
-                    }
-                prompt_id = client.queue_prompt(api_workflow)
-                try:
-                    local_paths = client.wait_and_get_images(prompt_id, timeout=comfyui_timeout)
-                    image_url = ""
-                    if local_paths:
-                        first = local_paths[0]
-                        if first.startswith("http://"):
-                            image_url = first
-                        else:
-                            image_url = f"file:///{first.replace(chr(92), '/')}"
-                    self._send_json(200, {"success": True, "prompt_id": prompt_id, "image_url": image_url, "prompt": prompt, "width": width, "height": height, "workflow_path": workflow_path})
-                    return
-                except Exception as e:
-                    self._send_json(200, {"success": True, "prompt_id": prompt_id, "image_url": "", "error": f"队列已提交，下载失败: {e}"})
-                    return
-            except Exception as e:
-                self._send_json(200, {"success": False, "error": str(e)})
-                return
-
-        if path == "/api/imagegen/test":
-            try:
-                payload = json.loads(self.rfile.read(length).decode("utf-8"))
-            except Exception:
-                payload = {}
-            host = (payload.get("host") or "127.0.0.1").strip()
-            port = int(payload.get("port") or 8000)
-            timeout = int(payload.get("timeout") or 3)
-            try:
-                import urllib.request
-                url = f"http://{host}:{port}/system_stats"
-                req = urllib.request.Request(url, headers={"Accept": "application/json"})
-                with urllib.request.urlopen(req, timeout=timeout) as r:
-                    data = json.loads(r.read().decode("utf-8"))
-                self._send_json(200, {"success": True, "comfyui_version": data.get("system", {}).get("comfyui_version", "")})
-                return
-            except Exception as e:
-                self._send_json(200, {"success": False, "output": str(e)})
-                return
-
-        if path == "/api/imagegen/workflow":
-            try:
-                payload = json.loads(self.rfile.read(length).decode("utf-8"))
-            except Exception:
-                payload = {}
-            filename = (payload.get("filename") or "").strip()
-            content = payload.get("content")
-            save_dir = PROJECT / "webui" / "uploaded_workflows"
-            try:
-                save_dir.mkdir(parents=True, exist_ok=True)
-                safe_name = re.sub(r'[^A-Za-z0-9_.-]+', '_', filename) or "workflow.json"
-                save_path = save_dir / safe_name
-                if isinstance(content, str):
-                    open(str(save_path), "w", encoding="utf-8").write(content)
-                else:
-                    save_path.write_bytes(content)
-                self._send_json(200, {"success": True, "path": str(save_path)})
-                return
-            except Exception as e:
-                self._send_json(200, {"success": False, "output": str(e)})
-                return
-
-
         # --- Meme APIs ---
         if path == "/api/memes":
             try:
@@ -2529,6 +2397,118 @@ class Handler(BaseHTTPRequestHandler):
                 data = json.loads(body)
         except Exception:
             pass
+
+        if path == "/api/imagegen/generate":
+            payload = dict(data or {})
+            prompt = (payload.get("prompt") or "").strip()
+            negative_prompt = (payload.get("negative_prompt") or "").strip()
+            width = int(payload.get("width") or 1024)
+            height = int(payload.get("height") or 1536)
+            steps = int(payload.get("steps") or 24)
+            cfg = float(payload.get("cfg") or 7)
+            seed = int(payload.get("seed") or 42)
+            style = (payload.get("style") or "default").strip()
+            llm_model = (payload.get("llm_model") or "deepseek").strip()
+            llm_url = (payload.get("llm_url") or "").strip()
+            comfyui_host = (payload.get("comfyui_host") or "127.0.0.1").strip()
+            comfyui_port = int(payload.get("comfyui_port") or 8000)
+            comfyui_timeout = int(payload.get("comfyui_timeout") or 120)
+            comfyui_checkpoint = (payload.get("comfyui_checkpoint") or "").strip()
+            workflow_path = (payload.get("workflow_path") or "").strip()
+            prompt_node_id = (payload.get("prompt_node_id") or "353").strip()
+            nsfw_enabled = bool(payload.get("nsfw_enabled", True))
+            if not prompt:
+                self._send_json(200, {"success": False, "error": "prompt 为空"})
+                return
+            try:
+                from comfyui_client import (
+                    get_comfyui_client,
+                    load_workflow,
+                    set_prompt_in_workflow,
+                )
+            except Exception as e:
+                self._send_json(200, {"success": False, "error": f"ComfyUI 模块未找到: {e}"})
+                return
+            try:
+                client = get_comfyui_client({
+                    "comfyui_host": comfyui_host,
+                    "comfyui_port": comfyui_port,
+                    "comfyui_timeout": comfyui_timeout,
+                })
+                if not client.is_connected():
+                    self._send_json(200, {"success": False, "error": "ComfyUI 未连接"})
+                    return
+                api_workflow = {}
+                if workflow_path and Path(workflow_path).exists():
+                    api_workflow = load_workflow(workflow_path)
+                    api_workflow = set_prompt_in_workflow(api_workflow, prompt, prompt_node_id)
+                else:
+                    api_workflow = {
+                        "1": {"class_type": "LoadImage", "inputs": {"image": "example.png", "upload": "image"}},
+                        "2": {"class_type": "UNETLoader", "inputs": {"unet_name": comfyui_checkpoint or "anima_baseV10.safetensors", "weight_dtype": "default"}},
+                        "3": {"class_type": "CLIPLoader", "inputs": {"clip_name": "qwen_3_06b_base.safetensors", "type": "stable_diffusion", "device": "default"}},
+                        "4": {"class_type": "CLIPTextEncode", "inputs": {"text": prompt, "clip": ["3", 0]}},
+                        "5": {"class_type": "CLIPTextEncode", "inputs": {"text": (negative_prompt or "lowres, bad anatomy, bad hands, text, error, worst quality, low quality, jpeg artifacts, signature, watermark"), "clip": ["3", 0]}},
+                        "6": {"class_type": "VAELoader", "inputs": {"vae_name": "qwen_image_vae.safetensors"}},
+                        "7": {"class_type": "VAEEncode", "inputs": {"pixels": ["1", 0], "vae": ["6", 0]}},
+                        "8": {"class_type": "KSampler", "inputs": {"model": ["2", 0], "positive": ["4", 0], "negative": ["5", 0], "latent_image": ["7", 0], "seed": seed, "steps": steps, "cfg": cfg, "sampler_name": "euler", "scheduler": "normal", "denoise": 0.6 if style == "img2img" else 1.0}},
+                        "9": {"class_type": "VAEDecode", "inputs": {"samples": ["8", 0], "vae": ["6", 0]}},
+                        "10": {"class_type": "SaveImage", "inputs": {"images": ["9", 0], "filename_prefix": "EggBloom"}},
+                    }
+                prompt_id = client.queue_prompt(api_workflow)
+                try:
+                    local_paths = client.wait_and_get_images(prompt_id, timeout=comfyui_timeout)
+                    image_url = ""
+                    if local_paths:
+                        first = local_paths[0]
+                        if first.startswith("http://"):
+                            image_url = first
+                        else:
+                            image_url = f"file:///{first.replace(chr(92), '/')}"
+                    self._send_json(200, {"success": True, "prompt_id": prompt_id, "image_url": image_url, "prompt": prompt, "width": width, "height": height, "workflow_path": workflow_path})
+                    return
+                except Exception as e:
+                    self._send_json(200, {"success": True, "prompt_id": prompt_id, "image_url": "", "error": f"队列已提交，下载失败: {e}"})
+                    return
+            except Exception as e:
+                self._send_json(200, {"success": False, "error": str(e)})
+                return
+
+        if path == "/api/imagegen/test":
+            payload = dict(data or {})
+            host = (payload.get("host") or "127.0.0.1").strip()
+            port = int(payload.get("port") or 8000)
+            timeout = int(payload.get("timeout") or 3)
+            try:
+                import urllib.request
+                url = f"http://{host}:{port}/system_stats"
+                req = urllib.request.Request(url, headers={"Accept": "application/json"})
+                with urllib.request.urlopen(req, timeout=timeout) as r:
+                    resp_data = json.loads(r.read().decode("utf-8"))
+                self._send_json(200, {"success": True, "comfyui_version": resp_data.get("system", {}).get("comfyui_version", "")})
+                return
+            except Exception as e:
+                self._send_json(200, {"success": False, "output": str(e)})
+                return
+
+        if path == "/api/imagegen/workflow":
+            payload = dict(data or {})
+            filename = (payload.get("filename") or "").strip()
+            content = payload.get("content")
+            save_dir = PROJECT / "webui" / "uploaded_workflows"
+            try:
+                save_dir.mkdir(parents=True, exist_ok=True)
+                safe_name = re.sub(r'[^A-Za-z0-9_.-]+', '_', filename) or "workflow.json"
+                save_path = save_dir / safe_name
+                if isinstance(content, str):
+                    open(str(save_path), "w", encoding="utf-8").write(content)
+                else:
+                    save_path.write_bytes(content)
+                self._send_json(200, {"success": True, "path": str(save_path)})
+                return
+            except Exception as e:
+                self._send_json(200, {"success": False, "output": str(e)})
+                return
 
         if path == "/api/config/reload":
             result = push_bot_reload()
@@ -3125,17 +3105,18 @@ class Handler(BaseHTTPRequestHandler):
                 sl = get_self_learning_stats()
                 output = f"状态: {'运行中' if S.bot_running else '已停止'} | 运行时长: {uptime_str} | 消息数: {S.messages_total} | 活跃群组: {S.groups_active} | 图片生成: {S.images_generated} | AI 调用: {S.api_calls_today} | 内存: {sl['total_messages']} entries"
             elif cmd == "restart":
-                output = "重启 command sent (simulated)"
-            elif cmd == "memory_reload":
-                output = "内存 engine reloaded"
-            elif cmd == "self_learn":
-                output = "Self-learning cycle triggered"
-            elif cmd == "clear_sessions":
-                output = "All sessions cleared"
-            elif cmd == "personality_reload":
-                output = "Personality config reloaded"
+                # 真实重启 bot_core（先前是模拟输出）
+                stop_result = stop_bot()
+                time.sleep(2)
+                start_result = start_bot()
+                output = f"重启完成: 停止={stop_result.get('output')} | 启动={start_result.get('output')}"
+            elif cmd == "config_reload":
+                reload_result = push_bot_reload()
+                output = "配置已热重载" if reload_result and reload_result.get("ok") else ("Bot 未运行，无法热重载" if reload_result is None else "热重载失败")
             elif cmd == "help":
-                output = "可用指令: status | restart | memory_reload | self_learn | clear_sessions | personality_reload"
+                output = "可用指令: status | restart | config_reload"
+            elif cmd in ("memory_reload", "self_learn", "clear_sessions", "personality_reload"):
+                output = f"未实现: {cmd}（没有对应的后端动作，避免假装成功）"
             else:
                 output = f"Unknown: {cmd}. Type 'help' for commands."
             self._send_json(200, {"output": output})
