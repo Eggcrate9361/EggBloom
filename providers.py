@@ -97,6 +97,7 @@ class OpenAIProvider(Provider):
             "Authorization": f"Bearer {self.api_key}",
         }
 
+        last_err = None
         for attempt in range(self.max_retries):
             try:
                 req = urllib.request.Request(self.api_url, data=body, headers=headers)
@@ -107,11 +108,14 @@ class OpenAIProvider(Provider):
                 total = usage.get("total_tokens", 0)
                 cost = total * 0.5 / 1_000_000
                 log(f"AI ({total} tokens, {cost:.6f} yuan)")
-                return msg["content"].strip(), msg.get("tool_calls"), usage
+                # content 可能是 None（纯工具调用响应）：先归一化再 strip，避免 AttributeError
+                return (msg.get("content") or "").strip(), msg.get("tool_calls"), usage
             except Exception as e:
+                last_err = e
                 if attempt < self.max_retries - 1:
                     log(f"AI retry {attempt+1}/{self.max_retries}: {self._read_error(e)}")
                     time.sleep(3)
+        log(f"AI 请求最终失败: {self._read_error(last_err) if last_err else 'unknown'}")
         return None, None, {}
 
     def chat_stream(self, messages, max_tokens=800):
@@ -174,6 +178,7 @@ class OllamaProvider(Provider):
         headers = {"Content-Type": "application/json"}
         url = self.api_url.rstrip("/") + "/api/chat"
 
+        last_err = None
         for attempt in range(self.max_retries):
             try:
                 req = urllib.request.Request(url, data=body, headers=headers)
@@ -198,9 +203,11 @@ class OllamaProvider(Provider):
                 usage = resp.get("eval_count") or {}
                 return content, tool_calls, {"total_tokens": usage}
             except Exception as e:
+                last_err = e
                 if attempt < self.max_retries - 1:
                     log(f"Ollama retry {attempt+1}/{self.max_retries}: {self._read_error(e)}")
                     time.sleep(3)
+        log(f"Ollama 请求最终失败: {self._read_error(last_err) if last_err else 'unknown'}")
         return None, None, {}
 
     def chat_stream(self, messages, max_tokens=800):
@@ -372,6 +379,7 @@ class AnthropicProvider(Provider):
                    "x-api-key": self.api_key or "",
                    "anthropic-version": "2023-06-01"}
         body = json.dumps(payload).encode("utf-8")
+        last_err = None
         for attempt in range(self.max_retries):
             try:
                 req = urllib.request.Request(self._endpoint(), data=body, headers=headers)
@@ -379,9 +387,11 @@ class AnthropicProvider(Provider):
                     resp = json.loads(r.read().decode("utf-8"))
                 return self._parse_resp(resp)
             except Exception as e:
+                last_err = e
                 if attempt < self.max_retries - 1:
                     log(f"Claude retry {attempt+1}/{self.max_retries}: {self._read_error(e)}")
                     time.sleep(3)
+        log(f"Claude 请求最终失败: {self._read_error(last_err) if last_err else 'unknown'}")
         return None, None, {}
 
     def chat_stream(self, messages, max_tokens=800):
@@ -532,6 +542,7 @@ class GoogleProvider(Provider):
                 payload["tools"] = gtools
         body = json.dumps(payload).encode("utf-8")
         headers = {"Content-Type": "application/json"}
+        last_err = None
         for attempt in range(self.max_retries):
             try:
                 req = urllib.request.Request(self._endpoint(), data=body, headers=headers)
@@ -539,9 +550,11 @@ class GoogleProvider(Provider):
                     resp = json.loads(r.read().decode("utf-8"))
                 return self._parse_resp(resp)
             except Exception as e:
+                last_err = e
                 if attempt < self.max_retries - 1:
                     log(f"Gemini retry {attempt+1}/{self.max_retries}: {self._read_error(e)}")
                     time.sleep(3)
+        log(f"Gemini 请求最终失败: {self._read_error(last_err) if last_err else 'unknown'}")
         return None, None, {}
 
     def chat_stream(self, messages, max_tokens=800):

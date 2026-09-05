@@ -12,9 +12,8 @@ Vision Assist - 视觉辅助模块
 
 API Key 解析优先级（不会把真实 key 写进 git）：
     1. 环境变量 ZHIPU_API_KEY
-    2. config 中 vision_assist.api_key（仅当非占位/非空）
-    3. 插件同目录 data/secret.json 中的 api_key（该文件已在 .gitignore）
-    4. 用户级共享密钥文件 ~/.config/opencode/mcp/zhipu_vision/zhipu.json
+    2. Windows 凭据管理器（cred_store.py，DPAPI，条目名 zhipu）
+    3. config 中 vision_assist.api_key（仅当非占位/非空）
     （真实 key 永不打印，日志仅显示是否存在）
 """
 import base64
@@ -72,25 +71,29 @@ def _normalize_image(image_ref: str) -> str:
 
 
 def _resolve_api_key(va: dict) -> str:
-    """安全地获取 API Key，绝不把真实 key 写入日志"""
+    """安全地获取 API Key：环境变量 > Windows 凭据管理器 > 插件配置。绝不把真实 key 写入日志。"""
     key = (os.environ.get("ZHIPU_API_KEY") or "").strip()
     if key:
         return key
+    # 凭据管理器（cred_store.py，DPAPI）——不再扫描 secret.json 明文文件
+    try:
+        import sys
+        from pathlib import Path as _Path
+        _p = _Path(__file__).resolve()
+        for _parent in _p.parents:
+            if (_parent / "cred_store.py").exists():
+                if str(_parent) not in sys.path:
+                    sys.path.insert(0, str(_parent))
+                break
+        from cred_store import read_cred
+        cred = (read_cred("zhipu") or "").strip()
+        if cred and cred not in PLACEHOLDER_KEYS and "YOUR_" not in cred:
+            return cred
+    except Exception:
+        pass
     cfg_key = (va.get("api_key") or "").strip()
     if cfg_key and cfg_key not in PLACEHOLDER_KEYS and "YOUR_" not in cfg_key:
         return cfg_key
-    for secret in ("secret.json", "zhipu.json"):
-        for base in (PLUGIN_DATA_DIR, Path.home() / ".config/opencode/mcp/zhipu_vision"):
-            f = base / secret
-            if not f.exists():
-                continue
-            try:
-                data = json.loads(f.read_text(encoding="utf-8")) or {}
-                k = (data.get("api_key") or "").strip()
-                if k and "YOUR_" not in k:
-                    return k
-            except Exception:
-                continue
     return ""
 
 

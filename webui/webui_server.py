@@ -63,12 +63,18 @@ sys.path.insert(0, str(PROJECT))
 from config import load_config as load_config  # noqa: E402
 
 
+# 静态文件服务允许的扩展名（杜绝 .log/.py/.db/.env 等敏感文件被静态读出）
+_STATIC_EXTS = {".html", ".htm", ".css", ".js", ".mjs", ".json", ".map",
+                ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".ico",
+                ".woff", ".woff2", ".ttf", ".txt", ".md"}
+
+
 def _is_redacted_key(k):
     """判断 API Key 是否为前端回传的占位符/掩码（不应写回凭据管理器）。"""
     k = (k or "").strip()
     if not k:
         return True
-    if k.startswith("«redacted:") and k.endswith("»"):
+    if k.startswith("«redacted"):
         return True
     if k.endswith("****"):
         return True
@@ -1340,6 +1346,11 @@ class Handler(BaseHTTPRequestHandler):
             pass
 
     def do_OPTIONS(self):
+        if not self._host_allowed():
+            self.send_response(403)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         self.send_response(204)
         ao = self._allowed_origin()
         if ao:
@@ -1381,8 +1392,14 @@ class Handler(BaseHTTPRequestHandler):
 
         # Serve static files from webui directory
         if path.startswith("/assets/") or (path.startswith("/") and not path.startswith("/api/")):
-            file_path = HERE / path.lstrip("/")
-            if file_path.is_file():
+            # 防目录穿越/越权读文件：unquote + realpath 后必须仍位于 webui 目录内，且只放行静态扩展名
+            # （此前 `HERE / path.lstrip("/")` 不过滤 `..`，本机任意进程可读 ../bot_config.json 与 model-debug.log）
+            rel = unquote(path.lstrip("/"))
+            file_path = (HERE / rel).resolve()
+            _root = str(HERE.resolve())
+            _real = str(file_path)
+            in_dir = (_real == _root) or _real.startswith(_root + os.sep)
+            if in_dir and file_path.is_file() and file_path.suffix.lower() in _STATIC_EXTS:
                 try:
                     data = file_path.read_bytes()
                     ct = "application/javascript"
@@ -1486,7 +1503,7 @@ class Handler(BaseHTTPRequestHandler):
                     for scope_id, cnt, last_ts in rows:
                         last = ""
                         if last_ts:
-                            last = datetime.fromtimestamp(last_ts).strftime("%Y-%m-%d %H:%M")
+                            last = datetime.datetime.fromtimestamp(last_ts).strftime("%Y-%m-%d %H:%M")
                         items.append({"qq": scope_id, "summary": f"{cnt} 轮 · 最后 {last}", "rounds": cnt})
                 items.sort(key=lambda x: x["qq"])
             except Exception:
@@ -1518,7 +1535,7 @@ class Handler(BaseHTTPRequestHandler):
                     ).fetchall()
                     conn.close()
                     for user_msg, bot_reply, ts in rows:
-                        time_str = datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M") if ts else ""
+                        time_str = datetime.datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M") if ts else ""
                         rounds.append({"time": time_str, "user": user_msg, "bot": bot_reply})
                 self._send_json(200, {"qq": qq, "rounds": rounds})
             except Exception as e:
@@ -2177,93 +2194,6 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(200, {"tools": _tools_catalog()})
             return
 
-        if path == "/api/providers/models":
-            body = dict(data or {})
-            provider_id = (body.get("provider_id") or "").strip()
-            base_url = (body.get("base_url") or "").strip().rstrip("/")
-            api_key = (body.get("api_key") or "").strip()
-            api_key_label = "set" if api_key else "empty"
-            try:
-                with open(str(HERE / 'model-debug.log'), 'a', encoding='utf-8') as df:
-                    df.write(f'[RUNTIME] module={Path(__file__).resolve()} api_key={api_key_label}\n')
-            except Exception:
-                pass
-            import urllib.request
-            models = []
-            provider_type = _detect_provider_type(base_url, provider_id)
-            candidate_urls = _model_candidate_urls(base_url, provider_type)
-            local_models = []
-            provider_entry = None
-            all_providers = []
-            try:
-                # 优先用 bot_config.json 里已保存的提供商（含用户编辑的 Base URL / 模型 / 专属 Key）
-                _cfg_now = load_config()
-                all_providers = _cfg_now.get("providers") or []
-                if not all_providers:
-                    providers_path = PROJECT / "webui" / "providers.json"
-                    if providers_path.exists():
-                        all_providers = json.loads(providers_path.read_text(encoding="utf-8"))
-            except Exception:
-                all_providers = []
-            try:
-                if provider_id:
-                    found = next((p for p in all_providers if isinstance(p, dict) and p.get("id") == provider_id), None)
-                    if found:
-                        provider_entry = found
-                        local_models = [{"id": m.get("id", ""), "name": m.get("name", m.get("id", ""))} for m in (found.get("models") or []) if m.get("id")]
-                        local_models.sort(key=lambda x: x["id"])
-            except Exception as e:
-                local_models = []
-                try:
-                    with open(str(HERE / 'model-debug.log'), 'a', encoding='utf-8') as df:
-                        df.write('[LOCAL PARSE ERROR] ' + str(e) + '\n')
-                except Exception:
-                    pass
-            models = local_models
-            # Key 解析：请求 Key > 该提供商专属凭据（凭据管理器）> 全局凭据。
-            # 前端不回传明文 key（掩码占位符），旧版 providers 数组里的明文也会被优先使用。
-            api_key = _provider_api_key(api_key, provider_entry)
-            if candidate_urls and not api_key:
-                try:
-                    with open(str(HERE / 'model-debug.log'), 'a', encoding='utf-8') as df:
-                        df.write('[SKIP] api_key empty\n')
-                except Exception:
-                    pass
-                self._send_json(400, {"models": models, "provider_type": provider_type, "error": "未配置 API Key"})
-                return
-            last_err = None
-            if candidate_urls:
-                for url in candidate_urls:
-                    try:
-                        with open(str(HERE / 'model-debug.log'), 'a', encoding='utf-8') as df:
-                            df.write('[TRY] ' + url + ' type=' + provider_type + '\n')
-                        remote, _err = _fetch_remote_models(url, api_key, provider_type)
-                        if remote:
-                            models = remote
-                            last_err = None
-                            break
-                        last_err = "接口未返回模型"
-                    except Exception as e:
-                        last_err = _classify_error(e)
-                        try:
-                            with open(str(HERE / 'model-debug.log'), 'a', encoding='utf-8') as df:
-                                df.write('[FAIL] ' + url + ' -> ' + str(e) + '\n')
-                        except Exception:
-                            pass
-                        continue
-            status = 200
-            error = None
-            if not models and last_err:
-                status = 400 if "地址不可达" in last_err else 500
-                error = last_err
-            try:
-                with open(str(HERE / 'model-debug.log'), 'a', encoding='utf-8') as df:
-                    df.write(f'[RESPONSE] type={provider_type} models={len(models)} status={status} error={error}\n')
-            except Exception:
-                pass
-            self._send_json(status, {"models": models, "provider_type": provider_type, "error": error})
-            return
-
         if path == "/api/bot/status":
             self._send_json(200, {"data": get_bot_status()})
             return
@@ -2570,6 +2500,20 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", "0")
             self.end_headers()
             return
+        # 防 CSRF：浏览器跨站页面（恶意网页）发起的请求会带非本机 Origin，一律拒绝。
+        # 无 Origin 的本地进程/curl 不受影响（本机进程本身即可读写本机文件，威胁模型一致）。
+        _origin = self.headers.get("Origin") or ""
+        if _origin:
+            try:
+                from urllib.parse import urlsplit
+                _oh = urlsplit(_origin).hostname or ""
+            except Exception:
+                _oh = ""
+            if _oh and _oh not in ("127.0.0.1", "localhost", "::1"):
+                self.send_response(403)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
         parsed = urlparse(self.path)
         path = parsed.path
         try:
@@ -3040,13 +2984,17 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 import base64
                 data = json.loads(self.rfile.read(int(self.headers.get('Content-Length', 0))))
-                name = data.get('name', 'unknown.jpg')
+                # 文件名必须取 basename 并限图片扩展名，防止 `..\..\evil.png` 向任意目录写文件
+                raw_name = str(data.get('name', 'unknown.jpg'))
+                name = Path(raw_name).name.strip()
+                if not name or name in ('.', '..') or Path(name).suffix.lower() not in {'.jpg', '.jpeg', '.png', '.gif', '.webp'}:
+                    self._send_json(200, {'success': False, 'error': '非法文件名或类型'})
+                    return
                 b64 = data.get('data', '')
                 tags = data.get('tags', [])
                 meme_dir = PROJECT / 'memes' / 'memes'
                 meme_dir.mkdir(parents=True, exist_ok=True)
                 dest = meme_dir / name
-                dest.parent.mkdir(parents=True, exist_ok=True)
                 if b64 and ',' in b64:
                     b64 = b64.split(',', 1)[1]
                 dest.write_bytes(base64.b64decode(b64))
@@ -3060,13 +3008,18 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/memes/delete":
             try:
                 data = json.loads(self.rfile.read(int(self.headers.get('Content-Length', 0))))
-                name = data.get('name', '')
+                # 只允许删除 meme 目录内的图片（basename + 扩展名校验），防止删除任意文件
+                raw_name = str(data.get('name', ''))
+                name = Path(raw_name).name.strip()
+                if not name or Path(name).suffix.lower() not in {'.jpg', '.jpeg', '.png', '.gif', '.webp'}:
+                    self._send_json(200, {'success': False, 'error': '非法文件名或类型'})
+                    return
                 meme_dir = PROJECT / 'memes' / 'memes'
                 target = meme_dir / name
-                if target.exists():
+                if target.exists() and target.is_file():
                     target.unlink()
                 tag_file = target.with_suffix('.json')
-                if tag_file.exists():
+                if tag_file.exists() and tag_file.is_file():
                     tag_file.unlink()
                 self._send_json(200, {'success': True})
             except Exception as e:

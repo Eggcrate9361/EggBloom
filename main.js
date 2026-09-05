@@ -1,4 +1,4 @@
-﻿const { app, BrowserWindow, ipcMain, Tray, Menu, nativeImage } = require('electron');
+const { app, BrowserWindow, ipcMain, Tray, Menu, nativeImage } = require('electron');
 const path = require('path');
 const { spawn, execSync } = require('child_process');
 const http = require('http');
@@ -15,10 +15,13 @@ try {
   app.commandLine.appendSwitch('disable-http-cache');
 } catch (e) {}
 
-// 启动前清理旧进程
+// 启动前清理本应用遗留的 python 进程（只按应用目录过滤，绝不无差别杀全机 python/node）
 function killOldProcesses() {
   try {
-    execSync('taskkill /F /IM "python.exe" /T 2>nul & taskkill /F /IM "python3.13.exe" /T 2>nul & taskkill /F /IM "pythonw.exe" /T 2>nul & taskkill /F /IM "pythonw3.13.exe" /T 2>nul & taskkill /F /IM "node.exe" /T /FI "WINDOWTITLE eq *eggbot*" 2>nul', { timeout: 5000, stdio: 'ignore' });
+    // 只匹配本包/源码目录下的 python 进程（bundled python 位于包根 python\ 或 resources\app\python）
+    const roots = [path.join(__dirname, '..', '..'), __dirname].map(p => p.replace(/\\/g, '\\\\')).join('|');
+    const ps = `powershell -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -match '${roots}' -and $_.Name -match 'python' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"`;
+    execSync(ps, { timeout: 5000, stdio: 'ignore' });
   } catch (e) {}
 }
 
@@ -142,10 +145,9 @@ function fullQuit() {
     req.end();
   } catch (e) {}
   setTimeout(() => {
-    // 杀掉 QQ + Python 子进程树
-    try {
-      execSync('taskkill /F /IM QQ.exe /T 2>nul & taskkill /F /IM QQEX.exe /T 2>nul', { timeout: 5000, stdio: 'ignore' });
-    } catch (e) {}
+    // 只清理本应用启动的 webui_server 进程树（bot_core 是其子进程）。
+    // 不无差别杀全机 QQ.exe：用户可能同时登录多个 QQ 账号，退出 EggBloom 不应强杀它们；
+    // 协议层自身驱动的 QQ 由 /api/protocol/stop 负责收尾（见上方请求）。
     try { if (server && server.pid) execSync('taskkill /F /PID ' + server.pid + ' /T 2>nul', { timeout: 3000, stdio: 'ignore' }); } catch (e) {}
     if (tray) { try { tray.destroy(); } catch (e) {} }
     app.quit();

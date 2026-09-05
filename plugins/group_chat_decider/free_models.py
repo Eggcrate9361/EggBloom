@@ -95,7 +95,7 @@ def _cred_store():
 
 
 def _load_secret() -> dict:
-    """读取插件 data/secret.json（旧版明文，仅凭据管理器不可用时使用）"""
+    """读取插件 data/secret.json（旧版明文，仅迁移用；正常情况下应已删除）"""
     try:
         if SECRET_FILE.exists():
             data = json.loads(SECRET_FILE.read_text(encoding="utf-8")) or {}
@@ -106,8 +106,36 @@ def _load_secret() -> dict:
     return {}
 
 
+def _migrate_secret_file():
+    """把旧版明文 data/secret.json 迁移进 Windows 凭据管理器后删除文件（一次性）。
+
+    迁移后任何代码路径都不再从明文文件读 key；文件已删则直接返回 False。
+    """
+    try:
+        if not SECRET_FILE.exists():
+            return False
+        secret = _load_secret()
+        _read, _write, _delete = _cred_store()
+        if _write and isinstance(secret, dict):
+            for k, v in secret.items():
+                v = (v or "").strip()
+                if v:
+                    try:
+                        _write(k, v)
+                    except Exception:
+                        pass
+        try:
+            SECRET_FILE.unlink()
+            print("[free_models] 已把明文 secret.json 迁移进凭据管理器并删除")
+        except Exception:
+            pass
+        return True
+    except Exception:
+        return False
+
+
 def _read_key(key_name: str) -> str:
-    """按优先级解析某 provider 的 key：环境变量 > 凭据管理器 > secret.json(旧版兼容)。"""
+    """按优先级解析某 provider 的 key：环境变量 > 凭据管理器 > secret.json(仅迁移)。"""
     _read, _write, _delete = _cred_store()
     if _read:
         try:
@@ -117,7 +145,10 @@ def _read_key(key_name: str) -> str:
         except Exception:
             pass
     secret = _load_secret()
-    return (secret.get(key_name, "") or "").strip()
+    v = (secret.get(key_name, "") or "").strip()
+    if v:
+        _migrate_secret_file()  # 用到旧明文时顺手迁移进凭据管理器并删除
+    return v
 
 
 def save_plugin_config(updates: dict) -> dict:
@@ -136,34 +167,24 @@ def save_plugin_config(updates: dict) -> dict:
 
 
 def save_secret_key(provider_id: str, api_key: str) -> bool:
-    """写入某 provider 的 key：优先 Windows 凭据管理器（不落盘明文）；
-    凭据管理器不可用时回退 data/secret.json。key 为空表示清除。"""
+    """写入某 provider 的 key：只写 Windows 凭据管理器（DPAPI，不落盘明文）。
+    凭据管理器不可用时拒绝降级到明文文件（返回 False）。key 为空表示清除。"""
     if provider_id not in FREE_MODELS:
         return False
     api_key = (api_key or "").strip()
     _read, _write, _delete = _cred_store()
     if _write:
         try:
-            if api_key:
-                return bool(_write(provider_id, api_key))
-            return bool(_delete(provider_id))
+            ok = bool(_write(provider_id, api_key)) if api_key else bool(_delete(provider_id))
+            if ok:
+                _migrate_secret_file()  # 写成功后顺带清理旧明文
+            return ok
         except Exception as e:
             print(f"[free_models] 凭据管理器写入失败: {e}")
-    # 回退：明文 secret.json（仅凭据管理器不可用时）
-    secret = _load_secret()
-    if api_key:
-        secret[provider_id] = api_key
-    else:
-        secret.pop(provider_id, None)
-    try:
-        DATA_DIR.mkdir(parents=True, exist_ok=True)
-        SECRET_FILE.write_text(
-            json.dumps(secret, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
-        return True
-    except Exception as e:
-        print(f"[free_models] 保存 secret 失败: {e}")
-        return False
+            return False
+    # 安全要求：不再回退写明文 secret.json
+    print("[free_models] 凭据管理器不可用，拒绝把 key 写入明文文件")
+    return False
 
 
 def get_active_model() -> str:
