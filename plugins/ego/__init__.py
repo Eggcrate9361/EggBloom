@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """
 EGO 插件：人格 + 记忆 + 节奏 + 说话风格 + 黑话学习
 对外统一接口，内部按子模块拆分。
@@ -78,12 +78,32 @@ PLUGIN_META = {
     "page": "plugins/ego/ui.html",
 }
 
-# Submodule references for advanced access
-_memory = SuperMemory()
-_style = ChatStyleLearner()
-_rhythm = HumanlikeRhythm()
-_slang = SlangLearner()
-_mood = MoodEngine()
+# ── 惰性单例：不在 import 时实例化子系统 ──
+# 之前模块加载即 new 出 SuperMemory/ChatStyleLearner/HumanlikeRhythm/
+# SlangLearner/MoodEngine 五个重对象——任一子模块初始化失败会拖垮整个 EGO；
+# 且这些实例在本模块内从未被使用（memory_recall/style_features 还各自 new）。
+import threading as _threading
+
+_inst_lock = _threading.Lock()
+_instances = {}
+
+
+def _lazy_instance(key, factory):
+    inst = _instances.get(key)
+    if inst is None:
+        with _inst_lock:
+            inst = _instances.get(key)
+            if inst is None:
+                inst = factory()
+                _instances[key] = inst
+    return inst
+
+
+def _get_memory(): return _lazy_instance("memory", SuperMemory)
+def _get_style(): return _lazy_instance("style", ChatStyleLearner)
+def _get_rhythm(): return _lazy_instance("rhythm", HumanlikeRhythm)
+def _get_slang(): return _lazy_instance("slang", SlangLearner)
+def _get_mood(): return _lazy_instance("mood", MoodEngine)
 
 
 # ------------------------------------------------------------------
@@ -240,7 +260,7 @@ def memory_stats(scope_id="default"):
 
 def memory_recall(scope_id="default", user_id="", query="", limit=10):
     try:
-        sm = SuperMemory()
+        sm = _get_memory()
         items = sm.recall_key_memories(scope="group", scope_id=scope_id, current_msg=query, limit=limit)
         return {"items": items}
     except Exception as e:
@@ -260,7 +280,7 @@ def memory_vector_stats():
 # ------------------------------------------------------------------
 def style_features(scope_id="default", user_id=""):
     try:
-        cs = ChatStyleLearner()
+        cs = _get_style()
         return cs.get_features(scope_id=scope_id, user_id=user_id)
     except Exception as e:
         return {"features": [], "error": str(e)}
@@ -473,8 +493,10 @@ __all__ = [
     "slang_inject_selected",
     "slang_reject_selected",
     "slang_get_stats",
-    "_memory",
-    "_slang",
-    "_style",
-    "_rhythm",
+    # 惰性单例访问器（替代原先 import 期即 new 的 _memory/_slang/_style/_rhythm）
+    "_get_memory",
+    "_get_style",
+    "_get_rhythm",
+    "_get_slang",
+    "_get_mood",
 ]
