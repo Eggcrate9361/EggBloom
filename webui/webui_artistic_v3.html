@@ -3358,65 +3358,115 @@ function mountProtocol(root){  root.innerHTML = `<div class="panel" style="max-w
 }
 
 function mountPlugins(root){  root.innerHTML = `    <div class="cmd-bar" style="flex-wrap:wrap"><div class="tag-bar" id="pluginTagBar"><span class="meta">标签</span></div><div style="flex:1"></div><span class="meta" id="pluginsCount"></span><button class="btn" id="pluginsRefresh">刷新</button></div><div class="grid grid-2" id="pluginsGrid"></div>`; loadPlugins();}
-function loadPlugins(){  API('/plugins').then(r => {    const plugins = (r && r.plugins !== undefined ? r.plugins : []) || [];    if (!plugins.length){      $('pluginsGrid').innerHTML = '<div class="empty" style="grid-column:1/-1"><div class="empty-desc">插件列表未加载</div></div>';      return;    }    // 如实展示后端返回的全部插件（不再硬编码过滤/注入 ego 卡——此前导致"写了 N 个只显示几个"）    let kept = plugins;    const isEnabled = v => v === true || v === 1 || v === '1' || v === 'true';
-    const pluginEnabled = p => isEnabled(p.enabled !== undefined ? p.enabled : p.已启用);
-    const allTags = Array.from(new Set(kept.reduce((a,p) => a.concat(Array.isArray(p.tags) ? p.tags.map(t=>String(t)) : []), [])));
-    const activeTag = (window.__pluginActiveTag || '');
-    const tagBar = $('pluginTagBar');
-    if (tagBar){      tagBar.innerHTML = '<span class="meta">标签</span>' + ['全部', ...allTags].map(t => `<button class="tag-chip${(activeTag || '全部') === t ? ' ac' : ''}" data-tag="${escapeHtml(t)}">${escapeHtml(t)}</button>`).join('');      qsa('#pluginTagBar .tag-chip').forEach(ch => ch.addEventListener('click', () => {        const t = ch.dataset.tag === '全部' ? '' : ch.dataset.tag;        window.__pluginActiveTag = t;        loadPlugins();      }));    }
-    if (activeTag) kept = kept.filter(p => ((p.tags || []).map(x=>String(x))).includes(activeTag));
-    // 标签筛选结果为空 → 自动重置为"全部"，避免整页假死成空白（残留标签在删插件后会匹配不到任何插件）
+function loadPlugins(){
+  API('/plugins').then(function(r){
+    var all = (r && r.plugins !== undefined ? r.plugins : []) || [];
+    if (!all.length){
+      $('pluginsGrid').innerHTML = '<div class="empty" style="grid-column:1/-1"><div class="empty-desc">插件列表未加载</div></div>';
+      return;
+    }
+    var plugins = all.slice();
+    var isEnabled = function(v){ return v === true || v === 1 || v === '1' || v === 'true'; };
+    var pluginEnabled = function(p){ return isEnabled(p.enabled !== undefined ? p.enabled : p['\u5df2\u542f\u7528']); };
+    // 标签集合
+    var allTags = [];
+    var seen = {};
+    plugins.forEach(function(p){
+      (p.tags || []).forEach(function(t){ var s = String(t); if (!seen[s]) { seen[s] = 1; allTags.push(s); } });
+    });
+    var activeTag = (window.__pluginActiveTag || '');
+    var tagBar = $('pluginTagBar');
+    if (tagBar){
+      var chips = ['\u5168\u90e8'].concat(allTags).map(function(t){
+        var ac = ((activeTag || '\u5168\u90e8') === t) ? ' ac' : '';
+        return '<button class="tag-chip' + ac + '" data-tag="' + escapeHtml(t) + '">' + escapeHtml(t) + '</button>';
+      }).join('');
+      tagBar.innerHTML = '<span class="meta">\u6807\u7b7e</span>' + chips;
+      qsa('#pluginTagBar .tag-chip').forEach(function(ch){
+        ch.addEventListener('click', function(){
+          var t = ch.dataset.tag === '\u5168\u90e8' ? '' : ch.dataset.tag;
+          window.__pluginActiveTag = t;
+          loadPlugins();
+        });
+      });
+    }
+    var kept = plugins;
+    if (activeTag){
+      kept = kept.filter(function(p){ return (p.tags || []).map(function(x){ return String(x); }).indexOf(activeTag) >= 0; });
+    }
     if (activeTag && !kept.length){
       window.__pluginActiveTag = '';
       kept = plugins;
-      if (typeof showToast === 'function') showToast('该标签下暂无插件，已显示全部', 'info');
+      if (typeof showToast === 'function') showToast('\u8be5\u6807\u7b7e\u4e0b\u6682\u65e0\u63d2\u4ef6\uff0c\u5df2\u663e\u793a\u5168\u90e8', 'info');
     }
-    $('pluginsCount').textContent = kept.length + ' 个';
-    const apiStatus = p => {
-      const st = p._api_status;
-      const hasApi = p._api_capable === true || (st && typeof st === 'object' && st !== null);
-      let line = '';
-      if (st && typeof st === 'object') {
-        const ok = st.ok === true || st.ok === 1 || st.ok === '1' || st.ok === 'true';
-        const label = ok ? 'API已连接' : 'API未连接';
-        const detail = st.detail || st.status || '';
-        const color = ok ? '#6ecf8e' : '#ff8080';
-        line = `<div class="meta" data-api-status-line title="${escapeHtml(detail)}" style="color:${color};margin-top:4px">● ${label}${detail ? ' · ' + escapeHtml(String(detail).slice(0,24)) : ''}</div>`;
-      } else if (hasApi) {
-        line = `<div class="meta" data-api-status-line style="color:#6b7280;margin-top:4px">● API状态未知（待检测）</div>`;
+    var countEl = $('pluginsCount');
+    if (countEl) countEl.textContent = kept.length + ' \u4e2a';
+    function apiStatus(p){
+      var st = p._api_status;
+      var hasApi = p._api_capable === true || (st && typeof st === 'object' && st !== null);
+      var line = '';
+      if (st && typeof st === 'object'){
+        var ok = st.ok === true || st.ok === 1 || st.ok === '1' || st.ok === 'true';
+        var label = ok ? 'API\u5df2\u8fde\u63a5' : 'API\u672a\u8fde\u63a5';
+        var detail = st.detail || st.status || '';
+        var color = ok ? '#6ecf8e' : '#ff8080';
+        line = '<div class="meta" data-api-status-line title="' + escapeHtml(detail) + '" style="color:' + color + ';margin-top:4px">\u25cf ' + label + (detail ? ' \u00b7 ' + escapeHtml(String(detail).slice(0, 24)) : '') + '</div>';
+      } else if (hasApi){
+        line = '<div class="meta" data-api-status-line style="color:#6b7280;margin-top:4px">\u25cf API\u72b6\u6001\u672a\u77e5\uff08\u5f85\u68c0\u6d4b\uff09</div>';
       }
-      const btn = hasApi ? `<button class="btn" style="margin-top:6px;font-size:12px;padding:3px 10px" onclick="testPluginApi(${JSON.stringify(p.name)}, this)">测试连通</button>` : '';
-      return `${line}${btn}`;
-    };
-    async function testPluginApi(name, btn) {
-      const orig = btn ? btn.innerHTML : '';
-      if (btn) { btn.disabled = true; btn.innerHTML = '测试中…'; }
-      const line = btn ? btn.closest('.card').querySelector('[data-api-status-line]') : null;
-      try {
-        const resp = await fetch('http://127.0.0.1:3005/api/plugins/test', {
-          method: 'POST',
-          headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({name})
+      var btn = hasApi ? '<button class="btn" style="margin-top:6px;font-size:12px;padding:3px 10px" onclick="testPluginApi(' + JSON.stringify(p.name) + ', this)">\u6d4b\u8bd5\u8fde\u901a</button>' : '';
+      return line + btn;
+    }
+    var grid = $('pluginsGrid');
+    if (grid){
+      grid.innerHTML = kept.map(function(p){
+        var tagsHtml = (Array.isArray(p.tags) && p.tags.length) ? '<div class="plugin-tag-row">' + p.tags.map(function(ti){
+          var hot = ['web','tools','system'].indexOf(String(ti).toLowerCase()) >= 0;
+          return '<span class="plugin-tag' + (hot ? ' hot' : '') + '">' + escapeHtml(ti) + '</span>';
+        }).join('') + '</div>' : '';
+        return '<div class="card" style="cursor:pointer" data-plugin-open="' + escapeHtml(p.name) + '">' +
+          '<div class="card-label">' + escapeHtml(p.name) + ' <span class="meta">v' + escapeHtml(p.version || '1.0.0') + '</span></div>' +
+          '<div class="card-value" style="font-size:14px">' + escapeHtml(p.description || '') + '</div>' +
+          tagsHtml + apiStatus(p) +
+          '<div class="card-sub">' + (pluginEnabled(p) ? '<span style="color:#6ecf8e">\u542f\u7528</span>' : '<span style="color:#6b7280">\u7981\u7528</span>') + ' \u00b7 ' + escapeHtml(p.author || '\u672a\u77e5\u4f5c\u8005') + '</div>' +
+          '<div class="cmd-bar" style="margin-top:8px">' +
+            '<button class="btn primary" data-plugin-open-btn="' + escapeHtml(p.name) + '">\u6253\u5f00</button>' +
+            '<button class="btn ' + (pluginEnabled(p) ? '' : 'primary') + '" data-plugin-toggle="' + escapeHtml(p.name) + '" data-enabled="' + (pluginEnabled(p) ? 1 : 0) + '">' + (pluginEnabled(p) ? '\u505c\u7528' : '\u542f\u7528') + '</button>' +
+          '</div></div>';
+      }).join('');
+    }
+    qsa('[data-plugin-toggle]').forEach(function(btn){
+      btn.addEventListener('click', function(e){
+        e.stopPropagation();
+        var name = btn.dataset.pluginToggle;
+        var enabled = btn.dataset.enabled === '1';
+        btn.disabled = true;
+        btn.textContent = '\u5207\u6362\u4e2d...';
+        API('/plugins/toggle', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({name: name, enabled: !enabled}) }).then(function(rr){
+          if (rr && rr.ok === false) showToast(rr.error || '\u5207\u6362\u5931\u8d25', 'error');
+          loadPlugins();
+        }).catch(function(){
+          btn.disabled = false;
+          btn.textContent = enabled ? '\u542f\u7528' : '\u505c\u7528';
+          showToast('\u5207\u6362\u5931\u8d25', 'error');
         });
-        let data = {};
-        try { data = await resp.json(); } catch (e) {}
-        const ok = data.ok === true || data.ok === 1 || data.ok === '1' || data.ok === 'true';
-        const detail = data.detail || data.status || data.error || '';
-        if (line) {
-          line.innerHTML = `● ${ok ? 'API已连接' : 'API未连接'}${detail ? ' · ' + String(detail).slice(0,40) : ''}`;
-          line.style.color = ok ? '#6ecf8e' : '#ff8080';
-          line.title = detail;
-        }
-        showToast(ok ? `${name} API 连通正常` : `${name} API 连通失败：${detail}`, ok ? 'success' : 'error');
-      } catch (e) {
-        if (line) { line.innerHTML = '● 测试失败（无法连接 bot_core:3005）'; line.style.color = '#ff8080'; }
-        showToast('连通测试失败：' + e.message, 'error');
-      } finally {
-        if (btn) { btn.disabled = false; btn.innerHTML = orig; }
-      }
-    }
-    $('pluginsGrid').innerHTML = kept.map(p => `      <div class="card" style="cursor:pointer" data-plugin-open="${escapeHtml(p.name)}"><div class="card-label">${escapeHtml(p.name)} <span class="meta">v${escapeHtml(p.version || '1.0.0')}</span></div><div class="card-value" style="font-size:14px">${escapeHtml(p.description || '')}</div>${(Array.isArray(p.tags) && p.tags.length) ? '<div class="plugin-tag-row">' + p.tags.map(ti => `<span class="plugin-tag${['web','tools','system'].includes(String(ti).toLowerCase()) ? ' hot' : ''}">${escapeHtml(ti)}</span>`).join('') + '</div>' : ''}${apiStatus(p)}<div class="card-sub">${pluginEnabled(p) ? '<span style="color:#6ecf8e">启用</span>' : '<span style="color:#6b7280">禁用</span>'} · ${escapeHtml(p.author || '未知作者')}</div><div class="cmd-bar" style="margin-top:8px"><button class="btn primary" data-plugin-open-btn="${escapeHtml(p.name)}">打开</button><button class="btn ${pluginEnabled(p) ? '' : 'primary'}" data-plugin-toggle="${escapeHtml(p.name)}" data-enabled="${pluginEnabled(p) ? 1 : 0}">${pluginEnabled(p) ? '停用' : '启用'}</button></div></div>`).join('');
-    qsa('[data-plugin-toggle]').forEach(btn => {      btn.addEventListener('click', (e) => {        e.stopPropagation();        const name = btn.dataset.pluginToggle;        const enabled = btn.dataset.enabled === '1';        const originalText = btn.textContent;        btn.disabled = true;        btn.textContent = '切换中...';        API('/plugins/toggle', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({name, enabled: !enabled}) }).then((r) => {          if (r && r.ok === false) {            showToast(r.error || '切换失败', 'error');          }          loadPlugins();        }).catch(() => {          btn.disabled = false;          btn.textContent = originalText;          showToast('切换失败', 'error');        });      });    });    qsa('[data-plugin-open]').forEach(card => {      card.addEventListener('click', () => {        const key = card.dataset.pluginOpen;        router('plugin_' + key);      });    });    qsa('[data-plugin-open-btn]').forEach(btn => {      btn.addEventListener('click', (e) => {        e.stopPropagation();        const key = btn.dataset.pluginOpenBtn;        router('plugin_' + key);      });    });  });  const ref = $('pluginsRefresh'); if (ref) ref.addEventListener('click', loadPlugins);}
+      });
+    });
+    qsa('[data-plugin-open]').forEach(function(card){
+      card.addEventListener('click', function(){ var key = card.dataset.pluginOpen; router('plugin_' + key); });
+    });
+    qsa('[data-plugin-open-btn]').forEach(function(btn){
+      btn.addEventListener('click', function(e){
+        e.stopPropagation();
+        var key = btn.dataset.pluginOpenBtn;
+        router('plugin_' + key);
+      });
+    });
+  });
+  var ref = $('pluginsRefresh');
+  if (ref) ref.addEventListener('click', loadPlugins);
+}
+
 var currentPage = '';const pageCache = {};function router(page){    if (__chatlogAutoTimer && page !== 'chatlogs') { clearInterval(__chatlogAutoTimer); __chatlogAutoTimer = null; }  currentPage = page;  const [title, sub] = pageTitles[page] || [page, ''];  $('pageTitle').textContent = title;  $('pageSub').textContent = sub;  qsa('#sideRail .side-rail-item').forEach(n => n.classList.toggle('ac', n.dataset.page === page));  const container = $('page-content');    container.innerHTML = '';  container.dataset.page = page;  let pluginPageUrl = '';  if (page.startsWith('plugin_')) {    pluginPageUrl = window._lastPluginPage || '';    if (!pluginPageUrl) {      const name = page.replace('plugin_', '');      const match = Array.from(document.querySelectorAll('[data-plugin-open]')).find(el => el.dataset.pluginOpen === name);      if (match) pluginPageUrl = match.dataset.page;    }  }  const mount = pageMounts[page];  if (mount){        container.classList.remove('page-enter'); void container.offsetWidth; container.classList.add('page-enter');    try { mount(container, pluginPageUrl || page);  } catch(e) { console.error('Mount error:', e); }  } else if (page.startsWith('plugin_')) {    const name = page.replace('plugin_', '');    container.innerHTML = `<div class="panel" style="padding:0;overflow:hidden"><iframe id="pluginFrame" src="/page?plugin_id=${encodeURIComponent(name)}" style="width:100%;height:75vh;border:0;background:var(--bg)"></iframe></div>`;  } else if (pluginPageUrl && typeof mountPluginPage === 'function') {    mountPluginPage(container, pluginPageUrl.replace('/page?plugin_id=', ''));  } else {  }}window.addEventListener('message', e => {  if (e && e.data && (e.data.type === 'ego-back' || (e.data.type === 'eggbloom:navigate' && e.data.page === 'plugins'))) {    router('plugins');  }});qsa('#sideRail .side-rail-item').forEach(n => {  n.addEventListener('click', () => router(n.dataset.page));});
 router(location.hash.replace('#','') || 'dashboard');
 /* Phase 5: Micro-interactions & Polish */
