@@ -20,4 +20,5 @@ def _get_learner():
 
 PLUGIN_META = dict(PLUGIN_META)
 PLUGIN_META["name"] = "slang_learner"
+PLUGIN_META["adapter"] = True
 PLUGIN_META.setdefault("page", "plugins/slang_learner/ui.html")

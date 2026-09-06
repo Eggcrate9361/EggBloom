@@ -701,6 +701,8 @@ def start_event_server():
                 try:
                     pm = get_plugin_manager()
                     plugins = pm.list_plugins() if pm else []
+                    # 过滤适配层壳（chat_style/slang_learner/super_memory 转发到 ego）
+                    plugins = [p for p in plugins if not (p or {}).get("adapter")]
                     body = json.dumps({"plugins": plugins}).encode("utf-8")
                     self.send_response(200)
                     self.send_header("Content-Type", "application/json")

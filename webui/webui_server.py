@@ -1947,7 +1947,8 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/plugins":
             bc = fetch_from_bot_core("/api/plugins")
             if bc and bc.get("plugins"):
-                self._send_json(200, {"plugins": bc["plugins"]})
+                # 过滤适配层壳（chat_style/slang_learner/super_memory 转发到 ego，不在列表单独显示）
+                self._send_json(200, {"plugins": [p for p in bc["plugins"] if not (p or {}).get("adapter")]})
                 return
             _plugins = []
             try:
@@ -2005,6 +2006,9 @@ class Handler(BaseHTTPRequestHandler):
                             pass
                         em = state.get("enabled", state.get("已启用", {})) if isinstance(state, dict) else {}
                         enabled = em.get(meta.get("name", entry.name), meta.get("enabled", meta.get("已启用", False)))
+                        # 适配层壳（转发到 ego 子模块）不在插件列表单独显示
+                        if meta.get("adapter"):
+                            continue
                         _plugins.append({
                             "name": meta.get("name", entry.name),
                             "version": meta.get("version", "1.0.0"),

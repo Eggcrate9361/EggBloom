@@ -13,6 +13,9 @@ from plugins.ego.super_memory import (
     set_config as _set_config,
 )
 
+# 拷贝 ego 的 meta（避免原地改写共享 dict），标记为"适配层壳"：不在插件列表单独显示
+PLUGIN_META = dict(PLUGIN_META)
+PLUGIN_META["adapter"] = True
 PLUGIN_META["page"] = "plugins/super_memory/ui.html"
 
 _lock = threading.Lock()
