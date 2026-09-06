@@ -1971,25 +1971,30 @@ class Handler(BaseHTTPRequestHandler):
                         try:
                             meta = {"name": entry.name, "version": "1.0.0", "description": "", "author": "", "hooks": [], "priority": 50, "enabled": False}
                             content_py = init_file.read_text(encoding="utf-8", errors="replace")
-                            idx = content_py.find("PLUGIN_META = ")
-                            if idx >= 0:
+                            # 老式插件读 PLUGIN_META，真插件（ABI）读 PLUGIN_MANIFEST
+                            for _kw in ("PLUGIN_META = ", "PLUGIN_MANIFEST = "):
+                                idx = content_py.find(_kw)
+                                if idx < 0:
+                                    continue
                                 bp = content_py.find("{", idx)
-                                if bp >= 0:
-                                    depth = 0
-                                    for ci in range(bp, len(content_py)):
-                                        if content_py[ci] == '{': depth += 1
-                                        elif content_py[ci] == '}': depth -= 1
-                                        if depth == 0:
-                                            dstr = content_py[bp:ci+1]
-                                            try:
-                                                ns = {"__builtins__": {}, "enabled": False}
-                                                exec("__pm__ = " + dstr, ns)
-                                                parsed = ns.get("__pm__", {})
-                                                if isinstance(parsed, dict):
-                                                    meta.update(parsed)
-                                            except Exception:
-                                                pass
-                                            break
+                                if bp < 0:
+                                    continue
+                                depth = 0
+                                for ci in range(bp, len(content_py)):
+                                    if content_py[ci] == '{': depth += 1
+                                    elif content_py[ci] == '}': depth -= 1
+                                    if depth == 0:
+                                        dstr = content_py[bp:ci+1]
+                                        try:
+                                            ns = {"__builtins__": {}, "enabled": False}
+                                            exec("__pm__ = " + dstr, ns)
+                                            parsed = ns.get("__pm__", {})
+                                            if isinstance(parsed, dict):
+                                                meta.update(parsed)
+                                        except Exception:
+                                            pass
+                                        break
+                                break
                             if not meta.get("description"):
                                 dm = re.search(r'"""(.*?)"""', content_py, re.DOTALL)
                                 if dm:

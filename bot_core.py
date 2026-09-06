@@ -6792,6 +6792,38 @@ def main():
                                 log(f"群[{gid}] 空闲退场语发送失败: {e}")
 
             for msg in new_msgs:
+                # ── 真插件 ABI：on_message（只调 spec 插件；返回文本即作为插件回复，跳过 AI）──
+                if PLUGIN_OK:
+                    try:
+                        pm = get_plugin_manager()
+                        if pm and pm.has_typed_hook("on_message"):
+                            _mtype = msg.get("_type", "private")
+                            _mtext = extract_text(msg).strip()
+                            _msender = str(msg.get("sender", {}).get("user_id", "") or msg.get("user_id", ""))
+                            _plugin_reply = pm.execute_typed_hooks_first(
+                                "on_message",
+                                event={
+                                    "type": _mtype,
+                                    "group_id": msg.get("_group_id") or "",
+                                    "sender": _msender,
+                                    "text": _mtext,
+                                    "message_id": msg.get("message_id", 0),
+                                    "time": msg.get("time", 0),
+                                },
+                            )
+                            if _plugin_reply and str(_plugin_reply).strip():
+                                _pr = str(_plugin_reply).strip()
+                                if _mtype == "group" and msg.get("_group_id"):
+                                    # 尊重群回复开关（与正常路径一致）
+                                    if _group_restriction(msg.get("_group_id"), "reply_enabled", True) is not False:
+                                        smart_send_group(msg.get("_group_id"), _pr)
+                                        log(f"[Plugin] on_message 插件回复: {_pr[:60]}")
+                                elif _msender:
+                                    smart_send(_pr, target_qq=_msender)
+                                    log(f"[Plugin] on_message 插件回复: {_pr[:60]}")
+                                continue
+                    except Exception as _pe:
+                        log(f"[Plugin] on_message 派发异常: {_pe}")
                 msg_type = msg.get("_type", "private")
                 group_id = msg.get("_group_id")
                 

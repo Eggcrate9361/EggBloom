@@ -81,16 +81,25 @@ class PluginManager:
     # ── 加载 / 卸载 ─────────────────────────────────────────
 
     def load(self, name: str) -> bool:
-        """加载指定插件，注册到注册表。返回是否成功。"""
+        """加载指定插件，注册到注册表。返回是否成功。
+
+        支持两种形态：
+        - 老式内置插件：PLUGIN_META + hooks（进程内强依赖模块）
+        - 真插件 ABI：PLUGIN_SPEC=1 + PLUGIN_MANIFEST + PLUGIN_HOOKS（只经 ctx 访问能力）
+        """
         try:
             if name in sys.modules:
                 mod = sys.modules[name]
             else:
                 mod = importlib.import_module(f"plugins.{name}")
 
+            spec = getattr(mod, "PLUGIN_SPEC", None)
+            if spec is not None:
+                return self._load_spec(name, mod)
+
             meta = getattr(mod, "PLUGIN_META", None)
             if not meta:
-                self._plugins[name] = {"error": "缺少 PLUGIN_META", "module": mod, "meta": {}}
+                self._plugins[name] = {"error": "缺少 PLUGIN_META 或 PLUGIN_SPEC", "module": mod, "meta": {}}
                 return False
 
             meta["name"] = meta.get("name", name)
@@ -141,6 +150,100 @@ class PluginManager:
                 count += 1
         return count
 
+    # ── 真插件 ABI（PLUGIN_SPEC=1）────────────────────────
+
+    def _load_spec(self, name: str, mod) -> bool:
+        """加载 ABI 插件：校验 manifest、构建 ctx、注册类型化 hooks、触发 on_load。"""
+        from plugins.abi import PluginContext, validate_manifest, PLUGIN_API_VERSION
+        manifest = dict(getattr(mod, "PLUGIN_MANIFEST", None) or {})
+        err = validate_manifest(manifest)
+        if err:
+            self._plugins[name] = {
+                "module": mod, "tier": "spec", "meta": {"name": name, "version": "?", "description": err},
+                "hooks": {}, "ctx": None, "error": f"manifest 校验失败: {err}",
+            }
+            return False
+        hooks = dict(getattr(mod, "PLUGIN_HOOKS", None) or {})
+        pname = str(manifest.get("name") or name)
+        pversion = str(manifest.get("version") or "0.0.0")
+        enabled = self._state.get(name, bool(manifest.get("default_enabled", True)))
+        ctx = PluginContext(name=pname, version=pversion, manager=self)
+        self._plugins[name] = {
+            "module": mod,
+            "tier": "spec",
+            "manifest": manifest,
+            "meta": {"name": pname, "version": pversion, "enabled": enabled,
+                     "description": manifest.get("description", ""),
+                     "author": manifest.get("author", ""),
+                     "priority": int(manifest.get("priority") or 50)},
+            "hooks": {k: v for k, v in hooks.items() if callable(v)},
+            "ctx": ctx,
+            "error": None,
+        }
+        self._propagate_ai_client(name)
+        if enabled:
+            self._call_spec_hook(name, "on_load", ctx)
+        return True
+
+    def _call_spec_hook(self, name: str, hook_name: str, ctx, **kwargs) -> Any:
+        """调用单个 spec 插件的钩子（异常隔离）。"""
+        entry = self._plugins.get(name)
+        if not entry or entry.get("tier") != "spec":
+            return None
+        fn = (entry.get("hooks") or {}).get(hook_name)
+        if not callable(fn):
+            return None
+        try:
+            return fn(ctx, **kwargs) if kwargs else fn(ctx)
+        except Exception as e:
+            print(f"[Plugin:{name}] {hook_name} 异常: {e}")
+            return None
+
+    def has_typed_hook(self, hook_name: str) -> bool:
+        """是否有已启用的 spec 插件注册了指定类型化钩子。"""
+        return any(
+            e.get("tier") == "spec" and e.get("meta", {}).get("enabled")
+            and hook_name in (e.get("hooks") or {})
+            for e in self._plugins.values()
+        )
+
+    def execute_typed_hooks_first(self, hook_name: str, **kwargs) -> Any:
+        """按 priority 升序调用启用 spec 插件的钩子，返回第一个非 None 结果。"""
+        candidates = []
+        for name, e in self._plugins.items():
+            if e.get("tier") != "spec" or not e.get("meta", {}).get("enabled"):
+                continue
+            fn = (e.get("hooks") or {}).get(hook_name)
+            if callable(fn):
+                candidates.append((int(e.get("meta", {}).get("priority") or 50), name, fn, e.get("ctx")))
+        candidates.sort(key=lambda x: x[0])
+        for _, name, fn, ctx in candidates:
+            try:
+                r = fn(ctx, **kwargs) if kwargs else fn(ctx)
+                if r is not None:
+                    return r
+            except Exception as e:
+                print(f"[Plugin:{name}] {hook_name} 异常: {e}")
+        return None
+
+    def execute_typed_hooks(self, hook_name: str, **kwargs) -> List[Tuple[str, Any]]:
+        """调用所有启用 spec 插件的钩子，返回 [(plugin_name, result)]。"""
+        results = []
+        candidates = []
+        for name, e in self._plugins.items():
+            if e.get("tier") != "spec" or not e.get("meta", {}).get("enabled"):
+                continue
+            fn = (e.get("hooks") or {}).get(hook_name)
+            if callable(fn):
+                candidates.append((int(e.get("meta", {}).get("priority") or 50), name, fn, e.get("ctx")))
+        candidates.sort(key=lambda x: x[0])
+        for _, name, fn, ctx in candidates:
+            try:
+                results.append((name, fn(ctx, **kwargs) if kwargs else fn(ctx)))
+            except Exception as e:
+                print(f"[Plugin:{name}] {hook_name} 异常: {e}")
+        return results
+
     def unload(self, name: str) -> bool:
         """卸载插件。调用 on_unload 并从注册表移除。"""
         entry = self._plugins.get(name)
@@ -148,12 +251,15 @@ class PluginManager:
             return False
         mod = entry.get("module")
         if mod:
-            on_unload = getattr(mod, "on_unload", None)
-            if callable(on_unload):
-                try:
-                    on_unload()
-                except Exception as e:
-                    print(f"[Plugin:{name}] on_unload 异常: {e}")
+            if entry.get("tier") == "spec":
+                self._call_spec_hook(name, "on_unload", entry.get("ctx"))
+            else:
+                on_unload = getattr(mod, "on_unload", None)
+                if callable(on_unload):
+                    try:
+                        on_unload()
+                    except Exception as e:
+                        print(f"[Plugin:{name}] on_unload 异常: {e}")
         self._plugins.pop(name, None)
         return True
 
@@ -169,12 +275,15 @@ class PluginManager:
         self._save_state()
         mod = entry.get("module")
         if mod:
-            on_load = getattr(mod, "on_load", None)
-            if callable(on_load):
-                try:
-                    on_load()
-                except Exception as e:
-                    print(f"[Plugin:{name}] on_load 异常: {e}")
+            if entry.get("tier") == "spec":
+                self._call_spec_hook(name, "on_enable", entry.get("ctx"))
+            else:
+                on_load = getattr(mod, "on_load", None)
+                if callable(on_load):
+                    try:
+                        on_load()
+                    except Exception as e:
+                        print(f"[Plugin:{name}] on_load 异常: {e}")
         return True
 
     def disable(self, name: str) -> bool:
@@ -187,12 +296,15 @@ class PluginManager:
         self._save_state()
         mod = entry.get("module")
         if mod:
-            on_unload = getattr(mod, "on_unload", None)
-            if callable(on_unload):
-                try:
-                    on_unload()
-                except Exception as e:
-                    print(f"[Plugin:{name}] on_unload 异常: {e}")
+            if entry.get("tier") == "spec":
+                self._call_spec_hook(name, "on_disable", entry.get("ctx"))
+            else:
+                on_unload = getattr(mod, "on_unload", None)
+                if callable(on_unload):
+                    try:
+                        on_unload()
+                    except Exception as e:
+                        print(f"[Plugin:{name}] on_unload 异常: {e}")
         return True
 
     def reload(self, name: str) -> bool:
