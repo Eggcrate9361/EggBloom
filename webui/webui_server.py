@@ -952,33 +952,6 @@ def get_self_learning_stats():
     _SL_CACHE.set(result)
     return result
 
-_EXPR_CACHE = _Cache(ttl=30)
-
-def get_expressions():
-    cached = _EXPR_CACHE.get()
-    if cached is not None:
-        return cached
-    try:
-        db_paths = [
-            PROJECT / "self_learning_db" / "self_learning.db",
-            Path.home() / "AppData/Local/EggBloom_v3/self_learning_db/self_learning.db",
-        ]
-        for db in db_paths:
-            if not db.exists():
-                continue
-            conn = sqlite3.connect(str(db))
-            cur = conn.cursor()
-            cur.execute("SELECT expression, scene, quality, count FROM expressions ORDER BY count DESC LIMIT 20")
-            rows = cur.fetchall()
-            conn.close()
-            result = [{"text": r[0], "scene": r[1], "weight": r[2], "score": int(r[3] * 20)} for r in rows]
-            _EXPR_CACHE.set(result)
-            return result
-    except Exception:
-        pass
-    result = []
-    _EXPR_CACHE.set(result)
-    return result
 
 def get_memory_stats():
     # T8: 私聊记忆已迁入 super_memory SQLite，统计改为查库
@@ -1112,91 +1085,6 @@ def get_system_stats():
     return result
 
 # 插件Discovery
-def discover_plugins():
-    plugins = []
-    try:
-        plugin_dir = PROJECT / "plugins"
-        if not plugin_dir.exists():
-            return plugins
-        state_file = plugin_dir / "plugin_state.json"
-        state = {}
-        if state_file.exists():
-            try:
-                state = json.loads(state_file.read_text(encoding="utf-8"))
-            except Exception:
-                pass
-
-        for entry in sorted(plugin_dir.iterdir()):
-            if not entry.is_dir() or entry.name.startswith('_') or entry.name.startswith('.'):
-                continue
-            if entry.name == "plugin_manager.py":
-                continue
-            init_file = entry / "__init__.py"
-            if not init_file.exists():
-                continue
-            try:
-                meta = {"name": entry.name, "version": "1.0.0", "description": "", "author": "", "hooks": [], "priority": 50, "已启用": False}
-                content = init_file.read_text(encoding="utf-8", errors="replace")
-                idx = content.find("PLUGIN_META")
-                if idx >= 0:
-                    bp = content.find("{", idx)
-                    if bp >= 0:
-                        depth = 0
-                        for i in range(bp, len(content)):
-                            if content[i] == '{': depth += 1
-                            elif content[i] == '}': depth -= 1
-                            if depth == 0:
-                                dstr = content[bp:i+1]
-                                try:
-                                    ns = {"__builtins__": {}, "已启用": False}
-                                    exec("__pm__ = " + dstr, ns)
-                                    parsed = ns.get("__pm__", {})
-                                    if isinstance(parsed, dict):
-                                        meta.update(parsed)
-                                except Exception:
-                                    pass
-                                break
-                if not meta.get("description"):
-                    dm = re.search(r'"""(.*?)"""', content, re.DOTALL)
-                    if dm:
-                        desc = dm.group(1).strip().split(chr(10))[0]
-                        if len(desc) > 5:
-                            meta["description"] = desc[:120]
-                em = state.get("已启用", {}) if isinstance(state, dict) else {}
-                已启用 = em.get(meta.get("name", entry.name), meta.get("已启用", False))
-                plugins.append({
-                    "name": meta.get("name", entry.name),
-                    "version": meta.get("version", "1.0.0"),
-                    "description": meta.get("description", ""),
-                    "author": meta.get("author", ""),
-                    "hooks": meta.get("hooks", []),
-                    "priority": meta.get("priority", 50),
-                    "已启用": 已启用,
-                })
-            except Exception:
-                pass
-    except Exception:
-        pass
-    return plugins
-
-
-def load_plugin_state():
-    try:
-        p = PROJECT / "plugins" / "plugin_state.json"
-        if p.exists():
-            return json.loads(p.read_text(encoding="utf-8"))
-    except Exception:
-        pass
-    return {}
-
-def save_plugin_state(state):
-    try:
-        p = PROJECT / "plugins" / "plugin_state.json"
-        open(str(p), "w", encoding="utf-8").write(json.dumps(state, ensure_ascii=False, indent=2))
-    except Exception:
-        pass
-
-
 # 
 #  HTML TEMPLATE - Single File SPA
 # 
