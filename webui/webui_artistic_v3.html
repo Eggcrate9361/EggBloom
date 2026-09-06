@@ -3365,6 +3365,12 @@ function loadPlugins(){  API('/plugins').then(r => {    const plugins = (r && r.
     const tagBar = $('pluginTagBar');
     if (tagBar){      tagBar.innerHTML = '<span class="meta">标签</span>' + ['全部', ...allTags].map(t => `<button class="tag-chip${(activeTag || '全部') === t ? ' ac' : ''}" data-tag="${escapeHtml(t)}">${escapeHtml(t)}</button>`).join('');      qsa('#pluginTagBar .tag-chip').forEach(ch => ch.addEventListener('click', () => {        const t = ch.dataset.tag === '全部' ? '' : ch.dataset.tag;        window.__pluginActiveTag = t;        loadPlugins();      }));    }
     if (activeTag) kept = kept.filter(p => ((p.tags || []).map(x=>String(x))).includes(activeTag));
+    // 标签筛选结果为空 → 自动重置为"全部"，避免整页假死成空白（残留标签在删插件后会匹配不到任何插件）
+    if (activeTag && !kept.length){
+      window.__pluginActiveTag = '';
+      kept = plugins;
+      if (typeof showToast === 'function') showToast('该标签下暂无插件，已显示全部', 'info');
+    }
     $('pluginsCount').textContent = kept.length + ' 个';
     const apiStatus = p => {
       const st = p._api_status;
