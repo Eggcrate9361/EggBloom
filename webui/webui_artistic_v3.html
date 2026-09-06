@@ -1054,7 +1054,9 @@ function renderLLMPanel(root){
         <select class="input" id="sModel" style="flex:1"><option value="">-- 选择模型 --</option></select>
         <button class="btn primary" id="sFetchModels" style="white-space:nowrap">获取模型列表</button>
       </div>
-      <div class="field-desc">从提供商 API 拉取可用模型</div>
+      <input class="input" id="sModelManual" placeholder="或直接输入模型代码（自定义/中转推荐）" style="margin-top:8px;display:none">
+      <div class="field-desc" id="sModelManualHint" style="display:none">该提供商不支持自动拉取模型，请手动输入模型代码（保存时优先使用此输入框的值）</div>
+      <div class="field-desc">从提供商 API 拉取可用模型；拉不到时可手动输入</div>
     </div>
     <label class="field" style="display:flex;align-items:center;gap:16px;cursor:pointer">
       <input type="checkbox" class="toggle-input" id="sUseLocalLlm">
@@ -1558,7 +1560,7 @@ function openProviderModal(existing){
   const isEdit = !!existing;
   const data = existing || {id:'custom_'+Date.now(),name:'Custom',base_url:'',models:[],api_key:''};
   // models 可能是 {id,name} 对象或纯字符串；统一转成 id 展示，避免 join 出 "[object Object]"
-  const modelList = (data.models||[]).map(m => (typeof m === 'string' ? m : (m && (m.id || m.name)) || '')).filter(Boolean).join(', ');
+  const modelList = (data.models||[]).map(m => (typeof m === 'string' ? m : (m && (m.id || m.name)) || '')).filter(Boolean).join('\n');
   const modal = document.createElement('div');
   modal.className = 'modal-overlay';
   modal.innerHTML = '<div class="modal">'+
@@ -1567,8 +1569,8 @@ function openProviderModal(existing){
     '<input class="input" id="mpName" value="'+esc(data.name)+'"></div>'+
     '<div class="field"><div class="field-label">Base URL</div>'+
     '<input class="input" id="mpUrl" value="'+esc(data.base_url)+'"></div>'+
-    '<div class="field"><div class="field-label">Models (comma separated)</div>'+
-    '<input class="input" id="mpModels" value="'+esc(modelList)+'"></div>'+
+    '<div class="field"><div class="field-label">Models（每行一个）</div>'+
+    '<textarea class="input" id="mpModels" rows="5" placeholder="deepseek-chat&#10;deepseek-reasoner">'+esc(modelList)+'</textarea></div>'+
     '<div class="field"><div class="field-label">API Key</div>'+
     '<input class="input" id="mpApiKey" type="password" value="'+esc(data.api_key||'')+'" placeholder="sk-...（可选，本提供商专用；留空则用全局 Key）">'+
     (data.has_api_key ? '<label style="display:flex;align-items:center;gap:8px;margin-top:6px;font-size:12px;color:var(--ink2);cursor:pointer"><input type="checkbox" id="mpClearKey" style="width:auto"> 清除已保存的专用 Key</label>' : '')+
@@ -1583,8 +1585,8 @@ function openProviderModal(existing){
     const url = modal.querySelector('#mpUrl').value.trim();
     const clearKey = !!(modal.querySelector('#mpClearKey') && modal.querySelector('#mpClearKey').checked);
     const apiKey = modal.querySelector('#mpApiKey').value.trim();
-    // 统一转成 {id,name} 对象，与拉取模型列表的格式一致
-    const models = modal.querySelector('#mpModels').value.split(',').map(s=>s.trim()).filter(Boolean).map(id => ({id, name: id}));
+    // 支持每行一个或逗号分隔，统一转成 {id,name} 对象，与拉取模型列表的格式一致
+    const models = modal.querySelector('#mpModels').value.split(/[\n,]+/).map(s=>s.trim()).filter(Boolean).map(id => ({id, name: id}));
     if(!name){ showToast('Name required','error'); return; }
     const newP = {...data, name, base_url:url, models};
     if(clearKey){ newP._clear_key = true; delete newP.api_key; }
@@ -1613,6 +1615,7 @@ async function loadSettingsData(){
     const c = (r && r.config !== undefined ? r.config : {}) || {};
     currentProviders = c.providers || [];
     currentProviderId = c.api_provider || 'deepseek';
+    window.__savedModelName = c.model_name || '';
     if(window._refreshProviderCards) window._refreshProviderCards();
     const s = (id,v)=>{ const el=$(id); if(el) el.value = v||''; };
     const t = (id,v)=>{ const el=$(id); if(el){ el.checked = !!v; }};
@@ -1769,7 +1772,7 @@ function collectSettings(){
     image_llm_model_path: val('sImageLlamaModelPath'),
     image_llm_port: num('sImageLlamaPort'),
     image_llm_model_name: val('sImageLlamaModelName'),
-    model_name: val('sModel'), api_key: val('sApiKey'),
+    model_name: (()=>{ const manualEl = $('sModelManual'); const mv = (manualEl && manualEl.value || '').trim(); return mv ? mv : val('sModel'); })(), api_key: val('sApiKey'),
     ai_temperature: num('sAiTemp'), ai_max_tokens: num('sAiMaxTokens'),
     ai_top_p: num('sAiTopP'), ai_frequency_penalty: num('sAiFreqPenalty'),
     ai_presence_penalty: num('sAiPresencePenalty'),
@@ -2271,13 +2274,32 @@ function bindSettingsEvents(){
       const found = (currentProviders || []).find(p => p.id === id);
       if(!found || !found.base_url){ showToast('请先选择提供商并配置 Base URL', 'error'); return; }
       fetchBtn.textContent = '获取中...'; fetchBtn.disabled = true;
-      await fetchRemoteModels(found.id, found.base_url, apiKeyEl ? apiKeyEl.value : '', $('sModel'));
+      await fetchRemoteModels(found.id, found.base_url, apiKeyEl ? apiKeyEl.value : '', $('sModel'), true);
       fetchBtn.textContent = '获取模型列表'; fetchBtn.disabled = false;
     });
   }
 }
 
-function updateProviderModels(providers, providerId){  const modelEl = $('sModel');  if (!modelEl) return;  const found = providers.find(p => p.id === providerId);  const models = (found && found.models !== undefined ? found.models : []) || [];  if (!models.length){    return;  }  const current = modelEl.value;  modelEl.innerHTML = models.map(m => `<option>${escapeHtml(m.id)}</option>`).join('');  if (current) modelEl.value = current;}function applyProviderToLLM(providerId, apiKey){
+function updateProviderModels(providers, providerId){  const modelEl = $('sModel');  if (!modelEl) return;  const found = providers.find(p => p.id === providerId);  const models = (found && found.models !== undefined ? found.models : []) || [];  if (!models.length){    return;  }  const current = modelEl.value;  modelEl.innerHTML = models.map(m => `<option>${escapeHtml(m.id)}</option>`).join('');  if (current) modelEl.value = current;}function applyModelOptions(modelEl, models, isManual){
+  if(!modelEl) return;
+  const list = (models||[]) || [];
+  modelEl.innerHTML = '<option value="">-- 选择模型 --</option>' + list.map(m => `<option value="${escapeHtml(m.id)}">${escapeHtml(m.name || m.id)}</option>`).join('');
+  const manualEl = $('sModelManual'), hintEl = $('sModelManualHint');
+  const saved = window.__savedModelName || '';
+  const manualVal = (manualEl && manualEl.value || '').trim();
+  // 需要手动输入的情形：提供商不支持拉取 / 列表为空 / 已保存模型不在列表里
+  const needManual = isManual || !list.length || (saved && !list.some(m => String(m.id) === saved)) || (manualVal && !list.some(m => String(m.id) === manualVal));
+  if(manualEl) manualEl.style.display = needManual ? '' : 'none';
+  if(hintEl) hintEl.style.display = needManual ? '' : 'none';
+  if(needManual){
+    const fill = manualVal || saved || '';
+    if(manualEl) manualEl.value = fill;
+    if(fill){
+      modelEl.insertAdjacentHTML('beforeend', `<option value="${escapeHtml(fill)}">${escapeHtml(fill)}（手动）</option>`);
+      modelEl.value = fill;
+    }
+  }
+}function applyProviderToLLM(providerId, apiKey){
   const urlEl = $('sApiUrl');
   const modelEl = $('sModel');
   const providerEl = $('sProvider');
@@ -2289,66 +2311,63 @@ function updateProviderModels(providers, providerId){  const modelEl = $('sModel
   const pk = (found && found.api_key) || '';
   const masked = !pk || /«redacted/.test(pk) || /\*{2,}/.test(pk);
   const provKey = masked ? (apiKey || '') : pk;
-  fetchRemoteModels(providerId, found.base_url || '', provKey, modelEl);
+  fetchRemoteModels(providerId, found.base_url || '', provKey, modelEl, false);
 }
-async function fetchRemoteModels(providerId, baseUrl, apiKey, modelEl){
+async function fetchRemoteModels(providerId, baseUrl, apiKey, modelEl, force){
+  const prov = (currentProviders || []).find(p => p.id === providerId);
+  const cached = (prov && prov.models && prov.models.length) ? prov.models : [];
+  const fresh = !!(prov && prov._fetchedAt && (Date.now() - prov._fetchedAt < 5 * 60 * 1000));
+  // 5 分钟内用缓存，避免每次进设置页都重复请求（之前"一直刷新/一直转圈"的根因之一）
+  if(!force && cached.length && fresh){
+    applyModelOptions(modelEl, cached, false);
+    return;
+  }
   if(!baseUrl && !providerId){
-    if(modelEl) modelEl.insertAdjacentHTML('beforeend', '<option value="">未配置地址</option>');
+    applyModelOptions(modelEl, cached, true);
     return;
   }
   const payload = {provider_id: providerId || '', base_url: baseUrl || '', api_key: apiKey || ''};
   const options = {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)};
-  console.log('[fetchRemoteModels] start', {provider_id: payload.provider_id, base_url: payload.base_url, has_api_key: !!payload.api_key});
   const mySeq = (window._fetchRemoteModelsSeq || 0) + 1;
   window._fetchRemoteModelsSeq = mySeq;
   try{
     if(modelEl){
       modelEl.innerHTML = '<option value="">-- 选择模型 --</option><option value="">获取中...</option>';
     }
-    const timeoutMs = 20000;
-    const fetchPromise = fetch('/api/providers/models', options).then(r => {
-      console.log('[fetchRemoteModels] response status', r.status);
-      return r.text();
-    });
+    const timeoutMs = 12000;
+    const fetchPromise = fetch('/api/providers/models', options).then(r => r.text());
     const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('TIMEOUT')), timeoutMs));
     const text = await Promise.race([fetchPromise, timeoutPromise]);
-    if(mySeq !== window._fetchRemoteModelsSeq){
-      console.log('[fetchRemoteModels] stale response ignored');
-      return;
-    }
-    console.log('[fetchRemoteModels] response text', text.length ? '(omitted)' : text);
+    if(mySeq !== window._fetchRemoteModelsSeq) return;
     let data = {};
-    try { data = JSON.parse(text); } catch(e) { console.error('models response parse error', e, text); }
+    try { data = JSON.parse(text); } catch(e) {}
     const models = (data && data.models || []) || [];
     const providerType = data && data.provider_type ? data.provider_type : 'unknown';
     const backendError = data && data.error ? data.error : '';
-    console.log('[fetchRemoteModels] parsed', {models, providerType, backendError});
-    if(mySeq !== window._fetchRemoteModelsSeq){
-      console.log('[fetchRemoteModels] stale parsed result ignored');
-      return;
-    }
+    const isManual = !!(data && data.manual);
+    if(mySeq !== window._fetchRemoteModelsSeq) return;
     if(modelEl){
-      modelEl.innerHTML = '<option value="">-- 选择模型 --</option>' + models.map(m => `<option value="${escapeHtml(m.id)}">${escapeHtml(m.name || m.id)}</option>`).join('');
-      console.log('[fetchRemoteModels] updated sModel options', modelEl.innerHTML.length, models.map(m=>m.id));
-      if(!models.length){
-        const msg = backendError ? `[${providerType}] ${backendError}` : `[${providerType}] 未返回模型`;
-        modelEl.insertAdjacentHTML('beforeend', `<option value="">${escapeHtml(msg)}</option>`);
+      applyModelOptions(modelEl, models, isManual);
+      if(!models.length && backendError && !isManual){
+        modelEl.insertAdjacentHTML('beforeend', `<option value="">${escapeHtml('[' + providerType + '] ' + backendError)}</option>`);
       }
     }
-    if(providerId){
-      const prov = (currentProviders || []).find(p => p.id === providerId);
-      if(prov){
+    if(prov){
+      if(models.length){
         prov.models = models.map(m => ({id: m.id, name: m.name || m.id}));
+        prov._fetchedAt = Date.now();
+      }else if(!cached.length){
+        prov.models = [];
       }
+      // 失败时保留旧缓存不覆盖
     }
   }catch(e){
-    if(mySeq !== window._fetchRemoteModelsSeq){
-      console.log('[fetchRemoteModels] stale error ignored');
-      return;
-    }
-    console.error('[fetchRemoteModels] error', e);
+    if(mySeq !== window._fetchRemoteModelsSeq) return;
     if(modelEl){
-      modelEl.innerHTML = '<option value="">-- 选择模型 --</option><option value="">模型列表获取失败</option>';
+      applyModelOptions(modelEl, cached, true);
+      if(!cached.length){
+        modelEl.insertAdjacentHTML('beforeend', '<option value="">模型列表获取失败，请手动输入</option>');
+      }
     }
   }
 }

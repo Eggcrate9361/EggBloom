@@ -788,6 +788,10 @@ def _model_candidate_urls(base_url, provider_type):
     if provider_type in ('gemini', 'google'):
         # Gemini: GET /v1beta/models，需 ?key= 查询参数
         return [root + '/models', root + '/v1beta/models']
+    if provider_type in ('custom',):
+        # 自建中转/自定义端点大多没有 OpenAI 兼容的 /models 接口，硬试只会等超时。
+        # 直接回落已保存的模型列表 + 前端手动输入。
+        return []
     candidates = [
         root + '/v1/models',
         root + '/models',
@@ -825,7 +829,7 @@ def _fetch_remote_models(url, api_key, provider_type):
     else:
         headers['Authorization'] = 'Bearer ' + (api_key or '')
     req = urllib.request.Request(final_url, headers=headers)
-    with urllib.request.urlopen(req, timeout=15) as r:
+    with urllib.request.urlopen(req, timeout=6) as r:
         data = json.loads(r.read().decode('utf-8'))
 
     def _mid(m):
@@ -2955,7 +2959,8 @@ class Handler(BaseHTTPRequestHandler):
                     df.write(f'[RESPONSE] type={provider_type} models={len(models)} status={status} error={error}\n')
             except Exception:
                 pass
-            self._send_json(status, {"models": models, "provider_type": provider_type, "error": error})
+            self._send_json(status, {"models": models, "provider_type": provider_type, "error": error,
+                                     "manual": provider_type == 'custom'})
             return
 
         
