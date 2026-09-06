@@ -2002,6 +2002,10 @@ class Handler(BaseHTTPRequestHandler):
                                     desc = dm.group(1).strip().split(chr(10))[0]
                                     if len(desc) > 5:
                                         meta["description"] = desc[:120]
+                            # 适配层壳标记：PLUGIN_META 可能是 `dict(...)` 写法（文本解析器读不到字面量），
+                            # 直接按文件里是否出现 adapter 键判定
+                            if 'adapter' in content_py:
+                                meta["adapter"] = True
                         except Exception:
                             pass
                         em = state.get("enabled", state.get("已启用", {})) if isinstance(state, dict) else {}
