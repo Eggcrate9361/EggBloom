@@ -113,10 +113,19 @@ def before_reply(message="", group_id="", context=None, **kwargs):
     try:
         ctx = dict(context or {})
         ctx.setdefault("group_id", group_id)
-        # 聚合式：收集所有子模块注入（人格/记忆/风格），而非短路链只取第一个
+        # 聚合式：收集所有子模块注入（人格/记忆/风格），而非短路链只取第一个。
+        # 按 ego 自己的模块开关（module_flags.json）门控，被关的子模块直接跳过。
         all_parts = []
         temperature = None
-        for _sub in (_mood_before_reply, _personality_before_reply, _memory_before_reply, _style_before_reply, _rhythm_before_reply):
+        for _sub, _flag_key in (
+            (_mood_before_reply, "mood_enabled"),
+            (_personality_before_reply, "personality_enabled"),
+            (_memory_before_reply, "memory_enabled"),
+            (_style_before_reply, "style_enabled"),
+            (_rhythm_before_reply, "rhythm_enabled"),
+        ):
+            if not _flag(_flag_key):
+                continue
             try:
                 result = _sub(message=message, group_id=group_id, context=ctx, **kwargs)
             except Exception as e:
@@ -175,53 +184,93 @@ def after_reply(message="", group_id="", reply="", context=None, **kwargs):
 # ------------------------------------------------------------------
 # Config facade
 # ------------------------------------------------------------------
+# ------------------------------------------------------------------
+# Config facade
+# ------------------------------------------------------------------
+_MODULE_FLAG_KEYS = ("memory_enabled", "style_enabled", "rhythm_enabled",
+                     "slang_enabled", "mood_enabled", "personality_enabled")
+_MODULE_FLAG_FILE = None
+
+
+def _module_flags_file():
+    global _MODULE_FLAG_FILE
+    if _MODULE_FLAG_FILE is None:
+        import json
+        _MODULE_FLAG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "module_flags.json")
+    return _MODULE_FLAG_FILE
+
+
+def _load_flags() -> dict:
+    import json
+    try:
+        with open(_module_flags_file(), encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, dict):
+            return data
+    except Exception:
+        pass
+    return {}
+
+
+def _save_flags(flags: dict):
+    import json
+    try:
+        p = _module_flags_file()
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        with open(p, "w", encoding="utf-8") as f:
+            json.dump(flags, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
+def _flag(name: str) -> bool:
+    """读取某子模块开关（未设置时默认开启）。"""
+    flags = _load_flags()
+    v = flags.get(name)
+    return v is not False  # 默认 True
+
+
+def _set_flag(name: str, value: bool):
+    flags = _load_flags()
+    flags[name] = bool(value)
+    _save_flags(flags)
+
+
 def get_config():
     cfg = {}
-    try:
-        cfg.update(personality_get_config())
-    except Exception:
-        pass
-    try:
-        cfg.update(memory_get_config())
-    except Exception:
-        pass
-    try:
-        cfg.update(style_get_config())
-    except Exception:
-        pass
-    try:
-        cfg.update(rhythm_get_config())
-    except Exception:
-        pass
-    try:
-        cfg.update(mood_get_config())
-    except Exception:
-        pass
+    for sub in (personality_get_config, memory_get_config, style_get_config, rhythm_get_config, mood_get_config):
+        try:
+            cfg.update(sub())
+        except Exception:
+            pass
+    # 叠加 ego 自己的模块开关（前端 {module}_enabled 读取用，保证与 before_reply 门控一致）
+    for k in _MODULE_FLAG_KEYS:
+        cfg[k] = _flag(k)
     return cfg
 
 
 def set_config(params):
+    """设置模块开关：写入 ego 自己的标志文件（{module}_enabled），并尽力同步到子模块。"""
     results = {}
-    try:
-        results["personality"] = personality_set_config(params)
-    except Exception as e:
-        results["personality_error"] = str(e)
-    try:
-        results["memory"] = memory_set_config(params)
-    except Exception as e:
-        results["memory_error"] = str(e)
-    try:
-        results["style"] = style_set_config(params)
-    except Exception as e:
-        results["style_error"] = str(e)
-    try:
-        results["rhythm"] = rhythm_set_config(params)
-    except Exception as e:
-        results["rhythm_error"] = str(e)
-    try:
-        results["mood"] = mood_set_config(params)
-    except Exception as e:
-        results["mood_error"] = str(e)
+    params = dict(params or {})
+    for k in _MODULE_FLAG_KEYS:
+        if k in params:
+            _set_flag(k, params[k])
+    # 尽力同步 enabled 到各子模块（它们自己的 set_config 是否认键不影响开关生效）
+    for alias, sub_fn, name in (
+        ("personality_enabled", personality_set_config, "personality"),
+        ("memory_enabled", memory_set_config, "memory"),
+        ("style_enabled", style_set_config, "style"),
+        ("rhythm_enabled", rhythm_set_config, "rhythm"),
+        ("mood_enabled", mood_set_config, "mood"),
+    ):
+        d = dict(params)
+        if alias in d:
+            d["enabled"] = d.pop(alias)
+        try:
+            results[name] = sub_fn(d)
+        except Exception as e:
+            results[name + "_error"] = str(e)
     return results
 
 

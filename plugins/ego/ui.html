@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
@@ -258,6 +258,7 @@
       <div class="grid grid-2">
         <div class="card">
           <div class="switch-row"><div><div class="card-label">记忆</div><div class="muted">事实 / 事件 / 人格 / 好感度</div></div><label class="toggle"><input type="checkbox" id="ego-memory" checked><span class="slider"></span></label></div>
+          <div class="switch-row"><div><div class="card-label">人格</div><div class="muted">人设 / 语气 / few-shot 示例</div></div><label class="toggle"><input type="checkbox" id="ego-personality" checked><span class="slider"></span></label></div>
           <div class="switch-row"><div><div class="card-label">说话风格</div><div class="muted">学习群友风格并注入</div></div><label class="toggle"><input type="checkbox" id="ego-style" checked><span class="slider"></span></label></div>
           <div class="switch-row"><div><div class="card-label">情绪状态机</div><div class="muted">心情曲线 / 影响语气温度</div></div><label class="toggle"><input type="checkbox" id="ego-mood" checked><span class="slider"></span></label></div>
           <div class="row" style="margin-top:8px"><a class="btn ghost" href="/page?plugin_id=chat_style" target="_self" style="font-size:12px;padding:4px 10px;width:100%;text-align:center">打开说话风格完整页</a></div>
@@ -583,6 +584,7 @@ async function loadModuleConfig(){
   const setChecked=(id,k)=>{const el=egoRoot('#'+id);if(!el||!cfg)return;const v=cfg[k];if(typeof v==='boolean') el.checked=v; else el.checked=v!==false;};
   setChecked('ego-enabled','enabled');
   setChecked('ego-memory','memory_enabled');
+  setChecked('ego-personality','personality_enabled');
   setChecked('ego-style','style_enabled');
   setChecked('ego-rhythm','rhythm_enabled');
   setChecked('ego-slang','slang_enabled');
@@ -608,6 +610,7 @@ async function saveModuleConfig(){
   const payload={plugin_id:'ego',action:'set_config',params:{
     enabled:!!egoRoot('#ego-enabled').checked,
     memory_enabled:!!egoRoot('#ego-memory').checked,
+    personality_enabled:!!egoRoot('#ego-personality').checked,
     style_enabled:!!egoRoot('#ego-style').checked,
     rhythm_enabled:!!egoRoot('#ego-rhythm').checked,
     slang_enabled:!!egoRoot('#ego-slang').checked,
