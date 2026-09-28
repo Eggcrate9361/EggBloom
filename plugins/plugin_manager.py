@@ -60,6 +60,15 @@ class PluginManager:
 
     # ── 发现 ──────────────────────────────────────────────
 
+    # ego 的子模块在 plugins/ 顶层留有历史副本（内容与 ego 内部的有差异，
+    # 但它们的功能由 ego 插件统一提供）。它们不该以"独立插件"身份出现，
+    # 否则插件列表里会多出一排同名项。这里跳过枚举；**文件保留不删**，
+    # 万一有直接 import 依赖，模块本身仍可被 import。
+    EGO_SUBMODULE_COPIES = frozenset({
+        "chat_style", "humanlike_rhythm", "mood_engine",
+        "personality_engine", "slang_learner", "super_memory",
+    })
+
     def discover(self) -> List[str]:
         """扫描 plugins/ 的子目录，返回含 PLUGIN_META 的包名列表"""
         found = []
@@ -71,6 +80,8 @@ class PluginManager:
             if name.startswith("_") or name.startswith("."):
                 continue
             if not os.path.isdir(pkg_path) or not os.path.isfile(init_file):
+                continue
+            if name in self.EGO_SUBMODULE_COPIES:
                 continue
             if name == "group_chat_decider":
                 found.append(name)

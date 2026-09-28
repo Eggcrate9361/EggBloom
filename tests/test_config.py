@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """config.py 单元测试
 
 运行方式（项目根目录）：
@@ -39,7 +39,7 @@ class TestAPIProviders(unittest.TestCase):
     def test_deepseek_provider(self):
         ds = config.API_PROVIDERS.get("deepseek")
         self.assertIsNotNone(ds)
-        self.assertIn("deepseek-chat", ds["models"])
+        self.assertIn("deepseek-flash", ds["models"])
         self.assertTrue(ds["url"].startswith("https://"))
 
     def test_custom_provider_has_empty_url(self):

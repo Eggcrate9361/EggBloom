@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """ai_client.py      AI 客户端 (DeepSeek/OpenAI/兼容, SSL 上下文)"""
 import urllib.request, urllib.error, ssl, os, sys, base64, hashlib
 from utils import log
@@ -46,7 +46,7 @@ IMAGE_CACHE = os.path.join(SCRIPT_DIR, "image_cache")
 os.makedirs(IMAGE_CACHE, exist_ok=True)
 
 class AIClient:
-    def __init__(self, api_url, api_key, model="deepseek-chat", personality="", max_retries=3, provider="openai", temperature=None):
+    def __init__(self, api_url, api_key, model="deepseek-flash", personality="", max_retries=3, provider="openai", temperature=None):
         self.api_url = api_url
         self.api_key = api_key
         self.model = model

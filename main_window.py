@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+﻿#!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
 EggBloom v3 主窗口 - CustomTkinter 版本
@@ -1140,7 +1140,7 @@ class MainWindow:
         def _model_dd(parent):
             self._model_var = ctk.StringVar(value=self.cfg.get("model_name", ""))
             w = ctk.CTkOptionMenu(parent, variable=self._model_var,
-                                  values=["deepseek-chat", "deepseek-reasoner"],
+                                  values=["deepseek-flash", "deepseek-v4-pro"],
                                   font=font(10), fg_color=C["bg_input"],
                                   button_color=C["border_light"],
                                   dropdown_fg_color=C["bg_card"],

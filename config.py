@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """config.py - Configuration with env override, API provider selection"""
 import json
 import os
@@ -33,7 +33,7 @@ API_PROVIDERS = {
     "deepseek": {
         "name": "DeepSeek",
         "url": "https://api.deepseek.com/chat/completions",
-        "models": ["deepseek-chat", "deepseek-reasoner", "deepseek-v4-flash"],
+        "models": ["deepseek-flash", "deepseek-v4-pro"],
         "note": "官方直连，性价比高",
     },
     "openai": {
@@ -128,7 +128,7 @@ DEFAULT_CONFIG = {
     "group_ids": [],
     "api_provider": "deepseek",
     "api_url": "https://api.deepseek.com/chat/completions",
-    "model_name": "deepseek-chat",
+    "model_name": "deepseek-flash",
     "bot_group_nick": "AAA",
     "startup_cooldown": 60,
     "msg_split_len": 2000,

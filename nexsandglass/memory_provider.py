@@ -143,9 +143,11 @@ class NexSandglassProvider(MemoryProvider):
             if self._initialized:
                 return
             # 确保 sandglass 模块可导入
+            # 数据根统一走 sandglass_paths._NB —— 不在别处重算一遍，
+            # 否则一旦数据根换了位置，这里会把错误的 scripts 目录塞进 sys.path
             import sys
-            nb = os.environ.get("NEXSANDBASE_HOME") or os.path.expanduser("~/.neurobase")
-            nb_scripts = os.path.join(nb, "scripts")
+            from sandglass_paths import _NB
+            nb_scripts = os.path.join(_NB, "scripts")
             if nb_scripts not in sys.path:
                 sys.path.insert(0, nb_scripts)
 

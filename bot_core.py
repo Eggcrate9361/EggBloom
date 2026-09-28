@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+﻿#!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
 EggBloom - OneBot + DeepSeek AI + 远程控制
@@ -536,7 +536,7 @@ def start_event_server():
                         "plugin_count": 0,
                         "plugin_active": 0,
                         "llm_status": "connected" if REQUESTS_OK else "disconnected",
-                        "llm_model": _config.get("model_name", "deepseek-chat"),
+                        "llm_model": _config.get("model_name", "deepseek-flash"),
                         "memory_total": 0,
                         "session_count": len(GROUP_SESSION) if 'GROUP_SESSION' in dir() else 0,
                         "api_calls_today": 0,
@@ -2884,42 +2884,42 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "web_operate",
-            "description": "操作网页：打开链接/读内容/填问卷/点击/截图/答题。action: open_url/get_page/fill_form/click/screenshot/survey。",
+            "description": (
+                "操作网页 v2。标准流程：open_url 会自动返回带编号的结构化快照（如 - button \"登录\" [ref=e5]），"
+                "然后用 ref 调 click/fill/select/check/press/hover（每次动作后自动回传最新快照，无需你再猜选择器）。"
+                "多步复杂任务直接用 action=autonomous + goal，插件会自主完成。"
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "action": {
                         "type": "string",
-                        "enum": ["open_url", "get_page", "fill_form", "click", "screenshot", "survey"],
-                        "description": "要执行的网页操作类型"
+                        "enum": [
+                            "open_url", "snapshot", "get_page",
+                            "click", "dblclick", "fill", "fill_form", "select", "check", "uncheck", "press", "hover", "upload", "focus",
+                            "scroll", "extract", "execute_js", "screenshot", "wait", "get_attribute", "press_key",
+                            "tab_list", "tab_switch", "tab_new", "handle_dialog", "download",
+                            "api_call", "close", "save_state", "load_state", "autonomous",
+                        ],
+                        "description": "要执行的网页操作类型",
                     },
-                    "url": {
-                        "type": "string",
-                        "description": "要打开的网页链接（open_url 必填）"
-                    },
+                    "url": {"type": "string", "description": "open_url/tab_new 要打开的链接"},
+                    "ref": {"type": "string", "description": "快照中元素编号，如 e5（click/fill/select/check/press/hover/upload/get_attribute 首选）"},
+                    "value": {"type": "string", "description": "fill 填入的文本 / select 选择的值 / press 的按键"},
+                    "selector": {"type": "string", "description": "兜底 CSS 选择器（优先用 ref；无快照时才用）"},
+                    "text": {"type": "string", "description": "click 兜底：按按钮文字定位"},
+                    "description": {"type": "string", "description": "元素语义描述，供视觉兜底使用（可选）"},
+                    "goal": {"type": "string", "description": "autonomous 模式：自然语言目标（如“把这份问卷答完并提交”）"},
                     "fields": {
                         "type": "array",
-                        "description": "表单填写项列表，每项含 selector/name + value（fill_form 时使用）",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "selector": {"type": "string", "description": "CSS 选择器或 name/id"},
-                                "value": {"type": "string", "description": "要填写的值"}
-                            }
-                        }
+                        "description": "fill_form 批量填表：每项 {ref 或 selector, value}",
+                        "items": {"type": "object", "properties": {
+                            "ref": {"type": "string"}, "selector": {"type": "string"}, "value": {"type": "string"}
+                        }},
                     },
-                    "selector": {
-                        "type": "string",
-                        "description": "要点击的 CSS 选择器（click 时使用）"
-                    },
-                    "text": {
-                        "type": "string",
-                        "description": "要点击的按钮文字，如「提交」「下一步」（click 时使用，优先于 selector）"
-                    },
-                    "total": {
-                        "type": "integer",
-                        "description": "survey 模式的预计总题数（默认 50）"
-                    }
+                    "index": {"type": "integer", "description": "tab_switch 的标签页序号"},
+                    "name": {"type": "string", "description": "get_attribute 要取的属性名"},
+                    "file_path": {"type": "string", "description": "upload 的本地文件路径"},
                 },
                 "required": ["action"]
             }
@@ -3045,92 +3045,130 @@ def _tool_get_group_members(args):
 TOOL_FUNCTIONS["get_group_members"] = _tool_get_group_members
 
 
+def _make_plugin_chat_closure():
+    """为插件自主 Agent 提供一次带工具调用的文本 LLM 回调，复用主模型配置。
+    返回签名：chat(messages, tools=None) -> (content, tool_calls, usage)。"""
+    def _chat(messages, tools=None, max_tokens=1500):
+        msg, usage = _call_chat_sync(
+            messages, runtime_cfg=None, max_tokens=max_tokens, stream=False,
+            with_tools=(tools or []),
+        )
+        return (msg.get("content") or ""), (msg.get("tool_calls") or []), (usage or {})
+    return _chat
+
+
+_WEB_ACTION_DONE_WORDS = {
+    "click": "已点击", "dblclick": "已双击", "fill": "已填写", "select": "已选择",
+    "check": "已勾选", "uncheck": "已取消勾选", "press": "已按键", "hover": "已悬停",
+    "focus": "已聚焦", "upload": "已上传", "scroll": "已滚动",
+}
+
+
 def handle_web_operate(args):
-    """网页操作工具：调用 web_operator 插件执行网页任务（打开/读页/填表/点击/问卷）。"""
+    """网页操作工具 v2：结构化快照 + ref 精确操作 + 自主 Agent。"""
     try:
         import plugins.web_operator as _wo
     except Exception as e:
         return f"网页操作插件加载失败: {e}"
 
-    action = (args or {}).get("action") or ""
+    args = args or {}
+    action = (args.get("action") or "").strip()
+    if not action:
+        return "缺少 action 参数"
+    if action == "survey":
+        return "survey 已废弃：请用 action=autonomous + goal，或 open_url 拿快照后按 ref 逐个 click。"
+
     task_type = f"web.{action}"
-    params = dict(args or {})
+    params = dict(args)
     params.pop("action", None)
     target_qq = params.pop("target_qq", None)
 
-    mapping = {
-        "open_url": "web.open_url",
-        "get_page": "web.get_page",
-        "fill_form": "web.fill_form",
-        "click": "web.click",
-        "screenshot": "web.screenshot",
-        "survey": "web.survey",
-    }
-    task_type = mapping.get(action, f"web.{action}")
+    context = {}
+    if action == "autonomous":
+        context["chat"] = _make_plugin_chat_closure()
 
     try:
-        res = _wo.execute_task(task_type, params)
+        res = _wo.execute_task(task_type, params, context=context)
     except Exception as e:
         return f"网页操作执行失败: {e}"
 
     if not isinstance(res, dict):
         return f"网页操作返回异常: {res}"
 
+    logs = res.get("logs") or []
     if not res.get("ok"):
-        logs = res.get("logs") or []
         err = " | ".join(l.get("text", "") for l in logs if l.get("level") == "error")
         return f"网页操作失败: {res.get('error') or err or '未知错误'}"
 
     result = res.get("result") or {}
 
-    # survey 模式：拼结果 + 完成截图（一张，作为完成汇报）
-    if action == "survey":
-        answered = result.get("answered", 0)
-        total = result.get("total", 0)
-        text = f"问卷完成：已答 {answered}/{total} 题"
-        shot = result.get("screenshot_path")
+    # screenshot：把截图发给用户（仅模型显式要求时）
+    if action == "screenshot":
+        shot = result.get("path") or result.get("screenshot_path")
+        sent = ""
         if shot and os.path.exists(shot):
             try:
                 if target_qq:
                     send_image(shot, target_qq=target_qq)
+                    sent = "（截图已发送）"
                 elif params.get("group_id"):
                     send_group_image(params["group_id"], shot)
+                    sent = "（截图已发送）"
             except Exception:
                 pass
-        return text
+        out = "网页截图完成 " + sent
+        if result.get("vision_summary"):
+            out += "\n[视觉] " + str(result["vision_summary"])[:600]
+        return out.strip()
 
-    # open_url / click：返回页面标题，不自动发截图（避免截图轰炸，需要画面时模型可显式调 screenshot）
+    # autonomous：返回最终结论（插件内部已完成多步）
+    if action == "autonomous":
+        steps = result.get("steps", "?")
+        answer = (result.get("answer") or "").strip()
+        return f"[网页自主任务] 已完成（{steps} 步）\n{answer}" if answer else f"[网页自主任务] 已结束（{steps} 步）但无明确结论"
+
+    # 通用：动作摘要 + 最新快照（供模型继续按 ref 操作）
+    parts = []
     if action == "open_url":
-        title = result.get("title", "")
-        url = result.get("url", "")
-        return f"已打开页面「{title}」（{url}）"
+        parts.append(f"已打开「{result.get('title','')}」（{result.get('url','')}）")
+    elif action == "get_page":
+        parts.append(f"页面内容（{result.get('length',0)} 字）：\n{(result.get('text') or '')[:1500]}")
+    elif action == "snapshot":
+        parts.append(f"当前页面 {result.get('ref_count',0)} 个可交互元素")
+    elif action == "extract":
+        ex = result.get("fields") or {}
+        parts.append("提取结果：" + (json.dumps(ex, ensure_ascii=False) if ex else (result.get("text") or "")[:800]))
+    elif action in _WEB_ACTION_DONE_WORDS:
+        note = _WEB_ACTION_DONE_WORDS[action]
+        if res.get("healed"):
+            note += "（自愈重定位）"
+        if res.get("vision_fallback"):
+            note += "（视觉定位）"
+        if res.get("from_cache"):
+            note += "（缓存）"
+        parts.append(note)
+    elif action == "get_attribute":
+        parts.append(f"{result.get('attribute')} = {result.get('value')}")
+    elif action == "fill_form":
+        parts.append(f"表单：成功 {len(result.get('filled') or [])}，失败 {len(result.get('failed') or [])}")
+    elif action == "execute_js":
+        parts.append("JS 结果：" + str(result.get("result"))[:500])
+    elif action == "api_call":
+        parts.append(f"HTTP {result.get('status_code')}：" + str(result.get("body"))[:600])
+    elif action == "tab_list":
+        tabs = result.get("tabs") or []
+        parts.append("标签页：" + " | ".join(f"[{t['index']}]{t.get('title') or t.get('url','')[:30]}" for t in tabs))
+    elif action in ("tab_switch", "tab_new"):
+        parts.append(f"已切换/新建标签页：{result.get('title','')}（{result.get('url','')}）")
+    elif action in ("wait", "handle_dialog", "save_state", "load_state", "close", "download"):
+        parts.append(f"{action} 完成")
+    else:
+        parts.append("操作完成")
 
-    # get_page：返回页面文字给 AI 参考
-    if action == "get_page":
-        body = result.get("text", "")
-        return f"页面内容（{result.get('length', 0)} 字）：\n{body[:1500]}"
-
-    # fill_form：返回填写结果
-    if action == "fill_form":
-        filled = result.get("filled", [])
-        return f"表单已填写 {len(filled)} 个字段" + (f": {', '.join(f.get('selector','') for f in filled)}" if filled else "")
-
-    # click：通用
-    if action == "click":
-        return "网页点击已执行"
-
-    # screenshot：发送截图（仅模型显式要求截图时才发）
-    if action == "screenshot":
-        shot = result.get("screenshot_path") or result.get("path")
-        if shot and os.path.exists(shot):
-            if target_qq:
-                send_image(shot, target_qq=target_qq)
-            elif params.get("group_id"):
-                send_group_image(params["group_id"], shot)
-            return "网页截图已发送"
-        return "截图完成（未生成文件）"
-
-    return f"网页操作完成: {json.dumps(result, ensure_ascii=False)[:500]}"
+    snap = result.get("snapshot")
+    if snap:
+        parts.append("--- 页面快照（用 ref 操作）---\n" + snap)
+    return "\n".join(parts)
 
 
 # ComfyUI 工作流路径（全部从配置读取，不写死本机路径；空值 = 未配置，调用处降级处理）
@@ -3698,7 +3736,7 @@ def _generate_english_prompt(user_description, runtime_cfg=None):
         _ilc = _llm_config(runtime_cfg)
         _remote_url = _ilc.get("api_url") or DEEPSEEK_URL
         _remote_key = _ilc.get("api_key") or ""
-        _remote_model = _ilc.get("model_name") or "deepseek-chat"
+        _remote_model = _ilc.get("model_name") or "deepseek-flash"
         if image_use_local:
             if not _ensure_llama_server(image_exe_path, image_model_path, image_port):
                 raise RuntimeError("生图本地模型启动失败")
@@ -5224,7 +5262,7 @@ def summarize_group_history(group_id):
         # 统一走 _llm_config：每提供商专属 key/url/model（不再写死 deepseek-chat + 全局 DeepSeek key）
         _lc = _llm_config()
         data = {
-            "model": _lc.get("model_name") or "deepseek-chat",
+            "model": _lc.get("model_name") or "deepseek-flash",
             "messages": [
                 {"role": "system", "content": "你是群聊记录压缩器，输出50字以内的极简摘要。"},
                 {"role": "user", "content": summary_prompt}
@@ -5404,7 +5442,7 @@ def _llm_config(runtime_cfg=None):
             api_key = get_provider_api_key(provider_id) or api_key
         except Exception:
             pass
-    remote_model = runtime_cfg.get("model_name") or "deepseek-chat"
+    remote_model = runtime_cfg.get("model_name") or "deepseek-flash"
 
     if use_local and driver == "ollama":
         base_url = f"http://127.0.0.1:{port}/v1/chat/completions"
@@ -5524,7 +5562,7 @@ def _post_chat_stream(url, payload, api_key="", timeout=60):
 
 def _call_chat_sync(messages, runtime_cfg=None, max_tokens=AI_MAX_TOKENS, stream=False, with_tools=True):
     cfg = _llm_config(runtime_cfg)
-    model_name = cfg.get("model_name") or "deepseek-chat"
+    model_name = cfg.get("model_name") or "deepseek-flash"
     api_url = cfg.get("api_url") or DEEPSEEK_URL
     api_key = cfg.get("api_key") or ""
     effective_temperature = AI_TEMPERATURE
@@ -5570,7 +5608,7 @@ def _stream_chat_lines(messages, runtime_cfg=None, max_tokens=AI_MAX_TOKENS, wit
         from providers import make_provider
         prov = make_provider(api_url=cfg.get("api_url") or DEEPSEEK_URL,
                              api_key=cfg.get("api_key") or "",
-                             model=cfg.get("model_name") or "deepseek-chat",
+                             model=cfg.get("model_name") or "deepseek-flash",
                              provider=ptype, max_retries=3)
         return prov.chat_stream(messages, max_tokens=max_tokens) or ""
     api_url, api_key, payload = _call_chat_sync(messages, runtime_cfg=runtime_cfg, max_tokens=max_tokens, stream=True, with_tools=with_tools)
@@ -5715,12 +5753,12 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
 
     messages = _build_cached_messages(history, cache_key, static_prompt, dynamic_parts, user_msg, images)
 
-    # ── 网页操作任务引导：消息含链接/问卷/填表意图时，强制引导模型调用 web_operate 工具 ──
+    # ── 网页操作任务引导：消息含链接/问卷/填表意图时，引导模型调用 web_operate 工具 ──
     _web_hint = ""
     if re.search(r'https?://\S+', user_msg):
-        _web_hint = "【重要】用户消息中包含网页链接。若任务涉及打开网页、填写问卷/表单、点击/操作网页、读取网页内容或完成网页任务，必须调用 web_operate 工具逐步执行（open_url → get_page → 按需 fill_form/click/survey），不要只靠文字回复代替实际操作。网页内容变化时以工具返回的真实页面为准。"
+        _web_hint = "【重要】用户消息中包含网页链接。请用 web_operate 工具真实操作网页：先 open_url（会自动返回带编号的结构化快照），再用快照里的 ref 调 click/fill/select（每次动作后会自动回传新快照）。绝不要凭文字假装已操作。遇到多步复杂任务可直接用 action=autonomous + goal 让插件自主完成。"
     elif re.search(r'(问卷|填表|填表单|答题|做.*?(问卷|题)|填写|表单|网页.*?(任务|操作)|帮我.*?(打开|填))', user_msg):
-        _web_hint = "【重要】本次请求涉及问卷/表单/网页任务。请调用 web_operate 工具实际打开并操作网页完成，不要凭猜测文字回复。使用 survey 模式处理问卷类任务。"
+        _web_hint = "【重要】本次请求涉及问卷/表单/网页任务。请调用 web_operate 工具实际打开并操作网页：open_url 拿快照 -> 按 ref 逐个 click/fill 作答（动作后自动回传新快照）；问卷/多步任务优先用 action=autonomous + goal 自主完成。禁止凭文字假装完成。"
     if _web_hint:
         messages.append({"role": "user", "content": "[系统提示] " + _web_hint})
 
@@ -5739,7 +5777,6 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
     
     last_error = None
     web_rounds = 0
-    web_survey_ok = False
     MAX_WEB_ROUNDS = 20
     error_retries = 0
     while True:
@@ -5775,11 +5812,6 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
                     _res_parts = str(result)[:140].replace("\n", " ") if result else ""
                     log(f"  → {func_name}: action={_act}" + (f" url={_url[:60]}" if _url else "") + f" (第{web_rounds}轮) → {_res_parts}")
                     messages.append({"role": "tool", "tool_call_id": tc["id"], "content": result})
-                    if _web_hint and func_name == "web_operate":
-                        act = (func_args or {}).get("action") or ""
-                        if act == "survey" and "问卷完成" in str(result or ""):
-                            web_survey_ok = True
-                            log("[网页任务] survey 成功，问卷完成标志已置位")
                 # 网页任务：继续多轮推进，直到模型主动收尾或达到轮次上限
                 if _web_hint:
                     if web_rounds >= MAX_WEB_ROUNDS:
@@ -5806,26 +5838,13 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
             except Exception:
                 log(f"AI 回复 ({total} tokens, ￥{cost:.6f})")
 
-            if _web_hint and not web_survey_ok:
-                # 模型调用过工具且文字里含明确完成证据 → 视为完成，不再强制
-                if web_rounds >= 1 and re.search(r'(问卷已提交|已提交|提交完成|全部完成|全部答完|全答完|做完了|答完了|完成结果|调查完成|提交成功|问卷完成)', reply):
-                    log(f"[网页任务] 文字含完成证据，判定完成（survey={web_survey_ok}，rounds={web_rounds}）")
-                    _hk = usage.get("prompt_cache_hit_tokens") or 0 if isinstance(usage, dict) else 0
-                    _mk = usage.get("prompt_cache_miss_tokens") or 0 if isinstance(usage, dict) else 0
-                    log(f"AI 回复 ({total} tokens, ￥{cost:.6f}, 缓存命中 {_hk} / 未命中 {_mk})")
-                    return reply
-                # 否则（一次工具都没调 = 纯扮演，或还在进行中）强制继续
+            if _web_hint and web_rounds == 0:
+                # 模型一次工具都没调，却可能用文字假装已操作 -> 给一次强制纠正
                 web_rounds += 1
-                if web_rounds >= MAX_WEB_ROUNDS:
-                    log(f"[网页任务] 达到轮次上限 {MAX_WEB_ROUNDS}，返回当前回复")
-                    _hk = usage.get("prompt_cache_hit_tokens") or 0 if isinstance(usage, dict) else 0
-                    _mk = usage.get("prompt_cache_miss_tokens") or 0 if isinstance(usage, dict) else 0
-                    log(f"AI 回复 ({total} tokens, ￥{cost:.6f}, 缓存命中 {_hk} / 未命中 {_mk})")
-                    return reply
-                log(f"[强制工具] 网页任务未完成（survey={web_survey_ok}），模型纯文字（\"{reply[:50]}\"），追加强制指令 {web_rounds}/{MAX_WEB_ROUNDS}")
+                log(f"[网页任务] 模型未调用任何工具，追加强制指令 {web_rounds}/{MAX_WEB_ROUNDS}")
                 messages.append({
                     "role": "user",
-                    "content": "【强制指令】问卷还没做完。请继续真实调用 web_operate 工具完成剩余步骤：get_page 读题目、fill_form/click 答题、最后必须调用 action=survey 提交并拿到完成结果。禁止用文字假装完成；若你确实已经完成问卷，请明确回复『问卷已提交』并附上题数与完成状态。"
+                    "content": "【强制指令】你没有真实调用任何 web_operate 工具。请用 web_operate 实际执行：先 action=open_url 拿快照，再按快照里的 ref 调 click/fill/extract（每次动作会自动回传新快照）；多步任务用 action=autonomous + goal。禁止用文字假装已操作；若确实无法完成，直接说明失败原因。",
                 })
                 continue
 
@@ -6552,7 +6571,7 @@ def main():
                 _pid = str(_cfg.get("api_provider") or "openai")
                 _ak = get_provider_api_key(_pid) or _cfg.get("api_key") or _cfg.get("deepseek_api_key", "")
                 _au = _cfg.get("api_url", DEEPSEEK_URL)
-                _am = _cfg.get("model_name", "deepseek-chat")
+                _am = _cfg.get("model_name", "deepseek-flash")
                 if _ak:
                     _ac = AIClient(_au, _ak, _am, provider=_pid, temperature=_cfg.get("ai_temperature"))
                     pm.set_ai_client(_ac)

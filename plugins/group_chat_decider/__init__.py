@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """
 group_chat_decider 群聊决策插件 v3.0 - 话题流 + 群画像 + 记忆匹配 + 情绪感知
 
@@ -678,7 +678,7 @@ def _get_ai_client():
         api_url = cfg.get("api_url", "")
         provider = cfg.get("api_provider", "deepseek")
         api_key = get_provider_api_key(provider)
-        model = cfg.get("model_name", "deepseek-chat")
+        model = cfg.get("model_name", "deepseek-flash")
         if api_key or provider == "ollama":
             client = AIClient(api_url, api_key, model, provider=provider, temperature=cfg.get("ai_temperature"))
             _ai_client_cache["client"] = client

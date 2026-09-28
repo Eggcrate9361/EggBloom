@@ -84,8 +84,8 @@ TASKS_FILE = DATA_DIR / "tasks.json"
 
 PLUGIN_META = {
     "name": "web_operator",
-    "version": "0.1.0",
-    "description": "全能操作插件：网页自动化、CLI、文件系统、软件控制、系统能力、任务编排。",
+    "version": "2.0.0",
+    "description": "全能操作插件 v2：CDP 无障碍树结构化感知 + ref 精确定位 + 自愈 + 视觉兜底 + 自主 Agent。",
     "author": "EggBloom",
     "group_only": False,
     "enabled": True,
@@ -142,17 +142,28 @@ DEFAULT_CONFIG = {
         "engine": "playwright",
         "channel": "",
         "headless": True,
-        "spa_settle_ms": 2200,
         "auto_screenshot": True,
         "screenshot_on_error": True,
         "screenshot_on_step": False,
         "max_screenshot_bytes": 2 * 1024 * 1024,
+        "snapshot_enabled": True,
+        "self_heal": True,
+        "self_heal_retries": 1,
+        "vision_grounding": True,
+        "action_cache": True,
+        "storage_state": True,
+        "stealth": True,
         "humanize": {
             "enabled": True,
             "delay_min_ms": 800,
             "delay_max_ms": 1800,
             "jitter_scroll": True,
         },
+    },
+    "autonomous": {
+        "enabled": True,
+        "max_steps": 25,
+        "timeout_per_step": 30,
     },
     "cli": {
         "allow_any_command": False,
@@ -635,7 +646,14 @@ def execute_task(task_type, params, context=None):
             return _WEB_SESSION.execute(task, context)
 
         try:
-            return _run_on_worker(_run_web_task, timeout=max(60, int(cfg.get("default_timeout", 30) or 30) * 4))
+            if task_type == "web.autonomous":
+                auto_cfg = cfg.get("autonomous") or {}
+                steps = int((params or {}).get("max_steps") or auto_cfg.get("max_steps", 25) or 25)
+                per = int(auto_cfg.get("timeout_per_step", 30) or 30)
+                worker_timeout = max(180, steps * (per + 15))
+            else:
+                worker_timeout = max(60, int(cfg.get("default_timeout", 30) or 30) * 4)
+            return _run_on_worker(_run_web_task, timeout=worker_timeout)
         except Exception as e:
             return {"ok": False, "error": str(e), "logs": [{"level": "error", "text": str(e)}]}
 

@@ -1,0 +1,131 @@
+{
+  "meta": {
+    "generated": "2026-08-22T16:59:00+08:00",
+    "workspace": "my-workspace-59c95014-4d9d-4dbf-9d0a-4597fdf5d0e5",
+    "projects": ["EggBloom (d:\\git\\EggBloom)", "EggBloomDist (e:\\EggBloomDist)"],
+    "total_findings": 12,
+    "severity_summary": { "critical": 3, "major": 5, "minor": 4 }
+  },
+  "findings": [
+    {
+      "id": "F01",
+      "severity": "critical",
+      "category": "ai-guidance",
+      "title": "缺少 AI Agent 规则文件",
+      "description": "项目无任何 .cursorrules、.qoder/rules、AGENTS.md 或 CLAUDE.md。AI Agent 缺乏项目级上下文：架构概览、模块职责边界、开发约定、禁忌操作。Agent 只能从 README 和源码逆向推断项目结构，效率低且易出错。",
+      "affected_files": ["(缺失) .cursorrules / .qoder/rules / AGENTS.md"],
+      "impact": "AI Agent 每次交互都需要大量探索，无法准确遵循项目约定，可能违反架构约束（如直接修改 bot_core.py）。",
+      "recommendation": "创建 .qoder/rules 或 AGENTS.md，包含：架构概览、模块职责图、命名规范、禁忌列表（如不要修改 bot_core.py 核心逻辑）、插件开发入口、配置加载优先级。"
+    },
+    {
+      "id": "F02",
+      "severity": "critical",
+      "category": "code-structure",
+      "title": "bot_core.py 上帝文件 — 7566 行单文件",
+      "description": "bot_core.py 承载消息处理、AI 对话、事件分支、联系人管理 API、HTTP 服务、指令系统、拟人化逻辑等至少 8 个职责。ruff 配置对其做了 F401/F841/F811/F821/F823 全量豁免，暗示存在大量未清理的遗留代码。",
+      "affected_files": ["d:\\git\\EggBloom\\bot_core.py"],
+      "impact": "AI 修改任何单一功能都需要理解整个文件上下文，变更风险极高。无法进行局部代码审查。新贡献者/AI 上手成本极高。",
+      "recommendation": "制定渐进式拆分计划：1) 提取联系人管理 API → contact_api.py；2) 提取指令系统 → commands.py；3) 提取事件分发 → event_handler.py；4) 提取拟人化逻辑 → humanize.py。每次拆分配合测试保护。"
+    },
+    {
+      "id": "F03",
+      "severity": "critical",
+      "category": "config-consistency",
+      "title": "Python 版本要求文档与配置矛盾",
+      "description": "pyproject.toml 声明 requires-python = '>=3.13,<3.14'（严格锁定 3.13），而 README.md 写 'Python 3.10+'，CONTRIBUTING.md 写 'Python 3.10+（主分支锁定 3.13）'。三处说法互相矛盾。",
+      "affected_files": ["d:\\git\\EggBloom\\pyproject.toml", "d:\\git\\EggBloom\\README.md", "d:\\git\\EggBloom\\CONTRIBUTING.md"],
+      "impact": "AI 和开发者无法确定真实支持的 Python 版本。依赖安装、CI 配置、环境检查都可能基于错误前提。",
+      "recommendation": "统一为实际测试版本。若仅支持 3.13，则更新 README 和 CONTRIBUTING；若确实支持 3.10+，则放宽 pyproject.toml 约束并验证依赖兼容性。"
+    },
+    {
+      "id": "F04",
+      "severity": "major",
+      "category": "code-quality",
+      "title": "Ruff 大面积 per-file 豁免 — 20+ 文件禁用 lint",
+      "description": "pyproject.toml [tool.ruff.lint.per-file-ignores] 对 20+ 个文件/模式禁用了 F401/F841/F811/F821 等规则。F821（未定义名称）和 F823（局部变量引用错误）是潜在的运行时 bug 信号，不应被全局豁免。",
+      "affected_files": ["d:\\git\\EggBloom\\pyproject.toml (L60-84)"],
+      "impact": "lint 形同虚设，真正的未定义变量和未使用导入被静默忽略。AI 无法通过 lint 反馈发现潜在错误。",
+      "recommendation": "1) 优先清理 F821/F823 豁免（这些是真实 bug 风险）；2) 为每个文件创建 tracking issue 渐进清理 F401/F841；3) 目标：per-file-ignores 缩减到 5 个以内。"
+    },
+    {
+      "id": "F05",
+      "severity": "major",
+      "category": "testing",
+      "title": "测试覆盖严重不足 — 仅 1 个测试文件",
+      "description": "tests/ 目录仅含 test_bot_core_events.py 一个测试文件。CONTRIBUTING.md 要求核心模块覆盖率 ≥ 80%，但 config.py、protocols/、plugins/ 等核心模块零测试。无 pytest 配置、无覆盖率基线、无 CI 集成。",
+      "affected_files": ["d:\\git\\EggBloom\\tests/"],
+      "impact": "代码变更无安全网，AI 无法验证修改正确性。重构 bot_core.py 等核心模块时风险极高。",
+      "recommendation": "1) 优先为 config.py、protocols/ 添加单元测试；2) 在 pyproject.toml 添加 pytest 配置；3) 设置 CI 覆盖率门禁；4) 拆分 bot_core.py 前先为其关键路径补充测试。"
+    },
+    {
+      "id": "F06",
+      "severity": "major",
+      "category": "code-structure",
+      "title": "WebUI 单文件 SPA — 3969 行 HTML",
+      "description": "webui_artistic_v3.html 是一个 3969 行的单文件 SPA，内嵌 CSS + JavaScript，承载 15 个页面。无构建步骤、无模块化、无组件化。",
+      "affected_files": ["d:\\git\\EggBloom\\webui\\webui_artistic_v3.html"],
+      "impact": "AI 修改任何 UI 功能需要理解整个文件。前端逻辑无法测试。CSS 样式冲突难以定位。",
+      "recommendation": "短期：按功能区域拆分 HTML 模板片段（由 webui_server.py 组装）。中期：迁移到轻量前端框架（如 Preact/Alpine.js），保持无构建步骤特性。"
+    },
+    {
+      "id": "F07",
+      "severity": "major",
+      "category": "architecture",
+      "title": "配置加载路径复杂且无文档化优先级",
+      "description": "config.py 实现多层回退链：Windows 凭据管理器 → 程序目录 bot_config.json → AppData 目录 → .env → DEFAULT_CONFIG。涉及 data_store.py 的 Electron userData / 平台标准目录 / 开发模式三种路径策略。优先级散落在代码中，无集中文档。",
+      "affected_files": ["d:\\git\\EggBloom\\config.py", "d:\\git\\EggBloom\\data_store.py", "d:\\git\\EggBloom\\cred_store.py"],
+      "impact": "AI 和开发者无法预判某个配置项的实际来源。调试配置问题需要跟踪多个文件的执行路径。",
+      "recommendation": "在 config.py 顶部或 docs/ 中添加配置优先级图：列出每类配置的完整回退链、文件路径、环境变量名。在 AI 规则文件中引用此图。"
+    },
+    {
+      "id": "F08",
+      "severity": "major",
+      "category": "type-safety",
+      "title": "无类型检查配置 — 类型注解要求形同虚设",
+      "description": "CONTRIBUTING.md 要求'新增公共 API 必须加类型注解'，但项目无 pyright/mypy 配置、无类型检查 CI 步骤。现有核心代码（bot_core.py 7566 行）类型注解稀少。",
+      "affected_files": ["d:\\git\\EggBloom\\pyproject.toml (缺少 mypy/pyright 配置)"],
+      "impact": "AI 无法通过类型信息理解函数签名，只能依赖 docstring 和代码阅读。类型相关 bug 无法在开发阶段发现。",
+      "recommendation": "1) 在 pyproject.toml 添加 [tool.pyright] 配置，从 basic 级别开始；2) 对新增模块强制类型注解；3) 在 pre-commit 中添加 mypy/pyright hook。"
+    },
+    {
+      "id": "F09",
+      "severity": "minor",
+      "category": "architecture",
+      "title": "插件系统缺少正式接口定义",
+      "description": "插件通过 dict-based PLUGIN_META 和 duck-typed 钩子函数（before_reply/after_reply）集成。无 Protocol/ABC 定义、无类型签名、无 schema 验证。",
+      "affected_files": ["d:\\git\\EggBloom\\plugins/"],
+      "impact": "AI 和新开发者只能通过 PLUGIN_GUIDE.md 和示例代码学习插件契约，容易遗漏必需字段或返回错误格式。",
+      "recommendation": "定义 PluginProtocol(Protocol) 和 PluginMeta(TypedDict)，在 PluginManager 加载时做运行时校验（或至少启动时 warning）。"
+    },
+    {
+      "id": "F10",
+      "severity": "minor",
+      "category": "code-patterns",
+      "title": "广泛的 try-import + sys.path 操作模式",
+      "description": "代码大量使用 try/except ImportError 做依赖降级（如 requests → urllib），并在多处手动修改 sys.path（bot_core.py L37-41）。这导致模块依赖关系不透明，AI 难以判断哪些模块是真正可选的。",
+      "affected_files": ["d:\\git\\EggBloom\\bot_core.py (L18-50)", "d:\\git\\EggBloom\\config.py (L7-34)"],
+      "impact": "模块的真实依赖图不可见。AI 可能错误假设某个导入始终可用。sys.path 操作导致 IDE 和 AI 的路径解析出错。",
+      "recommendation": "1) 集中降级策略到 compat.py 或 fallbacks.py；2) 用 importlib.util.find_spec 替代 try-import；3) 移除 sys.path 操作，改用 pyproject.toml 的 [tool.setuptools] packages 声明。"
+    },
+    {
+      "id": "F11",
+      "severity": "minor",
+      "category": "distribution",
+      "title": "EggBloomDist 与源码无同步机制",
+      "description": "EggBloomDist/resources/app/ 包含 EggBloom 源码的完整副本（含 bot_core.py、webui_server.py 等），但无自动化同步脚本或版本标记。两个仓库的代码可能随时间漂移。",
+      "affected_files": ["e:\\EggBloomDist\\resources\\app\\ (整个目录)"],
+      "impact": "修复 bug 时可能只改一处而忘记另一处。AI 分析代码时不确定哪个副本是 source of truth。",
+      "recommendation": "1) 明确 EggBloom 源码仓库为唯一 source of truth；2) 创建同步脚本（如 scripts/sync-dist.ps1）并记录在 CONTRIBUTING.md；3) 在 EggBloomDist 根目录添加 VERSION 文件指向源码 commit。"
+    },
+    {
+      "id": "F12",
+      "severity": "minor",
+      "category": "observability",
+      "title": "日志约定不统一 — print/logging/自定义混用",
+      "description": "项目有 logger_setup.py（5MB × 5 轮转，按模块分文件），但实际代码中 print()、logging 模块、自定义 logger 混用。插件统一用 print()，核心模块部分用 logging，bot_core.py 混用两者。",
+      "affected_files": ["d:\\git\\EggBloom\\bot_core.py", "d:\\git\\EggBloom\\plugins/**/__init__.py", "d:\\git\\EggBloom\\logger_setup.py"],
+      "impact": "日志格式不一致，难以通过日志追踪问题。AI 添加新功能时不确定应使用哪种日志方式。",
+      "recommendation": "1) 在 AI 规则和 CONTRIBUTING 中明确：所有模块使用 logging.getLogger(__name__)，禁止裸 print；2) 为插件提供统一的 get_plugin_logger(plugin_name) 工具函数；3) 在 pre-commit 中添加 no-print 检查（或降级为 warning）。"
+    }
+  ]
+}

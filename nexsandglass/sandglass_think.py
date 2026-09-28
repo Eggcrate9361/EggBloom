@@ -1513,4 +1513,6 @@ def memory_migrate(output_path: str = "") -> str:
                 tar.add(dp, arcname=d)
     
     size_kb = os.path.getsize(output_path) / 1024
-    return f"✅ 记忆包已导出：{output_path}（{size_kb:.0f} KB）\n   解压到新电脑的 ~/.neurobase/ 即可恢复全部记忆。"
+    return (f"✅ 记忆包已导出：{output_path}（{size_kb:.0f} KB）\n"
+            f"   恢复：解压到本程序目录旁的 .neurobase/（即 {os.path.dirname(_VAULT)}），\n"
+            f"   若那里已有数据则解压后合并覆盖同名文件即可。")

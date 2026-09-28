@@ -122,40 +122,70 @@
 
   <div class="tabpage ac" id="tab-web">
     <div class="panel">
-      <div class="panel-title">网页操作</div>
+      <div class="panel-title">网页操作<span class="meta">v2 snapshot+ref</span></div>
       <div class="field">
         <div class="field-title">URL</div>
-        <input type="text" id="webUrl" placeholder="https://femboy.test.nagisa.icu/?qq_aio_chat_type=3">
+        <input type="text" id="webUrl" placeholder="https://example.com">
       </div>
       <div class="actions">
-        <button class="btn primary" id="webOpen">打开</button>
+        <button class="btn primary" id="webOpen">打开(自动快照)</button>
+        <button class="btn" id="webSnapshot">获取快照</button>
         <button class="btn" id="webText">获取文本</button>
         <button class="btn" id="webScreenshot">📸 截图</button>
       </div>
       <div class="field">
-        <div class="field-title">填写表单</div>
-        <textarea id="webFields" placeholder='[{"selector":"input[name=x]","value":"123"}]'></textarea>
-        <div class="hint">JSON 数组，selector + value</div>
-        <button class="btn" id="webFill" style="margin-top:8px">填写</button>
+        <div class="field-title">页面快照（可交互元素 ref 列表）</div>
+        <textarea id="webSnapOut" readonly placeholder="打开页面或点“获取快照”后显示" style="min-height:160px"></textarea>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-title">按 ref 操作</div>
+      <div class="field">
+        <div class="field-title">ref 编号（如 e5，优先于 selector）</div>
+        <input type="text" id="webRef" placeholder="e5">
       </div>
       <div class="field">
-        <div class="field-title">点击 / 选择</div>
-        <input type="text" id="webSelector" placeholder="selector 或 text">
-        <input type="text" id="webValue" placeholder="选择值 / 点击文本" style="margin-top:8px">
-        <div class="actions" style="margin-top:8px">
-          <button class="btn" id="webClick">点击</button>
-          <button class="btn" id="webSelect">选择</button>
-        </div>
+        <div class="field-title">selector / text（兜底）</div>
+        <input type="text" id="webSelector" placeholder="CSS 选择器 或 按钮文字">
       </div>
       <div class="field">
-        <div class="field-title">执行 JS / 滚动</div>
-        <textarea id="webScript" placeholder="document.title"></textarea>
-        <div class="actions" style="margin-top:8px">
-          <button class="btn" id="webJs">执行 JS</button>
-          <button class="btn" id="webScrollDown">↓ 下滚</button>
-          <button class="btn" id="webScrollUp">↑ 上滚</button>
-        </div>
+        <div class="field-title">value / 选择值 / 按键</div>
+        <input type="text" id="webValue" placeholder="填入文本 / 选项值 / Enter">
       </div>
+      <div class="actions" style="margin-top:8px">
+        <button class="btn" id="webClick">点击</button>
+        <button class="btn" id="webFill">填写</button>
+        <button class="btn" id="webSelect">选择</button>
+        <button class="btn" id="webPress">按键</button>
+        <button class="btn" id="webScrollDown">↓ 下滚</button>
+        <button class="btn" id="webScrollUp">↑ 上滚</button>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-title">自主 Agent</div>
+      <div class="field">
+        <div class="field-title">目标 goal</div>
+        <textarea id="autoGoal" placeholder="例：打开这个链接，把问卷答完并提交"></textarea>
+      </div>
+      <div class="row">
+        <div><div class="label">最大步数</div><input type="text" id="autoSteps" value="25" style="width:80px"></div>
+        <div><button class="btn primary" id="autoRun" style="margin-top:18px">运行自主任务</button></div>
+      </div>
+      <div class="hint">自主模式会在插件内部循环“看快照→按 ref 操作→再看”，需要宿主已配置可用的文本模型。</div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-title">标签页 / 登录态</div>
+      <div class="actions">
+        <button class="btn" id="tabList">列出标签页</button>
+        <button class="btn" id="tabNew">新建标签页</button>
+        <button class="btn" id="tabSwitch">切换到序号</button>
+        <button class="btn" id="stateSave">保存登录态</button>
+        <button class="btn" id="stateLoad">载入登录态</button>
+      </div>
+      <div id="webResult" class="log" style="min-height:40px"><div class="empty">暂无结果</div></div>
     </div>
   </div>
 
@@ -407,19 +437,28 @@ qs('#enableSwitch').addEventListener('click', async ()=>{
 });
 qs('#refreshBtn').addEventListener('click', async ()=>{ await init(); toast('已刷新'); });
 
+function setSnap(res){ if(res&&res.ok&&res.result&&res.result.snapshot){ qs('#webSnapOut').value=res.result.snapshot; } }
+function showResult(res){ const el=qs('#webResult'); if(!el)return; if(el.querySelector('.empty'))el.innerHTML=''; const line=document.createElement('div'); line.className=(res&&res.ok)?'success':'error'; line.textContent=((res&&res.ok)?'✓ ':'✗ ')+JSON.stringify((res&&res.result)||{error:(res&&res.error)}).slice(0,500); el.appendChild(line); el.scrollTop=el.scrollHeight; }
+function refParams(){ const ref=qs('#webRef').value.trim(); const sel=qs('#webSelector').value.trim(); const p={}; if(ref)p.ref=ref; else if(sel)p.selector=sel; return p; }
+
 qs('#webOpen').addEventListener('click', async ()=>{
   const url = qs('#webUrl').value.trim();
   if(!url){ toast('请输入 URL'); return; }
   appendLog('info', '正在打开页面...');
   const res = await call('web.open_url', {url});
-  if(res && res.ok){ appendLog('success', '页面已打开：' + (res.result && res.result.title)); renderScreenshot(res.result); }
-  else { appendLog('error', '打开失败：' + (res && res.error)); }
+  if(res && res.ok){ appendLog('success', '页面已打开：' + (res.result && res.result.title)); setSnap(res); showResult(res); renderScreenshot(res.result); }
+  else { appendLog('error', '打开失败：' + (res && res.error)); showResult(res); }
+});
+qs('#webSnapshot').addEventListener('click', async ()=>{
+  appendLog('info', '正在获取快照...');
+  const res = await call('web.snapshot', {});
+  if(res && res.ok){ appendLog('success', '快照：' + (res.result && res.result.ref_count) + ' 个元素'); qs('#webSnapOut').value=(res.result&&res.result.snapshot)||''; }
+  else { appendLog('error', '快照失败：'+(res&&res.error)); }
 });
 qs('#webText').addEventListener('click', async ()=>{
-  const url = qs('#webUrl').value.trim();
   appendLog('info', '正在获取页面文本...');
-  const res = await call('web.get_page', {url});
-  if(res && res.ok){ appendLog('success', '页面文本长度：' + (res.result && res.result.length)); }
+  const res = await call('web.get_page', {});
+  if(res && res.ok){ appendLog('success', '页面文本长度：' + (res.result && res.result.length)); setSnap(res); }
   else { appendLog('error', '获取失败：' + (res && res.error)); }
 });
 qs('#webScreenshot').addEventListener('click', async ()=>{
@@ -428,43 +467,47 @@ qs('#webScreenshot').addEventListener('click', async ()=>{
   if(res && res.ok){ appendLog('success', '截图完成'); renderScreenshot(res.result); }
   else { appendLog('error', '截图失败'); }
 });
-qs('#webFill').addEventListener('click', async ()=>{
-  const raw = qs('#webFields').value.trim();
-  let fields = [];
-  try { fields = JSON.parse(raw); } catch { toast('fields JSON 格式错误'); return; }
-  appendLog('info', '正在填写表单...');
-  const res = await call('web.fill_form', {fields});
-  if(res && res.ok){ appendLog('success', '已填写 ' + (res.result && res.result.filled && res.result.filled.length)); }
-  else { appendLog('error', '填写失败'); }
-});
 qs('#webClick').addEventListener('click', async ()=>{
-  const selector = qs('#webSelector').value.trim();
-  if(!selector){ toast('请输入 selector/text'); return; }
-  const text = qs('#webValue').value.trim();
-  appendLog('info', '正在点击...');
-  const res = await call('web.click', text ? {text} : {selector});
-  if(res && res.ok){ appendLog('success', '点击完成'); }
-  else { appendLog('error', '点击失败'); }
+  const p = refParams();
+  if(!p.ref && !p.selector){ toast('请输入 ref 或 selector'); return; }
+  appendLog('info', '点击 '+JSON.stringify(p));
+  const res = await call('web.click', p); showResult(res); setSnap(res);
+});
+qs('#webFill').addEventListener('click', async ()=>{
+  const p = refParams(); p.value = qs('#webValue').value;
+  if(!p.ref && !p.selector){ toast('请输入 ref 或 selector'); return; }
+  appendLog('info', '填写 '+JSON.stringify(p));
+  const res = await call('web.fill', p); showResult(res); setSnap(res);
 });
 qs('#webSelect').addEventListener('click', async ()=>{
-  const selector = qs('#webSelector').value.trim();
-  const value = qs('#webValue').value.trim();
-  if(!selector || value === ''){ toast('请填写 selector 和 value'); return; }
-  appendLog('info', '正在选择...');
-  const res = await call('web.select', {selector, value});
-  if(res && res.ok){ appendLog('success', '选择完成'); }
-  else { appendLog('error', '选择失败'); }
+  const p = refParams(); p.value = qs('#webValue').value;
+  if(!p.ref && !p.selector){ toast('请输入 ref 或 selector'); return; }
+  appendLog('info', '选择 '+JSON.stringify(p));
+  const res = await call('web.select', p); showResult(res); setSnap(res);
 });
-qs('#webJs').addEventListener('click', async ()=>{
-  const script = qs('#webScript').value.trim();
-  if(!script){ toast('请输入 script'); return; }
-  appendLog('info', '正在执行 JS...');
-  const res = await call('web.execute_js', {script});
-  if(res && res.ok){ appendLog('success', 'JS 执行完成'); }
-  else { appendLog('error', 'JS 执行失败'); }
+qs('#webPress').addEventListener('click', async ()=>{
+  const p = refParams(); p.value = qs('#webValue').value.trim() || 'Enter';
+  appendLog('info', '按键 '+p.value);
+  const res = await call('web.press', p); showResult(res); setSnap(res);
 });
-qs('#webScrollDown').addEventListener('click', async ()=>{ appendLog('info','下滚'); await call('web.scroll', {direction:'down', amount:300}); });
-qs('#webScrollUp').addEventListener('click', async ()=>{ appendLog('info','上滚'); await call('web.scroll', {direction:'up', amount:300}); });
+qs('#webScrollDown').addEventListener('click', async ()=>{ appendLog('info','下滚'); const res=await call('web.scroll',{direction:'down',amount:400}); setSnap(res); });
+qs('#webScrollUp').addEventListener('click', async ()=>{ appendLog('info','上滚'); const res=await call('web.scroll',{direction:'up',amount:400}); setSnap(res); });
+qs('#autoRun').addEventListener('click', async ()=>{
+  const goal = qs('#autoGoal').value.trim();
+  if(!goal){ toast('请输入目标'); return; }
+  const url = qs('#webUrl').value.trim();
+  appendLog('info', '自主任务启动...'); toast('自主任务运行中，可能耗时...');
+  const p = {goal, max_steps: Number(qs('#autoSteps').value||25)}; if(url) p.url=url;
+  const res = await call('web.autonomous', p);
+  if(res && res.ok){ appendLog('success','[自主] '+(res.result&&res.result.answer||'').slice(0,300)); setSnap(res); }
+  else { appendLog('error','[自主] 失败：'+(res&&res.error)); }
+  showResult(res);
+});
+qs('#tabList').addEventListener('click', async ()=>{ const res=await call('web.tab_list',{}); showResult(res); });
+qs('#tabNew').addEventListener('click', async ()=>{ const url=qs('#webUrl').value.trim(); const res=await call('web.tab_new', url?{url}:{}); showResult(res); setSnap(res); });
+qs('#tabSwitch').addEventListener('click', async ()=>{ const idx=qs('#webValue').value.trim(); if(idx===''){toast('在 value 框输入标签序号');return;} const res=await call('web.tab_switch',{index:Number(idx)}); showResult(res); setSnap(res); });
+qs('#stateSave').addEventListener('click', async ()=>{ const res=await call('web.save_state',{}); showResult(res); });
+qs('#stateLoad').addEventListener('click', async ()=>{ const res=await call('web.load_state',{}); showResult(res); setSnap(res); });
 
 qs('#cliRun').addEventListener('click', async ()=>{
   const cmd = qs('#cliCmd').value.trim();

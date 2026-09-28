@@ -1,0 +1,68 @@
+{
+  "report_title": "EggBloom Harness 实践洞察",
+  "report_date": "2026-08-22",
+  "workspace": "my-workspace-59c95014-4d9d-4dbf-9d0a-4597fdf5d0e5",
+  "projects": [
+    { "name": "EggBloom", "path": "d:\\git\\EggBloom", "role": "源码仓库" },
+    { "name": "EggBloomDist", "path": "e:\\EggBloomDist", "role": "发行包" }
+  ],
+  "summary": {
+    "total_findings": 12,
+    "critical": 3,
+    "major": 5,
+    "minor": 4,
+    "categories": {
+      "ai-guidance": 1,
+      "code-structure": 2,
+      "config-consistency": 1,
+      "code-quality": 1,
+      "testing": 1,
+      "architecture": 2,
+      "type-safety": 1,
+      "code-patterns": 1,
+      "distribution": 1,
+      "observability": 1
+    }
+  },
+  "severity_data": [
+    { "label": "Critical", "value": 3, "tone": "danger" },
+    { "label": "Major", "value": 5, "tone": "warning" },
+    { "label": "Minor", "value": 4, "tone": "info" }
+  ],
+  "category_data": [
+    { "label": "AI 引导", "value": 1 },
+    { "label": "代码结构", "value": 2 },
+    { "label": "配置一致性", "value": 1 },
+    { "label": "代码质量", "value": 1 },
+    { "label": "测试", "value": 1 },
+    { "label": "架构", "value": 2 },
+    { "label": "类型安全", "value": 1 },
+    { "label": "代码模式", "value": 1 },
+    { "label": "发行", "value": 1 },
+    { "label": "可观测性", "value": 1 }
+  ],
+  "findings_table": [
+    ["F01", "Critical", "AI 引导", "缺少 AI Agent 规则文件", "创建 .qoder/rules 或 AGENTS.md"],
+    ["F02", "Critical", "代码结构", "bot_core.py 上帝文件 — 7566 行", "渐进拆分为 contact_api/commands/event_handler/humanize"],
+    ["F03", "Critical", "配置一致性", "Python 版本要求文档与配置矛盾", "统一 pyproject.toml / README / CONTRIBUTING 版本声明"],
+    ["F04", "Major", "代码质量", "Ruff 大面积 per-file 豁免", "优先清理 F821/F823，渐进缩减豁免范围"],
+    ["F05", "Major", "测试", "测试覆盖严重不足 — 仅 1 个测试文件", "为 config/protocols/plugins 补测试，加 CI 门禁"],
+    ["F06", "Major", "代码结构", "WebUI 单文件 SPA — 3969 行 HTML", "按功能拆分模板片段或迁移轻量前端"],
+    ["F07", "Major", "架构", "配置加载路径复杂且无文档化优先级", "添加配置优先级图到文档和 AI 规则"],
+    ["F08", "Major", "类型安全", "无类型检查配置", "添加 pyright 配置，新模块强制类型注解"],
+    ["F09", "Minor", "架构", "插件系统缺少正式接口定义", "定义 PluginProtocol + PluginMeta TypedDict"],
+    ["F10", "Minor", "代码模式", "广泛的 try-import + sys.path 操作", "集中降级策略到 compat.py，移除 sys.path 操作"],
+    ["F11", "Minor", "发行", "EggBloomDist 与源码无同步机制", "创建同步脚本 + VERSION 文件"],
+    ["F12", "Minor", "可观测性", "日志约定不统一", "统一使用 logging.getLogger，提供插件日志工具函数"]
+  ],
+  "recommendations_priority": [
+    { "priority": "P0", "action": "创建 AI Agent 规则文件", "effort": "低", "impact": "高" },
+    { "priority": "P0", "action": "统一 Python 版本文档", "effort": "极低", "impact": "中" },
+    { "priority": "P1", "action": "为 bot_core.py 关键路径补测试", "effort": "中", "impact": "高" },
+    { "priority": "P1", "action": "清理 ruff F821/F823 豁免", "effort": "中", "impact": "中" },
+    { "priority": "P2", "action": "渐进拆分 bot_core.py", "effort": "高", "impact": "极高" },
+    { "priority": "P2", "action": "添加 pyright 类型检查", "effort": "低", "impact": "中" },
+    { "priority": "P3", "action": "WebUI 前端拆分", "effort": "高", "impact": "中" },
+    { "priority": "P3", "action": "统一日志约定", "effort": "低", "impact": "低" }
+  ]
+}

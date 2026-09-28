@@ -269,3 +269,55 @@ def execute(params, config=None):
     if not image_ref:
         return {"ok": False, "error": "missing image", "logs": [{"level": "error", "text": "缺少 image 参数"}]}
     return analyze_image(image_ref, prompt, config or {})
+
+
+# ---------------------------------------------------------------------------
+# 视觉定位（bbox grounding）：给元素描述，返回屏幕坐标，供点击类兜底
+# ---------------------------------------------------------------------------
+import re as _re
+
+
+def _parse_first_point(text: str):
+    """从模型回复中抽取第一个 {"x":..,"y":..} 或 [x,y] 或 x,y 坐标。"""
+    if not text:
+        return None
+    # 1) {"x": 12, "y": 34}
+    m = _re.search(r'"?x"?\s*[:=]\s*(\d+)\s*,\s*"?y"?\s*[:=]\s*(\d+)', text, _re.IGNORECASE)
+    if m:
+        return {"x": int(m.group(1)), "y": int(m.group(2))}
+    # 2) [x, y]
+    m = _re.search(r'\[\s*(\d+)\s*,\s*(\d+)\s*\]', text)
+    if m:
+        return {"x": int(m.group(1)), "y": int(m.group(2))}
+    # 3) 两个独立数字兜底
+    nums = _re.findall(r'\d+', text)
+    if len(nums) >= 2:
+        return {"x": int(nums[0]), "y": int(nums[1])}
+    return None
+
+
+def ground_element(image_ref: str, description: str, config: dict = None) -> dict:
+    """
+    让 VLM 在截图中定位 description 所指元素，返回中心坐标。
+    :return: {ok, point:{x,y} | None, error?, meta}
+    """
+    cfg = config or {}
+    va = cfg.get("vision_assist") or {}
+    if not va.get("enabled", False):
+        return {"ok": False, "error": "vision disabled", "point": None}
+    prompt = (
+        "你是网页视觉定位助手。下面是一张网页截图。请找到与该描述最匹配的那个可点击元素，"
+        "返回它的中心点像素坐标。只输出 JSON，不要解释："
+        '{"x": <整数像素>, "y": <整数像素>}\n'
+        f"目标描述：{description}"
+    )
+    res = analyze_image(image_ref, prompt, cfg)
+    if not res.get("ok"):
+        return {"ok": False, "error": res.get("error"), "point": None, "logs": res.get("logs")}
+    summary = ((res.get("result") or {}).get("summary")) or ""
+    point = _parse_first_point(summary)
+    if not point:
+        return {"ok": False, "error": "无法从视觉回复解析坐标", "point": None,
+                "logs": (res.get("logs") or []) + [{"level": "warn", "text": f"[ground] 未解析到坐标: {summary[:80]}"}]}
+    return {"ok": True, "point": point, "logs": res.get("logs"),
+            "meta": {"model": (res.get("result") or {}).get("vision_model")}}

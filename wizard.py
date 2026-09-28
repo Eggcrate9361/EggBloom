@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+﻿#!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
 首次配置向导：API Key / QQ 路径 / 模型 / Bot QQ
@@ -65,7 +65,7 @@ class FirstRunWizard(ctk.CTkToplevel):
         ctk.CTkLabel(s0, text="模型", font=font(11), text_color=C.get("text_secondary", "#ABB2BF")).pack(anchor="w", padx=16)
         self._model = ctk.CTkEntry(s0, font=font(11), fg_color=C.get("bg_input", "#1E2127"),
                                    border_color=C.get("border_light", "#3A3F4B"), text_color=C.get("text_primary", "#EAECEF"))
-        self._model.insert(0, self.cfg.get("model_name", "deepseek-chat"))
+        self._model.insert(0, self.cfg.get("model_name", "deepseek-flash"))
         self._model.pack(fill=tk.X, padx=16, pady=(4, 12))
         self._pages.append(s0)
 

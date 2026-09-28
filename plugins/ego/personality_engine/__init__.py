@@ -86,8 +86,41 @@ def parse_personality(content: str) -> Dict[str, Any]:
     return {"raw": content, "sections": sections}
 
 
+def _distill_persona() -> str:
+    """蒸馏人格卡（由「这样脆弱的东西」插件发布），存在则优先于手写人设。
+
+    读取的是插件的 data/published/active.persona.txt —— 由该插件的
+    publish / disable / rollback 动作维护，这里只读不写。
+    读取失败时静默回退到手写人设，绝不能因为蒸馏插件出问题而拖垮 bot。
+    """
+    try:
+        # PLUGIN_DIR = app/plugins/ego/personality_engine → 三级 dirname 是 app 根
+        _app = os.path.dirname(os.path.dirname(os.path.dirname(PLUGIN_DIR)))
+        _p = os.path.join(_app, "plugins", "这样脆弱的东西",
+                          "data", "published", "active.persona.txt")
+        if _p and os.path.exists(_p):
+            with open(_p, "r", encoding="utf-8") as f:
+                content = f.read().strip()
+            if content:
+                return content
+    except Exception:
+        pass
+    return ""
+
+
 def get_personality() -> Dict[str, Any]:
-    """读取 personality.txt，返回 raw/sections/config"""
+    """读取人格，返回 raw/sections/config。
+
+    优先级：蒸馏人格卡（若已发布）> personality.txt。
+    """
+    _distilled = _distill_persona()
+    if _distilled:
+        return {
+            "raw": _distilled,
+            "sections": parse_personality(_distilled).get("sections", {}),
+            "config": get_config(),
+        }
+
     if not os.path.exists(PERSONALITY_PATH):
         return {"raw": "", "sections": {}, "config": get_config()}
 
@@ -682,3 +715,25 @@ __all__ = [
 
 def on_load():
     print("[PersonalityEngine] 人格引擎 v0.2.0 已启用")
+
+# ── 通用插件通道动作（WebUI plugin_id='ego.personality_engine'） ──
+def _action_save_personality(params=None):
+    params = params or {}
+    sections = params.get("sections") or params.get("personality") or {}
+    return save_personality(sections)
+
+
+def _action_save_examples(params=None):
+    params = params or {}
+    return save_examples(params.get("examples") or [])
+
+
+PLUGIN_ACTIONS = {
+    "get_config": lambda params: get_config(),
+    "set_config": lambda params: set_config(params or {}),
+    "get_personality": lambda params: get_personality(),
+    "save_personality": _action_save_personality,
+    "get_examples": lambda params: get_examples(str((params or {}).get("scene") or "")),
+    "save_examples": _action_save_examples,
+    "get_state": lambda params: get_state(),
+}

@@ -143,3 +143,5 @@ plugins/ego/slang_learner/data/prompt_templates.json
 # Local config overrides (machine-specific)
 local_config.json
 machine_config.json
+# NeuroBase 记忆库（已迁入程序目录，属用户数据不入库）
+.neurobase/

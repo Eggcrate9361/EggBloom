@@ -1,0 +1,1788 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>人格蒸馏 Persona Distill</title>
+<style>
+  :root{
+    --bg:#0a0a0f;--surface:#111118;--paper:#16161f;--elevated:#1e1e28;--input:#14141b;
+    --ink:#f0f0f5;--ink2:#b8b8c8;--ink3:#8a8f9a;--ink4:#3a3f48;--ink5:#26262f;
+    --gold:#c9a96e;--gold-dim:#8a7350;--red:#b54a4a;--green:#4a9b6a;--blue:#5a7a8e;
+    --purple:#7a5a9e;--orange:#c97a4e;
+    --font-d:'Outfit','Noto Sans SC','PingFang SC',system-ui,sans-serif;
+    --font-m:'JetBrains Mono','Consolas',monospace;--radius:12px;
+    --shadow-sm:0 1px 2px rgba(0,0,0,0.35);--shadow-md:0 4px 14px rgba(0,0,0,0.45);
+    --shadow-lg:0 10px 34px rgba(0,0,0,0.55);--shadow-gold:0 0 22px rgba(201,169,110,0.22);
+    --ease:180ms cubic-bezier(0.4,0,0.2,1);
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);font-family:var(--font-d);-webkit-font-smoothing:antialiased}
+  body{background-image:radial-gradient(ellipse at 10% 0%,rgba(201,169,110,0.06),transparent 45%),radial-gradient(ellipse at 90% 100%,rgba(122,90,158,0.05),transparent 45%)}
+  ::selection{background:rgba(201,169,110,0.25);color:var(--ink)}
+  .wrap{max-width:1060px;margin:0 auto;padding:24px}
+  .panel{background:linear-gradient(180deg,var(--surface),var(--paper));border:1px solid var(--ink4);border-radius:var(--radius);padding:18px;margin-bottom:14px;position:relative}
+  .panel:hover{border-color:rgba(201,169,110,0.25)}
+  .panel-title{font-size:17px;font-weight:700;margin-bottom:12px;display:flex;justify-content:space-between;align-items:center;user-select:none}
+  .meta{font-size:12px;color:var(--ink3);margin-left:8px;font-weight:400}
+  .desc{color:var(--ink2);font-size:14px;line-height:1.7;margin-top:10px}
+  .grid{display:grid;gap:12px;margin-top:14px}
+  .grid-2{grid-template-columns:repeat(2,1fr)}
+  .grid-3{grid-template-columns:repeat(3,1fr)}
+  .grid-4{grid-template-columns:repeat(4,1fr)}
+  @media(max-width:860px){.grid-2,.grid-3,.grid-4{grid-template-columns:1fr}}
+  .card{background:var(--elevated);border:1px solid var(--ink4);border-radius:var(--radius);padding:12px;transition:all var(--ease)}
+  .card:hover{transform:translateY(-1px);box-shadow:var(--shadow-md);border-color:rgba(201,169,110,0.25)}
+  .card-label{font-size:12px;color:var(--ink3);margin-bottom:4px;font-weight:500}
+  .card-value{font-family:var(--font-m);font-size:14px;color:var(--ink)}
+  button{padding:8px 14px;border:1px solid var(--ink4);background:var(--elevated);color:var(--ink);border-radius:8px;cursor:pointer;font-size:13px;transition:all var(--ease);position:relative;overflow:hidden;font-weight:500;letter-spacing:0.02em}
+  button:hover:not(:disabled){background:var(--paper);border-color:var(--gold);transform:translateY(-1px);box-shadow:var(--shadow-sm)}
+  button:active:not(:disabled){transform:scale(0.97)}
+  button:disabled{opacity:0.5;cursor:not-allowed}
+  button.primary{background:linear-gradient(135deg,rgba(201,169,110,0.18),rgba(201,169,110,0.08));color:var(--gold);border-color:rgba(201,169,110,0.35);font-weight:600}
+  button.primary:hover:not(:disabled){background:linear-gradient(135deg,rgba(201,169,110,0.28),rgba(201,169,110,0.14));border-color:rgba(201,169,110,0.5);box-shadow:var(--shadow-gold)}
+  button.danger{color:#ff8a80;border-color:rgba(255,80,80,0.25);background:rgba(255,80,80,0.08)}
+  button.danger:hover:not(:disabled){background:rgba(255,80,80,0.16);border-color:rgba(255,80,80,0.4)}
+  button.ghost{background:transparent;color:var(--ink2);border-color:var(--ink4)}
+  button.ghost:hover:not(:disabled){color:var(--ink);background:rgba(255,255,255,0.03)}
+  button.small{padding:4px 10px;font-size:12px}
+  input[type="text"],input[type="number"],select,textarea{padding:8px 10px;background:var(--input);color:var(--ink);border:1px solid var(--ink4);border-radius:8px;font-family:inherit;font-size:13px;width:100%;transition:all var(--ease)}
+  textarea{min-height:80px;resize:vertical}
+  input:focus,select:focus,textarea:focus{border-color:var(--gold);outline:none;box-shadow:0 0 0 3px rgba(201,169,110,0.12);transform:translateY(-1px)}
+  .muted{color:var(--ink3);font-size:12px;margin-top:4px}
+  .row{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
+  .section-title{font-size:14px;font-weight:700;margin:14px 0 6px;color:var(--ink)}
+  .section-label{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:var(--gold);margin:16px 0 8px 4px}
+  .section-label:first-child{margin-top:0}
+  .empty{color:var(--ink3);font-size:13px;padding:8px 0}
+  .empty-state{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:36px 16px;color:var(--ink3);text-align:center}
+  .empty-state-icon{font-size:28px;margin-bottom:10px;opacity:0.6}
+  .empty-state-title{font-size:14px;font-weight:600;color:var(--ink2);margin-bottom:4px}
+  .empty-state-desc{font-size:12px;color:var(--ink3)}
+  .tabs{display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap}
+  .tab{border-radius:999px;border:1px solid var(--ink4);background:transparent;color:var(--ink2);padding:6px 14px;font-size:12px;cursor:pointer;transition:all var(--ease);font-weight:500}
+  .tab:hover{border-color:var(--gold);color:var(--ink);background:rgba(255,255,255,0.02)}
+  .tab.active{background:var(--gold);color:#0a0a0f;border-color:var(--gold);font-weight:600;box-shadow:var(--shadow-gold)}
+  .stat-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+  @media(max-width:600px){.stat-grid{grid-template-columns:repeat(2,1fr)}}
+  .stat-card{background:var(--elevated);border:1px solid var(--ink4);border-radius:var(--radius);padding:12px;text-align:center;transition:all var(--ease)}
+  .stat-card:hover{border-color:rgba(201,169,110,0.3);box-shadow:var(--shadow-md)}
+  .stat-value{font-family:var(--font-m);font-size:20px;color:var(--ink);font-weight:600}
+  .stat-label{font-size:12px;color:var(--ink3);margin-top:6px}
+  .toggle{position:relative;display:inline-block;width:44px;height:24px;flex-shrink:0}
+  .toggle input{opacity:0;width:0;height:0;position:absolute}
+  .slider{position:absolute;cursor:pointer;top:0;left:0;right:0;bottom:0;background-color:var(--ink4);transition:all var(--ease);border-radius:999px;border:1px solid var(--ink4)}
+  .slider:before{position:absolute;content:"";height:18px;width:18px;left:3px;bottom:3px;background-color:#fff;transition:all var(--ease);border-radius:50%;box-shadow:0 1px 3px rgba(0,0,0,0.3)}
+  input:checked+.slider{background-color:var(--gold);border-color:rgba(201,169,110,0.4)}
+  input:checked+.slider:before{transform:translateX(20px)}
+  .switch-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 0;border-bottom:1px solid var(--ink4)}
+  .switch-row:hover{background:rgba(255,255,255,0.02);margin:0 -12px;padding-left:12px;padding-right:12px;border-radius:8px}
+  .switch-row:last-child{border-bottom:none}
+  .badge{display:inline-flex;align-items:center;padding:3px 10px;border-radius:999px;background:var(--ink4);color:var(--ink2);font-size:11px;font-weight:600;transition:all var(--ease)}
+  .badge.ok{background:rgba(74,155,106,0.2);color:var(--green)}
+  .badge.warn{background:rgba(201,169,110,0.2);color:var(--gold)}
+  .badge.err{background:rgba(181,74,74,0.2);color:var(--red)}
+  .badge.info{background:rgba(90,122,138,0.2);color:var(--blue)}
+  .badge.l0{background:rgba(90,122,138,0.2);color:#8ab4c8}
+  .badge.l1{background:rgba(74,155,106,0.2);color:var(--green)}
+  .badge.l2{background:rgba(201,169,110,0.2);color:var(--gold)}
+  .badge.l3{background:rgba(201,122,78,0.2);color:var(--orange)}
+  .badge.l4{background:rgba(122,90,158,0.2);color:var(--purple)}
+  .list-item{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:10px;border-bottom:1px solid var(--ink4);transition:background var(--ease);border-radius:8px}
+  .list-item:hover{background:rgba(255,255,255,0.02)}
+  .list-item:last-child{border-bottom:none}
+  .tag{display:inline-block;padding:3px 8px;border-radius:6px;background:var(--ink4);color:var(--ink2);font-size:11px;margin-right:6px;transition:all var(--ease)}
+  .tag:hover{border-color:var(--gold);color:var(--ink)}
+  .log{background:var(--input);border:1px solid var(--ink4);border-radius:10px;padding:12px;font-family:var(--font-m);font-size:12px;color:var(--ink2);max-height:220px;overflow:auto;white-space:pre-wrap;line-height:1.7;transition:border-color var(--ease)}
+  .log:hover{border-color:rgba(201,169,110,0.25)}
+  .toast{position:fixed;top:16px;right:16px;background:var(--elevated);border:1px solid var(--ink4);color:var(--ink);padding:10px 14px;border-radius:10px;font-size:13px;z-index:999;opacity:0;transform:translateY(-8px);transition:all var(--ease);pointer-events:none;box-shadow:var(--shadow-md);display:flex;align-items:center;gap:8px}
+  .toast.show{opacity:1;transform:translateY(0)}
+  .toast.success{border-left:3px solid #6ecf8e}
+  .toast.error{border-left:3px solid #ff8a80}
+  .toast.info{border-left:3px solid var(--gold)}
+  .progress-bar{height:6px;background:var(--ink5);border-radius:3px;overflow:hidden}
+  .progress-fill{height:100%;background:linear-gradient(90deg,var(--gold),var(--purple));border-radius:3px;transition:width 300ms ease}
+  .level-pipeline{display:flex;gap:6px;align-items:center;justify-content:center;margin:16px 0}
+  .level-step{display:flex;flex-direction:column;align-items:center;gap:4px}
+  .level-dot{width:32px;height:32px;border-radius:50%;border:2px solid var(--ink4);display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:var(--ink3);transition:all var(--ease)}
+  .level-dot.active{border-color:var(--gold);color:var(--gold);box-shadow:var(--shadow-gold)}
+  .level-dot.done{border-color:var(--green);color:var(--green);background:rgba(74,155,106,0.1)}
+  .level-label{font-size:10px;color:var(--ink3)}
+  .level-line{width:20px;height:2px;background:var(--ink4)}
+  .level-line.done{background:var(--green)}
+  .confidence-bar{height:4px;background:var(--ink5);border-radius:2px;overflow:hidden;margin-top:4px}
+  .confidence-fill{height:100%;border-radius:2px;transition:width 500ms ease}
+  .confidence-fill.high{background:var(--green)}
+  .confidence-fill.mid{background:var(--gold)}
+  .confidence-fill.low{background:var(--red)}
+  .inline{display:inline-flex;align-items:center;gap:8px}
+  .grow{flex:1}
+  .panel-divider{height:1px;background:var(--ink5);margin:16px 0;border:none}
+  .checkbox-row{display:flex;align-items:center;gap:8px;padding:6px 0;cursor:pointer}
+  .checkbox-row input[type="checkbox"]{width:16px;height:16px;accent-color:var(--gold);cursor:pointer}
+  .form-group{margin-bottom:12px}
+  .form-label{font-size:13px;font-weight:600;color:var(--ink2);margin-bottom:6px;display:block}
+  .form-hint{font-size:11px;color:var(--ink3);margin-top:4px}
+  .modal-overlay{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.7);z-index:1000;display:none;align-items:center;justify-content:center;backdrop-filter:blur(4px)}
+  .modal-overlay.show{display:flex}
+  .modal{background:var(--surface);border:1px solid var(--ink4);border-radius:var(--radius);padding:24px;max-width:700px;width:90%;max-height:80vh;overflow:auto}
+  .modal-title{font-size:18px;font-weight:700;margin-bottom:16px}
+  .modal-close{float:right;cursor:pointer;font-size:20px;color:var(--ink3);transition:color var(--ease)}
+  .modal-close:hover{color:var(--ink)}
+  .persona-preview{background:var(--input);border:1px solid var(--ink4);border-radius:10px;padding:16px;font-size:13px;line-height:1.8;max-height:500px;overflow:auto;white-space:pre-wrap;font-family:var(--font-m)}
+  .search-box{position:relative}
+  .search-box input{padding-left:32px}
+  .search-icon{position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--ink3);font-size:14px}
+  .review-section{background:var(--elevated);border:1px solid var(--ink4);border-radius:var(--radius);padding:14px;margin-bottom:12px;transition:all var(--ease)}
+  .review-section:hover{border-color:rgba(201,169,110,0.25)}
+  .review-section-title{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
+  .review-section-title h3{margin:0;font-size:14px;font-weight:700;color:var(--ink)}
+  .review-feature{display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid var(--ink4)}
+  .review-feature:last-child{border-bottom:none}
+  .review-feature-label{font-size:12px;color:var(--ink3);width:120px;flex-shrink:0}
+  .review-feature-value{flex:1;font-size:13px;color:var(--ink)}
+  .review-feature-value input{background:var(--input);border:1px solid var(--ink4);border-radius:6px;padding:4px 8px;font-size:13px;width:100%;color:var(--ink);transition:all var(--ease)}
+  .review-feature-value input:focus{border-color:var(--gold);outline:none}
+  .review-conf{display:flex;align-items:center;gap:6px;flex-shrink:0}
+  .review-conf input[type="range"]{width:80px;accent-color:var(--gold)}
+  .review-conf-label{font-family:var(--font-m);font-size:11px;color:var(--ink3);width:36px}
+  .review-del-btn{width:24px;height:24px;border-radius:50%;border:none;background:transparent;color:var(--ink3);cursor:pointer;font-size:14px;display:flex;align-items:center;justify-content:center;transition:all var(--ease)}
+  .review-del-btn:hover{color:var(--red);background:rgba(181,74,74,0.1)}
+  .src-badge{display:inline-block;margin-left:6px;padding:1px 6px;border-radius:999px;background:var(--ink4);color:var(--ink3);font-size:10px;font-weight:600;vertical-align:middle}
+  .evidence-line{margin-top:4px;font-size:11px;color:var(--ink3);line-height:1.7;word-break:break-all}
+  .evidence-line code{font-family:var(--font-m);background:var(--ink4);color:var(--gold);padding:1px 5px;border-radius:4px;margin-right:3px}
+  .evidence-line em{color:var(--ink3);opacity:.75;font-style:normal}
+  .quality-banner{display:block;padding:10px 12px;border-radius:var(--radius);font-size:12px;line-height:1.8;margin-bottom:12px;border:1px solid var(--ink4);background:var(--elevated);color:var(--ink2)}
+  .quality-banner strong{color:var(--ink)}
+  .quality-banner.ok{border-color:rgba(94,160,110,0.35)}
+  .quality-banner.warn{border-color:rgba(201,169,110,0.45)}
+  .quality-banner.bad{border-color:rgba(181,74,74,0.45)}
+  .quality-banner .q-sep{color:var(--ink3);opacity:.5;margin:0 2px}
+  .state-line{margin-top:4px;display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+  .state-badge{display:inline-flex;align-items:center;padding:1px 8px;border-radius:999px;font-size:10px;font-weight:600;border:1px solid var(--ink4);color:var(--ink2)}
+  .state-badge.ok{border-color:rgba(94,160,110,0.5);color:#7fbf8f}
+  .state-badge.warn{border-color:rgba(201,169,110,0.55);color:var(--gold)}
+  .state-badge.gone{border-color:rgba(181,74,74,0.5);color:#c97a7a;opacity:.85}
+  .state-when{font-size:10px;color:var(--ink3);opacity:.7}
+  .chg-badge{display:inline-flex;align-items:center;padding:1px 8px;border-radius:999px;font-size:10px;font-weight:600;background:var(--ink4);color:var(--ink2)}
+  .chg-badge.created,.chg-badge.revived{background:rgba(94,160,110,0.18);color:#7fbf8f}
+  .chg-badge.revised{color:var(--gold)}
+  .chg-badge.contradicted,.chg-badge.retired{background:rgba(181,74,74,0.18);color:#c97a7a}
+  .chg-badge.suspect,.chg-badge.dormant{opacity:.8}
+  .section-label{font-size:12px;font-weight:600;color:var(--ink3);margin:10px 0 6px;letter-spacing:.04em}
+  .stage-row{display:flex;align-items:center;gap:8px;padding:3px 0;font-size:12px;color:var(--ink2)}
+  .stage-row span:first-child{min-width:150px;color:var(--ink3)}
+  .stage-row .meta{margin-left:auto}
+  .review-add-btn{width:28px;height:28px;border-radius:50%;border:1px dashed var(--ink4);background:transparent;color:var(--ink3);cursor:pointer;font-size:16px;display:flex;align-items:center;justify-content:center;transition:all var(--ease)}
+  .review-add-btn:hover{border-color:var(--gold);color:var(--gold)}
+  .review-summary{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px}
+  .review-stat{background:var(--elevated);border:1px solid var(--ink4);border-radius:var(--radius);padding:10px;text-align:center}
+  .review-stat-value{font-family:var(--font-m);font-size:18px;color:var(--ink);font-weight:600}
+  .review-stat-label{font-size:11px;color:var(--ink3);margin-top:4px}
+  .review-status{display:inline-flex;align-items:center;gap:6px;padding:4px 12px;border-radius:999px;font-size:12px;font-weight:600}
+  .review-status.pending{background:rgba(201,169,110,0.15);color:var(--gold)}
+  .review-status.approved{background:rgba(74,155,106,0.15);color:var(--green)}
+  .review-status.rejected{background:rgba(181,74,74,0.15);color:var(--red)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <!-- Header -->
+  <div class="panel">
+    <div class="panel-title">
+      <span>这样脆弱的东西 <span class="meta">人格蒸馏 v1.0 · Persona-File</span></span>
+      <div class="inline">
+        <button class="ghost small" onclick="showTab('dashboard')">总览</button>
+        <button class="ghost small" onclick="showTab('new')">新建蒸馏</button>
+        <button class="ghost small" onclick="showTab('review')">审核</button>
+        <button class="ghost small" onclick="showTab('ledger')">人格账本</button>
+        <button class="ghost small" onclick="showTab('history')">历史</button>
+        <button class="ghost small" onclick="showTab('ethics')">伦理</button>
+        <button class="ghost small" onclick="openSettings()">⚙ 设置</button>
+      </div>
+    </div>
+    <div class="desc">从聊天记录、对话记忆、落沙数据中提取人格模型，按数据量分级蒸馏（L0-L4），生成通用人格文件格式（Persona-File v1.0）。蒸馏结果经人工审核后保存。</div>
+  </div>
+
+  <!-- Dashboard Tab -->
+  <div id="tab-dashboard">
+    <div class="stat-grid" style="margin-bottom:14px">
+      <div class="stat-card">
+        <div class="stat-value" id="statDistillations">--</div>
+        <div class="stat-label">蒸馏记录</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value" id="statSubjects">--</div>
+        <div class="stat-label">蒸馏对象</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value" id="statTotalTokens">--</div>
+        <div class="stat-label">累计 Token</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value" id="statAvgConfidence">--</div>
+        <div class="stat-label">平均置信度</div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-title">最近蒸馏</div>
+      <div id="recentDistillations">
+        <div class="empty-state">
+          <div class="empty-state-icon">⏳</div>
+          <div class="empty-state-title">暂无蒸馏记录</div>
+          <div class="empty-state-desc">点击「新建蒸馏」开始</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- New Distillation Tab -->
+  <div id="tab-new" style="display:none">
+    <div class="panel">
+      <div class="panel-title">蒸馏配置</div>
+
+      <div class="section-label">蒸馏对象</div>
+      <div class="form-group">
+        <label class="form-label">目标用户 ID</label>
+        <input type="text" id="targetId" placeholder="如 10000002">
+        <div class="form-hint">QQ 号或用户标识</div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">目标名称（可选）</label>
+        <input type="text" id="targetName" placeholder="如 小a">
+      </div>
+
+      <div class="panel-divider"></div>
+      <div class="section-label">数据来源</div>
+      <div id="dataSourceList">
+        <label class="checkbox-row">
+          <input type="checkbox" value="chat_logs" checked>
+          <span>聊天记录 (chat_logs/)</span>
+          <span class="muted" style="margin-left:auto">Markdown 格式</span>
+        </label>
+        <label class="checkbox-row">
+          <input type="checkbox" value="super_memory" checked>
+          <span>超级记忆 (super_memory.db)</span>
+          <span class="muted" style="margin-left:auto">SQLite 消息+事实</span>
+        </label>
+        <label class="checkbox-row">
+          <input type="checkbox" value="sandglass">
+          <span>落沙 (sandglass.txt)</span>
+          <span class="muted" style="margin-left:auto">全量消息捕获</span>
+        </label>
+        <label class="checkbox-row">
+          <input type="checkbox" value="private_memory">
+          <span>私聊记忆 (private_memory/)</span>
+          <span class="muted" style="margin-left:auto">JSON 格式</span>
+        </label>
+        <label class="checkbox-row">
+          <input type="checkbox" value="chat_style">
+          <span>说话风格 (chat_style.db)</span>
+          <span class="muted" style="margin-left:auto">风格特征</span>
+        </label>
+        <label class="checkbox-row">
+          <input type="checkbox" value="group_chat_decider">
+          <span>群聊决策 (group_chat_decider.db)</span>
+          <span class="muted" style="margin-left:auto">话题流+情绪</span>
+        </label>
+      </div>
+      <div class="form-group" style="margin-top:8px">
+        <label class="form-label">外部文本导入（可选）</label>
+        <textarea id="externalText" placeholder="粘贴额外文本数据..." style="min-height:60px"></textarea>
+      </div>
+
+      <div class="panel-divider"></div>
+      <div class="section-label">蒸馏等级</div>
+      <div class="level-pipeline">
+        <div class="level-step"><div class="level-dot" id="levelDot-L0">L0</div><div class="level-label">种子</div></div>
+        <div class="level-line"></div>
+        <div class="level-step"><div class="level-dot" id="levelDot-L1">L1</div><div class="level-label">核心</div></div>
+        <div class="level-line"></div>
+        <div class="level-step"><div class="level-dot" id="levelDot-L2">L2</div><div class="level-label">深度</div></div>
+        <div class="level-line"></div>
+        <div class="level-step"><div class="level-dot" id="levelDot-L3">L3</div><div class="level-label">完整</div></div>
+        <div class="level-line"></div>
+        <div class="level-step"><div class="level-dot" id="levelDot-L4">L4</div><div class="level-label">完美</div></div>
+      </div>
+      <div class="grid grid-3" style="margin-top:12px">
+        <div class="card">
+          <div class="card-label">L0 种子</div>
+          <div class="card-value" style="font-size:13px">&lt;100 条 · 200K tokens</div>
+          <div class="muted">身份锚点</div>
+        </div>
+        <div class="card">
+          <div class="card-label">L1 核心</div>
+          <div class="card-value" style="font-size:13px">100-1K 条 · 500K tokens</div>
+          <div class="muted">+ 语言指纹</div>
+        </div>
+        <div class="card">
+          <div class="card-label">L2 深度</div>
+          <div class="card-value" style="font-size:13px">1K-10K 条 · 2M tokens</div>
+          <div class="muted">+ 行为模式</div>
+        </div>
+        <div class="card">
+          <div class="card-label">L3 完整</div>
+          <div class="card-value" style="font-size:13px">10K-50K 条 · 5M tokens</div>
+          <div class="muted">+ 认知+关系</div>
+        </div>
+        <div class="card">
+          <div class="card-label">L4 完美</div>
+          <div class="card-value" style="font-size:13px">50K+ 条 · 20M+ tokens</div>
+          <div class="muted">+ 完整重建</div>
+        </div>
+        <div class="card">
+          <div class="card-label">当前数据量</div>
+          <div class="card-value" id="dataCount" style="font-size:13px">--</div>
+          <div class="muted" id="dataCountHint">点击「扫描数据量」获取</div>
+        </div>
+      </div>
+
+      <div class="form-group" style="margin-top:12px">
+        <label class="form-label">选择等级</label>
+        <select id="distillLevel">
+          <option value="L0">L0 种子 (&lt;100 条, 200K tokens)</option>
+          <option value="L1" selected>L1 核心 (100-1K 条, 500K tokens)</option>
+          <option value="L2">L2 深度 (1K-10K 条, 2M tokens)</option>
+          <option value="L3">L3 完整 (10K-50K 条, 5M tokens)</option>
+          <option value="L4">L4 完美 (50K+ 条, 20M+ tokens)</option>
+        </select>
+      </div>
+
+      <div class="form-group" style="margin-top:12px">
+        <label class="form-label">蒸馏方式</label>
+        <select id="distillMode">
+          <option value="auto" selected>自动（有账本就只吃新增语料）</option>
+          <option value="incremental">增量延续（只处理新增，最省额度）</option>
+          <option value="full">全量重蒸馏（从头重算，用于首次或数据跳变）</option>
+        </select>
+      </div>
+
+      <div id="ledgerStatus" class="quality-banner" style="display:none"></div>
+
+      <div class="panel-divider"></div>
+      <div class="section-label">伦理确认</div>
+      <div id="ethicsCheck">
+        <label class="checkbox-row">
+          <input type="checkbox" id="consentConfirmed">
+          <span>我已确认拥有被蒸馏者的知情同意</span>
+        </label>
+        <label class="checkbox-row">
+          <input type="checkbox" id="ethicsRead">
+          <span>我已阅读并同意伦理协议 (ETHICS.md)</span>
+        </label>
+      </div>
+
+      <div class="row" style="margin-top:16px">
+        <button onclick="scanData()">🔍 扫描数据量</button>
+        <div class="grow"></div>
+        <button class="primary" onclick="startDistill()" id="btnStart">🚀 开始蒸馏</button>
+      </div>
+    </div>
+
+    <!-- Progress Panel (hidden initially) -->
+    <div class="panel" id="progressPanel" style="display:none">
+      <div class="panel-title">蒸馏进度</div>
+      <div class="progress-bar" style="margin-bottom:12px">
+        <div class="progress-fill" id="progressFill" style="width:0%"></div>
+      </div>
+      <div class="grid grid-4" style="margin-bottom:12px">
+        <div class="card">
+          <div class="card-label">阶段</div>
+          <div class="card-value" id="progressStage">--</div>
+        </div>
+        <div class="card">
+          <div class="card-label">数据量</div>
+          <div class="card-value" id="progressData">--</div>
+        </div>
+        <div class="card">
+          <div class="card-label">Token 用量</div>
+          <div class="card-value" id="progressTokens">--</div>
+        </div>
+        <div class="card">
+          <div class="card-label">置信度</div>
+          <div class="card-value" id="progressConfidence">--</div>
+        </div>
+      </div>
+      <div id="stageList" style="margin-bottom:12px"></div>
+      <div class="log" id="progressLog"></div>
+    </div>
+  </div>
+
+  <!-- Review Tab -->
+  <div id="tab-review" style="display:none">
+    <div id="reviewEmpty">
+      <div class="panel">
+        <div class="empty-state">
+          <div class="empty-state-icon">🔍</div>
+          <div class="empty-state-title">暂无待审核的蒸馏结果</div>
+          <div class="empty-state-desc">蒸馏完成后，特征提取结果会出现在这里供你人工审核</div>
+          <button class="primary" style="margin-top:12px" onclick="showTab('new')">前往新建蒸馏</button>
+        </div>
+      </div>
+    </div>
+    <div id="reviewContent" style="display:none">
+      <div class="panel">
+        <div class="panel-title">
+          <span>特征审核 <span class="meta" id="reviewTargetInfo"></span></span>
+          <span class="review-status pending" id="reviewStatusBadge">待审核</span>
+        </div>
+        <div class="desc">蒸馏完成后，系统自动提取了以下特征。请逐条审核：可以修改值、调整置信度、删除错误项、添加遗漏项。审核通过后才会保存人格文件。</div>
+
+        <div id="reviewQuality" class="quality-banner" style="display:none"></div>
+        <div id="reviewChanges" class="quality-banner" style="display:none"></div>
+
+        <div class="row" style="margin-bottom:12px">
+          <div class="inline">
+            <button class="ghost" onclick="toggleEvidence()" id="btnEvidence">🔍 显示原文引证</button>
+            <button class="ghost" onclick="toggleOnlyChanged()" id="btnOnlyChanged">👁 只看本轮变更</button>
+            <button class="ghost" onclick="copyPersonaPrompt()">📋 复制人格提示词</button>
+          </div>
+          <div class="grow"></div>
+          <span class="meta" id="reviewEvidenceStat"></span>
+        </div>
+
+        <div class="row" style="margin-bottom:12px">
+          <div class="inline">
+            <span class="meta">批量：</span>
+            <input type="text" id="bulkThreshold" value="0.35" style="max-width:70px">
+            <button class="ghost" onclick="bulkRemoveLowConf()">移除低于此置信度的结论</button>
+          </div>
+          <div class="grow"></div>
+          <div class="inline">
+            <button class="ghost" onclick="exportDoc('persona')">⬇ 人格文件</button>
+            <button class="ghost" onclick="exportDoc('prompt')">⬇ 注入卡</button>
+            <button class="ghost" onclick="exportDoc('appendix')">⬇ 证据附卷</button>
+            <button class="ghost" onclick="exportDoc('ledger')">⬇ 账本 JSON</button>
+          </div>
+        </div>
+
+        <div class="review-summary">
+          <div class="review-stat">
+            <div class="review-stat-value" id="reviewTotalFeatures">--</div>
+            <div class="review-stat-label">总特征数</div>
+          </div>
+          <div class="review-stat">
+            <div class="review-stat-value" id="reviewEditedFeatures">--</div>
+            <div class="review-stat-label">已修改</div>
+          </div>
+          <div class="review-stat">
+            <div class="review-stat-value" id="reviewAvgConfidence">--</div>
+            <div class="review-stat-label">平均置信度</div>
+          </div>
+          <div class="review-stat">
+            <div class="review-stat-value" id="reviewLevel">--</div>
+            <div class="review-stat-label">蒸馏等级</div>
+          </div>
+        </div>
+
+        <div id="reviewSections"></div>
+
+        <div class="row" style="margin-top:16px">
+          <div class="inline">
+            <button class="ghost" onclick="discardReview()">🗑 丢弃</button>
+            <button class="ghost" onclick="reDistill()">🔄 重新蒸馏</button>
+          </div>
+          <div class="grow"></div>
+          <button class="primary" onclick="approveReview()">✅ 审核通过并保存</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Ledger Tab -->
+  <div id="tab-ledger" style="display:none">
+    <div class="panel">
+      <div class="panel-title">
+        <span>人格账本</span>
+        <span class="meta">连续蒸馏的家底：结论的生老病死都在这里</span>
+      </div>
+      <div class="row" style="margin-bottom:12px">
+        <input type="text" id="ledgerTarget" placeholder="目标用户 ID（如 10000002）" style="max-width:260px">
+        <button class="ghost" onclick="loadLedger()">读取账本</button>
+        <div class="grow"></div>
+        <button class="ghost" onclick="publishPersona()">🚀 发布给 bot</button>
+        <button class="ghost" onclick="unpublishPersona()">下线</button>
+        <button class="ghost" onclick="exportFromLedger('ledger')">⬇ 导出账本 JSON</button>
+      </div>
+      <div id="publishStatus" class="quality-banner" style="display:none"></div>
+      <div id="ledgerSummary" class="quality-banner" style="display:none"></div>
+      <div id="ledgerJournal"></div>
+      <div id="ledgerEntries"></div>
+    </div>
+  </div>
+
+  <!-- History Tab -->
+  <div id="tab-history" style="display:none">
+    <div class="panel">
+      <div class="panel-title">蒸馏历史</div>
+      <div class="search-box" style="margin-bottom:12px">
+        <span class="search-icon">🔍</span>
+        <input type="text" id="searchQuery" placeholder="搜索蒸馏记录..." oninput="filterHistory()">
+      </div>
+      <div id="historyList">
+        <div class="empty-state">
+          <div class="empty-state-icon">📋</div>
+          <div class="empty-state-title">暂无蒸馏记录</div>
+          <div class="empty-state-desc">蒸馏完成后将显示在这里</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Ethics Tab -->
+  <div id="tab-ethics" style="display:none">
+    <div class="panel">
+      <div class="panel-title">伦理协议</div>
+      <div class="desc">
+        <p>这样脆弱的东西（人格蒸馏）遵循严格的伦理协议。以下操作需要符合伦理要求：</p>
+        <ul style="margin:10px 0;padding-left:20px;line-height:2">
+          <li>蒸馏前必须获得被蒸馏者的知情同意</li>
+          <li>禁止使用黑客、欺骗、胁迫手段获取数据</li>
+          <li>蒸馏结果不得用于歧视、操控或伤害</li>
+          <li>被蒸馏者有权随时要求删除全部人格数据</li>
+          <li>14岁以下未成年人需监护人同意</li>
+        </ul>
+      </div>
+      <button class="primary" onclick="showEthicsDoc()">📖 查看完整伦理协议</button>
+    </div>
+
+    <div class="panel">
+      <div class="panel-title">审计日志</div>
+      <div id="auditLog">
+        <div class="empty-state">
+          <div class="empty-state-icon">📊</div>
+          <div class="empty-state-title">暂无审计记录</div>
+          <div class="empty-state-desc">蒸馏操作将自动记录在此</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Toast -->
+<div class="toast" id="toast"></div>
+
+<!-- Modal -->
+<div class="modal-overlay" id="modalOverlay">
+  <div class="modal">
+    <span class="modal-close" onclick="closeModal()">×</span>
+    <div id="modalContent"></div>
+  </div>
+</div>
+
+<script>
+const PLUGIN_ID = '这样脆弱的东西';
+let currentTab = 'dashboard';
+
+// 通用插件通道：POST /api/plugins/action {plugin_id, action, params}
+async function apiAction(action, params={}) {
+  const res = await fetch('/api/plugins/action', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({plugin_id: PLUGIN_ID, action: action, params: params || {}})
+  });
+  return res.json();
+}
+const api = apiAction;
+
+// Tab switching
+const TAB_LABELS = {dashboard:'总览', new:'新建蒸馏', review:'审核', ledger:'人格账本', history:'历史', ethics:'伦理'};
+function showTab(tab) {
+  ['dashboard','new','review','ledger','history','ethics'].forEach(t => {
+    document.getElementById('tab-'+t).style.display = t === tab ? '' : 'none';
+  });
+  document.querySelectorAll('button.ghost.small').forEach(btn => {
+    btn.classList.toggle('active', btn.textContent.trim() === TAB_LABELS[tab]);
+  });
+  currentTab = tab;
+  if (tab === 'dashboard') loadDashboard();
+  if (tab === 'history') loadHistory();
+  if (tab === 'ethics') loadEthics();
+  if (tab === 'review') loadReview();
+  if (tab === 'ledger') { loadLedger(); refreshPublishStatus(
+    (document.getElementById('ledgerTarget') || {}).value || ''); }
+}
+
+// Toast
+function toast(msg, type='info', duration=2000) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.className = 'toast ' + type + ' show';
+  setTimeout(() => el.classList.remove('show'), duration);
+}
+
+// Modal
+function showModal(html) {
+  document.getElementById('modalContent').innerHTML = html;
+  document.getElementById('modalOverlay').classList.add('show');
+}
+function closeModal() {
+  document.getElementById('modalOverlay').classList.remove('show');
+}
+
+// API helper（通用插件通道，见文件头 apiAction）
+
+// Level colors
+function levelColor(level) {
+  return {L0:'#8ab4c8',L1:'#4a9b6a',L2:'#c9a96e',L3:'#c97a4e',L4:'#7a5a9e'}[level] || '#8a8f9a';
+}
+
+// Confidence bar color
+function confColor(conf) {
+  if (conf >= 0.7) return 'high';
+  if (conf >= 0.4) return 'mid';
+  return 'low';
+}
+
+// Format tokens
+function fmtTokens(n) {
+  if (n >= 1e6) return (n/1e6).toFixed(1) + 'M';
+  if (n >= 1e3) return (n/1e3).toFixed(1) + 'K';
+  return n.toString();
+}
+
+// Format date
+function fmtDate(ts) {
+  const d = new Date(ts);
+  return d.toLocaleDateString('zh-CN') + ' ' + d.toLocaleTimeString('zh-CN', {hour:'2-digit',minute:'2-digit'});
+}
+
+// Dashboard
+async function loadDashboard() {
+  try {
+    const data = await api('stats');
+    document.getElementById('statDistillations').textContent = data.total_distillations || 0;
+    document.getElementById('statSubjects').textContent = data.unique_subjects || 0;
+    document.getElementById('statTotalTokens').textContent = fmtTokens(data.total_tokens || 0);
+    document.getElementById('statAvgConfidence').textContent = ((data.avg_confidence || 0) * 100).toFixed(0) + '%';
+
+    const recent = data.recent || [];
+    const el = document.getElementById('recentDistillations');
+    if (recent.length === 0) {
+      el.innerHTML = '<div class="empty-state"><div class="empty-state-icon">⏳</div><div class="empty-state-title">暂无蒸馏记录</div><div class="empty-state-desc">点击「新建蒸馏」开始</div></div>';
+      return;
+    }
+    el.innerHTML = recent.map(r => distillCard(r)).join('');
+  } catch (e) {
+    console.error('loadDashboard failed:', e);
+  }
+}
+
+// Distillation card
+function distillCard(r) {
+  const lc = levelColor(r.level);
+  return `<div class="list-item" onclick="showDistillDetail('${r.id}')">
+    <div>
+      <div style="font-weight:600">${r.target_name || r.target_id} <span class="badge ${r.level.toLowerCase()}" style="margin-left:6px">${r.level}</span></div>
+      <div class="muted">${fmtDate(r.timestamp)} · ${fmtTokens(r.tokens_used || 0)} tokens</div>
+    </div>
+    <div class="inline">
+      <div style="text-align:right">
+        <div class="card-value" style="font-size:13px">${r.confidence ? (r.confidence*100).toFixed(0)+'%' : '--'}</div>
+        <div class="confidence-bar" style="width:60px"><div class="confidence-fill ${confColor(r.confidence||0)}" style="width:${(r.confidence||0)*100}%"></div></div>
+      </div>
+      <button class="small ghost" onclick="event.stopPropagation();showDistillDetail('${r.id}')">详情</button>
+      <button class="small danger" onclick="event.stopPropagation();deleteDistill('${r.id}')">删除</button>
+    </div>
+  </div>`;
+}
+
+// History
+async function loadHistory() {
+  try {
+    const data = await api('history');
+    renderHistory(data.distillations || []);
+  } catch (e) {
+    console.error('loadHistory failed:', e);
+  }
+}
+
+function renderHistory(items) {
+  const el = document.getElementById('historyList');
+  if (items.length === 0) {
+    el.innerHTML = '<div class="empty-state"><div class="empty-state-icon">📋</div><div class="empty-state-title">暂无蒸馏记录</div><div class="empty-state-desc">蒸馏完成后将显示在这里</div></div>';
+    return;
+  }
+  el.innerHTML = items.map(r => distillCard(r)).join('');
+}
+
+function filterHistory() {
+  const q = document.getElementById('searchQuery').value.toLowerCase();
+  if (!q) { loadHistory(); return; }
+  // Filter on client side
+  document.querySelectorAll('#historyList .list-item').forEach(el => {
+    el.style.display = el.textContent.toLowerCase().includes(q) ? '' : 'none';
+  });
+}
+
+// Ethics
+async function loadEthics() {
+  try {
+    const data = await api('audit');
+    const el = document.getElementById('auditLog');
+    if (!data.entries || data.entries.length === 0) {
+      el.innerHTML = '<div class="empty-state"><div class="empty-state-icon">📊</div><div class="empty-state-title">暂无审计记录</div><div class="empty-state-desc">蒸馏操作将自动记录在此</div></div>';
+      return;
+    }
+    el.innerHTML = data.entries.map(e => `<div class="list-item">
+      <div>
+        <div style="font-weight:600">${e.subject || '—'} <span class="badge ${(e.level||'l0').toLowerCase()}">${e.level || 'L0'}</span></div>
+        <div class="muted">${fmtDate(e.timestamp)} · ${e.data_volume||0}条数据 · ${fmtTokens(e.token_usage||0)} tokens</div>
+      </div>
+      <div class="inline">
+        <span class="badge ${e.consent_status === 'confirmed' ? 'ok' : 'warn'}">${e.consent_status === 'confirmed' ? '已同意' : '未确认'}</span>
+      </div>
+    </div>`).join('');
+  } catch (e) {
+    console.error('loadEthics failed:', e);
+  }
+}
+
+// Scan data
+async function scanData() {
+  const targetId = document.getElementById('targetId').value.trim();
+  if (!targetId) { toast('请输入目标用户 ID', 'error'); return; }
+
+  toast('扫描数据量中...', 'info');
+  try {
+    const data = await api('scan_data', {
+      target_id: targetId,
+      sources: getSelectedSources()
+    });
+    if (data.error) { toast(data.error, 'error'); return; }
+    const count = data.total_count || 0;
+    document.getElementById('dataCount').textContent = count + ' 条';
+    document.getElementById('dataCountHint').textContent = count > 0
+      ? autoSuggestLevel(count)
+      : '未找到数据';
+
+    // Auto-select level
+    if (count > 0) {
+      const level = autoSuggestLevelKey(count);
+      document.getElementById('distillLevel').value = level;
+      updateLevelPipeline(level);
+    }
+
+    renderLedgerStatus(data, count);
+    toast(`扫描完成：${count} 条数据`, 'success');
+  } catch (e) {
+    toast('扫描失败: ' + e.message, 'error');
+  }
+}
+
+function renderLedgerStatus(data, count) {
+  const box = document.getElementById('ledgerStatus');
+  const led = data.ledger || {};
+  const delta = data.delta || {};
+  const mode = data.suggested_mode || 'full';
+  if (!box) return;
+
+  const modeText = { full: '全量推导', incremental: '增量延续', skip: '无需蒸馏' }[mode] || mode;
+  const cls = mode === 'incremental' ? 'ok' : (mode === 'skip' ? 'warn' : '');
+  const parts = [];
+
+  parts.push(`<strong>原料</strong> 独立发言 <strong>${data.distinct_count || count}</strong> 条`
+    + (data.total_count && data.distinct_count && data.total_count !== data.distinct_count
+        ? `（原始记录 ${data.total_count} 条，已去重）` : '')
+    + (data.facts_count ? ` + 平台事实 <strong>${data.facts_count}</strong> 条（${
+        Object.entries(data.facts_by_kind || {}).map(([k, v]) => `${k} ${v}`).join('、')}）` : ''));
+
+  if (led.runs) {
+    const states = Object.entries(led.by_state || {})
+      .map(([k, v]) => `${k} ${v}`).join('、');
+    parts.push(`<strong>人格账本</strong> 已连续蒸馏 <strong>${led.runs}</strong> 轮`
+      + `（结论 ${led.entries || 0} 条：${states || '—'}），水位 ${led.seen_messages || 0} 条`);
+  } else {
+    parts.push('<strong>人格账本</strong> 还没有记录 —— 这将是第 1 轮，走全量推导');
+  }
+  parts.push(`本轮新增 <strong>${delta.new_raw || 0}</strong> 条原始记录`
+    + `（累计 ${delta.total_raw || 0} 条）｜ 建议方式：<strong>${modeText}</strong>`);
+
+  // 代价预估：点之前就知道要花多久
+  const plan = data.plan;
+  if (plan) {
+    const mins = Math.ceil(plan.estimated * 60 / Math.max(1, (data.levels && data.levels[data.suggested_level]
+      && data.levels[data.suggested_level].budget) ? 3 : 3));
+    parts.push(`预计 <strong>${plan.estimated}</strong> 次调用`
+      + `（${plan.map_calls} 次取证 + ${plan.reduce ? 1 : 0} 次定稿 + ${plan.critic ? 1 : 0} 次终检）`
+      + `，按 ${3} 请求/分钟约需 <strong>${mins}</strong> 分钟，预算上限 ${plan.budget}`);
+    if (plan.degraded && plan.degraded.length) {
+      parts.push('⚠ 预算降级：' + plan.degraded.map(escapeHtml).join('；'));
+    }
+    if (plan.uncovered && plan.uncovered.length) {
+      parts.push('⚠ 本轮不会覆盖：' + plan.uncovered.join('、') + '（下轮自动优先补）');
+    }
+  }
+
+  // 源状态与缺口 —— 让"少收了什么"看得见
+  const notes = data.notes || [];
+  if (notes.length) {
+    parts.push('<span class="meta">数据源：' + notes.map(escapeHtml).join('　·　') + '</span>');
+  }
+  const miss = data.missing || [];
+  if (miss.length) {
+    parts.push('<span style="color:var(--red)">缺失：'
+      + miss.map(m => `${escapeHtml(m.source)}（${escapeHtml(m.reason)}）`).join('；')
+      + '</span>');
+  }
+
+  box.style.display = '';
+  box.className = 'quality-banner ' + cls;
+  box.innerHTML = parts.join('<br>');
+
+  const sel = document.getElementById('distillMode');
+  if (sel && mode !== 'skip') sel.value = 'auto';
+}
+
+function autoSuggestLevel(count) {
+  if (count < 100) return '建议 L0 种子';
+  if (count < 1000) return '建议 L1 核心';
+  if (count < 10000) return '建议 L2 深度';
+  if (count < 50000) return '建议 L3 完整';
+  return '建议 L4 完美';
+}
+
+function autoSuggestLevelKey(count) {
+  if (count < 100) return 'L0';
+  if (count < 1000) return 'L1';
+  if (count < 10000) return 'L2';
+  if (count < 50000) return 'L3';
+  return 'L4';
+}
+
+// Start distillation
+async function startDistill() {
+  const targetId = document.getElementById('targetId').value.trim();
+  const targetName = document.getElementById('targetName').value.trim();
+  const level = document.getElementById('distillLevel').value;
+  const consent = document.getElementById('consentConfirmed').checked;
+  const ethicsRead = document.getElementById('ethicsRead').checked;
+
+  if (!targetId) { toast('请输入目标用户 ID', 'error'); return; }
+  if (!consent) { toast('请确认已获得知情同意', 'error'); return; }
+  if (!ethicsRead) { toast('请阅读并同意伦理协议', 'error'); return; }
+
+  const sources = getSelectedSources();
+  if (sources.length === 0) { toast('请至少选择一个数据来源', 'error'); return; }
+
+  const externalText = document.getElementById('externalText').value.trim();
+
+  // Show progress panel
+  document.getElementById('progressPanel').style.display = '';
+  document.getElementById('btnStart').disabled = true;
+  document.getElementById('progressFill').style.width = '0%';
+
+  try {
+    // 启动蒸馏（通用通道）
+    const start = await api('start_distill', {
+      target_id: targetId,
+      target_name: targetName,
+      level: level,
+      mode: (document.getElementById('distillMode') || {}).value || 'auto',
+      sources: sources,
+      external_text: externalText,
+      consent: true
+    });
+    if (start.error) {
+      document.getElementById('btnStart').disabled = false;
+      toast(start.error, 'error');
+      return;
+    }
+    // 轮询进度
+    pollProgress();
+  } catch (e) {
+    document.getElementById('btnStart').disabled = false;
+    toast('启动失败: ' + e.message, 'error');
+  }
+}
+
+let pollTimer = null;
+
+function pollProgress() {
+  clearInterval(pollTimer);
+  pollTimer = setInterval(async () => {
+    try {
+      const data = await api('distill_status');
+      updateProgress(data);
+      if (data.error) {
+        clearInterval(pollTimer);
+        document.getElementById('btnStart').disabled = false;
+        toast('蒸馏失败: ' + data.error, 'error');
+        return;
+      }
+      if (data.done) {
+        clearInterval(pollTimer);
+        document.getElementById('btnStart').disabled = false;
+        toast('蒸馏完成！正在加载审核...', 'success');
+        setTimeout(() => {
+          document.getElementById('progressPanel').style.display = 'none';
+          showTab('review');
+        }, 1000);
+      } else if (!data.running) {
+        clearInterval(pollTimer);
+        document.getElementById('btnStart').disabled = false;
+      }
+    } catch (e) {
+      clearInterval(pollTimer);
+      document.getElementById('btnStart').disabled = false;
+      toast('进度查询失败: ' + e.message, 'error');
+    }
+  }, 1000);
+}
+
+function updateProgress(data) {
+  if (data.progress !== undefined) {
+    document.getElementById('progressFill').style.width = data.progress + '%';
+  }
+  if (data.stage) document.getElementById('progressStage').textContent = data.stage;
+  if (data.data_count) document.getElementById('progressData').textContent = data.data_count + ' 条';
+  if (data.tokens_used) document.getElementById('progressTokens').textContent = fmtTokens(data.tokens_used);
+  if (data.confidence) document.getElementById('progressConfidence').textContent = (data.confidence * 100).toFixed(0) + '%';
+  if (data.log) {
+    const log = document.getElementById('progressLog');
+    const lines = Array.isArray(data.log) ? data.log.join('\n') : String(data.log);
+    log.textContent = lines;
+    log.scrollTop = log.scrollHeight;
+  }
+  renderStages(data.stages);
+}
+
+// 分区进度：哪一层在跑、捞到几条 —— 长任务里这比一根进度条有用得多
+function renderStages(stages) {
+  const el = document.getElementById('stageList');
+  if (!el) return;
+  if (!stages || !stages.length) { el.innerHTML = ''; return; }
+  const cls = { '基线': 'mid', '取证中': 'mid', '已取证': 'high', '定稿': 'high',
+                '无证据': 'low' };
+  el.innerHTML = '<div class="section-label">各层进度</div>' + stages.map(s => `
+    <div class="stage-row">
+      <span>${escapeHtml(s.title || s.sid)}</span>
+      <span class="badge ${cls[s.status] || ''}">${escapeHtml(s.status || '')}</span>
+      <span class="meta">${s.entries || 0} 条</span>
+    </div>`).join('');
+}
+
+// Get selected data sources
+function getSelectedSources() {
+  const checks = document.querySelectorAll('#dataSourceList input[type="checkbox"]:checked');
+  return Array.from(checks).map(c => c.value);
+}
+
+// Update level pipeline visualization
+function updateLevelPipeline(level) {
+  const levels = ['L0','L1','L2','L3','L4'];
+  const idx = levels.indexOf(level);
+  levels.forEach((l, i) => {
+    const dot = document.getElementById('levelDot-' + l);
+    dot.classList.remove('active', 'done');
+    if (i < idx) dot.classList.add('done');
+    else if (i === idx) dot.classList.add('active');
+  });
+}
+
+// Show distillation detail
+async function showDistillDetail(id) {
+  try {
+    const data = await api('detail', {id: id});
+    const r = data.distillation;
+    if (!r) { toast('未找到蒸馏记录', 'error'); return; }
+
+    const lc = levelColor(r.level);
+    const html = `
+      <div class="modal-title">${r.target_name || r.target_id} <span class="badge ${r.level.toLowerCase()}" style="margin-left:8px">${r.level}</span></div>
+      <div class="grid grid-4" style="margin-bottom:16px">
+        <div class="card"><div class="card-label">等级</div><div class="card-value">${r.level}</div></div>
+        <div class="card"><div class="card-label">数据量</div><div class="card-value">${r.data_volume || 0} 条</div></div>
+        <div class="card"><div class="card-label">Token</div><div class="card-value">${fmtTokens(r.tokens_used || 0)}</div></div>
+        <div class="card"><div class="card-label">置信度</div><div class="card-value">${r.confidence ? (r.confidence*100).toFixed(0)+'%' : '--'}</div></div>
+      </div>
+      <div class="panel-divider"></div>
+      <div class="section-label">溯源项链</div>
+      <div style="margin-bottom:12px">
+        ${(r.provenance || []).map(p => `<span class="tag">${p}</span>`).join('') || '<span class="empty">无溯源数据</span>'}
+      </div>
+      <div class="panel-divider"></div>
+      <div class="section-label">人格文件预览</div>
+      <div class="persona-preview" id="personaPreview">${r.persona_preview || '<span class="muted">人格文件加载中...</span>'}</div>
+      <div class="row" style="margin-top:12px">
+        <button onclick="downloadPersona('${id}')">📥 下载人格文件</button>
+        <div class="grow"></div>
+        <button class="primary" onclick="viewFullPersona('${id}')">📖 查看完整文件</button>
+      </div>
+    `;
+    showModal(html);
+
+    // Load full persona if not preview
+    if (!r.persona_preview || r.persona_preview.includes('加载中')) {
+      try {
+        const full = await api('persona', {id: id});
+        const el = document.getElementById('personaPreview');
+        if (el) el.textContent = full.persona || '无内容';
+      } catch (e) { console.error('load persona failed:', e); }
+    }
+  } catch (e) {
+    toast('加载失败: ' + e.message, 'error');
+  }
+}
+
+// Download persona file
+async function downloadPersona(id) {
+  try {
+    const data = await api('persona', {id: id});
+    const text = data.persona || '';
+    const blob = new Blob([text], {type: 'text/markdown;charset=utf-8'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'persona_' + id + '.md';
+    a.click();
+    URL.revokeObjectURL(url);
+    toast('已下载', 'success');
+  } catch (e) {
+    toast('下载失败: ' + e.message, 'error');
+  }
+}
+
+// View full persona in new modal
+async function viewFullPersona(id) {
+  try {
+    const data = await api('persona', {id: id});
+    showModal(`
+      <div class="modal-title">人格文件完整内容</div>
+      <div class="persona-preview" style="max-height:70vh">${data.persona || '无内容'}</div>
+      <div class="row" style="margin-top:12px">
+        <button onclick="downloadPersona('${id}')">📥 下载</button>
+      </div>
+    `);
+  } catch (e) {
+    toast('加载失败: ' + e.message, 'error');
+  }
+}
+
+// Delete distillation
+async function deleteDistill(id) {
+  if (!confirm('确定要删除这条蒸馏记录吗？人格文件将被永久删除。')) return;
+  try {
+    await api('delete', {id: id});
+    toast('已删除', 'success');
+    loadDashboard();
+    loadHistory();
+  } catch (e) {
+    toast('删除失败: ' + e.message, 'error');
+  }
+}
+
+// Show ethics doc
+function showEthicsDoc() {
+  showModal(`
+    <div class="modal-title">伦理协议 Ethics Protocol v1.0</div>
+    <div class="persona-preview" style="max-height:70vh;font-size:12px;line-height:1.6">
+# 人格蒸馏伦理协议 Ethics Protocol
+
+## 第一章 总则
+
+### 1.1 原则
+
+人格蒸馏技术具有高度敏感性。本协议确立以下不可违背的原则：
+
+1. **自主权**：被蒸馏对象的人格数据主权归其本人所有
+2. **最小必要**：只收集蒸馏所需的最少数据
+3. **可撤回**：任何时刻可撤回授权并删除全部数据
+4. **不可滥用**：蒸馏结果不得用于歧视、操控或伤害
+
+### 1.2 适用范围
+
+本协议适用于通过"这样脆弱的东西"（人格蒸馏）插件进行的任何人格蒸馏操作。
+
+### 1.3 责任主体
+
+- **蒸馏执行者**：插件使用者，承担数据收集和使用的全部责任
+- **被蒸馏者**：人格数据的原始来源，享有知情权和删除权
+- **平台**：EggBloom Desktop，不承担蒸馏行为的法律责任
+
+## 第二章 知情同意
+
+### 2.1 基本规则
+
+原则上，蒸馏前必须获得被蒸馏者的明确知情同意。
+
+例外情况（仅限以下场景，且必须在事后通知被蒸馏者）：
+- 蒸馏对象为蒸馏执行者本人
+- 蒸馏对象为公开数据（公开发布的内容）
+- 蒸馏对象已明确授权第三方蒸馏
+
+### 2.2 知情同意内容
+
+知情同意必须包含：蒸馏目的、数据范围、数据用途、存储位置、删除方式、撤回授权方式。
+
+### 2.3 未成年人特殊规则
+
+蒸馏 14 岁以下未成年人的人格数据，必须同时获得其监护人同意。
+
+## 第三章 数据范围
+
+### 3.1 禁止的数据源
+
+- 通过黑客手段获取的数据
+- 通过欺骗手段获取的数据
+- 通过胁迫手段获取的数据
+- 被蒸馏者明确声明为私密的数据
+
+### 3.2 敏感信息处理
+
+身份信息、健康信息、财务信息、政治立场、性取向、宗教信息、位置信息、生物特征——必须脱敏或排除。
+
+## 第四章 数据存储
+
+- 本地优先，加密存储
+- 最小化存储，不保留原始数据副本
+- 不同被蒸馏者的数据隔离存储
+
+## 第五章 数据删除
+
+被蒸馏者有权在任何时间要求删除其人格数据。收到删除请求后，必须在 30 天内完成删除。
+
+## 第六章 使用限制
+
+禁止用途：冒充欺诈、操控决策、商业牟利（未授权）、歧视性决策、武器化使用、深度伪造。
+
+## 第七章 审计与追踪
+
+每次蒸馏操作必须记录审计日志，保留至少 2 年。
+
+## 第八章 违规处理
+
+严重违规（未获同意、数据泄露、禁止用途、拒绝删除）须立即停止、通知受影响方、提交整改报告。
+
+## 第九章 特殊场景
+
+已故人士需继承人同意；公众人物仅可使用公开数据；跨司法管辖区取更严格标准。
+
+    </div>
+    <div class="row" style="margin-top:12px">
+      <button onclick="closeModal()">关闭</button>
+    </div>
+  `);
+}
+
+// Level pipeline click
+document.querySelectorAll('.level-dot').forEach(dot => {
+  dot.style.cursor = 'pointer';
+  dot.addEventListener('click', function() {
+    const level = this.textContent.trim();
+    document.getElementById('distillLevel').value = level;
+    updateLevelPipeline(level);
+  });
+});
+
+// ── Review Functions ──
+
+let reviewData = null;
+let evidenceShown = false;
+let onlyChanged = false;   // 审核页：只看本轮变更
+let ledgerData = null;
+let reviewPlan = {};      // "section::label" → 账本条目（带状态/确认次数）
+let reviewChanges = {};   // "section::label" → 本轮变化
+
+const CHANGE_LABEL = { created:'新增', confirmed:'确认', revised:'改写',
+  contradicted:'遇到反证', weakened:'削弱', revived:'复活',
+  suspect:'转为存疑', dormant:'转入沉眠', retired:'推翻' };
+const CHANGE_ICON = { created:'➕', confirmed:'✔', revised:'🔁',
+  contradicted:'⚠', revived:'♻', suspect:'◐', dormant:'○', retired:'✕', weakened:'↓' };
+const STATE_LABEL = { active:'活跃', suspect:'存疑', dormant:'沉眠', retired:'已推翻' };
+
+// Section definitions for review
+const REVIEW_SECTIONS = [
+  { key: 'identity', label: '🟢 身份层', level: 'L0+', fields: ['姓名/称呼','年龄段','角色定位','一句话人设'] },
+  { key: 'linguistics', label: '🔵 语言层', level: 'L1+', fields: ['高频词','句式偏好','语气词','标点习惯','表情风格'] },
+  { key: 'behavior', label: '🟡 行为层', level: 'L1+', fields: ['话题偏好','情绪模式','幽默风格','冲突处理','社交模式'] },
+  { key: 'cognition', label: '🔴 认知层', level: 'L2+', fields: ['价值观','决策模式','驱动力','雷区/禁区','思维风格'] },
+  { key: 'relationship', label: '🟣 关系层', level: 'L2+', fields: ['依恋风格','亲密表达','群体角色','信任建立'] },
+  { key: 'temporal', label: '🟠 时间层', level: 'L3+', fields: ['活跃时段','日常节律','连发长度','时段差异'] },
+  { key: 'environmental', label: '🌿 环境层', level: 'L3+', fields: ['场景切换','平台痕迹','公开/私密','文化环境'] },
+  { key: 'reconstruction', label: '🧬 完整重建', level: 'L4+', fields: ['条件反射库','梗库','薄弱区','可复现锚点'] },
+];
+
+async function loadReview() {
+  try {
+    const data = await api('pending_review');
+    if (data && data.has_pending) {
+      reviewData = data;
+      document.getElementById('reviewEmpty').style.display = 'none';
+      document.getElementById('reviewContent').style.display = '';
+      renderReview();
+    } else {
+      reviewData = null;
+      document.getElementById('reviewEmpty').style.display = '';
+      document.getElementById('reviewContent').style.display = 'none';
+    }
+  } catch (e) {
+    console.error('loadReview failed:', e);
+    document.getElementById('reviewEmpty').style.display = '';
+    document.getElementById('reviewContent').style.display = 'none';
+  }
+}
+
+function renderReview() {
+  if (!reviewData) return;
+  const r = reviewData;
+
+  // Header info
+  document.getElementById('reviewTargetInfo').textContent =
+    `${r.target_name || r.target_id} · ${r.level} · ${r.data_volume || 0}条数据 · ${fmtTokens(r.tokens_used || 0)} tokens`;
+
+  // Summary stats
+  const allFeatures = Object.values(r.features || {}).flat();
+  document.getElementById('reviewTotalFeatures').textContent = allFeatures.length;
+  document.getElementById('reviewEditedFeatures').textContent = allFeatures.filter(f => f.edited).length;
+  const avgConf = allFeatures.length > 0
+    ? (allFeatures.reduce((s, f) => s + (f.confidence || 0), 0) / allFeatures.length * 100).toFixed(0) + '%'
+    : '--';
+  document.getElementById('reviewAvgConfidence').textContent = avgConf;
+  document.getElementById('reviewLevel').textContent = r.level;
+
+  // 质量报告
+  const q = r.quality || {};
+  const qb = document.getElementById('reviewQuality');
+  if (q.feasibility || q.llm) {
+    const feas = q.feasibility || {};
+    const llm = q.llm || {};
+    const cit = q.citations || {};
+    const crit = q.critic || {};
+    const cl = feas.grade === '合适' ? 'ok' : (feas.grade === '勉强' ? 'warn' : 'bad');
+    qb.style.display = '';
+    qb.className = 'quality-banner ' + cl;
+    qb.innerHTML = [
+      `<strong>${feas.grade || ''}</strong> ${feas.hint || ''}`,
+      `<span class="q-sep">|</span> 独立发言 ${q.unique_messages || 0} 条`,
+      `<span class="q-sep">|</span> 有效引用 ${cit.valid || 0} 处` +
+        (cit.invalid ? `，无效 ${cit.invalid} 处` : '') +
+        (cit.dropped_entries ? `，剔除编造 ${cit.dropped_entries} 条` : ''),
+      llm.calls ? `<span class="q-sep">|</span> LLM ${llm.calls} 次 / ${fmtTokens(llm.tokens || 0)} tokens` : '',
+      (crit.checked !== undefined && llm.calls) ? `<span class="q-sep">|</span> 终检核对 ${crit.checked} 条，降权 ${crit.weakened}，剔除 ${crit.dropped}，补漏 ${crit.added}` : '',
+    ].filter(Boolean).join(' ');
+  } else {
+    qb.style.display = 'none';
+  }
+
+  // 连续性：本轮变化 + 每条结论在账本里的状态
+  const planEntries = (r.ledger_plan || {}).entries || {};
+  reviewPlan = {};
+  for (const [key, items] of Object.entries(planEntries)) {
+    for (const e of items) reviewPlan[key + '::' + e.label] = e;
+  }
+  reviewChanges = {};
+  for (const c of ((r.ledger_plan || {}).changes || [])) {
+    reviewChanges[c.section + '::' + c.label] = c;
+  }
+  renderChanges(r);
+
+  // 证据统计
+  const withEv = allFeatures.filter(f => (f.evidence || []).length).length;
+  document.getElementById('reviewEvidenceStat').textContent =
+    allFeatures.length ? `${withEv}/${allFeatures.length} 条带证据编号` : '';
+
+  // Render sections
+  const sectionsEl = document.getElementById('reviewSections');
+  const html = REVIEW_SECTIONS.map(sec => {
+    const features = (r.features || {})[sec.key] || [];
+    if (features.length === 0 && r.level && r.level !== 'L4' && REVIEW_SECTIONS.indexOf(sec) >= 3) {
+      return ''; // Skip sections not in this level
+    }
+    return renderSection(sec, features);
+  }).join('');
+  sectionsEl.innerHTML = html;
+}
+
+function toggleEvidence() {
+  evidenceShown = !evidenceShown;
+  document.getElementById('btnEvidence').textContent =
+    evidenceShown ? '🔍 隐藏原文引证' : '🔍 显示原文引证';
+  document.querySelectorAll('.evidence-line').forEach(el => {
+    el.style.display = evidenceShown ? '' : 'none';
+  });
+}
+
+async function copyPersonaPrompt() {
+  try {
+    const id = (reviewData && reviewData.id) || '';
+    const data = await api('persona_prompt', { id });
+    if (!data || !data.prompt) { toast('拿不到人格提示词: ' + ((data && data.error) || '未知错误'), 'error'); return; }
+    await navigator.clipboard.writeText(data.prompt);
+    toast('人格提示词已复制到剪贴板，可直接作为 system prompt 使用', 'success');
+  } catch (e) {
+    toast('复制失败: ' + e.message + '（可在控制台查看）', 'error');
+    console.error(e);
+  }
+}
+
+// ── 导出 ──
+
+async function exportDoc(what) {
+  try {
+    const id = (reviewData && reviewData.id) || (ledgerData && ledgerData.id) || '';
+    const data = await api('export', { id, what });
+    if (!data || data.error) { toast('导出失败: ' + ((data && data.error) || '未知错误'), 'error'); return; }
+    downloadText(data.filename, data.content);
+    toast('已开始下载 ' + data.filename, 'success');
+  } catch (e) {
+    toast('导出失败: ' + e.message, 'error');
+  }
+}
+
+function exportFromLedger(what) {
+  const t = (document.getElementById('ledgerTarget') || {}).value || '';
+  const id = (ledgerData && ledgerData.id) || '';
+  api('export', { id, what }).then(data => {
+    if (!data || data.error) { toast('导出失败: ' + ((data && data.error) || '未知错误'), 'error'); return; }
+    downloadText(data.filename, data.content);
+    toast('已开始下载 ' + data.filename, 'success');
+  }).catch(e => toast('导出失败: ' + e.message, 'error'));
+}
+
+function downloadText(filename, content) {
+  const blob = new Blob([content || ''], { type: 'text/plain;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 4000);
+}
+
+// ── 人格账本页 ──
+
+// ── 发布给 bot ──
+// 把蒸馏注入卡写进发布文件（ego 的 get_personality 会优先返回它），
+// bot 下一次用人设时即生效，无需重启。
+async function publishPersona() {
+  const t = (document.getElementById('ledgerTarget') || {}).value || '';
+  if (!t) { toast('先在左边填目标用户 ID', 'error'); return; }
+  if (!confirm('把 ' + t + ' 的蒸馏人格卡发布给 bot？\n（bot 的说话方式将切换为蒸馏结果；手写人设的【禁忌】等硬约束保留；可随时下线或回滚）')) return;
+  try {
+    const data = await apiAction('publish', { target_id: t });
+    if (data.error) { toast('发布失败: ' + data.error, 'error'); return; }
+    toast('已发布给 bot（' + data.bytes + ' 字节），下一次用人设即生效', 'success');
+    refreshPublishStatus(t);
+  } catch (e) { toast('发布失败: ' + e.message, 'error'); }
+}
+
+async function unpublishPersona() {
+  if (!confirm('下线蒸馏人格？bot 将回到手写人设 personality.txt。')) return;
+  try {
+    await apiAction('publish', { action: 'disable' });
+    toast('已下线，bot 回到手写人设', 'success');
+    refreshPublishStatus((document.getElementById('ledgerTarget') || {}).value || '');
+  } catch (e) { toast('下线失败: ' + e.message, 'error'); }
+}
+
+async function refreshPublishStatus(targetId) {
+  const box = document.getElementById('publishStatus');
+  if (!box) return;
+  try {
+    const st = await apiAction('publish_status', {});
+    if (!st || (!st.enabled && !st.history_count)) { box.style.display = 'none'; return; }
+    box.style.display = 'block';
+    box.innerHTML = st.enabled
+      ? `🚀 <strong>已发布</strong> 目标 ${escapeHtml(st.target_id || '')} · ` +
+        `${new Date(st.published_at).toLocaleString()} · ${st.bytes} 字节 · ` +
+        `快照 ${st.history_count} 份`
+      : '⚪ 蒸馏人格未发布（bot 使用手写人设）';
+  } catch (e) { box.style.display = 'none'; }
+}
+
+// ── 发布给 bot 结束 ──
+
+async function loadLedger() {
+  const box = document.getElementById('ledgerEntries');
+  const t = (document.getElementById('ledgerTarget') || {}).value || '';
+  box.innerHTML = '<div class="empty">读取中…</div>';
+  try {
+    const data = await api('ledger', { target_id: t });
+    ledgerData = data;
+    if (data.error) {
+      document.getElementById('ledgerSummary').style.display = 'none';
+      document.getElementById('ledgerJournal').innerHTML = '';
+      box.innerHTML = `<div class="empty-state"><div class="empty-state-icon">📒</div>
+        <div class="empty-state-title">还没有账本</div>
+        <div class="empty-state-desc">${escapeHtml(data.error)}</div></div>`;
+      return;
+    }
+    renderLedger(data);
+  } catch (e) {
+    box.innerHTML = `<div class="empty">读取失败：${escapeHtml(e.message)}</div>`;
+  }
+}
+
+function renderLedger(data) {
+  const s = data.summary || {};
+  const sb = document.getElementById('ledgerSummary');
+  sb.style.display = '';
+  sb.className = 'quality-banner';
+  const states = Object.entries(s.by_state || {}).map(([k, v]) => `${k} ${v}`).join('、') || '—';
+  sb.innerHTML = `<strong>${escapeHtml(String(s.target_id))}</strong> ｜ `
+    + `已连续蒸馏 <strong>${s.runs || 0}</strong> 轮 ｜ 结论 ${s.entries || 0} 条（${states}）<br>`
+    + `平均置信度 ${((s.avg_confidence || 0) * 100).toFixed(0)}% ｜ 水位 ${s.seen_messages || 0} 条 ｜ `
+    + `建账 ${String(s.created_at || '').slice(0, 16).replace('T', ' ')}`;
+
+  const j = data.journal || [];
+  document.getElementById('ledgerJournal').innerHTML = j.length ? `
+    <div class="section-label" style="margin-top:8px">演化日志（最近的轮次）</div>
+    <div class="quality-banner" style="margin-bottom:12px">${
+      j.slice(0, 6).map(e => {
+        const ev = Object.entries(e.events || {}).map(([k, v]) => `${CHANGE_LABEL[k] || k} ${v}`).join('、') || '无变化';
+        return `第 ${e.run} 轮（${String(e.at || '').slice(5, 16).replace('T', ' ')}）：${ev}`;
+      }).join('<br>')
+    }</div>` : '';
+
+  const rows = [];
+  for (const [sec, items] of Object.entries(data.entries || {})) {
+    if (!items.length) continue;
+    rows.push(`<div class="section-label" style="margin-top:10px">${escapeHtml(sec)}</div>`);
+    rows.push(items.map(e => {
+      const st = e.state || 'active';
+      const cls = st === 'active' ? 'ok' : (st === 'suspect' ? 'warn' : 'gone');
+      const n = e.confirmations || 1;
+      return `<div class="list-item">
+        <div style="min-width:0">
+          <div style="font-weight:600">${escapeHtml(e.label || '')}
+            <span class="state-badge ${cls}">${STATE_LABEL[st] || st}${n > 1 ? ' · ' + n + '次确认' : ''}</span>
+          </div>
+          <div class="muted" style="word-break:break-all">${escapeHtml(e.value || '')}</div>
+          <div class="muted" style="font-size:11px">置信度 ${((e.confidence || 0) * 100).toFixed(0)}%
+            ・沉默 ${e.silent_runs || 0} 轮
+            ${(e.evidence || []).length ? '・证据 ' + (e.evidence || []).slice(0, 4).map(m => `<code>${m}</code>`).join(' ') : ''}</div>
+        </div>
+        <div class="inline">
+          <button class="small danger" onclick="forgetEntry('${encodeURIComponent(e.eid || '')}','${escapeHtml(e.label || '')}')">抹除</button>
+        </div>
+      </div>`;
+    }).join(''));
+  }
+  document.getElementById('ledgerEntries').innerHTML = rows.join('')
+    || '<div class="empty">账本里还没有结论。</div>';
+}
+
+async function forgetEntry(eidEnc, label) {
+  const eid = decodeURIComponent(eidEnc);
+  if (!confirm(`确定抹除「${label}」？\n\n这会把这条结论从账本里直接删掉（并在演化日志里留痕），之后重新蒸馏会重新观察它。`)) return;
+  const t = (document.getElementById('ledgerTarget') || {}).value || '';
+  const res = await api('forget', { target_id: t, eid });
+  if (res.error) { toast(res.error, 'error'); return; }
+  toast('已抹除：' + res.removed, 'success');
+  loadLedger();
+}
+
+// ── 审核页：只看变更 / 批量操作 ──
+
+function toggleOnlyChanged() {
+  onlyChanged = !onlyChanged;
+  document.getElementById('btnOnlyChanged').textContent =
+    onlyChanged ? '👁 显示全部' : '👁 只看本轮变更';
+  renderReview();
+}
+
+function bulkRemoveLowConf() {
+  if (!reviewData) return;
+  const th = parseFloat((document.getElementById('bulkThreshold') || {}).value || '0.35');
+  let n = 0;
+  for (const [sec, items] of Object.entries(reviewData.features || {})) {
+    const kept = (items || []).filter(f => {
+      const drop = (f.confidence || 0) < th;
+      if (drop) n++;
+      return !drop;
+    });
+    reviewData.features[sec] = kept;
+  }
+  renderReview();
+  toast(`已移除 ${n} 条置信度低于 ${(th * 100).toFixed(0)}% 的结论`, 'success');
+}
+
+// ── 设置面板 ──
+
+const SETTING_FIELDS = [
+  ['continuous', '连续蒸馏（账本累积，只吃新增语料）', 'bool'],
+  ['deep_disable_thinking', '关掉推理模型的思考过程（必须开，否则会超时且输出为空）', 'bool'],
+  ['critic_enabled', 'L4 终检对账（把结论送回原文核对）', 'bool'],
+  ['evidence_appendix', '审核通过时生成证据附卷', 'bool'],
+  ['llm_enabled', '允许调用 LLM 深挖', 'bool'],
+  ['llm_rpm', '上游限速（请求/分钟，实测中转只有约 3）', 'int'],
+  ['max_llm_calls', '单轮蒸馏的调用上限（防烧额度）', 'int'],
+  ['llm_max_tokens', '单次输出上限', 'int'],
+  ['sections_per_call', '每次取证问几层（1 最细，越大越快）', 'int'],
+  ['chunk_chars', '语料分块粒度（字符，越小块越多）', 'int'],
+  ['empty_retries', '空输出/被限流时的重试次数', 'int'],
+  ['incremental_max_messages', '新增不超过多少条时走增量模式', 'int'],
+  ['suspect_after', '连续多少轮没被提及转为「存疑」', 'int'],
+  ['dormant_after', '连续多少轮没被提及转为「沉眠」', 'int'],
+  ['inject_min_confidence', '人格注入卡的最低置信度', 'float'],
+  ['evidence_quotes', '每条结论展示几段原文引证', 'int'],
+  ['quote_chars', '每条引证保存多长的原文', 'int'],
+  ['ledger_max_fingerprints', '水位指纹上限', 'int'],
+];
+
+async function openSettings() {
+  try {
+    const cfg = await api('get_config');
+    const rows = SETTING_FIELDS.map(([k, label, t]) => {
+      const v = cfg[k];
+      if (t === 'bool') {
+        return `<label class="checkbox-row" style="margin:6px 0">
+          <input type="checkbox" data-cfg="${k}" ${v ? 'checked' : ''}><span>${label}</span></label>`;
+      }
+      return `<div class="form-group" style="margin-top:8px">
+        <label class="form-label">${label}</label>
+        <input type="text" data-cfg="${k}" value="${v === undefined ? '' : v}">
+      </div>`;
+    }).join('');
+    showModal(`<div class="panel-title">⚙ 蒸馏设置</div>
+      <div class="desc">改动只影响之后的蒸馏。限速与调用上限直接决定要花多久、花多少额度。</div>
+      <div style="max-height:52vh;overflow:auto">${rows}</div>
+      <div class="row" style="margin-top:16px">
+        <div class="inline">
+          <button class="ghost" onclick="closeModal()">取消</button>
+          <button class="ghost" onclick="resetSettings()">恢复默认</button>
+        </div>
+        <div class="grow"></div>
+        <button class="primary" onclick="saveSettings()">保存</button>
+      </div>`);
+  } catch (e) {
+    toast('读取设置失败: ' + e.message, 'error');
+  }
+}
+
+async function saveSettings() {
+  const payload = {};
+  document.querySelectorAll('[data-cfg]').forEach(el => {
+    const k = el.dataset.cfg;
+    if (el.type === 'checkbox') { payload[k] = el.checked; return; }
+    const raw = el.value.trim();
+    const num = Number(raw);
+    payload[k] = raw !== '' && !isNaN(num) ? (raw.includes('.') ? parseFloat(raw) : parseInt(raw, 10)) : raw;
+  });
+  try {
+    await api('set_config', payload);
+    closeModal();
+    toast('设置已保存', 'success');
+  } catch (e) {
+    toast('保存失败: ' + e.message, 'error');
+  }
+}
+
+function resetSettings() {
+  document.querySelectorAll('[data-cfg]').forEach(el => el.value = '');
+  toast('已清空输入；保存后将回落到插件默认值', 'info');
+}
+
+function renderChanges(r) {
+  const box = document.getElementById('reviewChanges');
+  const plan = r.ledger_plan;
+  if (!box) return;
+  if (!plan || (!plan.events || Object.keys(plan.events).length === 0)) {
+    if (plan) {
+      box.style.display = '';
+      box.className = 'quality-banner';
+      box.innerHTML = `<strong>本轮变化</strong>：第 ${plan.run || '?'} 轮 —— 没有结论发生变化`
+        + `（新数据再次印证了已有认识，这本身也是信息）`;
+    } else {
+      box.style.display = 'none';
+    }
+    return;
+  }
+  const order = ['created','revived','revised','contradicted','retired','suspect','dormant','confirmed'];
+  const head = order.filter(k => plan.events[k])
+    .map(k => `${CHANGE_LABEL[k]} ${plan.events[k]}`).join('、');
+  const rows = [];
+  for (const kind of order) {
+    const items = (plan.changes || []).filter(c => c.event === kind);
+    if (!items.length) continue;
+    const shown = items.slice(0, 8);
+    rows.push(`${CHANGE_ICON[kind] || ''} <strong>${CHANGE_LABEL[kind]}</strong>：`
+      + shown.map(c => `${c.label}${c.reason ? `（${c.reason}）` : ''}`).join('；')
+      + (items.length > shown.length ? ` …等 ${items.length} 条` : ''));
+  }
+  box.style.display = '';
+  box.className = 'quality-banner ' +
+    (plan.events.contradicted || plan.events.retired || plan.events.dormant ? 'warn' : 'ok');
+  box.innerHTML = `<strong>本轮变化</strong>（连续蒸馏第 ${plan.run || '?'} 轮）：${head}<br>`
+    + rows.join('<br>');
+}
+
+function renderSection(sec, features) {
+  // 过滤时**必须保留原始下标**：updateFeature/removeFeature 都是按下标操作的，
+  // 直接 filter 会让"编辑过滤后的第 1 行"改到别的条目上去。
+  let pairs = features.map((f, i) => ({ f, i }));
+  if (onlyChanged) {
+    pairs = pairs.filter(({ f }) => reviewChanges[sec.key + '::' + f.label]);
+  }
+  const featuresHtml = pairs.map(({ f, i }) => {
+    const ev = (f.evidence || []);
+    const src = f.source === 'llm' ? 'AI' : (f.source === 'critic' ? '终检' : '统计');
+    const key = sec.key + '::' + f.label;
+    const pe = reviewPlan[key];
+    const ch = reviewChanges[key];
+    const notes = [];
+    if (f.unverified) notes.push(`${f.unverified} 个引用编号不存在，已降权`);
+    if (f.critic === 'weak') notes.push('终检判定证据偏薄，已降权');
+    const evHtml = ev.length
+      ? '证据：' + ev.map(m => `<code>${m}</code>`).join(' ')
+      : (f.source === 'llm' ? '<em>无证据引用</em>' : '<em>统计特征（无单条引用）</em>');
+
+    let badge = '';
+    if (pe) {
+      const st = pe.state || 'active';
+      const cls = st === 'active' ? 'ok' : (st === 'suspect' ? 'warn' : 'gone');
+      const n = pe.confirmations || 1;
+      badge += `<span class="state-badge ${cls}">${STATE_LABEL[st] || st}`
+        + (n > 1 ? ` · ${n}次确认` : '') + '</span>';
+      if (pe.first_seen) badge += `<span class="state-when">首见 ${String(pe.first_seen).slice(5,16).replace('T',' ')}</span>`;
+    }
+    if (ch) {
+      badge += `<span class="chg-badge ${ch.event}">${CHANGE_ICON[ch.event] || ''} ${CHANGE_LABEL[ch.event] || ch.event}</span>`;
+    }
+
+    return `
+    <div class="review-feature" data-section="${sec.key}" data-index="${i}">
+      <span class="review-feature-label">${f.label || sec.fields[i] || '特征'}<span class="src-badge">${src}</span></span>
+      <div class="review-feature-value">
+        <input type="text" value="${escapeHtml(f.value || '')}" 
+               oninput="updateFeature('${sec.key}', ${i}, 'value', this.value)">
+        ${badge ? `<div class="state-line">${badge}</div>` : ''}
+        <div class="evidence-line" style="display:${evidenceShown ? '' : 'none'}">
+          ${evHtml}${notes.length ? ' <em>（' + notes.join('；') + '）</em>' : ''}
+        </div>
+      </div>
+      <div class="review-conf">
+        <span class="review-conf-label">${((f.confidence || 0) * 100).toFixed(0)}%</span>
+        <input type="range" min="0" max="100" value="${(f.confidence || 0) * 100}"
+               oninput="updateFeature('${sec.key}', ${i}, 'confidence', this.value / 100)"
+               onchange="this.previousElementSibling.textContent = (this.value)+'%'">
+      </div>
+      <button class="review-del-btn" onclick="removeFeature('${sec.key}', ${i})" title="删除">✕</button>
+    </div>
+  `;
+  }).join('');
+
+  return `
+    <div class="review-section" id="reviewSec-${sec.key}">
+      <div class="review-section-title">
+        <h3>${sec.label} <span class="badge ${sec.level[0].toLowerCase()}" style="margin-left:6px">${sec.level}</span></h3>
+        <button class="review-add-btn" onclick="addFeature('${sec.key}')" title="添加特征">+</button>
+      </div>
+      ${featuresHtml || '<div class="empty">暂无特征</div>'}
+    </div>
+  `;
+}
+
+function updateFeature(section, index, field, value) {
+  if (!reviewData) return;
+  const features = reviewData.features[section];
+  if (features && features[index]) {
+    if (field === 'confidence') value = parseFloat(value);
+    features[index][field] = value;
+    features[index].edited = true;
+    updateReviewStats();
+  }
+}
+
+function removeFeature(section, index) {
+  if (!reviewData) return;
+  const features = reviewData.features[section];
+  if (features) {
+    features.splice(index, 1);
+    renderReview();
+  }
+}
+
+function addFeature(section) {
+  if (!reviewData) return;
+  if (!reviewData.features[section]) reviewData.features[section] = [];
+  reviewData.features[section].push({
+    label: '新特征',
+    value: '',
+    confidence: 0.5,
+    edited: true
+  });
+  renderReview();
+}
+
+function updateReviewStats() {
+  if (!reviewData) return;
+  const allFeatures = Object.values(reviewData.features || {}).flat();
+  document.getElementById('reviewTotalFeatures').textContent = allFeatures.length;
+  document.getElementById('reviewEditedFeatures').textContent = allFeatures.filter(f => f.edited).length;
+  const avgConf = allFeatures.length > 0
+    ? (allFeatures.reduce((s, f) => s + (f.confidence || 0), 0) / allFeatures.length * 100).toFixed(0) + '%'
+    : '--';
+  document.getElementById('reviewAvgConfidence').textContent = avgConf;
+}
+
+async function approveReview() {
+  if (!reviewData) return;
+  if (!confirm('确认审核通过？审核后的特征将被保存为最终人格文件。')) return;
+
+  try {
+    await api('approve_review', {
+      id: reviewData.id,
+      features: reviewData.features
+    });
+    toast('审核通过，人格文件已保存！', 'success');
+    reviewData = null;
+    showTab('history');
+  } catch (e) {
+    toast('保存失败: ' + e.message, 'error');
+  }
+}
+
+async function discardReview() {
+  if (!reviewData) return;
+  if (!confirm('确定要丢弃这次蒸馏结果吗？')) return;
+
+  try {
+    await api('discard_review', {id: reviewData.id});
+    toast('已丢弃', 'info');
+    reviewData = null;
+    showTab('new');
+  } catch (e) {
+    toast('丢弃失败: ' + e.message, 'error');
+  }
+}
+
+async function reDistill() {
+  if (!reviewData) return;
+  toast('请重新配置并启动蒸馏', 'info');
+  showTab('new');
+  // Pre-fill target from previous distillation
+  if (reviewData.target_id) {
+    document.getElementById('targetId').value = reviewData.target_id;
+    document.getElementById('targetName').value = reviewData.target_name || '';
+    document.getElementById('distillLevel').value = reviewData.level;
+    updateLevelPipeline(reviewData.level);
+  }
+}
+
+function escapeHtml(text) {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
+}
+
+// Init
+document.getElementById('distillLevel').addEventListener('change', function() {
+  updateLevelPipeline(this.value);
+});
+
+// Close modal on overlay click
+document.getElementById('modalOverlay').addEventListener('click', function(e) {
+  if (e.target === this) closeModal();
+});
+
+// Initial load
+showTab('dashboard');
+updateLevelPipeline('L1');
+</script>
+</body>
+</html>

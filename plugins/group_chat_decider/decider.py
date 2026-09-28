@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """
 群聊决策器 - 概率筛选 + 注意力机制 + 超轻量AI调用
 
@@ -97,7 +97,7 @@ def _get_ai_client():
         api_url = plugin_config.DECIDER_API_URL or cfg.get("api_url", "")
         provider = cfg.get("api_provider", "deepseek")
         api_key = plugin_config.DECIDER_API_KEY or get_provider_api_key(provider)
-        model = plugin_config.DECIDER_MODEL or cfg.get("model_name", "deepseek-chat")
+        model = plugin_config.DECIDER_MODEL or cfg.get("model_name", "deepseek-flash")
 
         if api_key or provider == "ollama":
             client = AIClient(api_url, api_key, model, provider=provider, temperature=cfg.get("ai_temperature"))

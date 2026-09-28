@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """
 slang_learner 插件：让 EggBloom 能手动学习最新网络黑话，候选池确认后再注入。
 优化版：保持“手动触发 + 用户确认注入”模式，提升学习触发效率和注入流程。
@@ -335,11 +335,11 @@ class SlangLearner:
             provider = (bot_config.get("api_provider") or "deepseek")
             api_url = bot_config.get("api_url") or "https://api.deepseek.com/chat/completions"
             api_key = _gpak(provider) or ""
-            model = bot_config.get("model_name") or "deepseek-chat"
+            model = bot_config.get("model_name") or "deepseek-flash"
         except Exception:
             api_url = "https://api.deepseek.com/chat/completions"
             api_key = ""
-            model = "deepseek-chat"
+            model = "deepseek-flash"
 
         if not api_key:
             return candidates

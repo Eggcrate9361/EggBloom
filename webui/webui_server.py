@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+﻿#!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
 EggBloom WebUI Server - Modern Management Dashboard
@@ -621,7 +621,6 @@ def fetch_from_bot_core(path):
     if not _is_bot_core_alive():
         return None
     try:
-        import urllib.request
         req = urllib.request.Request(f"{BOT_CORE_URL}{path}", headers={"Accept": "application/json"})
         with urllib.request.urlopen(req, timeout=0.5) as r:
             return json.loads(r.read().decode("utf-8"))
@@ -634,7 +633,6 @@ def push_bot_reload():
     if not _is_bot_core_alive():
         return None
     try:
-        import urllib.request
         req = urllib.request.Request(
             f"{BOT_CORE_URL}/reload_config",
             data=b"{}",
@@ -690,7 +688,7 @@ class State:
         self.plugin_count = 0
         self.plugin_active = 0
         self.llm_status = "unknown"
-        self.llm_model = "deepseek-chat"
+        self.llm_model = "deepseek-flash"
         self.memory_total = 0
         self.session_count = 0
         self.api_calls_today = 0
@@ -789,9 +787,12 @@ def _model_candidate_urls(base_url, provider_type):
         # Gemini: GET /v1beta/models，需 ?key= 查询参数
         return [root + '/models', root + '/v1beta/models']
     if provider_type in ('custom',):
-        # 自建中转/自定义端点大多没有 OpenAI 兼容的 /models 接口，硬试只会等超时。
-        # 直接回落已保存的模型列表 + 前端手动输入。
-        return []
+        # 自定义端点也可能是标准 OpenAI 兼容服务：仍尝试 /v1/models（服务端用短超时快速失败）；
+        # 失败时前端回落已保存的模型列表 + 手动输入。
+        return [
+            root + '/v1/models',
+            root + '/models',
+        ]
     candidates = [
         root + '/v1/models',
         root + '/models',
@@ -814,6 +815,37 @@ def _provider_api_key(request_key, provider_entry):
         return get_provider_api_key(pid) or ''
     except Exception:
         return ''
+
+
+def _make_autonomous_chat():
+    """为 web_operator 自主 Agent 构造宿主文本模型回调。
+    签名：chat(messages, tools=None, max_tokens=...) -> (content, tool_calls, usage)。
+    复用主模型配置（api_provider / model_name / api_url + 凭据管理器里的 Key）。"""
+    from providers import make_provider
+    cfg = load_config()
+    pid = (cfg.get('api_provider') or '').strip()
+    api_url = (cfg.get('api_url') or '').strip()
+    model = (cfg.get('model_name') or cfg.get('model') or '').strip()
+    if not api_url:
+        try:
+            from config import API_PROVIDERS
+            api_url = (API_PROVIDERS.get(pid) or {}).get('url') or 'https://api.deepseek.com/chat/completions'
+        except Exception:
+            api_url = 'https://api.deepseek.com/chat/completions'
+    api_key = ''
+    try:
+        from config import get_provider_api_key, get_api_key
+        api_key = (get_provider_api_key(pid) if pid else get_api_key()) or ''
+    except Exception:
+        api_key = ''
+    if not api_key:
+        raise RuntimeError('未检测到可用的模型 API Key（请在设置里配置提供商与密钥）')
+    prov = make_provider(api_url=api_url, api_key=api_key,
+                         model=model or 'deepseek-flash', provider=pid or 'openai', max_retries=2)
+
+    def _chat(messages, tools=None, max_tokens=1500):
+        return prov.chat(messages, tools=tools, max_tokens=max_tokens)
+    return _chat
 
 
 def _fetch_remote_models(url, api_key, provider_type):
@@ -968,18 +1000,27 @@ def get_memory_stats():
     except Exception:
         return {"total": 0, "size_kb": 0}
 
+_EXPR_CACHE = _Cache(ttl=30)
+
 def get_expressions():
+    cached = _EXPR_CACHE.get()
+    if cached is not None:
+        return cached
     try:
         db = PROJECT / "self_learning_db" / "self_learning.db"
         if not db.exists():
-            return []
-        conn = sqlite3.connect(str(db))
-        cur = conn.cursor()
-        cur.execute("SELECT expression, scene, quality, count FROM expressions ORDER BY count DESC LIMIT 20")
-        rows = cur.fetchall()
-        return [{"text": r[0], "scene": r[1], "weight": r[2], "score": int(r[3] * 20)} for r in rows]
+            result = []
+        else:
+            conn = sqlite3.connect(str(db))
+            cur = conn.cursor()
+            cur.execute("SELECT expression, scene, quality, count FROM expressions ORDER BY count DESC LIMIT 20")
+            rows = cur.fetchall()
+            conn.close()
+            result = [{"text": r[0], "scene": r[1], "weight": r[2], "score": int(r[3] * 20)} for r in rows]
     except Exception:
-        return []
+        result = []
+    _EXPR_CACHE.set(result)
+    return result
 
 # Chat Logs
 def _collect_logs(limit=200):
@@ -2044,6 +2085,28 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(200, {"error": str(e), "snapshot": {}, "recent": []})
             return
 
+        if path == "/api/providers/catalog":
+            # 快速切模型下拉数据源：providers（含模型目录 + last_model）+ 当前 provider/model；
+            # 不回传任何 Key。模型目录由 /api/providers/models 拉取成功后自动持久化，
+            # 配置里没有就为空（用户到设置页拉一次即永久记住），不做静态目录兑底。
+            cfg = load_config()
+            provs = []
+            for _p in (cfg.get("providers") or []):
+                if not isinstance(_p, dict):
+                    continue
+                provs.append({
+                    "id": str(_p.get("id") or ""),
+                    "name": str(_p.get("name") or _p.get("id") or ""),
+                    "models": [m for m in (_p.get("models") or []) if m],
+                    "last_model": str(_p.get("last_model") or ""),
+                })
+            self._send_json(200, {
+                "providers": provs,
+                "api_provider": cfg.get("api_provider") or "",
+                "model_name": cfg.get("model_name") or "",
+            })
+            return
+
         if path == "/api/config":
             cfg = load_config()
             display = dict(cfg)
@@ -2060,14 +2123,15 @@ class Handler(BaseHTTPRequestHandler):
                         providers = json.loads(providers_path.read_text(encoding="utf-8"))
             except Exception:
                 providers = [
-                    {"id": "deepseek", "name": "DeepSeek", "models": [{"id": "deepseek-chat", "name": "DeepSeek Chat"}]},
+                    {"id": "deepseek", "name": "DeepSeek", "models": [{"id": "deepseek-flash", "name": "DeepSeek Chat"}]},
                     {"id": "openai", "name": "OpenAI", "models": [{"id": "gpt-4o", "name": "GPT-4o"}]},
                     {"id": "custom", "name": "Custom", "models": [{"id": "", "name": "Custom Endpoint"}]},
                 ]
             display["providers"] = providers
             for _p in display.get("providers", []) or []:
                 if isinstance(_p, dict):
-                    _p.pop("models", None)
+                    # models 目录随 providers 回传（仅模型 id/name，非敏感）：
+                    # 前端保存时整组写回，避免“显示层剥掉 → 保存写空 → 目录永久丢失”的链条
                     if _p.get("api_key"):
                         _p["api_key"] = _mask_secret(_p["api_key"])
                     # 标记该提供商是否已在凭据管理器保存专属 Key（前端据此显示"清除 Key"入口）
@@ -2154,7 +2218,6 @@ class Handler(BaseHTTPRequestHandler):
             comfyui_host = cfg.get("comfyui_host", "127.0.0.1")
             comfyui_port = cfg.get("comfyui_port", 8000)
             try:
-                import urllib.request
                 req = urllib.request.Request(f"http://{comfyui_host}:{comfyui_port}/system_stats", headers={"Accept": "application/json"})
                 with urllib.request.urlopen(req, timeout=3) as r:
                     comfyui_running = True
@@ -2385,7 +2448,6 @@ class Handler(BaseHTTPRequestHandler):
             port = int(payload.get("port") or 8000)
             timeout = int(payload.get("timeout") or 3)
             try:
-                import urllib.request
                 url = f"http://{host}:{port}/system_stats"
                 req = urllib.request.Request(url, headers={"Accept": "application/json"})
                 with urllib.request.urlopen(req, timeout=timeout) as r:
@@ -2422,7 +2484,19 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/config":
             cfg = load_config()
-            update = {k: v for k, v in data.items() if k != "api_key"}
+            update = {k: v for k, v in data.items() if k not in ("api_key", "api_key_clear")}
+            # 清除 Key：api_key_clear 传提供商 id（清专属凭据）或 "_global_"（清全局 Key）
+            clear_target = str(data.get("api_key_clear") or "").strip()
+            if clear_target:
+                try:
+                    from config import clear_provider_api_key
+                    if clear_target == "_global_":
+                        from cred_store import MODEL_API_KEY_CRED, delete_cred
+                        delete_cred(MODEL_API_KEY_CRED)
+                    else:
+                        clear_provider_api_key(clear_target)
+                except Exception:
+                    pass
             if "group_tool_allowlist" in update and not update["group_tool_allowlist"]:
                 # 空名单 = 恢复默认群聊工具（删除配置键，回到 GROUP_TOOLS）
                 cfg.pop("group_tool_allowlist", None)
@@ -2786,6 +2860,11 @@ class Handler(BaseHTTPRequestHandler):
                 pass
             models = []
             provider_type = _detect_provider_type(base_url, provider_id)
+            # 前端显式声明的协议优先（提供商编辑弹窗可选），避免中转/网关被 URL 误判
+            proto_override = (body.get("protocol") or "").strip().lower()
+            if proto_override and proto_override != 'auto' and proto_override in (
+                    'openai', 'anthropic', 'gemini', 'ollama', 'lmstudio', 'deepseek', 'custom'):
+                provider_type = proto_override
             candidate_urls = _model_candidate_urls(base_url, provider_type)
             local_models = []
             try:
@@ -2808,12 +2887,18 @@ class Handler(BaseHTTPRequestHandler):
                     pass
             models = local_models
             if candidate_urls and (not api_key or _is_redacted_key(api_key)):
-                # 前端不回传明文 key（掩码占位符）：服务端从凭据管理器解析真实 key
+                # 前端不回传明文 key：服务端按「提供商专属凭据 → 全局 Key」顺序解析
                 try:
-                    from config import get_api_key as _gak
-                    api_key = _gak() or ""
+                    from config import get_provider_api_key
+                    api_key = get_provider_api_key(provider_id) or ""
                 except Exception:
                     api_key = ""
+                if not api_key:
+                    try:
+                        from config import get_api_key as _gak
+                        api_key = _gak() or ""
+                    except Exception:
+                        api_key = ""
                 if not api_key:
                     try:
                         with open(str(HERE / 'model-debug.log'), 'a', encoding='utf-8') as df:
@@ -2823,13 +2908,14 @@ class Handler(BaseHTTPRequestHandler):
                     self._send_json(400, {"models": models, "provider_type": provider_type, "error": "未配置 API Key"})
                     return
             last_err = None
+            per_timeout = 6 if provider_type == 'custom' else 15
             if candidate_urls:
                 for url in candidate_urls:
                     try:
                         with open(str(HERE / 'model-debug.log'), 'a', encoding='utf-8') as df:
                             df.write('[TRY] ' + url + '\n')
                         req = urllib.request.Request(url, headers={"Authorization": "Bearer " + api_key, "Accept": "application/json"})
-                        with urllib.request.urlopen(req, timeout=15) as r:
+                        with urllib.request.urlopen(req, timeout=per_timeout) as r:
                             data = json.loads(r.read().decode("utf-8"))
                             raw = data.get("data") or data.get("models") or []
                             remote = []
@@ -2855,6 +2941,21 @@ class Handler(BaseHTTPRequestHandler):
             if not models and last_err:
                 status = 400 if "地址不可达" in last_err else 500
                 error = last_err
+            # 拉取成功即自动持久化到该 provider 的 models：
+            # 一次拉取永久记住，topbar / catalog / 设置页共享同一数据源，无需静态兑底
+            if models and provider_id:
+                try:
+                    _cfg = load_config()
+                    _changed = False
+                    for _p in (_cfg.get("providers") or []):
+                        if isinstance(_p, dict) and str(_p.get("id") or "") == provider_id and _p.get("models") != models:
+                            _p["models"] = models
+                            _changed = True
+                    if _changed:
+                        if save_config(_cfg):
+                            CONFIG_CACHE.update(_cfg)
+                except Exception:
+                    pass
             try:
                 with open(str(HERE / 'model-debug.log'), 'a', encoding='utf-8') as df:
                     df.write(f'[RESPONSE] type={provider_type} models={len(models)} status={status} error={error}\n')
@@ -2998,21 +3099,62 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(200, {"success": True, "enabled": bool(enabled)})
             return
 
-        if path == "/api/llm/test":
-            # 真实连通性测试：用当前 provider 的 URL/模型/每提供商专属 key 发一条最小请求
+        if path == "/api/config/model":
+            # 快速切换模型：一次性更新 provider/url/model 三个字段并热重载（不碰其它配置）
+            body = dict(data or {})
+            m = str(body.get("model_name") or "").strip()
+            pid = str(body.get("api_provider") or "").strip()
+            if not m or not pid:
+                self._send_json(200, {"success": False, "error": "missing api_provider/model_name"})
+                return
             cfg = load_config()
-            provider_id = str(cfg.get("api_provider") or "")
+            provs = cfg.get("providers") or []
+            prov = next((p for p in provs if isinstance(p, dict) and str(p.get("id")) == pid), None)
+            if not prov:
+                self._send_json(200, {"success": False, "error": "provider not found"})
+                return
+            cfg["api_provider"] = pid
+            cfg["api_url"] = str(prov.get("base_url") or "")
+            cfg["model_name"] = m
+            # 记住该提供商最近使用的模型（providers 随 save_config 落盘）
+            try:
+                prov["last_model"] = m
+            except Exception:
+                pass
+            success = save_config(cfg)
+            reload_result = None
+            if success:
+                CONFIG_CACHE.update(cfg)
+                reload_result = push_bot_reload()
+            self._send_json(200, {"success": success, "reload": reload_result, "model_name": m})
+            return
+
+        if path == "/api/llm/test":
+            # 真实连通性测试：优先用前端当前表单值（未保存也可测），缺省回落已保存配置；
+            # Key 掩码占位符视为无效，回退每提供商专属凭据 → 全局配置
+            cfg = load_config()
+            body_cfg = dict(data or {})
+            provider_id = str(body_cfg.get("api_provider") or cfg.get("api_provider") or "")
             try:
                 from config import get_provider_api_key
                 api_key = get_provider_api_key(provider_id) or ""
             except Exception:
+                api_key = ""
+            form_key = str(body_cfg.get("api_key") or "").strip()
+            if form_key and not _is_redacted_key(form_key):
+                api_key = form_key
+            if not api_key:
                 api_key = cfg.get("api_key") or ""
-            api_url = (cfg.get("api_url") or "").strip()
-            model = (cfg.get("model_name") or "").strip()
+            form_url = str(body_cfg.get("api_url") or "").strip()
+            api_url = form_url or (cfg.get("api_url") or "").strip()
+            form_model = str(body_cfg.get("model_name") or "").strip()
+            model = form_model or (cfg.get("model_name") or "").strip()
             if not api_url or not api_key:
                 self._send_json(200, {"ok": False, "error": "未配置 API URL 或 API Key（请在 LLM 配置页填写）"})
                 return
-            import urllib.request
+            # 注意：do_POST 是巨型函数，禁止在函数内局部 import urllib.request——
+            # 那会让 urllib 变成整个函数的局部变量，导致其它分支（如模型列表拉取）
+            # 报 UnboundLocalError。模块顶部已有全局 import。
             # 推理模型会先消耗 reasoning tokens：预算给足 64，避免 content 空返回被误判为失败
             payload = {"model": model, "messages": [{"role": "user", "content": "你好"}], "max_tokens": 64}
             req = urllib.request.Request(api_url, data=json.dumps(payload).encode("utf-8"),
@@ -3671,6 +3813,14 @@ class Handler(BaseHTTPRequestHandler):
                         return
                     if action == "chain_run":
                         self._send_json(200, wo.execute_task("chain.run", params))
+                        return
+                    if action == "web.autonomous":
+                        try:
+                            ctx = {"chat": _make_autonomous_chat()}
+                        except Exception as e:
+                            self._send_json(200, {"ok": False, "error": f"宿主模型未就绪: {e}"})
+                            return
+                        self._send_json(200, wo.execute_task(action, params, context=ctx))
                         return
                     self._send_json(200, wo.execute_task(action, params))
                     return
