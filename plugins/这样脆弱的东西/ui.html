@@ -1386,9 +1386,10 @@ async function refreshPublishStatus(targetId) {
     const st = await apiAction('publish_status', {});
     if (!st || (!st.enabled && !st.history_count)) { box.style.display = 'none'; return; }
     box.style.display = 'block';
+    const tok = st.tokens ? ` · ≈${st.tokens} tokens${st.token_warn ? ' ⚠ 偏大，确认模型上下文装得下' : ''}` : '';
     box.innerHTML = st.enabled
       ? `🚀 <strong>已发布</strong> 目标 ${escapeHtml(st.target_id || '')} · ` +
-        `${new Date(st.published_at).toLocaleString()} · ${st.bytes} 字节 · ` +
+        `${new Date(st.published_at).toLocaleString()} · ${st.bytes} 字节${tok} · ` +
         `快照 ${st.history_count} 份`
       : '⚪ 蒸馏人格未发布（bot 使用手写人设）';
   } catch (e) { box.style.display = 'none'; }

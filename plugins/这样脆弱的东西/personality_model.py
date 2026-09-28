@@ -780,7 +780,21 @@ def _overall_confidence(features):
 
 # ── 人格注入卡（可直接当 system prompt） ────────────────
 
-INJECT_LIMIT = 6000   # 硬约束在卡片末尾，上限太低会把它截掉（曾用 1800 出过事故）
+# 不再截断注入卡；只在大文件时给出 token 用量警告（约值，中文 1 字 ≈ 0.7 token）
+TOKEN_WARN = 8000      # 超过这个 token 数，发布/渲染时提醒（现代模型 8k 起步很常见）
+
+
+def injection_token_report(card):
+    """注入卡的 token 用量报告：大文件只警告，不截断。"""
+    tokens = estimate_tokens(card)
+    return {
+        "chars": len(card or ""),
+        "tokens": tokens,
+        "warn": tokens > TOKEN_WARN,
+        "message": (f"注入卡 {tokens} tokens（{len(card or '')} 字）——"
+                    "偏大，确认目标模型的上下文窗口装得下"
+                    if tokens > TOKEN_WARN else ""),
+    }
 
 
 def build_injection_prompt(record):
@@ -882,10 +896,9 @@ def build_injection_prompt(record):
     add("作息与场合", pick("temporal", 3, 0.5) + pick("environmental", 3, 0.5))
     add("最认人的几条锚点", pick("reconstruction", 5, 0.45))
 
-    text = "\n".join(parts)
-    if len(text) > INJECT_LIMIT:
-        text = text[:INJECT_LIMIT].rstrip() + "\n…（已按上下文预算截断）"
-    return text
+    # 大小不截断（用户决定）：宁可提示 token 用量，也不能把硬约束砍掉。
+    # token 用量警告见 injection_token_report()，由 publisher / UI 展示。
+    return "\n".join(parts)
 
 
 def build_evidence_appendix(record):

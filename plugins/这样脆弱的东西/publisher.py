@@ -148,10 +148,16 @@ def publish(target_id=None, enabled=True):
                 pass
 
     _write(prev, composed)
+    # token 用量报告（只警告不截断，用户决定）
+    from . import personality_model as _pm
+    report = _pm.injection_token_report(composed)
+
     state = {
         "target_id": target,
         "published_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "bytes": len(composed.encode("utf-8")),
+        "tokens": report["tokens"],
+        "token_warn": report["warn"],
         "preserved_sections": list(PRESERVE_SECTIONS),
         "enabled": True,
         "source": "persona_store card.md",
@@ -159,11 +165,16 @@ def publish(target_id=None, enabled=True):
     _write(STATE_PATH, __import__("json").dumps(state, ensure_ascii=False, indent=1))
 
     touched = _touch_personality()
+    notes = ["bot 将在下一次用人设时读到新内容（无需重启）" if touched
+             else "⚠ 未能 touch personality.txt，bot 可能要重启才生效"]
+    if report["warn"]:
+        notes.append("⚠ " + report["message"])
     return {"success": True, "target_id": target, "path": prev,
-            "bytes": state["bytes"], "preserved": bool(preserved),
+            "bytes": state["bytes"], "tokens": report["tokens"],
+            "token_warning": report["message"] if report["warn"] else "",
+            "preserved": bool(preserved),
             "bot_cache_refreshed": touched,
-            "note": ("bot 将在下一次用人设时读到新内容（无需重启）"
-                     if touched else "⚠ 未能 touch personality.txt，bot 可能要重启才生效")}
+            "note": "；".join(notes)}
 
 
 def disable():

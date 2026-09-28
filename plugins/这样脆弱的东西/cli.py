@@ -308,8 +308,11 @@ def cmd_publish(a):
     if res.get("rolled_back_to"):
         print(f"已回滚到 {res['rolled_back_to']}")
         return 0
-    print(f"已发布 {res['target_id']} 的注入卡（{res['bytes']} 字节，"
+    print(f"已发布 {res['target_id']} 的注入卡（{res['bytes']} 字节 ≈ "
+          f"{res.get('tokens', '?')} tokens，"
           f"硬约束保留={'是' if res.get('preserved') else '否'}）")
+    if res.get("token_warning"):
+        print(f"  ⚠ {res['token_warning']}")
     print(f"  {res.get('note', '')}")
     return 0
 
