@@ -316,8 +316,24 @@ def _is_marker_only(text):
     return bool(_SG_MARKER_ONLY.match(text or ""))
 
 
+_PARSE_CACHE = {}          # path -> (mtime, size, rows)；落沙是追加型文件，
+                           # mtime+size 变了才重解析，render/scan 反复读不再重复解析 4080 行
+
+
 def _parse_sandglass(path):
-    """逐行解析落沙，返回 [{"ts","speaker","text"}]，正文里的换行保留。"""
+    """逐行解析落沙，返回 [{"ts","speaker","text"}]，正文里的换行保留。
+
+    带缓存：按 mtime+size 判失效。落沙只会追加，解析结果按行数折叠，
+    是收集阶段最重的单步（实测 4080 行），render 每次都要跑一遍。
+    """
+    try:
+        st = os.stat(path)
+        key = (st.st_mtime, st.st_size)
+    except OSError:
+        return []
+    cached = _PARSE_CACHE.get(path)
+    if cached and cached[0] == key[0] and cached[1] == key[1]:
+        return list(cached[2])      # 浅拷贝列表壳，防调用方改坏缓存里的条目
     rows = []
     try:
         with open(path, "r", encoding="utf-8") as f:
@@ -331,6 +347,7 @@ def _parse_sandglass(path):
                          "text": m.group(3)})
         elif rows and line.strip():
             rows[-1]["text"] += "\n" + line        # 多行消息的续行
+    _PARSE_CACHE[path] = (key[0], key[1], rows)
     return rows
 
 

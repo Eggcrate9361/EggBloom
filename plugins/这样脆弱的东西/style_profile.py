@@ -289,6 +289,9 @@ def build(msgs, exemplar_count=12):
     b = _bursts(msgs)
     prof["burst"] = {k: v for k, v in b.items() if k != "groups"}
     prof["open_close"] = _open_close(b.get("groups") or [])
+    # 分时段画像（深夜 vs 白天）：to_features 会用「深夜说话方式」这条，
+    # 之前 build() 忘了生成它，导致这条永远发不出来 —— 潜伏 bug，实测发现
+    prof["band_profile"] = _band_profile(msgs)
     return prof
 
 

@@ -82,8 +82,8 @@ def _shard_for(mid_num):
 # ── 写入 ────────────────────────────────────────────────
 
 def write(target_id, *, persona_md="", card_md="", evidence_md="",
-          features=None, measures=None, style=None, evidence_map=None,
-          stats=None, ledger_view=None, level="", mode=""):
+          features=None, measures=None, style=None, relational=None,
+          evidence_map=None, stats=None, ledger_view=None, level="", mode=""):
     """把一次蒸馏的产物写进分层存储，返回 manifest。"""
     tid = str(target_id)
     root = _root(tid)
@@ -112,7 +112,8 @@ def write(target_id, *, persona_md="", card_md="", evidence_md="",
     for key, obj in (("psych", (measures or {}).get("psychology")),
                      ("sociolinguistics", (measures or {}).get("sociolinguistics")),
                      ("sociology", (measures or {}).get("sociology")),
-                     ("style", style)):
+                     ("style", style),
+                     ("relational", relational)):
         if not obj:
             continue
         rel = f"measures/{key}.json"

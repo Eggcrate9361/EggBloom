@@ -51,6 +51,8 @@ DEFAULTS = {
     "sandglass_bare_is_target": True,   # 落沙里没标发送者的行，按"私聊对象"处理
     "neurobase_home": "",               # NeuroBase 数据根覆盖（留空=跟随程序 sandglass_paths）
     "bot_names": ["占位名片A"],     # 机器人的名字（personality.txt 里的"你是X"会自动并入）
+    "turing_auto": False,               # 审核通过后自动跑图灵盲测（花额度，默认关）
+    "turing_rounds": 5,                 # 自动盲测的轮数
 }
 
 os.makedirs(DATA_DIR, exist_ok=True)

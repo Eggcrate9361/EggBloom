@@ -91,6 +91,32 @@ def with_evidence(record):
 _with_evidence = with_evidence
 
 
+def _auto_turing(record_id, rounds):
+    """后台自动盲测：通过审核 → 用当前人格卡生成 → 与真实发言逐维度对比。
+
+    结果由 api_server.turing_test 写回账本（verdict + mismatches），
+    下一次 render 时人格文件里就会出现「哪里不像」那张表。
+    刻意放 daemon 线程：盲测要花几分钟额度，不能卡住审核请求。
+    """
+    try:
+        import time as _t
+        _t.sleep(2)          # 等审核的文件落盘稳定
+        from . import api_server
+        res = api_server.turing_test(
+            {"distillation_id": record_id, "rounds": rounds})
+        status = res.get("status")
+        verdict = res.get("verdict", "")
+        audit_logger.log("turing_auto", detail=record_id,
+                         outcome=str(status),
+                         extra={"verdict": verdict})
+    except Exception as e:
+        try:
+            audit_logger.log("turing_auto_error", detail=record_id,
+                             outcome=str(e))
+        except Exception:
+            pass
+
+
 def approve(features=None):
     """审核通过：合并审核后的特征 → 记入账本 → 生成人格文件 → 落盘 → 进历史。
 
@@ -164,7 +190,7 @@ def approve(features=None):
             evidence_md=personality_model.build_evidence_appendix(record)
             if appendix_path else "",
             features=merged, measures=pending.get("measures"),
-            style=pending.get("style"),
+            style=pending.get("style"), relational=pending.get("relational"),
             evidence_map=pending.get("evidence_map") or {},
             stats=pending.get("stats") or {},
             ledger_view=pending.get("ledger_plan") or {},
@@ -203,6 +229,16 @@ def approve(features=None):
     _append_history(entry)
     if os.path.exists(PENDING_FILE):
         os.remove(PENDING_FILE)
+    # 图灵自动闭环（配置 turing_auto，默认关）：后台跑盲测，结果回写账本，
+    # 下一次 render 的人格文件里就会出现「哪里不像」那张表
+    if cfg.get("turing_auto") and \
+            ((pending.get("quality") or {}).get("llm") or {}).get("available"):
+        import threading
+        threading.Thread(target=_auto_turing,
+                         args=(pending["id"],
+                               int(cfg.get("turing_rounds", 5))),
+                         daemon=True, name="auto-turing").start()
+
     return {"success": True, "persona_path": path,
             "appendix_path": appendix_path,
             "store_note": store_note,

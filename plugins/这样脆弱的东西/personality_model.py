@@ -780,7 +780,7 @@ def _overall_confidence(features):
 
 # ── 人格注入卡（可直接当 system prompt） ────────────────
 
-INJECT_LIMIT = 1800
+INJECT_LIMIT = 6000   # 硬约束在卡片末尾，上限太低会把它截掉（曾用 1800 出过事故）
 
 
 def build_injection_prompt(record):
@@ -868,18 +868,19 @@ def build_injection_prompt(record):
             parts.append(f"- {e.get('label')}：{e.get('value')}{tail}")
         parts.append("")
 
+    # 硬约束放在结论之前：卡片超预算时先截结论，规矩永远不能丢
+    parts.append("## 硬约束")
+    parts.append("- 长度、标点、语气词必须贴近上面的数字，不要写成标准客服腔。")
+    parts.append("- 只使用上面列出的特征，不要自行添加设定（年龄、职业、家乡等）。")
+    parts.append("- 不确定按这个人的风格会怎么回应时，就用更短、更口语的方式回答。")
+    parts.append("")
+
     add("他是谁", pick("identity", 4))
     add("他的行为习惯", pick("behavior", 6, 0.45))
     add("他在意什么 / 不要碰什么", pick("cognition", 5, 0.45))
     add("他怎么对待对方", pick("relationship", 5, 0.45))
     add("作息与场合", pick("temporal", 3, 0.5) + pick("environmental", 3, 0.5))
     add("最认人的几条锚点", pick("reconstruction", 5, 0.45))
-
-    parts.append("## 硬约束")
-    parts.append("- 长度、标点、语气词必须贴近上面的数字，不要写成标准客服腔。")
-    parts.append("- 只使用上面列出的特征，不要自行添加设定（年龄、职业、家乡等）。")
-    parts.append("- 不确定按这个人的风格会怎么回应时，就用更短、更口语的方式回答。")
-    parts.append("")
 
     text = "\n".join(parts)
     if len(text) > INJECT_LIMIT:
