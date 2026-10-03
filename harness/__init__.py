@@ -43,6 +43,7 @@ from . import tool_proc
 from . import agent_loop
 from . import agent_service
 from . import bot_hook
+from . import plugin_bridge
 
 __all__ = [
     "ItemRetainer",
@@ -64,4 +65,5 @@ __all__ = [
     "agent_loop",
     "agent_service",
     "bot_hook",
+    "plugin_bridge",
 ]
