@@ -165,6 +165,30 @@ def test_edit():
     check("空 old_string 被拒", "[错误]" in out, out[:50])
 
 
+# ── 参数名容错：把"传错参数名"这一次往返省掉 ────────────────────────
+def test_edit_arg_tolerance():
+    print("\n[ws_edit] 参数名容错（降重试成本）")
+    # 1) 常见别名应被接住，直接成功（不浪费一次往返）
+    out = fs.tool_edit({"path": "a.txt", "old": "FOO", "new": "FOO2"})
+    check("old/new 别名被接住", "已修改" in out, out[:80])
+    with open(os.path.join(_SANDBOX, "a.txt"), encoding="utf-8") as f:
+        check("别名调用确实改了内容", "FOO2" in f.read(), "")
+
+    out = fs.tool_edit({"path": "a.txt", "search": "FOO2", "replace": "FOO3"})
+    check("search/replace 别名被接住", "已修改" in out, out[:80])
+
+    # 2) 完全陌生的参数名 → 报错**必须列出实际收到的键**，模型才能自纠
+    out = fs.tool_edit({"path": "a.txt", "before": "x", "after": "y"})
+    check("陌生参数名被拒", "[错误]" in out, out[:60])
+    check("报错列出实际收到的键", "实际收到的参数" in out and "before" in out, out[:200])
+    check("报错给出正确名称", "old_string" in out, out[:200])
+    check("报错要求重试一次", "重试" in out, out[:200])
+
+    # 3) 别名单里的键应被显式点名（在 missing_arg 的 aliases 提示里）
+    out = fs.tool_edit({"path": "a.txt", "find": None, "new_string": "q"})
+    check("值为 None 仍视为缺参数", "[错误]" in out and "old_string" in out, out[:200])
+
+
 # ── edit_many：原子语义 ────────────────────────────────────────────
 def test_edit_many():
     print("\n[ws_edit_many] 批处理原子性")
@@ -402,6 +426,7 @@ def main():
         test_workspace()
         test_read()
         test_edit()
+        test_edit_arg_tolerance()
         test_edit_many()
         test_write()
         test_glob_grep()

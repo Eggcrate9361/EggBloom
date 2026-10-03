@@ -39,6 +39,42 @@ import os
 import re
 import fnmatch
 
+
+def missing_arg(name, args, *, aliases=(), hint=""):
+    """构造"缺参数"报错 —— **必须列出实际收到的键名**。
+
+    为什么（极高命中率的关键一条）
+        模型传错参数名（例如把 `old_string` 写成 `old`）是**最高频**的工具失败。
+        若只回"缺少 old_string"，模型看不出自己错在哪，只能盲猜重试 —— 每次
+        重试都是一次完整往返（贵且慢）。把"实际收到的键"回给模型，它下一轮就能
+        自查纠正，**把重试从 2~3 次压到 1 次**。
+    """
+    got = sorted((args or {}).keys())
+    got_s = "、".join(got) if got else "（无）"
+    parts = [f"[错误] 缺少必需参数 {name}。"]
+    if hint:
+        parts.append(hint)
+    parts.append(f"本次实际收到的参数：{got_s}")
+    if aliases:
+        near = [a for a in aliases if a in (args or {})]
+        if near:
+            parts.append(f"注意：你传的是 {near[0]}，正确名称是 {name}。")
+    parts.append(f"请用正确名称重试一次：{name}=...")
+    return " ".join(parts)
+
+
+def _alias_hit(args, canonical, aliases=()):
+    """参数别名容错：模型把 old_string 写成 old / old_str / search 等常见变体时，
+    仍能取到值。返回 (值, 是否命中别名)。这是"超级好用"里最省事的一层。"""
+    a = args or {}
+    if canonical in a and a[canonical] is not None:
+        return a[canonical], False
+    for alt in aliases:
+        if alt in a and a[alt] is not None:
+            return a[alt], True
+    return None, False
+
+
 from . import workspace as _ws
 
 # ── 预算（token 是钱，默认就要小）──────────────────────────────────
@@ -300,10 +336,17 @@ def tool_edit(args):
     if os.path.isdir(path):
         return f"[错误] 这是目录：{_ws.rel(path)}"
 
-    old = args.get("old_string")
+    old, _aliased = _alias_hit(args, "old_string",
+                               ("old", "old_str", "oldText", "old_text",
+                                "search", "find", "target", "from"))
     if old is None:
-        return "[错误] 缺少 old_string（要替换的原文，必须与文件内容完全一致，含缩进）。"
-    new = args.get("new_string")
+        return missing_arg(
+            "old_string", args,
+            aliases=("old", "old_str", "old_text", "search", "find", "target", "from"),
+            hint="old_string = 要替换的**原文**（必须与文件内容逐字一致，含缩进）。")
+    new, _ = _alias_hit(args, "new_string",
+                        ("new", "new_str", "newText", "new_text",
+                         "replace", "replacement", "to", "with"))
     if new is None:
         new = ""
 
@@ -363,11 +406,18 @@ def tool_edit_many(args):
         if os.path.isdir(p):
             problems.append(f"第 {i} 项：{_ws.rel(p)} 是目录。")
             continue
-        old = e.get("old_string")
+        old, _ = _alias_hit(e, "old_string",
+                            ("old", "old_str", "old_text", "search", "find",
+                             "target", "from"))
         if old is None:
-            problems.append(f"第 {i} 项：缺少 old_string。")
+            problems.append(
+                f"第 {i} 项缺少 old_string（该项实际键："
+                f"{'、'.join(sorted(e.keys())) or '（无）'}）。")
             continue
-        prepared.append((p, str(old), str(e.get("new_string") or ""),
+        new_v, _ = _alias_hit(e, "new_string",
+                              ("new", "new_str", "new_text", "replace",
+                               "replacement", "to", "with"))
+        prepared.append((p, str(old), str(new_v or ""),
                          bool(e.get("replace_all"))))
 
     if problems:
