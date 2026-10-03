@@ -11,10 +11,12 @@
   - TextRetainer : **按字节** 保留 head/tail/headTail，内存有界，切割处修剪不完整码点
   - spill        : 超预算内容落盘 + 内联首尾预览 + 绝对路径 + 读取提示
   - session_log  : 事件溯源会话日志（任务 5.3 试点：仅追加 + 从日志派生 prompt）
+  - agent_loop   : Agent 运行时内核（主程序 agent 能力：两入口共用）
 """
 from .retention import ItemRetainer, TextRetainer, format_retention_notice
 from .spill import spill_text, SPILL_DIR
 from . import session_log
+from . import agent_loop
 
 __all__ = [
     "ItemRetainer",
@@ -23,4 +25,5 @@ __all__ = [
     "spill_text",
     "SPILL_DIR",
     "session_log",
+    "agent_loop",
 ]
