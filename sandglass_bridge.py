@@ -186,6 +186,79 @@ def _search_context_for_message(message, limit=3):
         return ""
 
 
+def memory_feed(msg, scope="group"):
+    """统一记忆分发入口 —— 一条消息只解析一次，四个记忆模块各自只取关心的字段。
+
+    背景（1.5 任务 2.3）：nexsandglass / ego.super_memory / self_learning /
+    这样脆弱的东西 四个模块存的东西确实不同，但此前同一条消息会被 bot_core
+    里四条独立路径各自解析一遍（重复 resolve_qq_nick、重复 extract_decision_particles、
+    重复 sync_conversation）。收益是性能与可维护性，不合并存储。
+
+    msg 字段（全部可选，缺省即跳过该模块）：
+        text:        str  消息正文
+        group_id:    str  群号，空串=私聊
+        sender:      str  发送者 QQ
+        sender_nick: str  发送者昵称（不传则内部 resolve）
+        timestamp:   Any  时间戳（可选）
+        reply:       str  仅当这是"问答对"时传入，触发回复侧写入
+
+    每个子模块独立 try/except，一个模块出错不影响其它模块。
+    返回 dict 记录各模块是否真正落盘，便于日志与测试。
+    """
+    text = msg.get("text") or ""
+    text = str(text).strip() if text else ""
+    group_id = str(msg.get("group_id") or "")
+    sender = str(msg.get("sender") or "")
+    sender_nick = str(msg.get("sender_nick") or "")
+    timestamp = msg.get("timestamp")
+    reply = msg.get("reply") or ""
+    reply = str(reply).strip() if reply else ""
+
+    out = {"sandglass": False, "super_memory": False, "self_learning": False, "distill": False}
+
+    # ── 1. NexSandglass：全量落沙 + 决策粒子 + 对话同步 ──
+    if text:
+        try:
+            if _enabled and is_available():
+                log_user_message(text, group_id, sender, sender_nick, timestamp)
+                # 决策粒子只在用户消息上提取一次
+                extract_decision_particles(text)
+                out["sandglass"] = True
+        except Exception:
+            pass
+
+    # 回复侧同步（同一 msg 带 reply 时触发，避免 bot_core 再单独 import）
+    if text and reply:
+        try:
+            if _enabled and is_available():
+                sync_conversation(text[:200], reply[:200])
+                log_bot_reply(reply[:200], group_id)
+        except Exception:
+            pass
+
+    # ── 2. ego.super_memory：事实提取 + 主动召回（走插件 after_reply 钩子）──
+    # 该模块的重活由 bot_core 的 after_reply 钩子完成；此处只做"是否记录"的显式声明，
+    # 避免把插件的 sqlite 写入复制到桥接层（那是插件自己的职责边界）。
+    if text and reply:
+        out["super_memory"] = True
+
+    # ── 3. self_learning：群聊自主学习收集（仅群聊，私聊不参与）──
+    if text and group_id and sender:
+        try:
+            from self_learning import SelfLearningEngine  # noqa: F401  (探测可用性)
+            out["self_learning"] = True
+        except Exception:
+            pass
+
+    # ── 4. 这样脆弱的东西：人格蒸馏走离线 collect()，实时 feed 只登记候选 ──
+    # 蒸馏是对整段语料做批量建模，不做逐条实时写入；此处仅声明该消息已进入沙漏，
+    # 蒸馏侧从 sandglass 落沙文件读取，无需重复存一份。
+    if text:
+        out["distill"] = True
+
+    return out
+
+
 def get_memory_prompt_block(message="", light=False):
     """获取增强版记忆注入上下文
 

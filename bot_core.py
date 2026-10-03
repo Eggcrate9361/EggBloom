@@ -6416,11 +6416,14 @@ def process_buffered_message(group_id):
             # C2 存储对齐：群聊截断 30→16 轮（组装只取最近10轮）
             group_chat_history[group_id] = gh[-16:]
 
-            # NexSandglass: 同步对话（更新画像/偏移/阶段）
+            # 统一记忆分发（1.5 任务 2.3）：回复侧同步（sandglass 画像/偏移/阶段 + super_memory 问答对）
             try:
-                from sandglass_bridge import sync_conversation, log_bot_reply
-                sync_conversation(merged_text[:200], reply[:200])
-                log_bot_reply(reply[:200], str(group_id))
+                from sandglass_bridge import memory_feed
+                memory_feed({
+                    "text": merged_text,
+                    "group_id": str(group_id),
+                    "reply": reply,
+                })
             except Exception:
                 pass
 
@@ -6949,13 +6952,17 @@ def main():
                             _cs_mod.auto_learn(str(group_id), sender, text)
                     except Exception:
                         pass
-                    # NexSandglass 记忆落沙
+                    # 统一记忆分发（1.5 任务 2.3）：一条消息一次解析，四模块各取所需
+                    # 旧代码此处各模块独立 import + 独立 resolve_qq_nick，现收敛为一行
+                    sender_nick = resolve_qq_nick(sender) if sender else ""
                     try:
-                        from sandglass_bridge import log_user_message, extract_decision_particles
-                        if text:
-                            _sender_nick = resolve_qq_nick(sender) if sender else ""
-                            log_user_message(text, str(group_id), sender, _sender_nick)
-                            extract_decision_particles(text)
+                        from sandglass_bridge import memory_feed
+                        memory_feed({
+                            "text": text,
+                            "group_id": str(group_id),
+                            "sender": sender,
+                            "sender_nick": sender_nick,
+                        })
                     except Exception:
                         pass
                     
@@ -6983,7 +6990,7 @@ def main():
                     # 全局消息时间线：记录所有消息（概率门之前），用于上下文
                     if group_id not in GROUP_TIMELINE:
                         GROUP_TIMELINE[group_id] = []
-                    sender_nick = resolve_qq_nick(sender) if sender else ""
+                    # sender_nick 已在上方 memory_feed 前解析，复用避免重复查表
                     GROUP_TIMELINE[group_id].append((current_time, sender, sender_nick, text))
                     # 保留最近 50 条（约 3-5 分钟的群聊）
                     if len(GROUP_TIMELINE[group_id]) > 50:
@@ -7272,13 +7279,15 @@ def main():
                 
                 # 消息转存
                 save_chat_log(sender, "对方", text)
-                # NexSandglass: 私聊消息落沙
+                # 统一记忆分发（1.5 任务 2.3）：私聊 scope，四模块各取所需
                 try:
-                    from sandglass_bridge import log_user_message, extract_decision_particles
-                    if text:
-                        _sender_nick = resolve_qq_nick(sender) if sender else ""
-                        log_user_message(text, "", sender, _sender_nick)
-                        extract_decision_particles(text)
+                    from sandglass_bridge import memory_feed
+                    memory_feed({
+                        "text": text,
+                        "group_id": "",
+                        "sender": sender,
+                        "sender_nick": resolve_qq_nick(sender) if sender else "",
+                    })
                 except Exception:
                     pass
                 
@@ -7437,11 +7446,15 @@ def main():
                     # 转存 AI 回复
                     save_chat_log(sender, "小a", text, reply[:500])
                     save_instruction(text, reply)
-                    # NexSandglass: 私聊同步
+                    # 统一记忆分发（1.5 任务 2.3）：私聊回复侧同步
                     try:
-                        from sandglass_bridge import sync_conversation, log_bot_reply
-                        sync_conversation(text[:200], reply[:200])
-                        log_bot_reply(reply[:200])
+                        from sandglass_bridge import memory_feed
+                        memory_feed({
+                            "text": text,
+                            "group_id": "",
+                            "sender": sender,
+                            "reply": reply,
+                        })
                     except Exception:
                         pass
                 else:
