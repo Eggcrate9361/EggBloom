@@ -6002,11 +6002,27 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
                     err_body = e.read().decode("utf-8", errors="replace")[:500]
             except Exception:
                 pass
+            # ── 重试决策（harness.retry_policy）：分类 → 只有可恢复错误才重试 ──
+            #  改之前：不分类，401/400 也硬等 3s × 4 次（白耗 12 秒还是失败）。
+            #  现在：鉴权/参数类立刻上抛；限流/5xx/网络抖动 走指数退避 + 抖动，
+            #  并服从服务端 Retry-After。这是"降成本 + 提成功率"的关键。
             if error_retries < 4:
+                try:
+                    from harness import retry_policy as _rp
+                    _vd = _rp.classify(e)
+                    if not _vd.should_retry:
+                        log(f"AI 不重试（{_vd.reason}）: {e}" + (f" | {err_body}" if err_body else ""))
+                        break
+                    _delay = _rp.compute_delay(error_retries, retry_after=_vd.retry_after)
+                except Exception:
+                    _delay = 3
                 error_retries += 1
-                log(f"AI 重试 {error_retries}/5: {e}" + (f" | {err_body}" if err_body else ""))
-                time.sleep(3)
-    log(f"AI 失败 (已重试5次): {last_error}" + (f" | {err_body}" if err_body else ""))
+                log(f"AI 重试 {error_retries}/5（{_delay:.2f}s 后）: {e}"
+                    + (f" | {err_body}" if err_body else ""))
+                time.sleep(_delay)
+                continue
+            break
+    log(f"AI 失败 (已重试{error_retries}次): {last_error}" + (f" | {err_body}" if err_body else ""))
     return None
 
 

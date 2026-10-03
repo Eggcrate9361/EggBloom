@@ -10,12 +10,31 @@
 """
 import json
 import ssl
-import time
 import urllib.parse
 import urllib.request
 import urllib.error
 
 from utils import log
+
+# 重试策略单点实现（harness/retry_policy.py）：分类 + 指数退避 + 抖动 + Retry-After。
+# 用 try 包住：harness 缺席时退回一个"盲目重试"的兜底，保证 providers 仍可独立运行。
+try:
+    from harness.retry_policy import retry_call as _retry_call
+except Exception:  # pragma: no cover
+    def _retry_call(fn, *, max_attempts=3, **kw):
+        import time as _t
+        last = None
+        for i in range(max(1, int(max_attempts))):
+            try:
+                return True, fn(), {"attempts": i + 1, "reason": "", "last_error": None,
+                                    "retried": i > 0, "fatal": False, "aborted": False}
+            except Exception as e:
+                last = e
+                if i < max_attempts - 1:
+                    _t.sleep(3)
+        return False, None, {"attempts": max_attempts, "reason": "重试耗尽",
+                             "last_error": str(last), "retried": True,
+                             "fatal": False, "aborted": False}
 
 _SSL_CTX = ssl.create_default_context()
 
@@ -113,25 +132,24 @@ class OpenAIProvider(Provider):
             "Authorization": f"Bearer {self.api_key}",
         }
 
-        last_err = None
-        for attempt in range(self.max_retries):
-            try:
-                req = urllib.request.Request(self.api_url, data=body, headers=headers)
-                with urllib.request.urlopen(req, timeout=60, context=_SSL_CTX) as r:
-                    resp = json.loads(r.read().decode("utf-8"))
-                msg = resp["choices"][0]["message"]
-                usage = resp.get("usage", {})
-                total = usage.get("total_tokens", 0)
-                cost = total * 0.5 / 1_000_000
-                log(f"AI ({total} tokens, {cost:.6f} yuan)")
-                # content 可能是 None（纯工具调用响应）：先归一化再 strip，避免 AttributeError
-                return (msg.get("content") or "").strip(), msg.get("tool_calls"), usage
-            except Exception as e:
-                last_err = e
-                if attempt < self.max_retries - 1:
-                    log(f"AI retry {attempt+1}/{self.max_retries}: {self._read_error(e)}")
-                    time.sleep(3)
-        log(f"AI 请求最终失败: {self._read_error(last_err) if last_err else 'unknown'}")
+        def _attempt():
+            req = urllib.request.Request(self.api_url, data=body, headers=headers)
+            with urllib.request.urlopen(req, timeout=60, context=_SSL_CTX) as r:
+                resp = json.loads(r.read().decode("utf-8"))
+            msg = resp["choices"][0]["message"]
+            usage = resp.get("usage", {})
+            total = usage.get("total_tokens", 0)
+            cost = total * 0.5 / 1_000_000
+            log(f"AI ({total} tokens, {cost:.6f} yuan)")
+            # content 可能是 None（纯工具调用响应）：先归一化再 strip，避免 AttributeError
+            return (msg.get("content") or "").strip(), msg.get("tool_calls"), usage
+
+        # 重试策略统一走 harness.retry_policy（分类 + 指数退避 + 抖动 + Retry-After）
+        ok, val, meta = _retry_call(_attempt, max_attempts=self.max_retries)
+        if ok:
+            return val
+        log(f"AI 请求最终失败: {meta.get('reason') or ''} "
+            f"{self._read_error(meta.get('last_error'))}")
         return None, None, {}
 
     def chat_stream(self, messages, max_tokens=800):
@@ -195,36 +213,34 @@ class OllamaProvider(Provider):
         headers = {"Content-Type": "application/json"}
         url = self.api_url.rstrip("/") + "/api/chat"
 
-        last_err = None
-        for attempt in range(self.max_retries):
-            try:
-                req = urllib.request.Request(url, data=body, headers=headers)
-                with urllib.request.urlopen(req, timeout=120, context=_SSL_CTX) as r:
-                    resp = json.loads(r.read().decode("utf-8"))
-                msg = resp.get("message") or {}
-                content = (msg.get("content") or "").strip()
-                tool_calls = msg.get("tool_calls")
-                # Ollama tool_calls: [{"function": {"name":..., "arguments": {...}}}]
-                if tool_calls:
-                    normalized = []
-                    for tc in tool_calls:
-                        fn = tc.get("function") or {}
-                        args = fn.get("arguments")
-                        if isinstance(args, dict):
-                            args = json.dumps(args, ensure_ascii=False)
-                        normalized.append({"id": tc.get("id") or f"call_{attempt}", "function": {
-                            "name": fn.get("name", ""),
-                            "arguments": args or "{}",
-                        }})
-                    tool_calls = normalized
-                usage = resp.get("eval_count") or {}
-                return content, tool_calls, {"total_tokens": usage}
-            except Exception as e:
-                last_err = e
-                if attempt < self.max_retries - 1:
-                    log(f"Ollama retry {attempt+1}/{self.max_retries}: {self._read_error(e)}")
-                    time.sleep(3)
-        log(f"Ollama 请求最终失败: {self._read_error(last_err) if last_err else 'unknown'}")
+        def _attempt():
+            req = urllib.request.Request(url, data=body, headers=headers)
+            with urllib.request.urlopen(req, timeout=120, context=_SSL_CTX) as r:
+                resp = json.loads(r.read().decode("utf-8"))
+            msg = resp.get("message") or {}
+            content = (msg.get("content") or "").strip()
+            tool_calls = msg.get("tool_calls")
+            # Ollama tool_calls: [{"function": {"name":..., "arguments": {...}}}]
+            if tool_calls:
+                normalized = []
+                for i, tc in enumerate(tool_calls):
+                    fn = tc.get("function") or {}
+                    args = fn.get("arguments")
+                    if isinstance(args, dict):
+                        args = json.dumps(args, ensure_ascii=False)
+                    normalized.append({"id": tc.get("id") or f"call_{i}", "function": {
+                        "name": fn.get("name", ""),
+                        "arguments": args or "{}",
+                    }})
+                tool_calls = normalized
+            usage = resp.get("eval_count") or {}
+            return content, tool_calls, {"total_tokens": usage}
+
+        ok, val, meta = _retry_call(_attempt, max_attempts=self.max_retries)
+        if ok:
+            return val
+        log(f"Ollama 请求最终失败: {meta.get('reason') or ''} "
+            f"{self._read_error(meta.get('last_error'))}")
         return None, None, {}
 
     def chat_stream(self, messages, max_tokens=800):
@@ -397,19 +413,17 @@ class AnthropicProvider(Provider):
                    "x-api-key": self.api_key or "",
                    "anthropic-version": "2023-06-01"}
         body = json.dumps(payload).encode("utf-8")
-        last_err = None
-        for attempt in range(self.max_retries):
-            try:
-                req = urllib.request.Request(self._endpoint(), data=body, headers=headers)
-                with urllib.request.urlopen(req, timeout=120, context=_SSL_CTX) as r:
-                    resp = json.loads(r.read().decode("utf-8"))
-                return self._parse_resp(resp)
-            except Exception as e:
-                last_err = e
-                if attempt < self.max_retries - 1:
-                    log(f"Claude retry {attempt+1}/{self.max_retries}: {self._read_error(e)}")
-                    time.sleep(3)
-        log(f"Claude 请求最终失败: {self._read_error(last_err) if last_err else 'unknown'}")
+        def _attempt():
+            req = urllib.request.Request(self._endpoint(), data=body, headers=headers)
+            with urllib.request.urlopen(req, timeout=120, context=_SSL_CTX) as r:
+                resp = json.loads(r.read().decode("utf-8"))
+            return self._parse_resp(resp)
+
+        ok, val, meta = _retry_call(_attempt, max_attempts=self.max_retries)
+        if ok:
+            return val
+        log(f"Claude 请求最终失败: {meta.get('reason') or ''} "
+            f"{self._read_error(meta.get('last_error'))}")
         return None, None, {}
 
     def chat_stream(self, messages, max_tokens=800):
@@ -561,19 +575,17 @@ class GoogleProvider(Provider):
         self._apply_extra(payload)
         body = json.dumps(payload).encode("utf-8")
         headers = {"Content-Type": "application/json"}
-        last_err = None
-        for attempt in range(self.max_retries):
-            try:
-                req = urllib.request.Request(self._endpoint(), data=body, headers=headers)
-                with urllib.request.urlopen(req, timeout=120, context=_SSL_CTX) as r:
-                    resp = json.loads(r.read().decode("utf-8"))
-                return self._parse_resp(resp)
-            except Exception as e:
-                last_err = e
-                if attempt < self.max_retries - 1:
-                    log(f"Gemini retry {attempt+1}/{self.max_retries}: {self._read_error(e)}")
-                    time.sleep(3)
-        log(f"Gemini 请求最终失败: {self._read_error(last_err) if last_err else 'unknown'}")
+        def _attempt():
+            req = urllib.request.Request(self._endpoint(), data=body, headers=headers)
+            with urllib.request.urlopen(req, timeout=120, context=_SSL_CTX) as r:
+                resp = json.loads(r.read().decode("utf-8"))
+            return self._parse_resp(resp)
+
+        ok, val, meta = _retry_call(_attempt, max_attempts=self.max_retries)
+        if ok:
+            return val
+        log(f"Gemini 请求最终失败: {meta.get('reason') or ''} "
+            f"{self._read_error(meta.get('last_error'))}")
         return None, None, {}
 
     def chat_stream(self, messages, max_tokens=800):
