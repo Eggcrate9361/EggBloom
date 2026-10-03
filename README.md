@@ -131,10 +131,9 @@ pip install -e .
 # 4. 环境自检（可选，自动修复缺失依赖）
 python env_check_tool.py --fix
 
-# 5. 启动
-python launch.py
-# 或
-python webui/webui_server.py
+# 5. 启动（二选一）
+python webui/webui_server.py     # 源码方式，之后浏览器开 http://localhost:8080
+# 打包版：直接双击发行包根目录的 start.bat
 ```
 
 ### 从源码打包
@@ -229,7 +228,6 @@ EggBloom/
 ├── bot_config.json.example  # 配置模板
 ├── .env.example             # 环境变量模板
 ├── setup.ps1                # 环境初始化脚本
-├── launch.py                # 启动脚本
 ├── env_check_tool.py        # 环境自检工具
 ├── pyproject.toml           # 依赖声明
 ├── README.md                # 本文档
@@ -255,7 +253,7 @@ EggBloom/
 |------|------|
 | `setup.ps1` | 环境初始化（需管理员）：写 hosts、装 Python/Node 依赖、查端口、建目录、复制配置模板 |
 | `env_check_tool.py` | 环境自检：Python/Node/依赖/端口/磁盘/进程/配置文件，生成报告 |
-| `launch.py` | 启动器：自动定位 Electron 运行时与应用目录（开发/打包双模式） |
+| `debug_launch.py` | 调试用启动器：起 `webui/webui_server.py` 子进程并轮询等待就绪（正式运行请直接用上方的启动命令） |
 | `python -m pip install -e .` | 以可编辑模式安装依赖（从 pyproject.toml） |
 
 ---

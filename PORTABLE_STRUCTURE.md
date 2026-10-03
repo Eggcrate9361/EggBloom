@@ -72,10 +72,16 @@ EggBloom Desktop（整个文件夹可整体复制）
 
 - **不要删除** 根目录的 `*.dll`、`*.pak`、`locales\`、`python\` —— 这些是 Electron/Python
   运行时，删了程序无法启动。
-- 配置（bot_config.json / .env）优先从系统 `%LOCALAPPDATA%\EggBloom_v3` 读取，
-  不存在时才使用本目录的默认配置。API Key 由凭据管理器安全保存，不写入明文配置。
-- 若想彻底重置某台机器，可删除 `%LOCALAPPDATA%\EggBloom_v3` 下的配置，让程序回到
-  本目录的默认配置。
+- 配置（bot_config.json / .env）**以程序目录 `resources\app\` 为准**，不是 AppData：
+  - **读取**：程序目录 `bot_config.json` → 数据目录（`%LOCALAPPDATA%\EggBloom_v3`）
+    **仅「补缺」——字段已存在就完全不动** → `.env` → 代码内置默认值。
+  - **写入**：优先写程序目录；程序目录不可写（只读介质 / 权限不足）才回退数据目录。
+  - 完整优先级图见 `docs\CONFIG_PRIORITY.md`，实现见 `config.py` 的 `load_config` / `save_config`。
+  - API Key 由 Windows 凭据管理器安全保存，不写入明文配置。
+- 若想彻底重置某台机器：要**同时**清掉两份配置——程序目录的
+  `resources\app\bot_config.json` 和数据目录的 `%LOCALAPPDATA%\EggBloom_v3\bot_config.json`。
+  只删其中一份的话，另一份仍会生效（这正是"删了配置却还是老样子"的原因）。
+- 想连记忆一起重置，另外再删 `resources\app\.neurobase\`（见下一节，删前务必确认不再需要）。
 
 ---
 

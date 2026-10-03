@@ -86,14 +86,14 @@ Write-Host ""
 # 根目录按扩展名白名单复制
 $rootExts = @(".py", ".json", ".html", ".txt", ".md", ".toml", ".yaml", ".yml", ".png")
 
-# 整目录复制
-$dirItems = @("plugins", "protocols", "webui", "nexsandglass", "components", "memes")
+# 整目录复制（docs 也带上：发行副本里能直接看到权威文档，不必回源码库翻）
+$dirItems = @("plugins", "protocols", "webui", "nexsandglass", "components", "memes", "docs")
 
 # 排除的运行时数据（任意层级同名目录）
 $excludeDirs = @(
     "data", "logs", "chat_logs", "private_memory", "self_learning_db",
     "image_cache", "personality_versions", "__pycache__", ".git", "tests",
-    "scripts", "docs", ".qoder", ".neurobase", "node_modules", ".ruff_cache",
+    "scripts", ".qoder", ".neurobase", "node_modules", ".ruff_cache",
     ".venv", "venv", "build", "dist"
 )
 

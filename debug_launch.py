@@ -5,7 +5,7 @@ import time
 import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-WEBUI_DIR = os.path.join(HERE, "app-src", "webui")
+WEBUI_DIR = os.path.join(HERE, "webui")
 SERVER_PY = os.path.join(WEBUI_DIR, "webui_server.py")
 
 
@@ -13,7 +13,7 @@ def main():
     print("[debug_launch] starting webui server...")
     server_proc = subprocess.Popen(
         [sys.executable, SERVER_PY],
-        cwd=WEBUI_DIR,
+        cwd=HERE,          # 与生产一致：main.js 也是以应用根目录为 cwd 启动 webui_server
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
