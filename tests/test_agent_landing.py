@@ -128,6 +128,84 @@ def test_memory_wired_into_service():
     check("记忆: memory_status 带 available 字段", "available" in st, st)
 
 
+def test_project_knowledge_injected():
+    """★ Agent 必须"懂 EggBloom 这个项目"，而不只是通用 agent。
+
+    回答"插件怎么写""配置填哪儿"这类问题时，模型要知道：
+      · 插件有两种形态、新插件用 ABI v2、不许 import 主程序
+      · 配置是多层回退的、写程序目录
+      · 文档在哪、该用什么工具查
+      · 改源码不生效是因为漏了"同步 + 重启后端"
+    这些不能靠模型常识猜 —— 必须显式注入。同时又不能常驻（每轮都付 token），
+    所以按话题**按需注入**。
+    """
+    import tempfile
+    from harness import agent_service as svc, agent_project as ap
+
+    st = ap.stats()
+    check("项目: 模块可用", st["total_chars"] > 1000, st["total_chars"])
+    check("项目: 常驻手册精简（< 4K 字符）", st["total_chars"] < 4000, st["total_chars"])
+
+    # ── 分类正确性 ──
+    should = ["eggbloom 的插件怎么写", "配置怎么填", "harness 是什么",
+              "bot_core 在哪", "这个报错什么意思", "webui 怎么改",
+              "真插件的 manifest 长什么样", "改完源码为什么不生效"]
+    shouldnt = ["你今天心情怎么样", "哈哈哈", "在吗", "今天天气真好", "晚安", ""]
+    for q in should:
+        check(f"项目: 识别「{q}」", ap.is_project_question(q) is True, q)
+    for q in shouldnt:
+        check(f"项目: 不误判「{q}」", ap.is_project_question(q) is False, q)
+
+    # ── 注入行为 ──
+    svc.configure(static_prompt_fn=lambda is_group: "BASE", logger=lambda m: None,
+                  memory=False)
+    p_proj = svc.build_system_prompt(is_group=False, project_hint="eggbloom插件怎么写")
+    p_chat = svc.build_system_prompt(is_group=False, project_hint="你在干嘛")
+    for key in ("EggBloom 项目速查", "项目文档索引", "EggBloom 铁律", "工程模式"):
+        check(f"项目: 项目问题含「{key}」", key in p_proj, key)
+        check(f"项目: 闲聊不含「{key}」", key not in p_chat, key)
+    check("项目: 闲聊零成本（明显更短）", len(p_chat) < len(p_proj) * 0.5,
+          f"{len(p_chat)} vs {len(p_proj)}")
+
+    # ── 关键知识必须在场（答错会真出事的几条）──
+    must_have = [
+        ("PLUGIN_SPEC", "真插件标识"), ("PLUGIN_MANIFEST", "manifest"),
+        ("ctx.get_config", "插件读配置的唯一姿势"),
+        ("不 import 主程序", "插件边界"),
+        ("凭据管理器", "配置回退链"),
+        ("重启后端", "生效第二步"),
+        ("docs/PLUGIN_DEV.md", "插件文档路径"),
+        ("docs/CONFIG_PRIORITY.md", "配置文档路径"),
+        (":3005", "bot_core 端口"), (":8080", "webui 端口"),
+        ("webui_artistic_v3.html", "前端单文件"),
+        ("D:\\git\\EggBloom", "源码库路径"),
+    ]
+    for token, why in must_have:
+        check(f"项目: 含知识「{why}」", token in ap.project_block("插件", force=True), token)
+
+    # ── force + 截断安全 ──
+    check("项目: force 无条件注入", len(ap.project_block("哈哈哈", force=True)) > 1000)
+    tiny = ap.project_block("插件", force=True, max_chars=500)
+    check("项目: 极端截断仍保留铁律", "EggBloom 铁律" in tiny, len(tiny))
+
+
+def test_project_hint_wired_into_build():
+    """build_system_prompt / run_chat 必须真的把本轮输入传下去。"""
+    import ast
+    src = _read("harness/agent_service.py")
+    tree = ast.parse(src)
+    fns = {n.name: n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
+    bsp = fns.get("build_system_prompt")
+    check("项目: build_system_prompt 有 project_hint 参数",
+          bsp is not None and any(a.arg == "project_hint" for a in bsp.args.args),
+          [a.arg for a in bsp.args.args] if bsp else None)
+    rc = fns.get("run_chat")
+    check("项目: run_chat 存在", rc is not None)
+    if rc:
+        seg = ast.get_source_segment(src, rc) or ""
+        check("项目: run_chat 传 project_hint", "project_hint=" in seg, "未传")
+
+
 def test_history_records_user_words_not_injections():
     """★ 历史/回放里必须是**用户原话**，不能混进机器注入的前缀。
 
@@ -393,6 +471,7 @@ def main():
                test_memory_tool_call_degrades, test_memory_wired_into_service,
                test_memory_transient_not_cached,
                test_history_records_user_words_not_injections,
+               test_project_knowledge_injected, test_project_hint_wired_into_build,
                test_bot_core_routes_present, test_bot_core_sse_before_404,
                test_bot_core_group_session_bucketing, test_bot_core_configure_wired,
                test_bot_core_get_post_parity,

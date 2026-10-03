@@ -223,8 +223,8 @@ def _drain(session_id):
 
 
 # ── system_prompt 组装 ──────────────────────────────────────────────
-def build_system_prompt(is_group=True, extra="", with_memory=True):
-    """组装 agent 的 system_prompt：本体静态段 + **追加**的 agent 模式快照 + 本体记忆。
+def build_system_prompt(is_group=True, extra="", with_memory=True, project_hint=""):
+    """组装 agent 的 system_prompt：本体静态段 + **追加**的 agent 模式快照 + 本体记忆 + 项目知识。
 
     追加式（不改写 static_prompt 本体）→ 保住静态段的前缀缓存（任务 5.1 精神）。
     顺序（**静态在前、动态在后**，最大化可缓存前缀）：
@@ -233,7 +233,11 @@ def build_system_prompt(is_group=True, extra="", with_memory=True):
       3. Skill L1 清单 —— 半稳定（skill 集合变了才变）
       4. 时效锚（知识截止）—— 长期稳定
       5. **本体记忆快照** —— 缓慢变化（画像/阶段）
-      6. extra（调用方给的本轮上下文提示）
+      6. **EggBloom 项目知识** —— 仅在 project_hint 命中项目话题时出现
+      7. extra（调用方给的本轮上下文提示）
+
+    project_hint：用于判断是否注入项目知识的那句话（通常是本轮用户输入）。
+                  不传则不注入 —— 闲聊场景零成本。
     """
     base = ""
     fn = _CFG.get("static_prompt_fn")
@@ -270,6 +274,17 @@ def build_system_prompt(is_group=True, extra="", with_memory=True):
                 p += snap
         except Exception as e:
             _log(f"[agent] 本体记忆快照失败（已跳过）: {e}")
+    # ── EggBloom 项目知识（识别到项目话题才注入；否则空串、零成本）──
+    #  位置刻意放在**静态段最后**（记忆之后、extra 之前）：
+    #  它只在项目类问题出现时才存在，属于"半稳定"——放太靠前会让
+    #  "上一轮不问项目、这轮问项目"时前缀整体位移，白丢缓存。
+    try:
+        from . import agent_project as _ap
+        _pb = _ap.project_block(project_hint)
+        if _pb:
+            p += _pb
+    except Exception as e:
+        _log(f"[agent] 项目知识注入失败（已跳过）: {e}")
     if extra:
         p += "\n\n" + extra
     return p
@@ -361,10 +376,11 @@ def run_chat(*, user_input, session_id=None, is_group=False, context_hint="",
         for k in sorted(_SESS_META, key=lambda x: _SESS_META[x].get("updated", 0))[:100]:
             _SESS_META.pop(k, None)
 
-    # ── 组装 system prompt（含本体记忆快照）──
+    # ── 组装 system prompt（含本体记忆快照 + 按需的项目知识）──
     with_mem = bool(use_memory) and _CFG.get("memory", True)
     system_prompt = build_system_prompt(is_group=is_group, extra=context_hint,
-                                        with_memory=with_mem)
+                                        with_memory=with_mem,
+                                        project_hint=str(user_input or ""))
 
     # ── 本轮动态：时效指令 + 本体 prefetch，都放 user 同轮（保前缀缓存）──
     _user_input = str(user_input or "")
