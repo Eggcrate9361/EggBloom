@@ -467,15 +467,6 @@ GROUP_LAST_ANY_MSG: Dict[str, float] = {}  # {group_id: timestamp}  追踪群内
 GROUP_LAST_BOT_MSG: Dict[str, float] = {}  # {group_id: timestamp}  追踪 Bot 每个群最后发言时间
 POKE_COUNTS: Dict[str, dict] = {}  # {"group_uid": {"count": N, "time": ts}}  戳一戳计数（30秒超时重置）
 
-# 短消息结束会话退场语（被人用短消息打发走了）
-EXIT_PHRASES_SHORT = _config.get("custom_exit_phrases_short", [
-    "困了", "睡了", "走了", "溜了", "撤了",
-    "眯一会儿", "挂机了", "躺了", "下线了", "歇了",
-    "看番去了", "摸鱼去了", "打游戏去了", "先撤了", "先下了",
-    "告辞", "溜了溜了", "润了", "886", "下班了",
-    "装死中", "已离线", "信号中断", "电量不足", "休眠模式启动",
-])
-
 # 空闲超时退场语（真真正正一大段碎碎念，有概率触发）
 EXIT_PHRASES_IDLE = _config.get("custom_exit_phrases_idle", [
     "唉…又没人理我，我说话是自带隐身效果吗？每次打一堆字发出去，就像往大海里扔了颗小石子，连个水花都没有。你们是不是都把我屏蔽了啊？还是我说话太无聊了？我觉得还行啊，挺正常的呀，怎么就是没人接呢。我翻来覆去地看自己发的那几句话，也没毛病啊，没得罪人，没阴阳怪气，就是普通得不能再普通的聊天内容。别人发差不多的话你们都回得可快了，到我这就沉底，这区别对待也太明显了。我是不是进群的方式不对，还是打招呼的时候没走对流程。算了，我想不通，想多了头疼，头一疼就更想不通了，死循环。",
@@ -1178,13 +1169,6 @@ def _trim_incomplete(text):
         return text  # 全部都是不完整段：保守保留原文，不返回空
     trimmed = "\n".join(lines).strip()
     return trimmed or text
-
-
-def _chunk_text(text):
-    """按标点（句号/逗号/感叹号等）及换行切分文本，返回非空片段列表"""
-    import re
-    chunks = re.split(r'[，,。！？!?；;、\n]', text)
-    return [c.strip() for c in chunks if c.strip()]
 
 
 def smart_send(text, target_qq=None):
@@ -6044,23 +6028,6 @@ def _is_bystander_commentary(text: str) -> bool:
     return False
 
 
-def _filter_message_line(content: str, group_id: str = "") -> Tuple[bool, str]:
-    """对单行消息内容进行过滤判断。
-    返回 (should_skip, reason)。
-    reason: 'at_others' / 'short' / 'nonsense' / 'bystander' / 'short_end' / '' (通过)"""
-    if "小a" in content:
-        return False, ""
-    if _is_at_others(content):
-        return True, "at_others"
-    if _is_short_end_session(content):
-        return True, "short_end"
-    if _is_short_meaningless(content):
-        return True, "short"
-    if _is_nonsense(content):
-        return True, "nonsense"
-    if _is_bystander_commentary(content):
-        return True, "bystander"
-    return False, ""
 
 
 def is_meaningless_message(text: str) -> bool:

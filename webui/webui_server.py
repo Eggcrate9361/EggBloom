@@ -1383,11 +1383,6 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(200, {"data": stats})
             return
 
-        if path == "/api/chatlogs":
-            logs = get_chat_logs(200)
-            self._send_json(200, {"logs": logs})
-            return
-
         if path == "/api/gallery":
             images = get_image_gallery()
             self._send_json(200, {"images": images})
@@ -1463,28 +1458,6 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(200, {"qq": qq, "rounds": rounds})
             except Exception as e:
                 self._send_json(200, {"qq": qq, "rounds": [], "error": str(e)})
-            return
-
-        if path == "/api/plugins/page":
-            plugin_id = ""
-            try:
-                parsed = urlparse(self.path)
-                qs = parse_qs(parsed.query)
-                plugin_id = (qs.get("plugin_id") or [""])[0]
-            except Exception:
-                plugin_id = ""
-            if not plugin_id:
-                self._send_json(200, {"error": "missing plugin_id"})
-                return
-            ui_path = PROJECT / "plugins" / plugin_id / "ui.html"
-            if not ui_path.exists():
-                self._send_json(200, {"error": "plugin ui not found", "plugin_id": plugin_id})
-                return
-            try:
-                html = ui_path.read_text(encoding="utf-8")
-                self._send_html(html)
-            except Exception as e:
-                self._send_json(200, {"error": str(e)})
             return
 
         if path == "/page":
