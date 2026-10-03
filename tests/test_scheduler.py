@@ -57,9 +57,13 @@ check("interval：对齐到排程点而非 now+every", abs((n2 - now) % 60) < 1.
 
 from datetime import datetime, timedelta  # noqa: E402
 
-tomorrow_9 = (datetime.now() + timedelta(days=1)).replace(hour=9, minute=30, second=0, microsecond=0)
+# ★ 期望值必须跟着 now 走：09:30 还没到 → 今天；已过 → 明天。
+#   （旧写法写死「明天 09:30」，在 00:00–09:30 之间跑必红 —— 是测试错，不是实现错。）
+_expect = datetime.now().replace(hour=9, minute=30, second=0, microsecond=0)
+if _expect.timestamp() <= now:
+    _expect += timedelta(days=1)
 nd = S.compute_next({"kind": "daily", "at": "09:30"}, now)
-check("daily：算出下一个 09:30", abs(nd - tomorrow_9.timestamp()) < 2, datetime.fromtimestamp(nd).strftime("%m-%d %H:%M"))
+check("daily：算出下一个 09:30", abs(nd - _expect.timestamp()) < 2, datetime.fromtimestamp(nd).strftime("%m-%d %H:%M"))
 
 nbad = S.compute_next({"kind": "daily", "at": "25:99"}, now)
 check("daily：非法时间不空转（退到 1 小时后）", abs(nbad - (now + 3600)) < 2)

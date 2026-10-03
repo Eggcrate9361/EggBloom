@@ -16,6 +16,7 @@
 import os
 import sys
 import time
+from datetime import datetime
 
 HERE = os.path.dirname(os.path.abspath(__file__))      # D:\git\EggBloom\tests
 ROOT = os.path.dirname(HERE)                            # D:\git\EggBloom
@@ -173,17 +174,33 @@ def main():
     check("第 1 条 → 成功", r1.get("ok") is True, r1)
     check("第 1 条拿到 tid", r1.get("tid") == "tid1", r1.get("tid"))
 
-    # 第 2 条：先绕过 4 小时间隔（把上一条时间往前挪）
-    with Q._lock:
-        Q._state["publish_log"][-1]["ts"] = time.time() - Q.MIN_INTERVAL_SEC - 10
-        Q._save_state(Q._state)
-    r2 = Q.call("send_qzone_msg", {"content": "第二条"})
-    check("第 2 条（已满足间隔）→ 成功", r2.get("ok") is True, r2)
+    # 第 2、3 条：先绕过 4 小时间隔（把上一条时间往前挪）。
+    # ★ 必须同时满足两个约束，否则测试在「凌晨 00:00–04:00」跑必红：
+    #     ① 间隔 ≥4h  → ts 要早于 now-4h
+    #     ② 仍属「今天」→ ts 要晚于今天 00:00（否则被 _today_bounds 判为隔天，
+    #        每日上限就不生效了）
+    #   凌晨 0–4 点这两个约束在真实时间轴上互斥 —— 所以这里把模块内的
+    #   time.time() 钉到一个「当天 15:00」的合成时刻，让整段在确定的时间轴上
+    #   受测，而不是依赖墙上时钟。测试结束会还原。
+    #   （旧写法直接用 time.time()-MIN_INTERVAL，是测试的跨天缺陷，不是实现问题。）
+    _real_time = Q.time.time
+    _n = _real_time()
+    _today0 = datetime.fromtimestamp(_n).replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+    _synth = _today0 + 15 * 3600          # 当天 15:00
+    Q.time.time = lambda: _synth
+    try:
+        with Q._lock:
+            Q._state["publish_log"][-1]["ts"] = _synth - Q.MIN_INTERVAL_SEC - 10
+            Q._save_state(Q._state)
+        r2 = Q.call("send_qzone_msg", {"content": "第二条"})
+        check("第 2 条（已满足间隔）→ 成功", r2.get("ok") is True, r2)
 
-    with Q._lock:
-        Q._state["publish_log"][-1]["ts"] = time.time() - Q.MIN_INTERVAL_SEC - 10
-        Q._save_state(Q._state)
-    r3 = Q.call("send_qzone_msg", {"content": "第三条"})
+        with Q._lock:
+            Q._state["publish_log"][-1]["ts"] = _synth - Q.MIN_INTERVAL_SEC - 10
+            Q._save_state(Q._state)
+        r3 = Q.call("send_qzone_msg", {"content": "第三条"})
+    finally:
+        Q.time.time = _real_time
     check("★ 第 3 条 → 被拒绝", r3.get("ok") is False, r3)
     check("★ 拒绝原因含每日上限", "上限" in r3.get("error", "") or "2 条" in r3.get("error", ""), r3)
     check("★ 第 3 条确实没发出去（发送次数仍为 2）", len(sent) == 2, len(sent))
