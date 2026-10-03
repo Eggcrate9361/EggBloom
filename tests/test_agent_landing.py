@@ -128,6 +128,105 @@ def test_memory_wired_into_service():
     check("记忆: memory_status 带 available 字段", "available" in st, st)
 
 
+def test_history_records_user_words_not_injections():
+    """★ 历史/回放里必须是**用户原话**，不能混进机器注入的前缀。
+
+    回归的真实 bug：run_chat 为了保前缀缓存，会把"时效指令"和"本体记忆
+    prefetch"拼到 user_input 前面一起发给模型。但这些脚手架被一并写进了
+    session_log → 历史与回放里用户那句话前面挂着一串
+    「【当前状态】## 当前 偏移: ...」。用户看到自己的话被改写，回放也不再
+    是当时真实发生的事。
+    修法：run_agent 增加 display_input，模型收完整版，日志记原话。
+    """
+    import tempfile
+    from harness import agent_service as svc, session_log as slog, agent_loop as al
+
+    import ast
+    src = _read("harness/agent_loop.py")
+    tree = ast.parse(src)
+    fn = None
+    for n in ast.walk(tree):
+        if isinstance(n, ast.FunctionDef) and n.name == "run_agent":
+            fn = n
+            break
+    check("历史: run_agent 接受 display_input", fn is not None and
+          any(a.arg == "display_input" for a in fn.args.kwonlyargs),
+          [a.arg for a in fn.args.kwonlyargs] if fn else None)
+
+    # 端到端：注入前缀不应污染历史
+    td = tempfile.mkdtemp()
+    _orig_dir = slog.SESSION_LOG_DIR
+    _orig_spill = al._spill.SPILL_DIR
+    try:
+        slog.SESSION_LOG_DIR = td
+        al._spill.SPILL_DIR = os.path.join(td, "spill")
+        slog.reset_cache()
+        svc.configure(
+            chat_fn=lambda m, t=None, max_tokens=None: ("答案", [], {}),
+            tool_functions={"t": lambda a: "r"},
+            static_prompt_fn=lambda is_group: "SYS",
+            is_authorized_fn=lambda s: True,
+            logger=lambda m: None,
+        )
+        svc.run_chat(user_input="用户的原话", session_id="hist-1")
+        hist = svc.history_of("hist-1")
+        users = [h["content"] for h in hist if h.get("role") == "user"]
+        check("历史: 有 user 轮", len(users) >= 1, users)
+        if users:
+            check("历史: user 轮是原话（无注入前缀）",
+                  users[0] == "用户的原话", repr(users[0][:120]))
+        tr = svc.trace_of("hist-1")
+        ev_user = [e for e in tr if e.get("type") == al.EV_USER]
+        check("历史: 轨迹里的 user 事件也是原话",
+              bool(ev_user) and ev_user[0].get("payload", {}).get("content") == "用户的原话",
+              ev_user[:1])
+    finally:
+        slog.SESSION_LOG_DIR = _orig_dir
+        al._spill.SPILL_DIR = _orig_spill
+        svc._SESSIONS.clear()
+        slog.reset_cache()
+
+
+def test_memory_transient_not_cached():
+    """★ "正在加载"不能被当成"不可用"缓存住。
+
+    回归的真实 bug：sandglass 的后台加载线程约 0.5s 才完成，而启动瞬间的
+    一次探测会把 False 缓存 1.5s。结果是——打开 Agent 页后的头几轮对话里，
+    记忆检索工具一律返回"本体记忆当前不可用"，而记忆其实马上就好了。
+    修法：探测结果区分 transient（还在加载 → 不缓存）与稳定失败。
+    """
+    check("记忆: 探测结果带 transient 字段", "transient" in am._PROBE, am._PROBE)
+    # 所有取数路径都必须用 _ready_bridge（会等加载），不能直接用 _bridge
+    src = _read("harness/agent_memory.py")
+    import ast
+    tree = ast.parse(src)
+    fns = {n.name: n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
+    check("记忆: 存在 _ready_bridge 助手", "_ready_bridge" in fns, list(fns))
+    if "_ready_bridge" in fns:
+        body = ast.get_source_segment(src, fns["_ready_bridge"]) or ""
+        check("记忆: _ready_bridge 有等待逻辑", "sleep" in body and "deadline" in body)
+        check("记忆: 等待是有界的", "timeout" in body)
+
+    # 四个取数路径必须都调用 _ready_bridge
+    for fn in ("system_snapshot", "prefetch", "sync_turn"):
+        f = fns.get(fn)
+        if not f:
+            check(f"记忆: {fn} 存在", False)
+            continue
+        seg = ast.get_source_segment(src, f) or ""
+        check(f"记忆: {fn} 用 _ready_bridge", "_ready_bridge()" in seg,
+              "_bridge()" if "_bridge()" in seg else "none")
+    # 工具实现也要用
+    for fn in ("_tool_search", "_tool_recent"):
+        f = fns.get(fn)
+        if not f:
+            check(f"记忆: {fn} 存在", False)
+            continue
+        seg = ast.get_source_segment(src, f) or ""
+        check(f"记忆: {fn} 用 _ready_bridge", "_ready_bridge()" in seg,
+              "_bridge()" if "_bridge()" in seg else "none")
+
+
 # ---------------------------------------------------------------- 2. bot_core 路由
 AGENT_ENDPOINTS = ["chat", "abort", "history", "sessions", "rerun",
                    "delete", "status", "tools", "memory"]
@@ -292,6 +391,8 @@ def test_frontend_stream_lifecycle():
 def main():
     for fn in (test_memory_degrade_no_throw, test_memory_tool_schemas,
                test_memory_tool_call_degrades, test_memory_wired_into_service,
+               test_memory_transient_not_cached,
+               test_history_records_user_words_not_injections,
                test_bot_core_routes_present, test_bot_core_sse_before_404,
                test_bot_core_group_session_bucketing, test_bot_core_configure_wired,
                test_bot_core_get_post_parity,

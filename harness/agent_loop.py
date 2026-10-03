@@ -108,12 +108,16 @@ def run_agent(*, session_id, user_input, chat_fn, tool_functions,
               on_event=None, should_abort=None, logger=None,
               max_tool_result_tokens=DEFAULT_MAX_TOOL_RESULT_TOKENS,
               persist=True, extra_tools=None, tool_loader=None,
-              tool_schemas=None):
+              tool_schemas=None, display_input=None):
     """跑一次 agent 循环，返回 AgentResult。
 
     参数（全部依赖注入，故本模块不依赖 bot_core）
       session_id           : 会话标识（用于 session_log 命名空间与回放）
-      user_input           : 本次用户输入
+      user_input           : 本次用户输入（**发给模型**的版本）
+      display_input        : 记录/回放用的版本。调用方若往 user_input 里拼了
+                             时效指令、本体记忆 prefetch 这类机器注入前缀，
+                             就把用户原话传这里，日志与前端展示才不会被污染。
+                             缺省 None = 与 user_input 相同。
       chat_fn(messages, tools) -> (content, tool_calls, usage)
                              tools 可以是 name 列表，也可以是完整 schema 列表
       tool_functions       : {tool_name: callable(args_dict) -> result}
@@ -187,8 +191,13 @@ def run_agent(*, session_id, user_input, chat_fn, tool_functions,
         messages.extend(history)
     messages.append({"role": "user", "content": user_input})
 
-    _append_log(EV_USER, {"content": user_input})
-    _emit("user", {"content": user_input})
+    # ★ 记录给**人看**的那一版：调用方可能往 user_input 里拼了时效指令 /
+    #   本体记忆 prefetch 这类机器注入的前缀（为了保前缀缓存，见 agent_service）。
+    #   那些是脚手架，不是用户说的话 —— 写进日志会污染回放与历史展示，
+    #   也会让"用户到底说了什么"变得不可读。模型照旧收到完整版。
+    _log_input = display_input if display_input is not None else user_input
+    _append_log(EV_USER, {"content": _log_input})
+    _emit("user", {"content": _log_input})
 
     tool_names = list(tool_functions.keys())
     for t in (extra_tools or ()):

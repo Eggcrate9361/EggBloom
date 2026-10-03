@@ -410,6 +410,8 @@ def run_chat(*, user_input, session_id=None, is_group=False, context_hint="",
         should_abort=lambda: _should_abort(session_id),
         logger=_log,
         tool_schemas=_schemas,
+        # 记录用户原话，别把注入的时效指令/prefetch 写进历史与回放
+        display_input=str(user_input or ""),
     )
     if max_steps:
         kwargs["max_steps"] = int(max_steps)

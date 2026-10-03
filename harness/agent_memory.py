@@ -40,7 +40,7 @@ _CFG = {
 
 _LOCK = threading.Lock()
 # 探测结果缓存：{"ok": bool, "reason": str, "at": float}
-_PROBE = {"ok": None, "reason": "", "at": 0.0}
+_PROBE = {"ok": None, "reason": "", "at": 0.0, "transient": False}
 # 就绪后缓存久（30s）；**未就绪时只缓存 1.5s** —— 沙漏是后台线程异步加载的，
 # 启动后头几秒"还没好"是常态，缓存太久会让 agent 页一直显示"不可用"。
 _PROBE_TTL_OK = 30.0
@@ -97,16 +97,32 @@ def _bridge():
 
 
 def is_available(force=False):
-    """记忆是否真的可用（**探测结果带 TTL 缓存**，避免每轮都去探一遍）。"""
+    """记忆是否真的可用（探测结果带 TTL 缓存，避免每轮都去探一遍）。
+
+    ★ 关键区分——"**还在加载**"和"**真的没有**"是两回事：
+
+      · ``_init_attempted=True`` 但 ``_initialized=False``
+        → 后台线程正在加载（典型耗时 0.3~2s）。这是**瞬时状态**，
+          绝不能缓存成 False：否则启动后头 1.5 秒里每一轮 agent 都会
+          被告知"记忆不可用"，而记忆其实马上就要好了。
+      · ``_init_attempted=False``
+        → 从没试过。尝试拉一次，同样是瞬时状态，不缓存。
+      · 明确抛异常 / 桥装不上 / 配置关闭
+        → 这才是**稳定事实**，缓存住，别每轮重试。
+
+    实测依据：运行副本冷启动时 ``is_available()`` 先返回 False（约
+    0.5s 后才 True）。旧实现把这个 False 缓存 1.5s，导致 agent 在启动
+    窗口内检索记忆永远拿到"不可用"。
+    """
     if not _CFG.get("enabled", True):
         return False
     now = time.time()
     with _LOCK:
-        if not force and _PROBE["ok"] is not None:
+        if not force and _PROBE["ok"] is not None and not _PROBE.get("transient"):
             ttl = _PROBE_TTL_OK if _PROBE["ok"] else _PROBE_TTL_FAIL
             if (now - _PROBE["at"]) < ttl:
                 return bool(_PROBE["ok"])
-    ok, reason = False, ""
+    ok, reason, transient = False, "", False
     try:
         b = _bridge()
         if b is None:
@@ -114,11 +130,22 @@ def is_available(force=False):
         else:
             # sandglass_bridge.is_available() 是纯内存判断，很便宜
             ok = bool(b.is_available())
-            reason = "" if ok else "沙漏未初始化（后台线程可能还在加载）"
+            if not ok:
+                # 判断是"还在加载"还是"真的起不来"
+                attempted = bool(getattr(b, "_init_attempted", False))
+                initialized = bool(getattr(b, "_initialized", False))
+                if attempted and not initialized:
+                    transient = True
+                    reason = "沙漏正在后台加载"
+                elif not attempted:
+                    transient = True
+                    reason = "沙漏尚未开始初始化"
+                else:
+                    reason = "沙漏初始化失败（provider 不可用）"
     except Exception as e:
         ok, reason = False, f"{type(e).__name__}: {e}"
     with _LOCK:
-        _PROBE.update({"ok": ok, "reason": reason, "at": now})
+        _PROBE.update({"ok": ok, "reason": reason, "at": now, "transient": transient})
     return ok
 
 
@@ -140,6 +167,41 @@ def status():
         return {"available": False, "reason": f"{type(e).__name__}: {e}"}
 
 
+def _ready_bridge(timeout=1.2):
+    """取一个**已就绪**的桥；若还在后台加载则短暂等待。
+
+    为什么需要"等"：``_bridge()`` 只在**第一次**调用时拉起加载线程，随后
+    立刻返回；此时 ``is_available()`` 还是 False。如果直接用它的返回值判
+    "记忆不可用"，那**打开页面的头一次调用**必然拿到"不可用"——即使记忆
+    在 0.3 秒后就绪。实测运行副本冷启动约 0.5s 完成初始化。
+
+    等待是**有界**的（默认 1.2s），且只在"确实在加载中"时才等；
+    真起不来（attempted 但 provider 坏）立即返回，不拖慢对话。
+    """
+    b = _bridge()
+    if b is None:
+        return None
+    try:
+        if b.is_available():
+            return b
+    except Exception:
+        pass
+    # 只在"正在后台加载"时等；其它情况不浪费时间
+    attempted = bool(getattr(b, "_init_attempted", False))
+    initialized = bool(getattr(b, "_initialized", False))
+    if initialized or not attempted:
+        return b            # 要么已就绪、要么明确失败 → 交给调用方处理
+    deadline = time.time() + max(0.0, float(timeout))
+    while time.time() < deadline:
+        time.sleep(0.05)
+        try:
+            if b.is_available():
+                return b
+        except Exception:
+            return b
+    return b
+
+
 # ── 1. system prompt 本体快照（长期稳定 → 命中前缀缓存）──────────────
 def system_snapshot(max_chars=1200):
     """把沙漏本体（你是谁 / 往哪走 / 有哪些人）注入 system prompt。
@@ -154,7 +216,7 @@ def system_snapshot(max_chars=1200):
     if not _CFG.get("enabled", True):
         return ""
     try:
-        b = _bridge()
+        b = _ready_bridge()
         if b is None or not b.is_available():
             return ""
         # light=False：agent 是"干活"场景，需要完整画像上下文（不是私聊闲聊）
@@ -187,7 +249,7 @@ def prefetch(query="", max_chars=400):
     if not _CFG.get("enabled", True):
         return ""
     try:
-        b = _bridge()
+        b = _ready_bridge()
         if b is None or not b.is_available():
             return ""
         provider = getattr(b, "_provider", None)
@@ -225,7 +287,7 @@ def sync_turn(user_msg="", assistant_msg="", *, scope="agent", scope_id="",
     if not u and not a:
         return out
     try:
-        b = _bridge()
+        b = _ready_bridge()
         if b is None or not b.is_available():
             return out
         # scope=group → 走群记忆；其余（desk/agent）归到私聊记忆（group_id 空）
@@ -322,7 +384,7 @@ def _tool_search(args):
         limit = 5
     limit = max(1, min(20, limit))
     try:
-        b = _bridge()
+        b = _ready_bridge()
         if b is None or not b.is_available():
             return "（本体记忆当前不可用，无法检索）"
         from sandglass_vault import search  # sys.path 由 sandglass_bridge 注入
@@ -344,7 +406,7 @@ def _tool_recent(args):
         n = 8
     n = max(1, min(30, n))
     try:
-        b = _bridge()
+        b = _ready_bridge()
         if b is None or not b.is_available():
             return "（本体记忆当前不可用）"
         from sandglass_vault import recent
