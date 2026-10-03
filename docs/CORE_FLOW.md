@@ -184,7 +184,119 @@ if pm and pm.has_typed_hook("on_before_reply"):
 
 ---
 
-## 七、跨切面发现汇总（全部有行号证据）
+## 七、群聊决策、缓冲合并与退场（实测）
+
+### 7.1 缓冲合并
+
+| 项 | 值 | 行号 |
+|---|---|---|
+| 合并窗口（条） | `GROUP_MSG_BUFFER_WINDOW`，默认 3 | 236 |
+| 缓冲容器 | `GROUP_MSG_BUFFER: {group_id: {...}}` | 455 |
+| 并发保护 | `_buffer_lock = Lock()` | 412 |
+| 处理入口 | `process_buffered_message(group_id)` | 6091 |
+| 取缓冲 | 先 `pop` 再处理（保证只处理一次） | 6094 |
+
+**定时器延时策略**（同一个群多次触发会 `cancel` 旧定时器再重设）：
+
+| 情形 | 延时 |
+|---|---|
+| 会话中（`in_session`） | 5 秒 |
+| 被直接触发但还没有上下文 | 15 秒 |
+| 其余 | 3 秒 |
+
+→ 设计意图：被 @ 但对方还没说完，多等一会儿把上下文凑齐；已在会话里就快速接话。
+
+### 7.2 触发条件（六个标志）
+
+`is_at_bot` / `has_xiao_a` / `has_bot_nick` / `has_quote` / `has_text_at` / `in_session`
+
+**关键闸门在 6125**：六个都为假 → 不回复。
+
+| 项 | 行号 |
+|---|---|
+| `_group_trigger_words()` | 5936 |
+| 默认触发词 `["小a", "@占位名片A", "@10000001"]` | 5938 |
+| 会话中但非直接触发 → 走另一分支 | 6153 |
+| 标志在缓冲里累积 | 6136 |
+
+> ⚠️ **一个容易误判的点**：`_config.get("group_trigger_words", [默认])` 只在 key **不存在**时才用默认值。
+> 当前 `bot_config.json` 里该键存在但为空 → 返回 `[]`，**默认触发词不生效**。
+> 所以实际是"含昵称 / 含@文本"两个开关在兜底 —— 这与 8 月那份《配置中心全览》的提示一致。
+
+### 7.3 会话与退场
+
+| 项 | 值 | 行号 |
+|---|---|---|
+| 会话存活 | `SESSION_TTL`，默认 300 秒 | 229 |
+| 退场总开关 | `GROUP_IDLE_EXIT_ENABLE`，默认 True | 238 |
+| **静默下限硬保护** | `GROUP_IDLE_EXIT_MIN_SILENCE_FLOOR = 30` | 242 |
+| 生效值 | `_idle_exit_min_silence()` 取 `max(配置, 30)` | 244-250 |
+| 退场语（短 / 空闲） | `EXIT_PHRASES_SHORT` / `EXIT_PHRASES_IDLE` | 471 / 480 |
+| 退场语清洗 | `strip_exit_phrases()` | 1393 |
+| 退场表情默认 | `["崩溃","委屈","烦躁","落寞"]` | 1651 |
+
+> **30 秒下限是踩坑后的补丁**：8 月那份配置文档记着"设 12000 秒还是 47 秒就退场"的 bug。
+> 现在无论配置填多小，都不会低于 30 秒。
+
+---
+
+## 八、bot 生命周期与安全防护（实测）
+
+### 8.1 webui 如何拉起 bot_core
+
+```
+/api/bot/start   webui_server.py:3050
+   ▼
+start_bot()      3896
+   ├─ 已在运行？直接返回（_bot_lock 保护）
+   ├─ 必须有 bot_qq，否则返回「请先到配置中心填入 Bot QQ 号」
+   ├─ _get_bot_cmd()  3881  → 决定用哪个解释器、哪个工作目录
+   └─ Popen(cmd, cwd=cwd, env=…, stdout=PIPE, stderr=STDOUT, CREATE_NO_WINDOW)
+```
+
+`_get_bot_cmd()`（3881）的两种形态：
+
+| 形态 | 命令 | cwd |
+|---|---|---|
+| 冻结（打包） | 同级目录或 `_internal/` 下的 `EggBloom_v3_Core.exe` | 该 exe 所在目录 |
+| 源码 | `[sys.executable, PROJECT/bot_core.py]` | `PROJECT`（即 `resources\app`） |
+
+> **关键点：用的是 `sys.executable`** —— 谁在跑 webui_server，bot_core 就用同一个解释器。
+> `main.js` 用**包内 Python** 起 webui_server，所以 bot_core 也跑在包内 Python 上。
+> 这正是"包内 Python 缺依赖会连带影响 bot_core"的原因（已于 2026-10-03 装齐）。
+
+环境变量固定设置：`PYTHONUNBUFFERED=1`、`PYTHONIOENCODING=utf-8`；Windows 下加 `CREATE_NO_WINDOW`。
+
+停止：`/api/bot/stop`（3055）→ `stop_bot()`（3932）→ `terminate()` → 等 5 秒 → `kill()`。
+
+### 8.2 端口与 `last_port.txt`
+
+| 项 | 行号 |
+|---|---|
+| 绑定 `127.0.0.1` | 3995 |
+| `pick_port(preferred=8080, tries=20)`（顺延最多 20 个端口） | 4001 |
+| `run(host, port)` → 实际端口写入 `PROJECT/last_port.txt` | 4007 / 4015-4017 |
+
+> 🔴 **隐患**：`main.js` 把 URL **写死**成 `http://localhost:8080`（169 / 173 / 306）。
+> 一旦 8080 被占用、服务顺延到 8081，Electron 窗口会一直加载失败并按 `did-fail-load` 每 2 秒重试 8080 ——
+> **窗口永远出不来**，而服务其实正常运行在 8081。
+> 后端已经准备了 `last_port.txt`，但前端从未读它。
+
+### 8.3 安全防护
+
+| 防护 | 实现 | 行号 |
+|---|---|---|
+| **防 DNS rebinding** | `_host_allowed()`：Host 头必须是本机，否则 403 | 1239 / 1297-1301 |
+| **CORS 仅本机** | `_allowed_origin()`：只对 localhost / 127.0.0.1 / ::1 / file:// 返回 ACAO | 1224 |
+| **防目录穿越** | `unquote` → `resolve()` → 必须仍在 `HERE` 内 → 且扩展名在 `_STATIC_EXTS` 白名单 | 1328-1335 / 67 |
+| **API Key 掩码** | `_mask_secret()` 输出 `«redacted:xxxxx…»`；`_is_redacted_key()` 防止把掩码写回凭据管理器 | 84 / 91 / 72 / 806 |
+
+> 目录穿越防护的注释（1329）写明了它修的是什么：
+> 此前 `HERE / path.lstrip("/")` 不过滤 `..`，**本机任意进程都能读到 `../bot_config.json` 与 `model-debug.log`**。
+
+---
+
+## 九、跨切面发现汇总（全部有行号证据）
 
 | # | 发现 | 证据 | 状态 |
 |---|---|---|---|
@@ -194,10 +306,12 @@ if pm and pm.has_typed_hook("on_before_reply"):
 | 4 | `data_store.py` 两棵树同名不同物（一棵是 JSON 工具、一棵是目录管理器） | 见整理报告 P0 | ✅ 已合并 |
 | 5 | 三套各自为政的定时器 | `bot_core` Timer / `proactive_talk` 心跳 / `slang_learner` 间隔 | 🔄 调度器已就绪，待收编 |
 | 6 | `private_memory.py` / `message_router.py` / `onebot_client.py` / `log_utils.py` 无人 import | 全项目检索 0 命中 | ⬜ 待删（M5） |
+| 7 | **端口顺延后前端仍写死 8080** → 8080 被占用时 Electron 窗口永远出不来（服务其实正常） | `pick_port`:4001 / `last_port.txt`:4015-4017 **vs** `main.js`:169,173,306 | ❌ 未修 |
+| 8 | `group_trigger_words` 存在但为空 → 默认触发词不生效（易误判为"配了却不好使"） | `bot_core.py:5938` 的 `.get(key, default)` 语义 | ⬜ 待确认是否预期 |
 
 ---
 
-## 八、附录：可复现的验证命令
+## 十、附录：可复现的验证命令
 
 ```powershell
 $w = "E:\EggBloom水星\EggBloom Desktop-new\resources\app"
@@ -221,4 +335,16 @@ Select-String -Path "$w\bot_core.py" -Pattern 'execute_hooks?\(|has_hook\('
 (Select-String -Path "$w\webui\webui_server.py" -Pattern '["''](/api/[A-Za-z0-9_\-/]*)["'']' -AllMatches |
   ForEach-Object { $_.Matches } | ForEach-Object { $_.Groups[1].Value } |
   Sort-Object -Unique).Count                                                            # → 52（唯一路径）
+
+# 5) 群聊决策与退场 —— 实测命中：242, 250, 6091
+#    （6125 的六标志闸门与 6153 的会话分支需另用 pattern 才命中）
+Select-String -Path "$w\bot_core.py" -Pattern 'def process_buffered_message|GROUP_IDLE_EXIT_MIN_SILENCE_FLOOR'
+Select-String -Path "$w\bot_core.py" -Pattern 'not is_at_bot and not has_xiao_a'
+
+# 6) 端口顺延 vs 前端写死 —— 实测：前者 4001 / 4017，后者 main.js 169 / 173 / 306
+Select-String -Path "$w\webui\webui_server.py" -Pattern 'def pick_port|last_port\.txt'
+Select-String -Path "$w\main.js" -Pattern 'localhost:8080'
+
+# 7) bot 生命周期（应命中 3050 / 3055 / 3881 / 3896 / 3932）
+Select-String -Path "$w\webui\webui_server.py" -Pattern 'def _get_bot_cmd|def start_bot|def stop_bot'
 ```
