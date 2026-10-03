@@ -516,3 +516,59 @@ __all__ = [
     "on_load",
     "on_unload",
 ]
+
+# ── 通用插件通道动作（WebUI plugin_id='ego.chat_style'） ──
+def _action_toggle(params=None):
+    cfg = get_config()
+    enabled = not bool(cfg.get("enabled", True))
+    set_config({"enabled": enabled})
+    return {"enabled": enabled, "config": get_config()}
+
+
+def _action_config(params=None):
+    params = params or {}
+    key = (params.get("key") or "").strip()
+    if key:
+        return set_config({key: params.get("value")})
+    return get_config()
+
+
+def _action_custom(params=None):
+    params = params or {}
+    method = params.get("method") or ""
+    scope_id = str(params.get("scope_id") or "")
+    user_id = str(params.get("user_id") or "")
+    if method == "learn_from_user":
+        messages = params.get("messages") or []
+        if not isinstance(messages, list):
+            messages = [str(messages)]
+        learn_from_user(scope_id, user_id, messages)
+        return {"ok": True, "count": len(messages)}
+    if method == "learn_from_memory":
+        try:
+            count = learn_from_memory(scope_id, user_id)
+            return {"ok": True, "count": int(count or 0)}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+    return {"ok": False, "error": "unknown method: " + method}
+
+
+def _action_features(params=None):
+    params = params or {}
+    scope_id = (params.get("scope_id") or "").strip() or "default"
+    user_id = (params.get("user_id") or "").strip()
+    try:
+        feats = _learner.get_features(scope_id=scope_id, user_id=user_id)
+        return {"features": feats.get("features", []) if isinstance(feats, dict) else feats}
+    except Exception as e:
+        return {"features": [], "error": str(e)}
+
+
+PLUGIN_ACTIONS = {
+    "toggle": _action_toggle,
+    "config": _action_config,
+    "custom": _action_custom,
+    "get_features": _action_features,
+    "get_config": lambda params: get_config(),
+    "set_config": lambda params: set_config(params or {}),
+}

@@ -15,6 +15,8 @@
 ## P0 —— 端到端闭环（不做这两件，前面的都是离线实验）
 
 ### 1. ✅ 注入卡发布到 bot（2026-09-28 完成，publisher.py + ego 接收端）
+> v2.4.2 追加：按用户决定**取消大小截断**——大文件只给 token 用量警告
+（TOKEN_WARN=8000，发布/CLI/UI 三处展示），不再有内容被砍掉的风险。
 - **现状依据**：`grep bot_core.py` 显示它读 `personality.txt`（第 290 行
   `PERSONALITY_FILE`），且**整个 bot_core / webui 与蒸馏插件零引用**。
   蒸馏做得再好，模型说话用的还是那份手写人设。

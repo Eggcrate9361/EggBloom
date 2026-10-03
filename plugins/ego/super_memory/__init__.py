@@ -41,7 +41,7 @@ PLUGIN_META = {
         "embed_url": {"type": "str", "default": "http://127.0.0.1:8083/v1/embeddings"},
         "embed_model": {"type": "str", "default": "bge-small-zh"},
         # 内置默认：模型与 LiGGUF DLL 随插件打包在 models/（体量小，无需外部依赖）
-        "embed_exe": {"type": "str", "default": ""},
+        "embed_exe": {"type": "str", "default": "D:\\llama-b10068\\llama-server.exe"},
         "embed_model_path": {"type": "str", "default": os.path.join("models", "bge-small-zh-v1.5-f16.gguf")},
         "embed_dll": {"type": "str", "default": os.path.join("models", "ligguf_embed.dll")},
         "embed_min_sim": {"type": "float", "default": 0.35},
@@ -990,3 +990,67 @@ def after_reply(scope: str = "", scope_id: str = "", message: str = "", reply: s
             _memory.update_affection(scope_id, user_id, message)
         _memory.consolidate(scope, scope_id)
     return None
+
+# ── 通用插件通道动作（WebUI plugin_id='ego.super_memory'） ──
+def _action_stats(params=None):
+    params = params or {}
+    scope_id = str(params.get("scope_id") or "default").strip()
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) FROM messages WHERE scope_id=?", (scope_id,))
+        messages = cur.fetchone()[0]
+        cur.execute("SELECT COUNT(*) FROM facts WHERE scope_id=?", (scope_id,))
+        facts = cur.fetchone()[0]
+        cur.execute("SELECT COUNT(*) FROM events WHERE scope_id=?", (scope_id,))
+        events = cur.fetchone()[0]
+        cur.execute("SELECT COUNT(*) FROM persona_kernel WHERE scope_id=?", (scope_id,))
+        persona = cur.fetchone()[0]
+        conn.close()
+        return {"messages": messages, "facts": facts, "events": events, "persona": persona}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+def _action_test_embed(params=None):
+    params = params or {}
+    text = str(params.get("text") or "测试")
+    try:
+        t0 = time.time()
+        v1 = _embedder.embed(text)
+        if not v1:
+            return {"ok": False, "error": "embedding 服务不可用(8083 未启动)"}
+        v2 = _embedder.embed(text + "的同类描述")
+        t1 = time.time()
+        sim = _vec_sim(v1, v2)
+        return {"ok": True, "latency_ms": round((t1 - t0) * 1000, 1), "dim": len(v1), "sample_sim": round(sim, 4)}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def _action_recall(params=None):
+    params = params or {}
+    scope_id = str(params.get("scope_id") or "default").strip()
+    query = str(params.get("query") or "")
+    limit = int(params.get("limit") or 5)
+    try:
+        items = _memory.recall_key_memories(scope="group", scope_id=scope_id, current_msg=query, limit=limit)
+        return {"items": items or []}
+    except Exception as e:
+        return {"items": [], "error": str(e)}
+
+
+PLUGIN_ACTIONS = {
+    "get_config": lambda params: get_config(),
+    "set_config": lambda params: set_config(params or {}),
+    "stats": _action_stats,
+    "test_embed": _action_test_embed,
+    "recall": _action_recall,
+    "tier_stats": lambda params: get_tier_stats(str((params or {}).get("scope_id") or "default").strip()),
+    "set_tier": lambda params: set_tier(
+        scope_id=str((params or {}).get("scope_id") or "default").strip(),
+        table=str((params or {}).get("table") or "facts").strip(),
+        item_id=int((params or {}).get("item_id") or 0),
+        tier=str((params or {}).get("tier") or "long").strip(),
+    ),
+}

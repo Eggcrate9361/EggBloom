@@ -134,3 +134,10 @@ def before_reply(**kwargs):
 
 def after_reply(**kwargs):
     return _rhythm.after_reply(**kwargs)
+
+# ── 通用插件通道动作（WebUI plugin_id='ego.humanlike_rhythm'） ──
+PLUGIN_ACTIONS = {
+    "get_config": lambda params: get_config(),
+    "set_config": lambda params: set_config(params or {}),
+    "get_stats": lambda params: get_stats(),
+}

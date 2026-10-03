@@ -31,12 +31,22 @@ class Provider:
 
     name = "base"
 
-    def __init__(self, api_url="", api_key="", model="", max_retries=3, temperature=None):
+    def __init__(self, api_url="", api_key="", model="", max_retries=3, temperature=None,
+                 extra_body=None):
         self.api_url = api_url
         self.api_key = api_key
         self.model = model
         self.max_retries = max_retries
         self.temperature = temperature  # None=使用适配器默认值；由 AIClient 透传 ai_temperature
+        # 可选：调用方额外要带进请求体的字段（例如 {"thinking": {"type": "disabled"}}
+        # 用来关掉推理型模型的思考过程）。默认 None = 完全不影响原有行为。
+        self.extra_body = extra_body
+
+    def _apply_extra(self, payload):
+        """把 extra_body 合并进请求体。默认无操作。"""
+        if self.extra_body:
+            payload.update(self.extra_body)
+        return payload
 
     def _temp(self, fallback):
         """解析温度：显式配置优先，否则适配器默认值。"""
@@ -95,6 +105,7 @@ class OpenAIProvider(Provider):
         }
         if tools:
             data["tools"] = tools
+        self._apply_extra(data)
 
         body = json.dumps(data).encode("utf-8")
         headers = {
@@ -178,6 +189,7 @@ class OllamaProvider(Provider):
         }
         if tools:
             payload["tools"] = tools
+        self._apply_extra(payload)
 
         body = json.dumps(payload).encode("utf-8")
         headers = {"Content-Type": "application/json"}
@@ -380,6 +392,7 @@ class AnthropicProvider(Provider):
             payload["system"] = system_text
         if tools:
             payload["tools"] = self._tools_to_anthropic(tools)
+        self._apply_extra(payload)
         headers = {"Content-Type": "application/json",
                    "x-api-key": self.api_key or "",
                    "anthropic-version": "2023-06-01"}
@@ -545,6 +558,7 @@ class GoogleProvider(Provider):
             gtools = self._tools_to_gemini(tools)
             if gtools:
                 payload["tools"] = gtools
+        self._apply_extra(payload)
         body = json.dumps(payload).encode("utf-8")
         headers = {"Content-Type": "application/json"}
         last_err = None
@@ -617,7 +631,9 @@ _PROVIDER_REGISTRY = {
 }
 
 
-def make_provider(api_url="", api_key="", model="", provider="openai", max_retries=3, temperature=None):
+def make_provider(api_url="", api_key="", model="", provider="openai", max_retries=3,
+                  temperature=None, extra_body=None):
     """按 provider 名称构造适配器；未知 provider 回退 OpenAI 兼容。"""
     cls = _PROVIDER_REGISTRY.get((provider or "openai").lower(), OpenAIProvider)
-    return cls(api_url=api_url, api_key=api_key, model=model, max_retries=max_retries, temperature=temperature)
+    return cls(api_url=api_url, api_key=api_key, model=model, max_retries=max_retries,
+               temperature=temperature, extra_body=extra_body)

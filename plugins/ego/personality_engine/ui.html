@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
@@ -127,7 +127,7 @@
   async function loadPersonality() {
     const data = await api('/api/plugins/action', {
       method: 'POST',
-      body: JSON.stringify({plugin_id:'personality_engine', action:'get_personality'})
+      body: JSON.stringify({plugin_id:'ego.personality_engine', action:'get_personality'})
     });
     const sections = (data && data.sections) || {};
     const fields = ['你是谁','日常','性格','说话方式','群聊行为','遇到各种事','口头禅','绝对不能说的话'];
@@ -151,7 +151,7 @@
     }
     const exEl = document.getElementById('example-enabled');
     const payload = {
-      plugin_id:'personality_engine',
+      plugin_id:'ego.personality_engine',
       action:'save_personality',
       params:{
         sections,
@@ -184,7 +184,7 @@
   async function loadExamples() {
     const data = await api('/api/plugins/action', {
       method: 'POST',
-      body: JSON.stringify({plugin_id:'personality_engine', action:'get_examples', params:{scene:''}})
+      body: JSON.stringify({plugin_id:'ego.personality_engine', action:'get_examples', params:{scene:''}})
     });
     const list = Array.isArray(data && data.examples) ? data.examples : [];
     document.getElementById('example-editor').value = JSON.stringify(list, null, 2);
@@ -195,7 +195,7 @@
     try { parsed = JSON.parse(raw); } catch (e) { alert('示例库 JSON 格式错误'); return; }
     const data = await api('/api/plugins/action', {
       method: 'POST',
-      body: JSON.stringify({plugin_id:'personality_engine', action:'save_examples', params:{examples: parsed}})
+      body: JSON.stringify({plugin_id:'ego.personality_engine', action:'save_examples', params:{examples: parsed}})
     });
     alert(data.success !== false ? '示例已保存' : '保存失败：' + (data.error || '未知错误'));
   }
