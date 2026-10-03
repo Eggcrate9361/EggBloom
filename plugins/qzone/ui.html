@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>QQ 空间 · EggBloom</title>
+<style>
+:root{--bg:#0a0a0f;--paper:#16161f;--line:#26262f;--ink:#f0f0f5;--ink2:#b8b8c8;--ink3:#8a8f9a;
+  --gold:#c9a96e;--ok:#6f9e78;--err:#b05a52;--warn:#c9a35e;
+  --f:'Outfit','Noto Sans SC',system-ui,sans-serif;--m:'JetBrains Mono',Consolas,monospace}
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:var(--bg);color:var(--ink);font-family:var(--f);font-size:13.5px;padding:18px 20px 40px}
+h2{font-size:16px;font-weight:600;margin-bottom:4px}
+.sub{color:var(--ink3);font-size:12px;margin-bottom:16px}
+button{font-family:var(--m);font-size:11px;letter-spacing:.06em;padding:6px 12px;cursor:pointer;
+  background:transparent;color:var(--ink2);border:1px solid var(--line);border-radius:4px}
+button:hover{border-color:var(--gold);color:var(--gold)}
+button:disabled{opacity:.35;cursor:not-allowed}
+button.primary{color:var(--gold);border-color:#5a4a33}
+button.danger{color:var(--err);border-color:#3a2523}
+.card{border:1px solid var(--line);border-radius:6px;padding:14px;background:var(--paper);margin-bottom:14px}
+.card h3{font-size:13px;font-weight:600;margin-bottom:10px;display:flex;align-items:center;gap:8px}
+.bar{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.stat{font-family:var(--m);font-size:11px;color:var(--ink3)}
+.stat b{color:var(--ink2);font-weight:500}
+.sw{display:inline-flex;align-items:center;gap:8px;font-family:var(--m);font-size:11.5px;
+  border:1px solid var(--line);border-radius:4px;padding:6px 10px;cursor:pointer;user-select:none}
+.sw.on{border-color:#5a4a33;color:var(--gold)}
+.sw .dot{width:7px;height:7px;border-radius:50%;background:var(--line)}
+.sw.on .dot{background:var(--ok)}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px}
+.act{border:1px solid var(--line);border-radius:5px;padding:10px}
+.act .nm{font-family:var(--m);font-size:11.5px;color:var(--ink2);margin-bottom:2px}
+.act .lz{font-size:10.5px;color:var(--ink3);margin-bottom:8px}
+.f{display:flex;flex-direction:column;gap:3px;margin-bottom:6px}
+.f label{font-family:var(--m);font-size:10px;color:var(--ink3);letter-spacing:.08em}
+input,select,textarea{background:#14141b;border:1px solid var(--line);border-radius:4px;color:var(--ink);
+  font-family:var(--m);font-size:12px;padding:6px 8px;outline:none;width:100%}
+input:focus,select:focus,textarea:focus{border-color:var(--gold)}
+textarea{resize:vertical;min-height:52px;line-height:1.5}
+pre{font-family:var(--m);font-size:11px;background:#0e0e14;border:1px solid var(--line);border-radius:5px;
+  padding:10px;overflow:auto;max-height:340px;white-space:pre-wrap;word-break:break-all;color:var(--ink2)}
+.warnbox{border:1px solid #4a3d24;background:#1a160f;border-radius:5px;padding:9px 11px;
+  font-size:12px;color:var(--warn);margin-bottom:12px}
+.ok{color:var(--ok)}.err{color:var(--err)}
+.row{display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap}
+.hint{color:var(--ink3);font-size:11px;margin-top:6px}
+table{width:100%;border-collapse:collapse;margin-top:6px}
+th{font-family:var(--m);font-size:10px;letter-spacing:.1em;color:var(--ink3);text-align:left;
+  padding:6px 8px;border-bottom:1px solid var(--line);font-weight:400}
+td{padding:6px 8px;border-bottom:1px solid #1c1c22;font-size:11.5px;color:var(--ink2)}
+</style>
+</head>
+<body>
+<h2>QQ 空间</h2>
+<div class="sub">9 个动作分四层。默认全关 —— 要用哪层显式打开。发说说有频率硬上限（每天 ≤2 条，间隔 ≥4 小时）。</div>
+
+<div id="warn"></div>
+
+<div class="card">
+  <h3>总开关与能力层</h3>
+  <div class="bar" style="margin-bottom:10px">
+    <span class="sw" id="sw_enabled" onclick="toggleEnabled()"><span class="dot"></span>插件启用</span>
+    <span class="stat" id="stat">加载中…</span>
+  </div>
+  <div class="bar" id="layers"></div>
+  <div class="hint">read=读（无风险）· interact=互动（低）· write=发说说（中，人人可见）· manage=删/改权限/拉黑（中，不可逆或影响他人）</div>
+</div>
+
+<div class="card">
+  <h3>发布额度</h3>
+  <div class="bar">
+    <span class="stat" id="limit"></span>
+    <button class="danger" style="margin-left:auto" onclick="if(confirm('清空今日发布记录？仅用于调试/误操作恢复。'))call('reset_limit',{confirm:true}).then(load)">清空记录</button>
+  </div>
+  <div id="loglist"></div>
+</div>
+
+<div class="card">
+  <h3>人设（AI 生成内容用）</h3>
+  <div class="f"><textarea id="persona" placeholder="留空则用内置默认人设"></textarea></div>
+  <div class="bar">
+    <button class="primary" onclick="savePersona()">保存人设</button>
+    <button onclick="genPreview()">试生成一条（不发布）</button>
+  </div>
+  <div id="genbox" style="margin-top:10px;display:none"><pre id="genout"></pre></div>
+</div>
+
+<div class="card">
+  <h3>试运行（直接执行，返回原始 JSON）</h3>
+  <div class="hint" style="margin-bottom:10px">每个动作都可手动触发。返回的是驱动给的**原始 JSON**，不是"成功"两个字。试运行同样受能力层门禁约束。</div>
+  <div class="grid" id="acts"></div>
+</div>
+
+<div class="card">
+  <h3>返回结果</h3>
+  <pre id="out">（尚未执行任何动作）</pre>
+</div>
+
+<script>
+const API='/api/plugins/action';
+let S=null;
+async function call(action,params){
+  const r=await fetch(API,{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({plugin_id:'qzone',action,params:params||{}})});
+  return r.json();
+}
+function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+function show(obj){
+  document.getElementById('out').textContent=JSON.stringify(obj,null,2);
+}
+function showErr(m){document.getElementById('warn').innerHTML=`<div class="warnbox">${esc(m)}</div>`;}
+function clearErr(){document.getElementById('warn').innerHTML='';}
+
+const ACT_DEF=[
+  {a:'get_qzone_msg_list',layer:'read',f:'说说列表',fields:[
+    {k:'target_uin',l:'目标QQ(空=自己)',t:'text',ph:'留空'},{k:'pos',l:'起始偏移',t:'number',v:0},{k:'num',l:'数量',t:'number',v:20}]},
+  {a:'get_qzone_feeds',layer:'read',f:'好友动态',fields:[
+    {k:'page_num',l:'页码',t:'number',v:1},{k:'count',l:'本页数量',t:'number',v:10}]},
+  {a:'like_qzone',layer:'interact',f:'点赞',fields:[
+    {k:'tid',l:'tid(必填)',t:'text'},{k:'target_uin',l:'所属QQ',t:'text',ph:'留空'},{k:'abstime',l:'发表时间(unix秒)',t:'number',v:0}]},
+  {a:'unlike_qzone',layer:'interact',f:'取消赞',fields:[
+    {k:'tid',l:'tid(必填)',t:'text'},{k:'target_uin',l:'所属QQ',t:'text',ph:'留空'},{k:'abstime',l:'发表时间',t:'number',v:0}]},
+  {a:'comment_qzone',layer:'interact',f:'评论',fields:[
+    {k:'tid',l:'tid(必填)',t:'text'},{k:'content',l:'评论内容(必填)',t:'text'},{k:'target_uin',l:'所属QQ',t:'text',ph:'留空'}]},
+  {a:'send_qzone_msg',layer:'write',f:'发说说',fields:[
+    {k:'content',l:'正文(必填)',t:'textarea'},{k:'ugc_right',l:'权限',t:'select',opts:'ugc'},
+    {k:'target_uins',l:'权限名单QQ(逗号分隔)',t:'text',ph:'仅16/128需要'},{k:'images',l:'图片(逗号分隔URL)',t:'text',ph:'可空'}]},
+  {a:'delete_qzone_msg',layer:'manage',f:'删除说说',fields:[
+    {k:'tid',l:'tid(必填)',t:'text'},{k:'confirm',l:'确认删除',t:'check'}]},
+  {a:'set_qzone_msg_right',layer:'manage',f:'改权限',fields:[
+    {k:'tid',l:'tid(必填)',t:'text'},{k:'ugc_right',l:'权限(必填)',t:'select',opts:'ugc'},
+    {k:'target_uins',l:'权限名单QQ(逗号分隔)',t:'text',ph:'仅16/128需要'}]},
+  {a:'set_qzone_ban',layer:'manage',f:'拉黑/解黑',fields:[
+    {k:'user_id',l:'目标QQ(必填)',t:'text'},{k:'enable',l:'拉黑',t:'check',v:true}]},
+];
+const LAYER_ZH={read:'读',interact:'互动',write:'写',manage:'管'};
+
+function ugcOpts(sel){
+  if(!S) return '';
+  return S.ugc_options.map(o=>`<option value="${o.value}" ${String(o.value)===String(sel)?'selected':''}>${o.value} · ${esc(o.label)}</option>`).join('');
+}
+function buildActs(){
+  let h='';
+  for(const d of ACT_DEF){
+    h+=`<div class="act"><div class="nm">${d.a}</div><div class="lz">${d.f} · ${LAYER_ZH[d.layer]}层</div>`;
+    for(const f of d.fields){
+      if(f.t==='select') h+=`<div class="f"><label>${esc(f.l)}</label><select id="p_${d.a}_${f.k}">${ugcOpts(1)}</select></div>`;
+      else if(f.t==='check') h+=`<div class="f"><label><input type="checkbox" id="p_${d.a}_${f.k}" ${f.v?'checked':''} style="width:auto"> ${esc(f.l)}</label></div>`;
+      else if(f.t==='textarea') h+=`<div class="f"><label>${esc(f.l)}</label><textarea id="p_${d.a}_${f.k}" placeholder="${esc(f.ph||'')}"></textarea></div>`;
+      else h+=`<div class="f"><label>${esc(f.l)}</label><input type="${f.t}" id="p_${d.a}_${f.k}" value="${f.v!=null?f.v:''}" placeholder="${esc(f.ph||'')}"></div>`;
+    }
+    h+=`<button class="primary" onclick="run('${d.a}')">执行</button></div>`;
+  }
+  document.getElementById('acts').innerHTML=h;
+}
+function collect(d){
+  const p={};
+  for(const f of d.fields){
+    const el=document.getElementById(`p_${d.a}_${f.k}`); if(!el) continue;
+    let v;
+    if(f.t==='check') v=el.checked;
+    else v=el.value;
+    if(v===''&&f.t!=='textarea'&&f.t!=='check') continue;
+    if(v===''&&f.t==='textarea') continue;
+    if(f.k==='target_uins'&&v){ p[f.k]=v.split(',').map(x=>x.trim()).filter(Boolean); continue; }
+    if(f.k==='images'&&v){ p[f.k]=v.split(',').map(x=>x.trim()).filter(Boolean); continue; }
+    if(f.k==='user_id'&&v){ p[f.k]=parseInt(v,10); continue; }
+    if(f.k==='target_uin'&&v){ p[f.k]=parseInt(v,10); continue; }
+    if((f.t==='number')&&v!==''){ p[f.k]=parseInt(v,10); continue; }
+    p[f.k]=v;
+  }
+  return p;
+}
+async function run(a){
+  const d=ACT_DEF.find(x=>x.a===a); clearErr();
+  const r=await call('run',{action:a,params:collect(d)});
+  show(r); load();
+}
+function toggleEnabled(){
+  call('set_config',{enabled:!S.enabled}).then(()=>load());
+}
+function toggleLayer(k){
+  const layers=Object.assign({},S.layers); layers[k]=!layers[k];
+  call('set_config',{layers}).then(()=>load());
+}
+function savePersona(){
+  call('set_config',{persona:document.getElementById('persona').value}).then(r=>{show(r);load();});
+}
+async function genPreview(){
+  const r=await call('generate',{hint:''});
+  document.getElementById('genbox').style.display='block';
+  document.getElementById('genout').textContent=r.ok?r.content:JSON.stringify(r,null,2);
+}
+async function load(){
+  const d=await call('status');
+  if(d.error){ showErr(d.error); return; }
+  S=d;
+  document.getElementById('sw_enabled').className='sw'+(d.enabled?' on':'');
+  const on=Object.entries(d.layers).filter(([,v])=>v).map(([k])=>LAYER_ZH[k]);
+  document.getElementById('stat').innerHTML=
+    `总开关 <b>${d.enabled?'开':'关'}</b> · 能力层 <b>${on.length?on.join('/'):'全关'}</b>`;
+  document.getElementById('layers').innerHTML=Object.keys(d.layers).map(k=>
+    `<span class="sw ${d.layers[k]?'on':''}" onclick="toggleLayer('${k}')"><span class="dot"></span>${LAYER_ZH[k]}</span>`).join('');
+  const L=d.limit;
+  document.getElementById('limit').innerHTML=
+    `今日已发 <b>${L.used_today}/${L.max_per_day}</b> · 间隔 ≥ <b>${L.min_interval_hours}h</b> · 现在可发 <b class="${L.can_publish_now?'ok':'err'}">${L.can_publish_now?'是':'否'}</b>`+
+    (L.block_reason?` <span class="err">（${esc(L.block_reason)}）</span>`:'');
+  const logs=(d.publish_log||[]).reverse();
+  document.getElementById('loglist').innerHTML= logs.length?
+    '<table><thead><tr><th>时间</th><th>tid</th><th>内容</th></tr></thead><tbody>'+
+    logs.map(x=>`<tr><td>${new Date(x.ts*1000).toLocaleString()}</td><td>${esc(x.tid||'—')}</td><td>${esc(x.content)}</td></tr>`).join('')+
+    '</tbody></table>':'<div class="hint">今天还没有发布记录</div>';
+  document.getElementById('persona').value=d.persona||'';
+  buildActs();
+}
+async function init(){
+  // 先请求一次 ugc 选项，再建动作卡
+  const d=await call('status');
+  if(!d.error){ S=d; }
+  await load();
+}
+init();
+</script>
+</body>
+</html>
