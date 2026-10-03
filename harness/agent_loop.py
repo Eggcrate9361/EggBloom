@@ -161,6 +161,24 @@ def run_agent(*, session_id, user_input, chat_fn, tool_functions,
         except Exception as e:
             log(f"[agent] session_log 写入失败（不影响执行）: {e}")
 
+    def _finalize(res):
+        """返回前收尾：把本次运行的**轨迹**填进 result。
+
+        为什么在这里做：`AgentResult.trace` 原本永远是空的 —— 轨迹只落在
+        session_log 里，调用方（前端）只能再发一次 /trace 请求。run_agent 的
+        返回是**自包含**的更合理：一次 chat 响应就带全部执行留痕，前端无需
+        第二次往返（也避免"日志还没 flush 完就去读"的竞态）。
+        persist=True 时从日志回读（**以日志为准**，保证与回放一致）。
+        """
+        try:
+            if persist:
+                res.trace = replay(session_id)
+            else:
+                res.trace = list(res.trace or [])
+        except Exception:
+            pass
+        return res
+
     # ── 组装 messages ──────────────────────────────────────────────
     messages = []
     if system_prompt:
@@ -226,7 +244,7 @@ def run_agent(*, session_id, user_input, chat_fn, tool_functions,
                 _append_log(EV_FINAL, {"content": res.answer, "steps": step + 1})
                 _emit("final", {"content": res.answer, "steps": step + 1,
                                 "elapsed": round(time.time() - t0, 2)})
-                return res
+                return _finalize(res)
 
             # 记录模型的中间文字（若有）
             if content and str(content).strip():
@@ -243,7 +261,7 @@ def run_agent(*, session_id, user_input, chat_fn, tool_functions,
                                        "error": res.error, "reason": "tool_budget"})
                 _emit("final", {"content": res.answer, "steps": step + 1,
                                 "error": res.error, "elapsed": round(time.time() - t0, 2)})
-                return res
+                return _finalize(res)
 
             # 归一化 tool_calls（单点实现，主链共用同一套语义）
             norm_calls = _tr.normalize_tool_calls(tool_calls, session_id=session_id, step=step)
@@ -254,7 +272,7 @@ def run_agent(*, session_id, user_input, chat_fn, tool_functions,
                 _append_log(EV_FINAL, {"content": res.answer, "steps": step + 1})
                 _emit("final", {"content": res.answer, "steps": step + 1,
                                 "elapsed": round(time.time() - t0, 2)})
-                return res
+                return _finalize(res)
             tool_calls = norm_calls
 
             # 回灌 assistant 的工具调用消息
@@ -325,19 +343,19 @@ def run_agent(*, session_id, user_input, chat_fn, tool_functions,
         _append_log(EV_FINAL, {"content": "", "steps": res.steps, "error": res.error})
         _emit("final", {"content": "", "steps": res.steps, "error": res.error,
                         "elapsed": round(time.time() - t0, 2)})
-        return res
+        return _finalize(res)
 
     except AgentAborted:
         res.aborted = True
         res.ok = False
         res.error = "已中止"
         _emit("aborted", {"steps": res.steps})
-        return res
+        return _finalize(res)
     except Exception as e:
         res.ok = False
         res.error = f"{type(e).__name__}: {e}"
         _emit("error", {"error": res.error})
-        return res
+        return _finalize(res)
 
 
 def derive_history(session_id, *, limit=None):

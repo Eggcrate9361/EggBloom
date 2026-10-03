@@ -199,3 +199,56 @@ def reset_cache():
     with _lock:
         _cache.clear()
         _seq.clear()
+
+
+def list_ids(kind, *, limit=None):
+    """列出该 kind 下**已有日志的**会话 id（按文件 mtime 倒序 = 最近活动的在前）。
+
+    用途：Agent 页的"历史会话"列表 —— 刷新页面后仍能找回之前的会话
+    （这正是设计文档 §5「会话即日志（可回放）」要的能力：**不只是内存里记着**）。
+    """
+    out = []
+    try:
+        if not os.path.isdir(SESSION_LOG_DIR):
+            return out
+        prefix = f"{kind}-"
+        entries = []
+        for name in os.listdir(SESSION_LOG_DIR):
+            if not name.startswith(prefix) or not name.endswith(".jsonl"):
+                continue
+            p = os.path.join(SESSION_LOG_DIR, name)
+            try:
+                st = os.stat(p)
+            except OSError:
+                continue
+            sid = name[len(prefix):-len(".jsonl")]
+            entries.append((st.st_mtime, sid, st.st_size))
+        entries.sort(reverse=True)
+        for mt, sid, size in entries:
+            out.append({"session_id": sid, "mtime": mt, "bytes": size,
+                        "path": _ns_path(kind, sid)})
+            if limit and len(out) >= int(limit):
+                break
+    except Exception:
+        pass
+    return out
+
+
+def delete(kind, sid):
+    """删除一个会话日志（Agent 页的"清空会话"）。
+
+    返回 True/False。**只删对应的那个 jsonl**，不做通配 —— 避免误伤。
+    """
+    key = (kind, str(sid))
+    path = _ns_path(kind, sid)
+    ok = False
+    try:
+        if os.path.isfile(path):
+            os.remove(path)
+            ok = True
+    except Exception:
+        ok = False
+    with _lock:
+        _cache.pop(key, None)
+        _seq.pop(key, None)
+    return ok

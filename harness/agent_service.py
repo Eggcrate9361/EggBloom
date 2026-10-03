@@ -2,16 +2,21 @@
 """harness/agent_service.py —— Agent 服务层（主程序 agent 能力的「适配层」）。
 
 职责（把 bot_core 的接入压到最薄）
-  - 会话管理：session_id → 中止标志 / 历史窗口
-  - system_prompt 组装：复用 bot_core 现有静态段 + 追加「agent 工作模式」快照
-  - 工具包装：把 bot_core 的 TOOL_FUNCTIONS 适配成 agent_loop 需要的签名
+  - 会话管理：session_id → 中止标志 / 历史窗口 / 事件订阅
+  - system_prompt 组装：本体静态段 + agent 模式快照 + 本体记忆（追加式，保前缀缓存）
+  - 工具包装：把 bot_core 的 TOOL_FUNCTIONS 适配成 agent_loop 需要的签名，
+    并按场景（只读 / 写 / 执行）**分闸注入**
+  - **本体记忆**：system 快照 + 每轮 prefetch + 会话后落沙（走 harness/agent_memory）
   - 群内触发的**双闸**判断：权限闸（_is_authorized）+ 意图闸（明确执行意图）
+  - **实时事件总线**：按会话把 agent_loop 的事件广播给订阅者（前端 SSE 用）
+  - **单步重跑**：从 session_log 截到某一步，重建 messages 后继续
 
 原则
   - **依赖注入**：bot_core 通过 configure(...) 注入 chat_fn / tool_functions /
     static_prompt_fn / is_authorized_fn / logger，本模块**不做任何 from bot_core import**。
   - agent_loop 负责循环；本模块负责「把 bot_core 的能力喂给它」。
   - 群内 agent **默认关**：配置 agent_group_enable 打开 + 双闸通过才触发。
+  - 任何外部依赖（记忆 / 日志 / 注册表）故障都**不向主循环抛出**（DSH A10）。
 """
 import os
 import re
@@ -21,6 +26,7 @@ import threading
 
 from . import agent_loop as _al
 from . import session_log as _slog
+from . import agent_memory as _amem
 
 # ── 注入点（由 bot_core 在启动时 configure）────────────────────────
 _CFG = {
@@ -31,11 +37,29 @@ _CFG = {
     "logger": None,
     # 工具 schema 提供者：names -> schema 列表（顺序稳定）。用于 Agent 侧按需加载。
     "tool_schema_provider": None,
+    # 工具名解析器：(user_msg, is_group) -> [tool_name, ...]（按场景分闸）
+    "tool_picker": None,
+    # 会话落沙钩子：(session_id, user_input, answer, meta) -> None
+    "on_turn": None,
+    # 记忆开关（默认开；config 可关）
+    "memory": True,
 }
 
 # 会话状态：{session_id: {"abort": bool, "busy": bool, "last": float}}
 _SESSIONS = {}
 _sess_lock = threading.Lock()
+# 会话元数据（跨进程重启由 session_log 持久化；这里只放热态）
+_SESS_META = {}
+
+# 事件总线：{session_id: [queue, ...]}，queue 是 list（简单、够用）
+_BUS = {}
+_bus_lock = threading.Lock()
+#: 单会话事件缓冲上限（防前端不消费导致内存无界）
+BUS_MAX = 2000
+
+# 会话内存上限（防止长期运行无界增长）
+_MAX_SESSIONS = 200
+_MAX_META = 500
 
 # agent 工作模式的提示词快照（**追加式**，不改写既有 static_prompt → 保前缀缓存）
 AGENT_MODE_SNAPSHOT = (
@@ -53,11 +77,15 @@ AGENT_MODE_SNAPSHOT = (
     "变量/import/当前目录跨调用保留，所以可以分步推进而不必一次写完。\n"
     "8. 报错信息里通常已给出**候选位置/相似文件/下一步建议**，"
     "照它说的改一次再试，不要盲目重试同样的调用。\n"
+    "9. **回忆过往**：用 sandglass_search 检索本体长期记忆"
+    "（主人偏好、以前聊过什么）；别凭空猜测历史。\n"
 )
 
 
 def configure(*, chat_fn=None, tool_functions=None, static_prompt_fn=None,
-              is_authorized_fn=None, logger=None, tool_schema_provider=None):
+              is_authorized_fn=None, logger=None, tool_schema_provider=None,
+              tool_picker=None, on_turn=None, memory=None, memory_bridge=None,
+              memory_expose_tools=None):
     """由 bot_core 注入依赖。任何一项为 None 表示不改动。"""
     if chat_fn is not None:
         _CFG["chat_fn"] = chat_fn
@@ -71,6 +99,19 @@ def configure(*, chat_fn=None, tool_functions=None, static_prompt_fn=None,
         _CFG["logger"] = logger
     if tool_schema_provider is not None:
         _CFG["tool_schema_provider"] = tool_schema_provider
+    if tool_picker is not None:
+        _CFG["tool_picker"] = tool_picker
+    if on_turn is not None:
+        _CFG["on_turn"] = on_turn
+    if memory is not None:
+        _CFG["memory"] = bool(memory)
+    # 记忆桥配置（记忆开关 / 是否暴露检索工具）
+    try:
+        _amem.configure(logger=logger, bridge=memory_bridge,
+                        enabled=_CFG["memory"] if memory is None else bool(memory),
+                        expose_tools=memory_expose_tools)
+    except Exception:
+        pass
 
 
 def _log(msg):
@@ -113,11 +154,86 @@ def _should_abort(session_id):
         return bool(s and s.get("abort"))
 
 
-def build_system_prompt(is_group=True, extra=""):
-    """组装 agent 的 system_prompt：bot_core 现有静态段 + **追加**的 agent 模式快照。
+def _gc_sessions():
+    """按 last 时间清理内存会话（调用方需持锁或容忍竞态）。"""
+    if len(_SESSIONS) <= _MAX_SESSIONS:
+        return
+    oldest = sorted(_SESSIONS.items(), key=lambda kv: kv[1].get("last", 0))
+    for k, _ in oldest[:50]:
+        _SESSIONS.pop(k, None)
+
+
+# ── 事件总线（前端 SSE 的数据源）────────────────────────────────────
+def subscribe(session_id):
+    """订阅某会话的事件流。返回一个 list —— 调用方轮询取走并清空它。
+
+    为什么用 list 而不是 queue.Queue：需要**一个会话多个读者**（页面刷新
+    后新连接要能接上，旧连接可能还没断）。list + 取走即清空语义更简单，
+    且天然支持"重连后从 backlog 补上"。
+    """
+    q = []
+    with _bus_lock:
+        _BUS.setdefault(str(session_id), []).append(q)
+        # 防无界：最多 8 个订阅者
+        if len(_BUS[str(session_id)]) > 8:
+            _BUS[str(session_id)].pop(0)
+    return q
+
+
+def unsubscribe(session_id, q):
+    with _bus_lock:
+        arr = _BUS.get(str(session_id))
+        if arr and q in arr:
+            try:
+                arr.remove(q)
+            except ValueError:
+                pass
+        if arr is not None and not arr:
+            _BUS.pop(str(session_id), None)
+
+
+def _publish(session_id, ev_type, data):
+    """把事件推给所有订阅者。**永不抛**（总线故障不能影响 agent 执行）。"""
+    try:
+        payload = {"type": ev_type, "data": data, "ts": time.time()}
+        with _bus_lock:
+            arr = _BUS.get(str(session_id))
+            if not arr:
+                return
+            for q in list(arr):
+                if len(q) < BUS_MAX:
+                    q.append(payload)
+    except Exception:
+        pass
+
+
+def _drain(session_id):
+    """内部：取走并清空所有订阅队列（服务端 SSE 循环用）。
+
+    返回 list（可能为空）。**取走即清空** —— 配合前端"一个会话一个连接"，
+    避免多读者重复消费。
+    """
+    out = []
+    with _bus_lock:
+        for q in _BUS.get(str(session_id), []):
+            if q:
+                out.extend(q)
+                q.clear()
+    return out
+
+
+# ── system_prompt 组装 ──────────────────────────────────────────────
+def build_system_prompt(is_group=True, extra="", with_memory=True):
+    """组装 agent 的 system_prompt：本体静态段 + **追加**的 agent 模式快照 + 本体记忆。
 
     追加式（不改写 static_prompt 本体）→ 保住静态段的前缀缓存（任务 5.1 精神）。
-    Skill 的 L1 元数据（极省）也在此追加——**只给清单**，正文靠 skill__load 按需载入。
+    顺序（**静态在前、动态在后**，最大化可缓存前缀）：
+      1. static_prompt（人格/规则）—— 长期稳定
+      2. agent 模式快照 —— 长期稳定
+      3. Skill L1 清单 —— 半稳定（skill 集合变了才变）
+      4. 时效锚（知识截止）—— 长期稳定
+      5. **本体记忆快照** —— 缓慢变化（画像/阶段）
+      6. extra（调用方给的本轮上下文提示）
     """
     base = ""
     fn = _CFG.get("static_prompt_fn")
@@ -145,37 +261,112 @@ def build_system_prompt(is_group=True, extra=""):
             p += "\n\n" + _gap
     except Exception:
         pass
+    # 本体记忆（NexSandglass 画像/阶段）—— 缓慢变化，仍在静态段。
+    # 动态部分（偏移/情绪）走 prefetch 进 user 同轮，见 run_chat。
+    if with_memory and _CFG.get("memory", True):
+        try:
+            snap = _amem.system_snapshot()
+            if snap:
+                p += snap
+        except Exception as e:
+            _log(f"[agent] 本体记忆快照失败（已跳过）: {e}")
     if extra:
         p += "\n\n" + extra
     return p
 
 
+# ── 工具集组装（分闸）───────────────────────────────────────────────
+def _resolve_tool_names(user_input, is_group):
+    """按场景挑工具名。优先用 bot_core 注入的 tool_picker（与主链同一套闸门），
+    没有就退回"全部工具"。返回值可能为空 → 此时由调用方退回全量。
+    """
+    picker = _CFG.get("tool_picker")
+    if picker is None:
+        return None
+    try:
+        names = picker(str(user_input or ""), bool(is_group)) or []
+        return [str(n) for n in names if n]
+    except Exception as e:
+        _log(f"[agent] tool_picker 失败，退回全量: {e}")
+        return None
+
+
+def _tools_for(user_input, is_group, extra_tools=None):
+    """返回 (tool_functions, tool_names_or_None)。
+
+    tool_names=None 表示"用全量"（schema 由 provider 或名字列表决定）。
+    """
+    all_fns = dict(_CFG["tool_functions"])
+    # 本体记忆检索工具（只读，常驻）
+    if _CFG.get("memory", True):
+        try:
+            all_fns.update(_amem.memory_tools())
+        except Exception:
+            pass
+    picked = _resolve_tool_names(user_input, is_group)
+    if picked is None:
+        return all_fns, None
+    if extra_tools:
+        for t in extra_tools:
+            if t not in picked:
+                picked.append(t)
+    # 记忆工具始终可用（只读、便宜、不注入等于白做）
+    if _CFG.get("memory", True):
+        for n in ("sandglass_search", "sandglass_recent"):
+            if n in all_fns and n not in picked:
+                picked.append(n)
+    return all_fns, picked
+
+
+def _schemas_for(names):
+    """把名字列表解析成 schema 列表（顺序稳定）；失败返回 None。"""
+    provider = _CFG.get("tool_schema_provider")
+    if provider is None:
+        return None
+    try:
+        if names is None:
+            names = list(_CFG["tool_functions"].keys())
+        return list(provider(list(names)) or []) or None
+    except Exception as e:
+        _log(f"[agent] tool_schema_provider 失败，退回名字列表: {e}")
+        return None
+
+
+# ── 主入口：跑一次 agent 对话 ───────────────────────────────────────
 def run_chat(*, user_input, session_id=None, is_group=False, context_hint="",
-             on_event=None, max_steps=None, history=None, extra_tools=None):
+             on_event=None, max_steps=None, history=None, extra_tools=None,
+             use_memory=True, publish=True):
     """跑一次 agent 对话（供主程序 Agent 页与群内共用）。
 
-    返回 AgentResult.to_dict()。
+    返回 AgentResult.to_dict()（额外带 session_id / elapsed）。
     """
     if not is_ready():
         return {"ok": False, "error": "agent 未就绪（依赖未注入）", "answer": "",
-                "steps": 0, "trace": []}
+                "steps": 0, "trace": [], "session_id": session_id or ""}
 
     if session_id is None:
         session_id = _new_session_id()
+    session_id = str(session_id)
+    t0 = time.time()
 
     with _sess_lock:
-        _SESSIONS[session_id] = {"abort": False, "busy": True, "last": time.time()}
-        # 简单的会话上限，避免无界增长
-        if len(_SESSIONS) > 200:
-            oldest = sorted(_SESSIONS.items(), key=lambda kv: kv[1].get("last", 0))[:50]
-            for k, _ in oldest:
-                _SESSIONS.pop(k, None)
+        _SESSIONS[session_id] = {"abort": False, "busy": True, "last": t0}
+        _gc_sessions()
+    _SESS_META[session_id] = {
+        "session_id": session_id, "is_group": bool(is_group),
+        "started": _SESS_META.get(session_id, {}).get("started", t0),
+        "updated": t0, "turns": int(_SESS_META.get(session_id, {}).get("turns", 0)) + 1,
+    }
+    if len(_SESS_META) > _MAX_META:
+        for k in sorted(_SESS_META, key=lambda x: _SESS_META[x].get("updated", 0))[:100]:
+            _SESS_META.pop(k, None)
 
-    system_prompt = build_system_prompt(is_group=is_group, extra=context_hint)
+    # ── 组装 system prompt（含本体记忆快照）──
+    with_mem = bool(use_memory) and _CFG.get("memory", True)
+    system_prompt = build_system_prompt(is_group=is_group, extra=context_hint,
+                                        with_memory=with_mem)
 
-    # ── 时效指令（本轮事实 → 只在时效敏感时追加；闲聊零成本）──
-    #  放 user_input 的**同一轮**里，而不是 system prompt ——
-    #  因为"这句话需要核实"是**本轮**信息，塞进 system 会破坏前缀缓存。
+    # ── 本轮动态：时效指令 + 本体 prefetch，都放 user 同轮（保前缀缓存）──
     _user_input = str(user_input or "")
     try:
         from . import freshness as _fr
@@ -186,45 +377,180 @@ def run_chat(*, user_input, session_id=None, is_group=False, context_hint="",
             _user_input = _dir + "\n\n" + _user_input
     except Exception:
         pass
-
-    # 工具按需加载：优先走注册表（顺序稳定 + 只在需要时给），失败则全量退回。
-    _tool_names = list(_CFG["tool_functions"].keys())
-    _provider = _CFG.get("tool_schema_provider")
-    _schemas = None
-    if _provider is not None:
+    if with_mem:
         try:
-            _schemas = list(_provider(_tool_names) or [])
-        except Exception as e:
-            _log(f"[agent] tool_schema_provider 失败，退回名字列表: {e}")
-            _schemas = None
+            _pf = _amem.prefetch(_user_input)
+            if _pf:
+                _user_input = _pf + "\n" + _user_input
+        except Exception:
+            pass
+
+    # ── 工具集（分闸）──
+    _fns, _names = _tools_for(_user_input, is_group, extra_tools)
+    _schemas = _schemas_for(_names)
+
+    # ── 事件桥：外部 on_event + 内部总线（前端 SSE）双投递 ──
+    def _bus_emit(ev_type, data):
+        if publish:
+            _publish(session_id, ev_type, data)
+        if on_event:
+            try:
+                on_event(ev_type, data)
+            except Exception as e:
+                _log(f"[agent] on_event 回调异常（已隔离）: {e}")
 
     kwargs = dict(
         session_id=session_id,
         user_input=_user_input,
         chat_fn=_CFG["chat_fn"],
-        tool_functions=_CFG["tool_functions"],
+        tool_functions=_fns,
         system_prompt=system_prompt,
         history=history,
-        on_event=on_event,
+        on_event=_bus_emit,
         should_abort=lambda: _should_abort(session_id),
         logger=_log,
         tool_schemas=_schemas,
     )
     if max_steps:
         kwargs["max_steps"] = int(max_steps)
-    if extra_tools:
-        kwargs["extra_tools"] = extra_tools
+
+    if publish:
+        _publish(session_id, "start", {"input": str(user_input or ""),
+                                       "is_group": bool(is_group)})
 
     try:
         res = _al.run_agent(**kwargs)
         out = res.to_dict()
         out["session_id"] = session_id
+        out["elapsed"] = round(time.time() - t0, 2)
+        out["tools_offered"] = len(_schemas) if _schemas else (
+            len(_names) if _names else len(_fns))
+        # ── 落沙（本体记忆）：成功/失败都记，失败也要能被回忆起来 ──
+        if with_mem and str(out.get("answer") or "").strip():
+            try:
+                _rec = _amem.sync_turn(
+                    user_msg=str(user_input or ""),
+                    assistant_msg=str(out.get("answer") or ""),
+                    scope=("group" if is_group else "agent"),
+                    scope_id=_session_scope_id(session_id),
+                    extra={"session_id": session_id},
+                )
+                out["memory_synced"] = bool(_rec.get("ok"))
+            except Exception:
+                pass
+        # ── 外部 on_turn 钩子（bot_core 可用来做额外记账）──
+        fn_turn = _CFG.get("on_turn")
+        if fn_turn:
+            try:
+                fn_turn(session_id, str(user_input or ""), str(out.get("answer") or ""),
+                        {"is_group": bool(is_group), "ok": out.get("ok")})
+            except Exception as e:
+                _log(f"[agent] on_turn 钩子异常（已隔离）: {e}")
+        if publish:
+            _publish(session_id, "done", {"ok": out.get("ok"),
+                                          "steps": out.get("steps"),
+                                          "elapsed": out.get("elapsed"),
+                                          "error": out.get("error")})
         return out
     finally:
         with _sess_lock:
             s = _SESSIONS.get(session_id)
             if s:
                 s["busy"] = False
+        if session_id in _SESS_META:
+            _SESS_META[session_id]["updated"] = time.time()
+
+
+def _session_scope_id(session_id):
+    """群会话 id 形如 ``grp-<群号>-<ts>`` → 提取群号；其余返回空（走私聊记忆）。"""
+    s = str(session_id or "")
+    m = re.match(r"^grp-(\d+)", s)
+    return m.group(1) if m else ""
+
+
+# ── 单步重跑（从 session_log 截断后继续）───────────────────────────
+def rerun_from(*, session_id, from_step, user_input=None, is_group=False,
+               context_hint="", on_event=None, max_steps=None):
+    """从某个 step 之后重跑（设计文档 §5「可以"从某一步重来"」）。
+
+    实现要点（**充分利用事件溯源**）：
+      - 读该会话的完整事件日志，重建成 messages；
+      - **丢掉 step >= from_step 的工具往返**，只保留之前的上下文；
+      - 用重建的 history + （可选）新的 user_input 重新进入 agent 循环。
+
+    from_step 语义：第 1 个工具调用所在轮 = step 1。传 1 = 从第一个工具前重来。
+    """
+    if not is_ready():
+        return {"ok": False, "error": "agent 未就绪（依赖未注入）", "answer": "",
+                "steps": 0, "trace": [], "session_id": session_id}
+    sid = str(session_id or "")
+    if not sid:
+        return {"ok": False, "error": "缺少 session_id", "answer": "", "steps": 0,
+                "trace": [], "session_id": ""}
+    try:
+        fstep = int(from_step)
+    except (TypeError, ValueError):
+        return {"ok": False, "error": "from_step 必须是整数", "answer": "", "steps": 0,
+                "trace": [], "session_id": sid}
+
+    hist, last_user = _rebuild_history(sid, keep_steps_before=fstep)
+    # 重跑时的 user_input：显式给就用显式，否则用该会话最后一次输入
+    ui = str(user_input) if user_input else (last_user or "")
+    if not ui:
+        return {"ok": False, "error": "没有可重跑的输入（会话里找不到用户消息）",
+                "answer": "", "steps": 0, "trace": [], "session_id": sid}
+    _publish(sid, "start", {"input": ui, "rerun_from": fstep})
+    out = run_chat(user_input=ui, session_id=sid, is_group=is_group,
+                   context_hint=context_hint, on_event=on_event,
+                   max_steps=max_steps, history=hist or None)
+    out["rerun_from"] = fstep
+    out["history_rebuilt"] = len(hist or [])
+    return out
+
+
+def _rebuild_history(session_id, *, keep_steps_before=None, limit_turns=12):
+    """从事件日志重建 messages（可指定"保留到第几步之前"）。
+
+    事件里 tool_call/tool_result 的 payload 带 step 字段（见 agent_loop）。
+    user/final 事件无 step —— 它们属于"轮"层。这里按事件顺序累积：
+      - user → 入 messages
+      - final → 入 messages（assistant）
+      - tool_call/tool_result → **只用于判定 step 边界**，不入 messages
+        （因为 agent_loop 内部会把它们回灌；重建时重跑会自己再产生一遍）
+
+    返回 (messages, last_user_text)。
+    """
+    out = []
+    last_user = ""
+    try:
+        events = _slog.events_of("agent", session_id)
+    except Exception:
+        return out, last_user
+    for ev in events:
+        t = ev.get("type")
+        p = ev.get("payload") or {}
+        if t == _al.EV_TOOL_CALL or t == _al.EV_TOOL_RESULT:
+            if keep_steps_before is not None:
+                try:
+                    if int(p.get("step") or 0) >= int(keep_steps_before):
+                        # 到达截断点 → 停止累积（保留之前的部分）
+                        break
+                except (TypeError, ValueError):
+                    pass
+            continue
+        if t == _al.EV_USER:
+            c = p.get("content")
+            if c:
+                out.append({"role": "user", "content": c})
+                last_user = c
+        elif t == _al.EV_FINAL:
+            c = p.get("content")
+            if c:
+                out.append({"role": "assistant", "content": c})
+    # 只要最近的若干轮（避免历史过长把成本打爆）
+    if limit_turns and len(out) > limit_turns * 2:
+        out = out[-(limit_turns * 2):]
+    return out, last_user
 
 
 # ── 群内触发：双闸 ──────────────────────────────────────────────────
@@ -321,8 +647,82 @@ def trace_of(session_id, limit=None):
     return _al.replay(session_id, limit=limit)
 
 
-def list_sessions(kind="desk"):
-    """列出内存中的会话（诊断用）。"""
+def list_sessions(kind="desk", include_disk=True, limit=None):
+    """列出会话：内存热态 + 磁盘日志（**刷新页面不丢**）。
+
+    返回按 updated 倒序的列表；每条带 source=("live"/"disk")。
+    """
+    out = []
+    seen = set()
     with _sess_lock:
-        return [{"session_id": k, "busy": v.get("busy"), "last": v.get("last")}
-                for k, v in _SESSIONS.items() if k.startswith(kind)]
+        for sid, meta in _SESS_META.items():
+            if kind and not sid.startswith(kind):
+                continue
+            seen.add(sid)
+            s = _SESSIONS.get(sid) or {}
+            out.append({
+                "session_id": sid,
+                "is_group": bool(meta.get("is_group")),
+                "busy": bool(s.get("busy")),
+                "turns": meta.get("turns", 0),
+                "updated": meta.get("updated") or s.get("last") or 0,
+                "source": "live",
+            })
+    if include_disk:
+        try:
+            for rec in _slog.list_ids("agent", limit=limit or 100):
+                sid = rec["session_id"]
+                if sid in seen:
+                    continue
+                if kind and not sid.startswith(kind):
+                    continue
+                out.append({
+                    "session_id": sid,
+                    "is_group": sid.startswith("grp-"),
+                    "busy": False,
+                    "turns": None,
+                    "updated": rec.get("mtime", 0),
+                    "bytes": rec.get("bytes", 0),
+                    "source": "disk",
+                })
+        except Exception:
+            pass
+    out.sort(key=lambda x: x.get("updated") or 0, reverse=True)
+    if limit:
+        out = out[:int(limit)]
+    return out
+
+
+def delete_session(session_id):
+    """删除一个会话（内存 + 磁盘日志）。"""
+    sid = str(session_id or "")
+    if not sid:
+        return False
+    with _sess_lock:
+        _SESSIONS.pop(sid, None)
+    _SESS_META.pop(sid, None)
+    with _bus_lock:
+        _BUS.pop(sid, None)
+    try:
+        return _slog.delete("agent", sid)
+    except Exception:
+        return False
+
+
+def memory_status():
+    """本体记忆状态（Agent 页顶部显示）。"""
+    if not _CFG.get("memory", True):
+        return {"available": False, "reason": "记忆已在配置里关闭"}
+    try:
+        return _amem.status()
+    except Exception as e:
+        return {"available": False, "reason": f"{type(e).__name__}: {e}"}
+
+
+def tool_groups():
+    """返回工具注册表的分组统计（Agent 页显示"可用能力"）。"""
+    try:
+        from . import tool_registry as _trg
+        return _trg.stats()
+    except Exception as e:
+        return {"error": f"{type(e).__name__}: {e}"}
