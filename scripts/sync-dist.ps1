@@ -53,13 +53,44 @@ function Find-DistRoot {
             }
         }
     }
-    foreach ($c in $found) { if (Test-DistRoot $c) { return $c } }
-    return ""
+    return @($found | Where-Object { Test-DistRoot $_ } | Select-Object -Unique)
 }
 
 if (-not $DistPath) {
     Write-Host "未指定 -DistPath，正在自动探测发行包目录..." -ForegroundColor Cyan
-    $DistPath = Find-DistRoot
+    $cands = @(Find-DistRoot)
+    if ($cands.Count -eq 1) {
+        $DistPath = $cands[0]
+        Write-Host "  唯一候选: $DistPath" -ForegroundColor Green
+    } elseif ($cands.Count -eq 0) {
+        $DistPath = ""
+    } else {
+        # 有多个候选时**绝不擅自挑选**。
+        # 血泪教训（2026-10-03）：本机同时存在 E:\EggBloomDist（8 月的旧副本）与
+        # E:\EggBloom水星\EggBloom Desktop-new（在用的那份），旧逻辑取"第一个匹配"
+        # 把文件同步进了废弃副本。同步会覆盖目标文件，猜错 = 改错项目。
+        Write-Host ""
+        Write-Host "错误：发现多个发行包目录，无法自动确定同步目标。" -ForegroundColor Red
+        Write-Host "  同步会覆盖目标文件，猜错等于改错项目，因此这里不做猜测。" -ForegroundColor Yellow
+        Write-Host ""
+        Write-Host "  候选列表（按该副本内文件最近改动时间排序）：" -ForegroundColor Cyan
+        $rows = foreach ($c in $cands) {
+            $appd = Join-Path $c "resources\app"
+            $newest = Get-ChildItem $appd -Recurse -File -Force -ErrorAction SilentlyContinue |
+                Where-Object { $_.FullName -notmatch '__pycache__' } |
+                Sort-Object LastWriteTime -Descending | Select-Object -First 1
+            [pscustomobject]@{
+                Path     = $c
+                最近改动 = if ($newest) { $newest.LastWriteTime.ToString('yyyy-MM-dd HH:mm') } else { '-' }
+            }
+        }
+        $sorted = @($rows | Sort-Object 最近改动 -Descending)
+        ($sorted | Format-Table -AutoSize | Out-String -Width 200) | Write-Host
+        Write-Host "请用 -DistPath 明确指定其一（上面第一行通常就是你在用的那份），例如:" -ForegroundColor Yellow
+        Write-Host ('  powershell -ExecutionPolicy Bypass -File scripts/sync-dist.ps1 -DistPath "' + $sorted[0].Path + '"') -ForegroundColor Yellow
+        Write-Host "（要长期固定，可设环境变量 EGGBLOOM_DIST 指向目标）" -ForegroundColor DarkGray
+        exit 1
+    }
 }
 
 if (-not (Test-DistRoot $DistPath)) {
@@ -97,10 +128,14 @@ $excludeDirs = @(
     ".venv", "venv", "build", "dist"
 )
 
-# 排除的运行时文件（防止覆盖用户状态）
+# 排除的文件（防止覆盖用户状态 / 防止把重复副本又搬回去）
 $excludeFiles = @(
     "last_port.txt", "bot_config.json", "plugin_state.json",
-    "secret.json", "local_config.json", "machine_config.json"
+    "secret.json", "local_config.json", "machine_config.json",
+    # 真实前端只有 webui\webui_artistic_v3.html（_frontend_path = HERE/"webui_artistic_v3.html"）。
+    # 根目录若出现同名文件即为重复副本——同步时不要把它搬到发行包根目录，
+    # 否则又会出现"改错文件"的坑（2026-10-03 已被此脚本搬回去过一次）。
+    "webui_artistic_v3.html"
 )
 
 # 保留作业汇总表（要用它统计 Copied 数量），但去掉逐文件列表
