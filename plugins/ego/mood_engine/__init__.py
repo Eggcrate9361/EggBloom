@@ -295,3 +295,12 @@ def reset_mood(group_id: str = "") -> dict:
 
 def get_moods() -> dict:
     return _mood.get_all()
+
+
+# ── 通用插件通道动作（WebUI plugin_id='ego.mood_engine'） ──
+PLUGIN_ACTIONS = {
+    "get_config": lambda params: get_config(),
+    "set_config": lambda params: set_config(params or {}),
+    "get_moods": lambda params: get_moods(),
+    "reset": lambda params: reset_mood(str((params or {}).get("scope_id") or "") or None),
+}
