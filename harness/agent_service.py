@@ -29,6 +29,8 @@ _CFG = {
     "static_prompt_fn": None,    # (is_group: bool) -> str
     "is_authorized_fn": None,    # (sender_qq) -> bool
     "logger": None,
+    # 工具 schema 提供者：names -> schema 列表（顺序稳定）。用于 Agent 侧按需加载。
+    "tool_schema_provider": None,
 }
 
 # 会话状态：{session_id: {"abort": bool, "busy": bool, "last": float}}
@@ -48,7 +50,7 @@ AGENT_MODE_SNAPSHOT = (
 
 
 def configure(*, chat_fn=None, tool_functions=None, static_prompt_fn=None,
-              is_authorized_fn=None, logger=None):
+              is_authorized_fn=None, logger=None, tool_schema_provider=None):
     """由 bot_core 注入依赖。任何一项为 None 表示不改动。"""
     if chat_fn is not None:
         _CFG["chat_fn"] = chat_fn
@@ -60,6 +62,8 @@ def configure(*, chat_fn=None, tool_functions=None, static_prompt_fn=None,
         _CFG["is_authorized_fn"] = is_authorized_fn
     if logger is not None:
         _CFG["logger"] = logger
+    if tool_schema_provider is not None:
+        _CFG["tool_schema_provider"] = tool_schema_provider
 
 
 def _log(msg):
@@ -106,6 +110,7 @@ def build_system_prompt(is_group=True, extra=""):
     """组装 agent 的 system_prompt：bot_core 现有静态段 + **追加**的 agent 模式快照。
 
     追加式（不改写 static_prompt 本体）→ 保住静态段的前缀缓存（任务 5.1 精神）。
+    Skill 的 L1 元数据（极省）也在此追加——**只给清单**，正文靠 skill__load 按需载入。
     """
     base = ""
     fn = _CFG.get("static_prompt_fn")
@@ -116,6 +121,14 @@ def build_system_prompt(is_group=True, extra=""):
             _log(f"[agent] static_prompt 组装失败: {e}")
             base = ""
     p = base + AGENT_MODE_SNAPSHOT
+    # Skill L1：常驻清单（约 50~100 token/skill；无 skill 时为空串，零成本）
+    try:
+        from . import bot_hook as _bh
+        _sk1 = _bh.skill_l1_block()
+        if _sk1:
+            p += "\n\n" + _sk1
+    except Exception:
+        pass
     if extra:
         p += "\n\n" + extra
     return p
@@ -144,6 +157,17 @@ def run_chat(*, user_input, session_id=None, is_group=False, context_hint="",
 
     system_prompt = build_system_prompt(is_group=is_group, extra=context_hint)
 
+    # 工具按需加载：优先走注册表（顺序稳定 + 只在需要时给），失败则全量退回。
+    _tool_names = list(_CFG["tool_functions"].keys())
+    _provider = _CFG.get("tool_schema_provider")
+    _schemas = None
+    if _provider is not None:
+        try:
+            _schemas = list(_provider(_tool_names) or [])
+        except Exception as e:
+            _log(f"[agent] tool_schema_provider 失败，退回名字列表: {e}")
+            _schemas = None
+
     kwargs = dict(
         session_id=session_id,
         user_input=user_input,
@@ -154,6 +178,7 @@ def run_chat(*, user_input, session_id=None, is_group=False, context_hint="",
         on_event=on_event,
         should_abort=lambda: _should_abort(session_id),
         logger=_log,
+        tool_schemas=_schemas,
     )
     if max_steps:
         kwargs["max_steps"] = int(max_steps)

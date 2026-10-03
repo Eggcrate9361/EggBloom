@@ -723,6 +723,45 @@ def start_event_server():
 
         def do_POST(self):
             try:
+                # ── Agent 薄路由（逻辑在 harness.agent_service，这里只做转接）──
+                if self.path in ("/api/agent/chat", "/api/agent/abort", "/api/agent/history"):
+                    try:
+                        length = int(self.headers.get("Content-Length", 0) or 0)
+                        req = {}
+                        if 0 < length < 262144:
+                            try:
+                                req = json.loads(self.rfile.read(length).decode("utf-8"))
+                            except Exception:
+                                req = {}
+                        from harness import agent_service as _agent
+                        if self.path == "/api/agent/chat":
+                            res = _agent.run_chat(
+                                user_input=str(req.get("input") or req.get("text") or ""),
+                                session_id=req.get("session_id") or None,
+                                is_group=bool(req.get("is_group", False)),
+                                context_hint=str(req.get("context_hint") or ""),
+                            )
+                        elif self.path == "/api/agent/abort":
+                            res = {"ok": _agent.request_abort(str(req.get("session_id") or ""))}
+                        else:
+                            sid = str(req.get("session_id") or "")
+                            res = {"ok": True,
+                                   "history": _agent.history_of(sid, limit=req.get("limit")),
+                                   "trace": _agent.trace_of(sid, limit=req.get("limit"))}
+                        body = json.dumps(res, ensure_ascii=False, default=str).encode("utf-8")
+                        self.send_response(200)
+                        self.send_header("Content-Type", "application/json")
+                        self.send_header("Content-Length", str(len(body)))
+                        self.end_headers()
+                        self.wfile.write(body)
+                    except Exception as e:
+                        body = json.dumps({"ok": False, "error": str(e)}).encode("utf-8")
+                        self.send_response(200)
+                        self.send_header("Content-Type", "application/json")
+                        self.send_header("Content-Length", str(len(body)))
+                        self.end_headers()
+                        self.wfile.write(body)
+                    return
                 if self.path == "/reload_config" or self.path == "/reload":
                     try:
                         res = reload_config()
@@ -5700,15 +5739,26 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
 
     # 群聊动态信息（时间/群成员/时间线）→ 放到 dynamic_parts
     if is_group and group_id:
-        # T2-1/G 当前时间降频：距上次注入 ≥600s 才重新注入（按时间戳判定，
-        #  避免"首次注入后存分钟键、10 分钟后才更新"导致群聊低活跃时时间停留过久；因在 dynamic_parts 尾部，不影响前缀缓存）
-        _now_ts = datetime.datetime.now()
-        _last_time = _GROUP_TIME_INJECT_AT.get(group_id, 0)
-        if not isinstance(_last_time, (int, float)) or not _last_time or (time.time() - _last_time) >= 600:
-            dynamic_parts.append(
-                "【当前时间】" + _now_ts.strftime("%Y年%m月%d日 %H:%M") + "，星期" + ["一","二","三","四","五","六","日"][_now_ts.weekday()]
-            )
-            _GROUP_TIME_INJECT_AT[group_id] = time.time()
+        # 时间**分级**注入（harness.time_ctx）：
+        #   粗粒度（日期+时段，变化慢）→ 可长期复用；
+        #   精粒度（分钟）→ 只放尾部，仅刷新极少量 token。
+        # 取代原先"每 600s 才注入一次精确时间"的做法（那条路要么过期、要么刷缓存）。
+        try:
+            from harness import bot_hook as _bh
+            _coarse, _fine = _bh.time_parts(f"g_{group_id}")
+            if _coarse:
+                dynamic_parts.append(_coarse)
+            if _fine:
+                dynamic_parts.append(_fine)
+        except Exception:
+            # 降级：退回原逻辑（保持行为可用）
+            _now_ts = datetime.datetime.now()
+            _last_time = _GROUP_TIME_INJECT_AT.get(group_id, 0)
+            if not isinstance(_last_time, (int, float)) or not _last_time or (time.time() - _last_time) >= 600:
+                dynamic_parts.append(
+                    "【当前时间】" + _now_ts.strftime("%Y年%m月%d日 %H:%M") + "，星期" + ["一","二","三","四","五","六","日"][_now_ts.weekday()]
+                )
+                _GROUP_TIME_INJECT_AT[group_id] = time.time()
         timeline = GROUP_TIMELINE.get(group_id, [])
         if timeline:
             # T2-2 时间线去重 + 限 6 条：同一句话重复提到只留一条
@@ -5802,7 +5852,40 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
         messages.append({"role": "user", "content": "[系统提示] " + _web_hint})
 
     # 群聊只允许配置/默认名单里的工具，私聊允许全部工具
-    tools_for_call = _build_group_tools() if is_group else TOOLS
+    # ── 按需工具集（harness.tool_registry）──
+    #  **仅注入本轮可能用到的工具**（工具定义在请求前缀里，全量注入是纯浪费）。
+    #  策略：命中场景关键词才加对应分组；命中不到 → 只给 core（search_web）。
+    #  若注册表不可用/出错 → 退回原行为（全量），保证功能不退化。
+    tools_for_call = None
+    try:
+        from harness import tool_registry as _treg
+        from harness import bot_hook as _bh
+        if is_group:
+            # 群聊：注册表子集必须**同时**落在 group_tool_allowlist 白名单内
+            #   （白名单是安全边界，按需加载不能把它放开）
+            _allowed_names = {t["function"]["name"] for t in _build_group_tools()}
+            _subset = [n for n in _bh.tool_names_for(user_msg, is_group=True)
+                       if n in _allowed_names]
+        else:
+            _subset = _bh.tool_names_for(user_msg, is_group=False)
+        if _subset:
+            _resolved = _treg.resolve(_subset, lazy=True)
+            if _resolved:
+                tools_for_call = _resolved
+    except Exception as _e:
+        log(f"[工具按需加载] 跳过（退回全量）: {_e}")
+
+    if tools_for_call is None:
+        tools_for_call = _build_group_tools() if is_group else TOOLS
+    # 本轮真正"提供给模型"的工具名集合（用于越界防护）
+    try:
+        _offered_tool_names = {t["function"]["name"] for t in tools_for_call
+                               if isinstance(t, dict) and "function" in t}
+    except Exception:
+        _offered_tool_names = set()
+    if not _offered_tool_names:
+        # tools_for_call 是名字列表（理论上不会走到）→ 直接用
+        _offered_tool_names = {str(n) for n in (tools_for_call or [])}
     allow_tools = True
     
     # 群聊回复短，降低输出上限节省 token
@@ -5847,7 +5930,17 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
                     _act = (func_args or {}).get("action") or ""
                     _url = (func_args or {}).get("url") or ""
                     func = TOOL_FUNCTIONS.get(func_name)
-                    result = func(func_args) if func else f"未知工具: {func_name}"
+                    # 越界防护：模型可能"幻觉"调用本轮未提供的工具
+                    #   （按需加载后工具集变小，这类情况会变多；如实回灌而非静默执行）
+                    if func_name not in _offered_tool_names:
+                        if func is None:
+                            result = f"未知工具: {func_name}"
+                        else:
+                            result = (f"本轮未提供工具 {func_name}（本轮只提供："
+                                      f"{', '.join(sorted(_offered_tool_names)) or '无'}）。"
+                                      f"请用已有工具，或用自然语言直接回答。")
+                    else:
+                        result = func(func_args) if func else f"未知工具: {func_name}"
                     _res_parts = str(result)[:140].replace("\n", " ") if result else ""
                     log(f"  → {func_name}: action={_act}" + (f" url={_url[:60]}" if _url else "") + f" (第{web_rounds}轮) → {_res_parts}")
                     messages.append({"role": "tool", "tool_call_id": tc["id"], "content": result})
@@ -6597,6 +6690,90 @@ def main():
 
     log("OneBot 已连接")
 
+    # ── harness：把内置工具注册进 tool_registry（供 Agent 按需加载）──
+    #  **只注册元数据**（schema + 分组），实现仍在 TOOL_FUNCTIONS。
+    #  这样 agent 侧可以"按场景只注入用得上的工具" → 省大量 token。
+    try:
+        from harness import tool_registry as _treg
+        _treg.register_many(TOOLS, groups=(_treg.GROUP_CORE,))
+        # 覆盖分组：web_operate 归 web；桌面操控类归 desktop
+        for _t in TOOLS:
+            _n = _t["function"]["name"]
+            if _n == "web_operate":
+                _treg.register(_n, _t, groups=(_treg.GROUP_WEB,), source="builtin")
+            elif _n != "search_web":
+                _treg.register(_n, _t, groups=(_treg.GROUP_DESKTOP,), source="builtin")
+        _treg.register_many(GROUP_TOOLS, groups=(_treg.GROUP_GROUP,))
+        # skill 内部工具（skill__load / skill__read）
+        from harness import bot_hook as _bh
+        _treg.register_many(_bh.SKILL_TOOLS, groups=(_treg.GROUP_SKILL,), source="skill")
+        log(f"[harness] 工具注册表就绪: {_treg.stats()['by_group']}")
+    except Exception as e:
+        log(f"[harness] 工具注册失败（Agent 将退回全量工具）: {e}")
+
+    # ── harness：MCP（惰性；未配置/未装包时零成本）──
+    try:
+        from harness import mcp_hub as _mcp
+        _servers = _mcp.server_names()
+        if _servers:
+            if _mcp.available():
+                log(f"[harness] MCP server 已配置: {_servers}（惰性枚举，首次用到才拉取）")
+            else:
+                log(f"[harness] 检测到 MCP 配置 {_servers}，但 {_mcp.unavailable_reason()}")
+    except Exception as e:
+        log(f"[harness] MCP 初始化跳过: {e}")
+
+    # ── Agent 服务：注入依赖（逻辑在 harness.agent_service，此处仅接线）──
+    try:
+        from harness import agent_service as _agent
+        from harness import bot_hook as _bh
+
+        def _agent_chat(_messages, _tools=None, max_tokens=1500):
+            """Agent 用的 chat 闭包：把 registry 解析出的 schema 传下去。
+
+            _tools 由 agent_loop 给出（schema 列表或名字列表）：
+            - 是 schema 列表（含 function 字段）→ 直接用
+            - 是名字列表 → 经 registry 解析为 schema（顺序稳定）
+            这样"按需工具"在 agent 侧也生效。
+            """
+            _use = None
+            if isinstance(_tools, list) and _tools:
+                if isinstance(_tools[0], dict) and "function" in _tools[0]:
+                    _use = _tools
+                else:
+                    try:
+                        _use = _treg.resolve(_tools, lazy=True) or None
+                    except Exception:
+                        _use = None
+            msg, usage = _call_chat_sync(
+                _messages, runtime_cfg=None, max_tokens=max_tokens, stream=False,
+                with_tools=(_use if _use else []),
+            )
+            return (msg.get("content") or ""), (msg.get("tool_calls") or []), (usage or {})
+
+        # 工具实现 = 内置 TOOL_FUNCTIONS + skill 内部工具 + 已缓存的 MCP 工具
+        _agent_fns = dict(TOOL_FUNCTIONS)
+        try:
+            _agent_fns.update(_bh.skill_tool_functions())
+        except Exception:
+            pass
+        try:
+            _agent_fns.update(_mcp.tool_functions())
+        except Exception:
+            pass
+
+        _agent.configure(
+            chat_fn=_agent_chat,
+            tool_functions=_agent_fns,
+            static_prompt_fn=_build_static_prompt,
+            is_authorized_fn=_is_authorized,
+            logger=log,
+            tool_schema_provider=lambda names: _treg.resolve(names, lazy=True),
+        )
+        log(f"[Agent] 服务已注入（主程序页 + 群内双闸），工具 {len(_agent_fns)} 个")
+    except Exception as e:
+        log(f"[Agent] 注入失败: {e}")
+
     # 插件系统：传播 AI 客户端（尝试从 __main__ 获取）
     if PLUGIN_OK:
         try:
@@ -7120,6 +7297,37 @@ def main():
                                 continue
                         except Exception as e:
                             log(f"[群管理] 指令处理异常: {e}")
+
+                    # ── 群内 Agent 模式（任务：主程序 agent 能力 · 群内入口）──
+                    # **默认关**：agent_group_enable 打开 且 双闸通过才触发。
+                    # 闸一=权限（仅管理员白名单），闸二=明确执行意图（非闲聊）。
+                    if (is_at_bot or has_xiao_a) and text and _config.get("agent_group_enable", False):
+                        try:
+                            from harness import agent_service as _agent
+                            if _agent.is_ready():
+                                _allowed, _why = _agent.group_gate(
+                                    text=text, sender=sender, is_group=True)
+                                if _allowed:
+                                    log(f"[Agent] 群[{group_id}] {sender} 触发（{_why}）: {text[:60]}")
+                                    _agent_sid = f"grp-{group_id}-{int(time.time())}"
+                                    _agent_ctx = f"当前是 QQ 群 {group_id} 内的任务。" \
+                                                 f"需要群信息时可用工具，group_id={group_id}。"
+                                    _ar = _agent.run_chat(
+                                        user_input=text, session_id=_agent_sid,
+                                        is_group=True, context_hint=_agent_ctx,
+                                    )
+                                    _ans = str((_ar or {}).get("answer") or "").strip()
+                                    if not _ans and (_ar or {}).get("error"):
+                                        _ans = f"（任务没跑完：{_ar.get('error')}）"
+                                    if _ans:
+                                        try:
+                                            smart_send_group(str(group_id), _ans)
+                                        except Exception:
+                                            pass
+                                        continue
+                                    # answer 为空且无错误 → 不 continue，交给后续正常回复流程
+                        except Exception as e:
+                            log(f"[Agent] 群内执行异常: {e}")
 
                     # 纯转发消息：只记录上下文，不触发回复
                     if is_pure_forward:
