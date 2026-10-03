@@ -3,7 +3,10 @@
 > 整理：2026-10-03
 > 可信度声明：**本文只写我逐行核对过、能给出行号的内容。** 未经核对的不写。
 > 复核方法见文末「附录：可复现的验证命令」。
-> 配套详解（由子代理产出，覆盖更全）：`_ref/deepdive/bot_core-flow.md`、`_ref/deepdive/webui_server-flow.md`
+> 配套详解（覆盖更全，**但未经逐条复核**）：
+> [`deepdive/bot_core-flow.md`](deepdive/bot_core-flow.md)（202 行 / 46KB，12 项全覆盖）、
+> [`deepdive/webui_server-flow.md`](deepdive/webui_server-flow.md)（589 行 / 79KB，15 节，含 43 条风险与 8 项未能确认）。
+> 本文与它们的分工：**本文是我逐行核实过的结论；它们是我抽样核对过的详细展开。**
 
 ---
 
@@ -108,6 +111,40 @@ AI 回复
 `is_at_bot` / `has_xiao_a` / `has_bot_nick` / `has_quote` / `has_text_at` / `in_session` /
 `history` / `bot_qq` / `bot_name`。
 
+### 4.1 AI 客户端是怎么来的（有个时序陷阱）
+
+| 项 | 行号 |
+|---|---|
+| `call_deepseek(...)` 定义 | **5879** |
+| `AIClient(...)` 实例化 | **6586** |
+| 注入插件系统：`pm.set_ai_client(_ac)` | **6587** |
+| system prompt 静态缓存 `_STATIC_PROMPT_CACHE` | 1725 / 1734 / 1787-1789 |
+
+> ⚠️ **时序陷阱**：`AIClient` 是在 `main()` 内部（6586）才创建并注入的。
+> 也就是说 **插件在模块 import 阶段拿不到 AI 客户端** —— `ctx.ai_chat()` 会返回 `None` 并打日志
+> 「AI 客户端未注入」（见 `abi.py`）。插件若在 `on_load` 里直接调 `ctx.ai_chat()` 就会踩到。
+> 正确做法：在 `on_message` / `on_event` 这类**运行时钩子**里调，或自己判断返回 `None` 时降级。
+
+### 4.2 人设注入链（`load_personality`）
+
+入口 **1782**。优先级从高到低：
+
+| 顺序 | 来源 | 行号 |
+|---|---|---|
+| 1 | **蒸馏人格卡** —— 由「这样脆弱的东西」插件发布 | `ego/personality_engine._distill_persona()`（89-108） |
+| 2 | EGO 人格引擎 `get_personality()["raw"]` | `bot_core.py:1793-1796` |
+| 3 | 直接读 `personality.txt`（4 个候选路径） | 1816-1821 |
+| 4 | 代码内置的兜底人格字符串 | 1836 起 |
+
+**缓存机制**：纯 mtime 缓存。第 2 步拿到的 EGO 内容也**用 `personality.txt` 的 mtime 当 key**
+（1804-1808）—— 所以「发布新人格卡后必须 touch 一下 `personality.txt`」，
+否则 bot 会一直用旧缓存。这正是 `plugins/这样脆弱的东西/publisher.py:100` 那个 `_touch_personality()` 存在的原因。
+
+> 🔴 另一处已记录的行为：`_distill_persona()` **只判断发布文件在不在，完全不看插件开关**。
+> 所以关掉「这样脆弱的东西」插件 ≠ 撤销人格注入。要真正下线必须调它自己的 `disable`。
+
+system prompt 是拼接出来的，带静态缓存（1725 / 1734 / 1787），上限 8 个键防内存增长（1788-1789）。
+
 ---
 
 ## 五、🔴 关键发现：真插件 ABI 的钩子是「半残」的
@@ -147,7 +184,11 @@ if pm and pm.has_typed_hook("on_before_reply"):
 
 ---
 
-## 六、`webui_server.py` 路由表（我机械提取的基准，共 52 条）
+## 六、`webui_server.py` 路由表（基准：**51 条唯一路径**）
+
+> 计数口径（经复核修正）：**唯一路径 51 条**；按「路径 + 方法」注册计 **55 条**
+> （`/api/config`、`/api/plugins/action`、`/api/protocol/config`、`/api/protocol/logs` 各有 GET + POST）。
+> 我最初报的 52 条里含一个**非路由**项 —— 1327 行的 `path.startswith("/api/")` 前缀判断。
 
 按功能分组（完整列表见 `_ref/deepdive/webui_server-flow.md`）：
 
@@ -162,7 +203,9 @@ if pm and pm.has_typed_hook("on_before_reply"):
 | **config** | 3 | `config` `config/model` `config/reload` |
 | **memory** | 3 | `memory` `memory/list` `memory/detail` |
 | **providers** | 2 | `providers/catalog` `providers/models` |
-| 单个 | 9 | `status` `tools` `command` `llm/test` `token-stats` `qq-path` `chatlogs` `gallery` `/api/` |
+| 单个 | 8 | `status` `tools` `command` `llm/test` `token-stats` `qq-path` `chatlogs` `gallery` |
+
+合计：13 + 6 + 5 + 4 + 4 + 3 + 3 + 3 + 2 + 8 = **51** ✓
 
 **协议面板占了 13 条，是最大的一块** —— 与"协议页是前端最重的页面（25,562 字符）"一致。
 
@@ -181,6 +224,33 @@ if pm and pm.has_typed_hook("on_before_reply"):
 1. `PLUGIN_ACTIONS = {"name": fn(params)}` ← 优先
 2. `get_config()` / `set_config(params)` / `toggle()`
 3. `execute_action(action, params)`
+
+### 6.1 ⚠️ 项目里其实有**两套** `/api/*`，容易混淆
+
+| 服务 | 端口 | 面向 | 端点 |
+|---|---|---|---|
+| `webui_server.py` | **8080** | 浏览器 / Electron 窗口 | 52 条（上表） |
+| `bot_core.py` | **3005** | 协议层推送事件；**同时也提供联系人管理 API** | 11 条（下表） |
+
+**两套都有 `/api/status`** —— 读到这个名字时必须先确认是哪个端口。
+
+`bot_core.py` 自己的 11 个端点（3005）：
+
+| 端点 | 行号 | 作用 |
+|---|---|---|
+| `/api/status` | 534 | bot 自身状态 |
+| `/api/groups` | 571 | 群列表（含 Bot 角色探测） |
+| `/api/groups/members` | 626 | 群成员 |
+| `/api/groups/settings` | 798 | 每群限制（`group_restrictions`） |
+| `/api/groups/action` | 829 | 群操作（改名/禁言/踢人/设管理员…） |
+| `/api/friends` | 671 | 好友列表 |
+| `/api/friends/settings` | 851 | 每好友限制（`friend_restrictions`） |
+| `/api/friends/action` | 880 | 好友操作（改备注等） |
+| `/api/plugins` | 710 | 插件列表（bot 视角） |
+| `/api/plugins/test` | 753 | 插件测试 |
+| `/api/admin/notify_test` | 781 | 管理员通知测试 |
+
+> 前端「联系人管理 / 群管理」页实际打的是 **3005 这一套**，不是 8080 那套 —— 排障时要分清。
 
 ---
 
@@ -308,6 +378,47 @@ start_bot()      3896
 | 6 | `private_memory.py` / `message_router.py` / `onebot_client.py` / `log_utils.py` 无人 import | 全项目检索 0 命中 | ⬜ 待删（M5） |
 | 7 | **端口顺延后前端仍写死 8080** → 8080 被占用时 Electron 窗口永远出不来（服务其实正常） | `pick_port`:4001 / `last_port.txt`:4015-4017 **vs** `main.js`:169,173,306 | ❌ 未修 |
 | 8 | `group_trigger_words` 存在但为空 → 默认触发词不生效（易误判为"配了却不好使"） | `bot_core.py:5938` 的 `.get(key, default)` 语义 | ⬜ 待确认是否预期 |
+| 9 | **`personality_temperature` 是死参数** —— EGO 情绪温度一路透传但从未被使用 | `5659→5184→5882/5892`，而 `_call_chat_sync:5578` 只用全局 `AI_TEMPERATURE` | ❌ 未修 |
+| 10 | **群聊没有 GROUP_IDS 白名单** —— Bot 所在**任何群**都会参与回复 | 群分支只查 `reply_enabled`（6862-6870）；适配器转发全部事件（`onebot_std_adapter.py:390-401`） | ⚠️ 可能是设计如此，需确认 |
+| 11 | `private_memory_context` **恒为空** —— 私聊画像功能实际未生效 | 唯一调用点传 `pm_ctx = ""`（7377 / 7413）；`private_memory.py` 从未被 import | ❌ 未修 |
+| 12 | **锁形同虚设** —— `_replies_lock`/`_meme_lock`/`_group_meta_lock` 从未使用；`_buffer_lock` 只在一处用，而缓冲写入（7026-7218）与 Timer 线程 `pop`（6094）都不加锁 | 全项目 grep | ❌ 未修 |
+| 13 | `save_state` 用裸 `except: pass`（1893）吞掉落盘失败 —— 状态静默丢失 | 1893 | ❌ 未修 |
+| 14 | 死代码：`_chunk_text`(1183)、`_filter_message_line`(6047)、`EXIT_PHRASES_SHORT`(471)；`/api/chatlogs`(1386)、`/api/plugins/page`(1468) 是前端从不调用的死端点 | grep 核实 | ⬜ 待删 |
+
+### 9.1 两条安全问题（我已亲自验证，含**准确的影响面**）
+
+#### A. `/memes/*` 缺路径校验 → 可读 app 目录下任意文件
+
+**证据**：静态分支有防护（1328-1335：`unquote` → `resolve()` → 必须仍在 `HERE` 内 → 扩展名白名单），
+但**该分支判定失败后不 `return`**，控制流落到 2311 的 memes 分支；
+而 `_serve_meme`（1148-1174）是 `file_path = meme_dir / rel` —— **没有 `resolve()`、没有前缀校验、没有扩展名白名单**。
+
+`_meme_dirs()`（1146）= `PROJECT/memes/memes` 与 `PROJECT.parent/memes/memes`，
+所以 `../../` 可上溯到 `resources/app/` 与 `resources/`。
+
+**能读到什么**（实测）：`bot_config.json` **不含 `api_key`**（该字段本就不落盘），
+但**含 `onebot_token`**；此外 `.neurobase/sandglass.db`（记忆库）、`chat_logs/`、`plugins/state/*.json` 等都在范围内。
+
+**影响面要说准**：回复走 `_serve_meme` 手工写响应头（1165-1169），**不带 ACAO**，
+因此跨站 fetch 读不到内容；而 Host 校验（1297）挡住了 DNS rebinding。
+→ **这是加固缺陷（defense-in-depth 缺失），不是远程可利用漏洞。**
+但项目自己的威胁模型注释（2340）把"本机进程"排除在外，而浏览器地址栏/本机任意程序可直接读 —— 建议仍修。
+
+**修法**：`_serve_meme` 里对 `file_path` 做与静态分支同样的 `resolve()` + 前缀校验 + 扩展名白名单；
+并让静态分支失败时 `return`（发 404），不要继续往下走。
+
+#### B. `GET /api/plugins/action` 可改状态，却没有 Origin 校验（CSRF）
+
+**证据**：`/api/plugins/action` 在 `do_GET` 也被处理（1512），参数从 **query string** 取（1515-1516）；
+但 `do_GET` **只有 Host 校验（1297），没有 Origin 校验** ——
+`_allowed_origin` 只出现在 1250 / 1270 / 1288，那是**响应头**里决定要不要给 ACAO，**不是请求闸门**。
+Origin 闸门只在 `do_POST`（2339-2340 有明确注释），GET 路径漏了。
+
+**影响面**：恶意网页可用 `<img src="http://127.0.0.1:8080/api/plugins/action?...">` 触发**无参数或只吃简单参数**的动作
+（`params` 走 query 会变成字符串，复杂的会失败）。响应读不到（无 ACAO），但**副作用已经在服务端发生**。
+→ 属真实 CSRF 面，但可利用的动作范围受限。
+
+**修法**：把 `do_GET` 里的 `/api/plugins/action` 归入需要 Origin 校验的路径（或干脆只允许 POST）。
 
 ---
 
@@ -330,11 +441,13 @@ foreach ($h in @('on_message','on_before_reply','on_after_reply','on_event')) {
 #    其中真正的「派发调用」是 159, 6141, 6261, 6476, 7431；其余是 has_hook 判断
 Select-String -Path "$w\bot_core.py" -Pattern 'execute_hooks?\(|has_hook\('
 
-# 4) 路由数 —— 注意：按行计数是 59，按「唯一路径」才是 52
+# 4) 路由数 —— 三个口径要分清
 (Select-String -Path "$w\webui\webui_server.py" -Pattern '"/api/' -AllMatches).Count   # → 59（行）
 (Select-String -Path "$w\webui\webui_server.py" -Pattern '["''](/api/[A-Za-z0-9_\-/]*)["'']' -AllMatches |
   ForEach-Object { $_.Matches } | ForEach-Object { $_.Groups[1].Value } |
-  Sort-Object -Unique).Count                                                            # → 52（唯一路径）
+  Sort-Object -Unique).Count                                                            # → 52（字符串）
+# ↑ 52 里含 1327 行那个非路由的前缀判断 '/api/'，扣掉才是真实路由数 51
+# 按「路径 + 方法」注册计则是 55 条（config / plugins/action / protocol.config / protocol.logs 各双方法）
 
 # 5) 群聊决策与退场 —— 实测命中：242, 250, 6091
 #    （6125 的六标志闸门与 6153 的会话分支需另用 pattern 才命中）
