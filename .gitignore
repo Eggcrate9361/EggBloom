@@ -139,6 +139,8 @@ ehthumbs.db
 last_port.txt
 data/login_guard.json
 plugins/ego/slang_learner/data/prompt_templates.json
+plugins/state/
+plugins/plugin_state.json
 
 # Local config overrides (machine-specific)
 local_config.json
