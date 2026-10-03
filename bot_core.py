@@ -1705,16 +1705,50 @@ def save_chat_log(target_qq, speaker, text, reply=""):
 
 _personality_cache = {"text": None, "mtime": 0, "path": None}
 
-# T6 static 前缀缓存：{key:(is_group, config_rev, personality_mtime): static_prompt}
+# T6 static 前缀缓存：{key:(is_group, static_fp, personality_mtime): static_prompt}
 _STATIC_PROMPT_CACHE = {}
-_CONFIG_REV = 0
+_CONFIG_REV = 0  # 配置热重载计数（保留：其它用途/诊断用；**不再进入 static_prompt 缓存键**）
+
+
+# ── 任务 5.1：static_prompt 指纹 ─────────────────────────────────────
+# 旧实现把 _CONFIG_REV 整个塞进缓存键 → 任何一次配置热重载（哪怕只改了
+# ONE_BOT_URL / MEME_COOLDOWN 这类与 static_prompt 无关的字段）都会让
+# static_prompt 重算，进而在下一条请求里**整段作废 DeepSeek 前缀缓存**。
+# 现在改为只对 static_prompt **真正依赖**的少量内容取指纹：改无关字段时
+# 指纹不变 → static_prompt 逐字节稳定 → 前缀缓存保住。
+def _static_prompt_fingerprint(is_group: bool) -> str:
+    """static_prompt 依赖的最小指纹（不含 _CONFIG_REV）。
+
+    依赖项来自 _build_static_prompt 正文，逐条列出以免漏掉：
+      - is_group          : 私聊会剥掉群聊段落
+      - BOT_GROUP_NICK/QQ : 拼进「你是谁」身份块
+      - de_ai.enabled / de_ai.prompt_inject : 决定是否追加「说话铁律」
+      - 人格文本 mtime    : 人格变更（已在缓存键里单列，此处不再重复）
+    注：人格**内容**不在此指纹内（用 mtime 判），避免每轮读盘。
+    """
+    try:
+        from de_ai import get_config as _de_ai_get_config
+        de_ai_conf = _de_ai_get_config(_config) or {}
+    except Exception:
+        de_ai_conf = {}
+    parts = [
+        "1" if is_group else "0",
+        str(BOT_GROUP_NICK or ""),
+        str(BOT_QQ or ""),
+        "1" if de_ai_conf.get("enabled") else "0",
+        "1" if de_ai_conf.get("prompt_inject") else "0",
+    ]
+    src = "|".join(parts)
+    return hashlib.md5(src.encode("utf-8", "ignore")).hexdigest()[:16]
+
 
 def _build_static_prompt(is_group: bool) -> str:
-    """构建 static_prompt（人格+规则+多样性+表情包+铁律），按 (is_group, config_rev, personality_mtime) 缓存。
+    """构建 static_prompt（人格+规则+多样性+表情包+铁律），按 (is_group, static_fp, personality_mtime) 缓存。
 
-    结果只依赖 is_group 与配置/人格文件，同一值下内容完全一致 → 前缀稳定可命中 DeepSeek 硬盘缓存。
+    结果只依赖 is_group 与 static_prompt 真正用到的配置/人格文件，同一值下内容**逐字节一致**
+    → 前缀稳定可命中 DeepSeek 硬盘缓存。**刻意不依赖 _CONFIG_REV**（见 _static_prompt_fingerprint）。
     """
-    key = (is_group, _CONFIG_REV, _personality_cache.get("mtime", 0))
+    key = (is_group, _static_prompt_fingerprint(is_group), _personality_cache.get("mtime", 0))
     hit = _STATIC_PROMPT_CACHE.get(key)
     if hit is not None:
         return hit
