@@ -143,4 +143,44 @@ __all__ = [
     "ENV_FILE_LEGACY",
     "get_config_paths",
     "get_env_paths",
+    "read_json",
+    "write_json",
 ]
+
+
+# ── JSON 安全读写 ────────────────────────────────────────────────────
+# 本模块原先只做「数据目录解析」（get_data_dir 等），但 bot_core.py 用
+# data_store.read_json / write_json 存取状态与指令文件，而兜底类只捕获
+# ImportError —— import 成功却没有 read_json，运行到 load_state() 就会
+# AttributeError。两个函数原先只存在于发行/运行副本里的同名模块中，
+# 导致源码库与运行副本各自只有一半：源码库 bot_core 跑不起来，运行副本
+# utils.py / logger_setup.py 拿不到 get_log_dir。
+# 此处合并为一个模块，两个功能并存，两边都能用。
+def read_json(path, default=None):
+    """安全读 JSON：文件缺失或解析失败返回 default"""
+    if default is None:
+        default = {}
+    if not os.path.exists(path):
+        return default
+    try:
+        with open(path, "r", encoding="utf-8-sig") as f:
+            return json.load(f)
+    except Exception:
+        return default
+
+
+def write_json(path, data, indent=2):
+    """原子写 JSON：先写 tmp，再 os.replace（强制 UTF-8）"""
+    tmp = str(path) + ".tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=indent)
+        os.replace(tmp, str(path))
+        return True
+    except Exception:
+        try:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+        except Exception:
+            pass
+        return False
