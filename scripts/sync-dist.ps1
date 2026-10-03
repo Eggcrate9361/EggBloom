@@ -118,7 +118,7 @@ Write-Host ""
 $rootExts = @(".py", ".json", ".html", ".txt", ".md", ".toml", ".yaml", ".yml", ".png")
 
 # 整目录复制（docs 也带上：发行副本里能直接看到权威文档，不必回源码库翻）
-$dirItems = @("plugins", "protocols", "webui", "nexsandglass", "components", "memes", "docs")
+$dirItems = @("plugins", "protocols", "webui", "nexsandglass", "components", "memes", "docs", "harness")
 
 # 排除的运行时数据（任意层级同名目录）
 $excludeDirs = @(
