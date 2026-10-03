@@ -27,6 +27,7 @@ sys.modules["persona_distill"] = pkg
 L = importlib.import_module("persona_distill.ledger")
 RM = importlib.import_module("persona_distill.review_manager")
 PM = importlib.import_module("persona_distill.personality_model")
+PS = importlib.import_module("persona_distill.persona_store")
 
 TARGET = "__wiringtest__"
 fails = []
@@ -70,16 +71,47 @@ def make_payload(rid, features, level="L3", delta=19, mode="full"):
 
 
 # ── 清场 ──
-for f in (L._path(TARGET),
-          os.path.join(RM.DISTILLS_DIR, f"{TARGET}_L3.md"),
-          os.path.join(RM.DISTILLS_DIR, f"{TARGET}_L3.md.1"),
-          os.path.join(RM.EVIDENCE_DIR, "dist_wire_1.json"),
-          os.path.join(RM.EVIDENCE_DIR, "dist_wire_2.json"),
-          RM.PENDING_FILE):
-    if os.path.exists(f):
-        os.remove(f)
-RM._write_json(RM.HISTORY_FILE,
-               [r for r in RM.get_history() if r.get("target_id") != TARGET])
+def artifacts():
+    """本测试会产生的全部文件路径（全部落在测试目标 TARGET 名下，不含任何真实数据）。"""
+    return [
+        L._path(TARGET),
+        os.path.join(RM.DISTILLS_DIR, f"{TARGET}_L3.md"),
+        os.path.join(RM.DISTILLS_DIR, f"{TARGET}_L3.md.1"),
+        # 证据副文件：审核通过时写出。
+        # 此前漏了这一项，于是 distills\__wiringtest___L3.evidence.md 长期残留在真实数据目录。
+        os.path.join(RM.DISTILLS_DIR, f"{TARGET}_L3.evidence.md"),
+        os.path.join(RM.EVIDENCE_DIR, "dist_wire_1.json"),
+        os.path.join(RM.EVIDENCE_DIR, "dist_wire_2.json"),
+        RM.PENDING_FILE,
+    ]
+
+
+def cleanup():
+    """清掉本测试产生的一切 —— 含此前漏掉的 persona_store 分层目录。"""
+    for f in artifacts():
+        if os.path.exists(f):
+            try:
+                os.remove(f)
+            except OSError:
+                pass
+    # persona_store 的分层目录：card/persona/evidence.md/manifest.json/sections/evidence
+    _pdir = PS._root(TARGET)
+    if os.path.isdir(_pdir):
+        shutil.rmtree(_pdir, ignore_errors=True)
+    RM._write_json(RM.HISTORY_FILE,
+                   [r for r in RM.get_history() if r.get("target_id") != TARGET])
+
+
+def has_leftovers():
+    """残留检测：任何一项为真都说明清理不干净。"""
+    return (L.exists(TARGET)
+            or RM.has_pending()
+            or PS.exists(TARGET)
+            or any(os.path.exists(f) for f in artifacts())
+            or any(r.get("target_id") == TARGET for r in RM.get_history()))
+
+
+cleanup()
 
 feat1 = {
     "linguistics": [{"label": "高频词", "value": "你好×13", "confidence": 0.72,
@@ -131,21 +163,8 @@ check("历史里有 2 条记录",
 check("ledger_note 有内容", bool(res2.get("ledger_note")), res2.get("ledger_note", ""))
 
 print("\n=== 清理 ===")
-for f in (L._path(TARGET),
-          os.path.join(RM.DISTILLS_DIR, f"{TARGET}_L3.md"),
-          os.path.join(RM.DISTILLS_DIR, f"{TARGET}_L3.md.1"),
-          RM.PENDING_FILE):
-    if os.path.exists(f):
-        os.remove(f)
-for rid in ("dist_wire_1", "dist_wire_2"):
-    ev = os.path.join(RM.EVIDENCE_DIR, f"{rid}.json")
-    if os.path.exists(ev):
-        os.remove(ev)
-RM._write_json(RM.HISTORY_FILE,
-               [r for r in RM.get_history() if r.get("target_id") != TARGET])
-check("测试残留已清干净",
-      not L.exists(TARGET) and not RM.has_pending()
-      and not any(r.get("target_id") == TARGET for r in RM.get_history()))
+cleanup()
+check("测试残留已清干净", not has_leftovers())
 
 print("\n" + "=" * 46)
 print(f"结果：{'全部通过' if not fails else '失败 ' + str(fails)}")
