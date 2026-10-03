@@ -139,6 +139,60 @@ except Exception as e:
     print(f"[PluginSystem] 加载失败: {e}")
 
 
+def _dispatch_typed_before_reply(pm, *, message: str, group_id: str = "",
+                                 context: Optional[dict] = None):
+    """薄封装：派发 typed `on_before_reply`，结果打上 `_typed` 标记。
+
+    为什么要有这个包装而不是直接调 harness：
+      · bot_core 里 5 个派发点都要用同一套（PM 缺失/异常/无插件都不能炸主链）；
+      · 打标记是调用方（聚合循环）区分"旧式集合"与"typed 集合"的唯一依据；
+      · 集中一处，将来换实现只改这里。
+    任何失败 → 返回 []，绝不抛。
+    """
+    try:
+        from harness import plugin_bridge as _pb
+    except Exception:
+        return []
+    try:
+        items = _pb.dispatch_before_reply(
+            pm, message=message, group_id=group_id, context=context, log_fn=log)
+    except Exception as e:
+        try:
+            log(f"[plugin_bridge] typed before_reply 失败（已忽略）: {e}")
+        except Exception:
+            pass
+        return []
+    out = []
+    for name, res in items:
+        if isinstance(res, dict):
+            res = dict(res)
+            res["_typed"] = True
+        out.append((name, res))
+    return out
+
+
+def _dispatch_typed_after_reply(pm, *, message: str, group_id: str = "",
+                                reply: str, context: Optional[dict] = None):
+    """薄封装：派发 typed `on_after_reply`，返回新回复文本或 None。
+
+    空串是**有意义**的返回值（= 抑制发送），必须原样透传，不能被当成"无结果"。
+    """
+    try:
+        from harness import plugin_bridge as _pb
+    except Exception:
+        return None
+    try:
+        return _pb.dispatch_after_reply(
+            pm, message=message, group_id=group_id, reply=reply,
+            context=context, log_fn=log)
+    except Exception as e:
+        try:
+            log(f"[plugin_bridge] typed after_reply 失败（已忽略）: {e}")
+        except Exception:
+            pass
+        return None
+
+
 def _run_ego_before_reply(message: str, group_id: str = "", ctx: Optional[dict] = None):
     """统一执行 EGO 插件的 before_reply 钩子，收集注入内容。
 
@@ -157,13 +211,25 @@ def _run_ego_before_reply(message: str, group_id: str = "", ctx: Optional[dict] 
         if pm is None or not pm.has_hook("before_reply"):
             return "", None
         interventions = pm.execute_hooks("before_reply", message=message, group_id=group_id, context=ctx or {})
+        # ── typed 钩子并列派发（ABI v2 的 on_before_reply，此前从未被调用）──
+        # 与旧式**并列**收集，不动上面那行；下面同一循环按同一协议处理两者，
+        # 避免"两套 skip/inject 各管一段"导致的行为分叉。
+        # 注意：旧式过滤只认 plugin_name == "ego"，而 typed 插件名各不相同，
+        # 所以 typed 结果带 _typed 标记，循环里对它不做插件名过滤。
+        _typed_interventions = _dispatch_typed_before_reply(
+            pm, message=message, group_id=group_id, context=ctx)
+        if not interventions:
+            interventions = []
+        if _typed_interventions:
+            interventions = list(interventions) + list(_typed_interventions)
         if not interventions:
             return "", None
         parts = []
         for plugin_name, result in interventions:
-            if plugin_name != "ego":
-                continue
             if not isinstance(result, dict):
+                continue
+            # 旧式路径只收 ego 的注入；typed 路径收所有（它本就是显式注册的）
+            if not result.get("_typed") and plugin_name != "ego":
                 continue
             action = result.get("action")
             if action != "inject":
@@ -4737,6 +4803,37 @@ def _handle_group_decrease(ev):
         log(f"[事件] Bot 离开群 {group_id}，已清理会话与缓冲区")
 
 
+def _handle_group_ban(ev):
+    """群禁言/解除禁言：只记录，不发送、不调用 API（观测性补齐）。
+
+    为什么需要它：OneBot 的 `notice_type == "group_ban"` 在事件分发链里
+    此前**没有对应分支**（只有 group_increase / group_decrease / friend_add
+    等），所以群里有人被禁言时后台没有任何痕迹，排查"为什么 bot 不说话"时
+    会缺一块关键信息。
+
+    语义（与测试期望一致，且刻意保守）：
+      · 只写日志，含「群禁言」字样与时长（秒）
+      · **不调用任何 API**：禁止/解除禁言是群管理动作，bot 不该有反应
+      · duration == 0 → 解除禁言（OneBot 约定）
+      · 缺 group_id → 直接返回（脏事件）
+    """
+    group_id = ev.get("group_id")
+    if not group_id:
+        return
+    user_id = str(ev.get("user_id", ""))
+    operator = str(ev.get("operator_id", ""))
+    try:
+        duration = int(ev.get("duration") or 0)
+    except (TypeError, ValueError):
+        duration = 0
+
+    if duration > 0:
+        log(f"[事件] 群禁言: group={group_id} user={user_id} "
+            f"时长={duration}秒 操作者={operator}")
+    else:
+        log(f"[事件] 群解除禁言: group={group_id} user={user_id} 操作者={operator}")
+
+
 def _handle_friend_add(ev):
     """好友增加：追加进 target_qqs + 欢迎语 + 通知管理员。"""
     user_id = str(ev.get("user_id", ""))
@@ -6297,6 +6394,13 @@ def process_buffered_message(group_id):
                     for _pn, _pr in (_res or []):
                         if _pn == "group_chat_decider" and isinstance(_pr, dict) and _pr.get("action") == "inject":
                             _decider_go = True
+                    # ── typed 并列派发：spec 插件同样有权请求"放行" ──
+                    # 语义与旧式一致（inject = 建议插话），否则 typed 插件无法参与决策。
+                    for _tpn, _tpr in _dispatch_typed_before_reply(
+                            pm, message=merged_text, group_id=group_id, context=_decider_ctx):
+                        if isinstance(_tpr, dict) and _tpr.get("action") == "inject":
+                            _decider_go = True
+                            log(f"群[{group_id}] [typed 决策] {_tpn} 建议插话")
             except Exception as e:
                 log(f"群[{group_id}] [决策插件] 无触发预判异常: {e}")
         if not _decider_go:
@@ -6413,6 +6517,17 @@ def process_buffered_message(group_id):
                     "bot_name": "小a",
                 }
                 intervention = pm.execute_hooks("before_reply", message=merged_text, group_id=group_id, context=_plugin_ctx)
+                # ── typed 并列派发 → **并入同一个 intervention 列表** ──
+                # 关键：并入同一列表而非另起一段处理，才能让 skip/override/inject
+                # 在下面同一套 priority 裁决里竞争。若分开处理，会出现
+                # "旧式 skip 与 typed override 各说各话、后写者胜"的行为分叉。
+                _typed_bi = _dispatch_typed_before_reply(
+                    pm, message=merged_text, group_id=group_id, context=_plugin_ctx)
+                if not intervention:
+                    intervention = []
+                if _typed_bi:
+                    intervention = list(intervention) + list(_typed_bi)
+                    log(f"[调试] typed 干预并入 {len(_typed_bi)} 项")
                 log(f"[调试] interventions={intervention}")
                 if intervention:
                     skip_reasons = []
@@ -6651,6 +6766,23 @@ def process_buffered_message(group_id):
                                     log(f"群[{group_id}] [插件覆盖] {sent_text[:60]}")
                     except Exception as e:
                         log(f"[Plugin] after_reply error: {e}")
+                # ── typed 并列派发：契约是返回 str（不是 dict）──
+                # 放在旧式**之后**：让 spec 插件能覆盖旧式插件的结果，
+                # 且"空串 = 抑制发送"的语义与原逻辑一致（空串不会进入发送分支）。
+                try:
+                    if PLUGIN_OK:
+                        _tpm = get_plugin_manager()
+                        _t_new = _dispatch_typed_after_reply(
+                            _tpm, message=merged_text, group_id=group_id,
+                            reply=sent_text, context=_plugin_ctx)
+                        if _t_new is not None and _t_new != sent_text:
+                            if _t_new == "":
+                                log(f"群[{group_id}] [插件抑制] typed after_reply 返回空串 → 不发送")
+                            else:
+                                log(f"群[{group_id}] [typed 覆盖] {_t_new[:60]}")
+                            sent_text = _t_new
+                except Exception as e:
+                    log(f"[Plugin] typed after_reply error: {e}")
                 if smart_send_group(group_id, sent_text):
                     log(f"群回复: {sent_text[:60]}")
                     track_bot_reply(group_id, sent_text)
@@ -7058,6 +7190,12 @@ def main():
                             _handle_group_decrease(ev)
                         except Exception as e:
                             log(f"[事件] group_decrease 处理异常: {e}")
+                    elif post_type == "notice" and ev.get("notice_type") == "group_ban":
+                        # 群禁言/解除禁言：纯记录（此前缺失，导致该事件无任何痕迹）
+                        try:
+                            _handle_group_ban(ev)
+                        except Exception as e:
+                            log(f"[事件] group_ban 处理异常: {e}")
                     elif post_type == "notice" and ev.get("notice_type") == "friend_add":
                         try:
                             _handle_friend_add(ev)
@@ -7772,6 +7910,21 @@ def main():
                                             sent_text = new_reply
                             except Exception as e:
                                 log(f"[Plugin] after_reply error: {e}")
+                        # ── typed 并列派发（私聊作用域）──
+                        try:
+                            if PLUGIN_OK:
+                                _tpm = get_plugin_manager()
+                                _t_new = _dispatch_typed_after_reply(
+                                    _tpm, message=text, group_id="", reply=sent_text,
+                                    context={"scope": "private", "sender": sender})
+                                if _t_new is not None and _t_new != sent_text:
+                                    if _t_new == "":
+                                        log(f"私聊[{sender}] [插件抑制] typed after_reply 返回空串 → 不发送")
+                                    else:
+                                        log(f"私聊[{sender}] [typed 覆盖] {_t_new[:60]}")
+                                    sent_text = _t_new
+                        except Exception as e:
+                            log(f"[Plugin] typed after_reply error: {e}")
                         ok = smart_send(sent_text, sender)
                     else:
                         log("私聊 仅表情标记，跳过文本发送")

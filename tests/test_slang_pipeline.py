@@ -71,7 +71,26 @@ print("\n=== 2. 合并后存量与数据卫生 ===")
 entries = SI.get_entries()
 check("真源可读且非空", len(entries) > 0, f"{len(entries)} 条")
 check("旧条目一条不丢（>= 100 条真实词）", len(entries) >= 100, f"实际 {len(entries)}")
-_stale = [k for k in entries if "测试" in k or k.startswith("zzz") or k == "绝杀"]
+
+def _is_test_artifact(word, meaning):
+    """判定一条词条是否为开发期测试垃圾。
+
+    判据（宁可漏判，不可误杀真词）：
+      · 词名以 zzz / test / 探针 开头，或含「测试」「探针」「自检」
+      · 或**释义自述**是测试（"这是一个测试…"/"用于验证…"）
+    反例（必须保留）：'绝杀' 是真实电竞黑话，虽然长得像标记词，
+    但它的释义是正常语义 —— 旧规则按名字硬匹配会把它误杀。
+    """
+    w = str(word)
+    m = str(meaning or "")
+    if w.startswith(("zzz", "test", "TEST")) or "探针" in w or "自检" in w:
+        return True
+    if "测试" in w:
+        # 词名带"测试"也要看释义：真词可能恰含二字，测试数据的释义必自述
+        return ("测试" in m) or ("验证" in m) or ("探针" in m)
+    return ("这是一个测试" in m) or ("用于验证" in m and "测试" in m)
+
+_stale = [k for k, v in entries.items() if _is_test_artifact(k, v)]
 check("词典里没有残留的测试词", not _stale, str(_stale))
 
 # ══ 3. ★ 闭环：learner 写入 → injector 读出 ══════════════════════════
