@@ -764,6 +764,7 @@ def start_event_server():
                     self.end_headers()
                     self.wfile.write(body)
                     return
+
             if self.path == "/api/plugins":
                 try:
                     pm = get_plugin_manager()
@@ -784,49 +785,212 @@ def start_event_server():
                     self.end_headers()
                     self.wfile.write(body)
                 return
+            # ── Agent：SSE 事件流（**运行时快照，不发文件**）──
+            #  GET /api/agent/stream?session_id=xxx&cursor=n
+            #  返回：application/x-ndjson（每行一个 JSON 事件，天然支持断线重连）
+            #
+            #  为什么用 ndjson 而不是 text/event-stream：
+            #    1) 前端用 fetch + ReadableStream 逐行解析即可，不必引 EventSource；
+            #    2) 每个事件自包含（带 seq），断线重连用 cursor 增量补，不丢事件；
+            #    3) 出错时可以直接吐一个 {"type":"error"} 行，语义不混。
+            if self.path.startswith("/api/agent/stream"):
+                try:
+                    from urllib.parse import urlparse, parse_qs
+                    qs = parse_qs(urlparse(self.path).query or "")
+                    sid = str((qs.get("session_id") or [""])[0] or "")
+                    try:
+                        cursor = int((qs.get("cursor") or ["0"])[0] or 0)
+                    except (TypeError, ValueError):
+                        cursor = 0
+                    if not sid:
+                        body = json.dumps({"error": "缺少 session_id"}).encode("utf-8")
+                        self.send_response(200)
+                        self.send_header("Content-Type", "application/json")
+                        self.send_header("Content-Length", str(len(body)))
+                        self.end_headers()
+                        self.wfile.write(body)
+                        return
+                    from harness import agent_service as _agent
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
+                    self.send_header("Cache-Control", "no-cache, no-store")
+                    self.send_header("X-Accel-Buffering", "no")
+                    self.end_headers()
+                    _q = _agent.subscribe(sid)
+                    sent = 0
+                    deadline = time.time() + 300.0     # 单连接最长 5 分钟，超时让前端重连
+                    # 连接时可能 chat 还没开始（前端先连流、再发请求）→ 给一个
+                    # **启动宽限期**：在这段时间内即使会话不忙也不收尾，等它忙起来。
+                    # 一旦 seen_activity=True（收到过任何事件），空闲就立即收尾。
+                    grace_until = time.time() + 5.0
+                    seen_activity = False
+                    try:
+                        while time.time() < deadline:
+                            _batch = _agent._drain(sid)
+                            for _ev in _batch:
+                                sent += 1
+                                seen_activity = True
+                                if sent <= cursor:
+                                    continue
+                                self.wfile.write((json.dumps(_ev, ensure_ascii=False,
+                                                             default=str) + "\n").encode("utf-8"))
+                            if _batch:
+                                try:
+                                    self.wfile.flush()
+                                except Exception:
+                                    break
+                            _busy = bool(((_agent.get_session(sid) or {}).get("busy")))
+                            if _busy:
+                                seen_activity = True
+                            # 收尾条件：**已经看到过活动** 且 当前空闲 且 无新事件；
+                            # 或者宽限期已过且从未活动（例如会话不存在）→ 发 idle 收尾。
+                            if not _busy and not _batch:
+                                if seen_activity:
+                                    self.wfile.write((json.dumps(
+                                        {"type": "idle", "ts": time.time()},
+                                        ensure_ascii=False) + "\n").encode("utf-8"))
+                                    try:
+                                        self.wfile.flush()
+                                    except Exception:
+                                        pass
+                                    break
+                                if time.time() >= grace_until:
+                                    self.wfile.write((json.dumps(
+                                        {"type": "idle", "ts": time.time(),
+                                         "reason": "无活动"},
+                                        ensure_ascii=False) + "\n").encode("utf-8"))
+                                    try:
+                                        self.wfile.flush()
+                                    except Exception:
+                                        pass
+                                    break
+                            time.sleep(0.08)
+                    finally:
+                        _agent.unsubscribe(sid, _q)
+                    return
+                except Exception as e:
+                    try:
+                        self.wfile.write((json.dumps({"type": "error", "error": str(e)},
+                                                     ensure_ascii=False) + "\n").encode("utf-8"))
+                    except Exception:
+                        pass
+                    return
+
+            # ── Agent 只读端点（GET）：与 POST 共用同一套路由 ──────────
+            #  webui 的 GET 读取走这里；此前只在 do_POST 里实现，
+            #  导致前端 GET /api/agent/status 拿到 404 —— 状态灯永远"检测中"。
+            if self.path.startswith("/api/agent/") and not self.path.startswith("/api/agent/stream"):
+                self._agent_route(self.path, self._agent_query())
+                return
+
             self.send_response(404)
             self.end_headers()
+
+        # ── Agent 薄路由（逻辑在 harness.agent_service，这里只做转接）──────
+        #  这一层刻意保持"薄"：只做 JSON 解析 + 参数归一 + 错误兜底，
+        #  任何业务逻辑都在 harness 里（设计文档 §3 的折中方案）。
+        def _agent_query(self):
+            """把 GET 的 querystring 规整成与 POST body 同形状的 dict。"""
+            try:
+                from urllib.parse import urlparse, parse_qs
+                q = parse_qs(urlparse(self.path).query or "")
+                out = {}
+                for k, v in q.items():
+                    out[k] = v[0] if len(v) == 1 else v
+                # 类型归一：limit / max_steps / from_step 需要是 int
+                for k in ("limit", "max_steps", "from_step"):
+                    if k in out:
+                        try:
+                            out[k] = int(out[k])
+                        except Exception:
+                            out.pop(k, None)
+                if "is_group" in out:
+                    out["is_group"] = str(out["is_group"]).lower() in ("1", "true", "yes")
+                return out
+            except Exception:
+                return {}
+
+        def _agent_req(self):
+            """把 POST 的 body 读成 dict。"""
+            length = int(self.headers.get("Content-Length", 0) or 0)
+            if 0 < length < 262144:
+                try:
+                    return json.loads(self.rfile.read(length).decode("utf-8"))
+                except Exception:
+                    return {}
+            return {}
+
+        def _agent_route(self, path, req):
+            """统一的 agent 端点分派：GET/POST 共用，保证两边行为一致。"""
+            res = None
+            try:
+                from harness import agent_service as _agent
+                req = req if isinstance(req, dict) else {}
+                _p = path
+
+                if _p == "/api/agent/chat":
+                    res = _agent.run_chat(
+                        user_input=str(req.get("input") or req.get("text") or ""),
+                        session_id=req.get("session_id") or None,
+                        is_group=bool(req.get("is_group", False)),
+                        context_hint=str(req.get("context_hint") or ""),
+                        max_steps=req.get("max_steps"),
+                        use_memory=bool(req.get("use_memory", True)),
+                    )
+                elif _p == "/api/agent/abort":
+                    res = {"ok": _agent.request_abort(str(req.get("session_id") or ""))}
+                elif _p == "/api/agent/history":
+                    sid = str(req.get("session_id") or "")
+                    res = {"ok": True, "session_id": sid,
+                           "history": _agent.history_of(sid, limit=req.get("limit")),
+                           "trace": _agent.trace_of(sid, limit=req.get("limit"))}
+                elif _p == "/api/agent/sessions":
+                    res = {"ok": True,
+                           "sessions": _agent.list_sessions(
+                               kind=str(req.get("kind") or "desk"),
+                               limit=req.get("limit"))}
+                elif _p == "/api/agent/rerun":
+                    res = _agent.rerun_from(
+                        session_id=str(req.get("session_id") or ""),
+                        from_step=req.get("from_step"),
+                        user_input=req.get("input"),
+                        is_group=bool(req.get("is_group", False)),
+                        context_hint=str(req.get("context_hint") or ""),
+                    )
+                elif _p == "/api/agent/delete":
+                    res = {"ok": _agent.delete_session(str(req.get("session_id") or ""))}
+                elif _p == "/api/agent/status":
+                    res = {"ok": True, "ready": _agent.is_ready(),
+                           "memory": _agent.memory_status(),
+                           "tools": _agent.tool_groups(),
+                           "sessions": len(_agent.list_sessions(kind="", include_disk=False))}
+                elif _p == "/api/agent/tools":
+                    res = {"ok": True, "groups": _agent.tool_groups()}
+                elif _p == "/api/agent/memory":
+                    res = {"ok": True, "memory": _agent.memory_status()}
+                else:
+                    res = {"ok": False, "error": f"未知的 agent 端点: {_p}"}
+            except Exception as e:
+                res = {"ok": False, "error": f"{type(e).__name__}: {e}"}
+            try:
+                body = json.dumps(res, ensure_ascii=False, default=str).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                self.wfile.write(body)
+            except Exception:
+                pass
 
         def do_POST(self):
             try:
                 # ── Agent 薄路由（逻辑在 harness.agent_service，这里只做转接）──
-                if self.path in ("/api/agent/chat", "/api/agent/abort", "/api/agent/history"):
-                    try:
-                        length = int(self.headers.get("Content-Length", 0) or 0)
-                        req = {}
-                        if 0 < length < 262144:
-                            try:
-                                req = json.loads(self.rfile.read(length).decode("utf-8"))
-                            except Exception:
-                                req = {}
-                        from harness import agent_service as _agent
-                        if self.path == "/api/agent/chat":
-                            res = _agent.run_chat(
-                                user_input=str(req.get("input") or req.get("text") or ""),
-                                session_id=req.get("session_id") or None,
-                                is_group=bool(req.get("is_group", False)),
-                                context_hint=str(req.get("context_hint") or ""),
-                            )
-                        elif self.path == "/api/agent/abort":
-                            res = {"ok": _agent.request_abort(str(req.get("session_id") or ""))}
-                        else:
-                            sid = str(req.get("session_id") or "")
-                            res = {"ok": True,
-                                   "history": _agent.history_of(sid, limit=req.get("limit")),
-                                   "trace": _agent.trace_of(sid, limit=req.get("limit"))}
-                        body = json.dumps(res, ensure_ascii=False, default=str).encode("utf-8")
-                        self.send_response(200)
-                        self.send_header("Content-Type", "application/json")
-                        self.send_header("Content-Length", str(len(body)))
-                        self.end_headers()
-                        self.wfile.write(body)
-                    except Exception as e:
-                        body = json.dumps({"ok": False, "error": str(e)}).encode("utf-8")
-                        self.send_response(200)
-                        self.send_header("Content-Type", "application/json")
-                        self.send_header("Content-Length", str(len(body)))
-                        self.end_headers()
-                        self.wfile.write(body)
+                #  这一层刻意保持"薄"：只做 JSON 解析 + 参数归一 + 错误兜底，
+                #  任何业务逻辑都在 harness 里（设计文档 §3 的折中方案）。
+                #  ★ GET 与 POST 共用 _agent_route，避免两边行为漂移。
+                if self.path.startswith("/api/agent/"):
+                    self._agent_route(self.path, self._agent_req())
                     return
                 if self.path == "/reload_config" or self.path == "/reload":
                     try:
@@ -6994,7 +7158,25 @@ def main():
             is_authorized_fn=_is_authorized,
             logger=log,
             tool_schema_provider=lambda names: _treg.resolve(names, lazy=True),
+            # 工具分闸：与主回复链同一套（harness.bot_hook.agent_tools_for），
+            # 保证"主链给模型什么工具"和"agent 给模型什么工具"语义一致。
+            tool_picker=lambda msg, is_group: [
+                _t["function"]["name"]
+                for _t in (_bh.agent_tools_for(msg, is_group=bool(is_group)) or [])
+                if isinstance(_t, dict) and _t.get("function", {}).get("name")
+            ],
+            # 记忆：走本体（nexsandglass + super_memory），开关随 config.memory_enable
+            memory=bool(_config.get("memory_enable", True)),
         )
+        # 记忆桥自检（一行日志，方便排障"为什么 agent 不记得我"）
+        try:
+            from harness import agent_memory as _amem
+            _probe = _amem.probe()
+            log(f"[Agent] 本体记忆: {'可用' if _probe['available'] else '不可用'}"
+                f"{'（' + _probe['reason'] + '）' if _probe['reason'] else ''}"
+                f"，记忆条数={_probe.get('messages')}，检索工具={_probe.get('tools')}")
+        except Exception as _me:
+            log(f"[Agent] 本体记忆自检失败: {_me}")
         log(f"[Agent] 服务已注入（主程序页 + 群内双闸），工具 {len(_agent_fns)} 个")
     except Exception as e:
         log(f"[Agent] 注入失败: {e}")
@@ -7540,9 +7722,14 @@ def main():
                                     text=text, sender=sender, is_group=True)
                                 if _allowed:
                                     log(f"[Agent] 群[{group_id}] {sender} 触发（{_why}）: {text[:60]}")
-                                    _agent_sid = f"grp-{group_id}-{int(time.time())}"
-                                    _agent_ctx = f"当前是 QQ 群 {group_id} 内的任务。" \
-                                                 f"需要群信息时可用工具，group_id={group_id}。"
+                                    # 会话按**群**复用（同群多次指令共享上下文，语义更连贯）；
+                                    # 带日期戳防止跨天累积成超长历史。
+                                    _day = time.strftime("%Y%m%d")
+                                    _agent_sid = f"grp-{group_id}-{_day}"
+                                    _agent_ctx = (f"当前是 QQ 群 {group_id} 内的任务，"
+                                                  f"发起人 QQ={sender}。"
+                                                  f"需要群信息时可用工具，group_id={group_id}。")
+                                    # 群内执行进度：透过总线记录（前端/TUI 可观测），不刷屏
                                     _ar = _agent.run_chat(
                                         user_input=text, session_id=_agent_sid,
                                         is_group=True, context_hint=_agent_ctx,
