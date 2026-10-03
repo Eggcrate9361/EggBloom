@@ -6,6 +6,10 @@ import json
 import os
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+# ★ 黑话词典的**唯一真源**（2026-10-03 统一）
+# 学习侧 plugins/ego/slang_learner 过去写的是 plugins/ego/slang_dict.json，
+# 与本文件读的应用根 slang_dict.json 是两个不同文件 —— 学的黑话进了死胡同。
+# 现两侧统一指向下面这两个路径；改这里等于改全链路的真源。
 SLANG_DICT_PATH = os.path.join(HERE, "slang_dict.json")
 SLANG_REPLIES_PATH = os.path.join(HERE, "slang_replies.json")
 

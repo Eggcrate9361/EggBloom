@@ -7,13 +7,23 @@ slang_learner 插件：让 EggBloom 能手动学习最新网络黑话，候选�
 import json
 import os
 import re
-import sys
 import time
 import urllib.request
 import urllib.error
 from typing import Any, Dict, List, Optional
 
 PLUGIN_DIR = os.path.dirname(os.path.abspath(__file__))
+# PLUGIN_DIR = <app>/plugins/ego/slang_learner → 上溯 3 层到应用根 <app>
+APP_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(PLUGIN_DIR)))
+
+# ★ 黑话词典的**唯一真源**（2026-10-03 修复管线断裂）
+# 历史 bug：这里曾用 os.path.dirname(PLUGIN_DIR) = <app>/plugins/ego/，
+# 而注入侧 slang_injector.py 读的是 <app>/slang_dict.json —— 两个不同文件，永不交汇，
+# 结果"让它学的黑话，学完进了死胡同"。两侧必须指向同一路径。
+# 真源选应用根的依据：slang_injector 已被 bot_core.py 直接 import，动它风险更小。
+SLANG_DICT_PATH = os.path.join(APP_ROOT, "slang_dict.json")
+SLANG_REPLIES_PATH = os.path.join(APP_ROOT, "slang_replies.json")
+
 DATA_DIR = os.path.join(PLUGIN_DIR, "data")
 PENDING_FILE = os.path.join(DATA_DIR, "pending.json")
 INJECTED_FILE = os.path.join(DATA_DIR, "injected.json")
@@ -148,7 +158,7 @@ class SlangLearner:
         existing_ids.update(injected_ids)
 
         # 读取已有 slang_dict 进一步去重
-        slang_path = os.path.join(os.path.dirname(PLUGIN_DIR), "slang_dict.json")
+        slang_path = SLANG_DICT_PATH
         slang_data = _load_json(slang_path, {"entries": {}})
         existing_ids.update(slang_data.get("entries", {}).keys())
 
@@ -195,7 +205,7 @@ class SlangLearner:
         return result
 
     def inject_selected(self, ids: List[str]) -> Dict[str, Any]:
-        slang_path = os.path.join(os.path.dirname(PLUGIN_DIR), "slang_dict.json")
+        slang_path = SLANG_DICT_PATH
         slang_data = _load_json(slang_path, {"entries": {}})
         entries = slang_data.get("entries", {}) if isinstance(slang_data, dict) else {}
         updated = 0
@@ -215,12 +225,10 @@ class SlangLearner:
         _save_json(slang_path, slang_out)
         _save_json(PENDING_FILE, self.pending)
         _save_json(INJECTED_FILE, self.injected)
-        try:
-            if "slang_injector" in sys.modules:
-                import importlib
-                importlib.reload(sys.modules["slang_injector"])
-        except Exception as e:
-            print(f"[SlangLearner] 热更新 slang_injector 失败: {e}")
+        # 原先这里有一句 importlib.reload(sys.modules["slang_injector"])，2026-10-03 删除。
+        # 它是无效动作：slang_injector 模块内没有任何缓存，每次调用都 _load() 现读磁盘文件，
+        # 所以写完 slang_dict.json 的下一条消息就自动生效，不需要（也无法）靠 reload 生效。
+        # 真正让这条管线断裂的不是缺 reload，而是两侧路径不同（见 SLANG_DICT_PATH 注释）。
         return {"ok": True, "injected": updated}
 
     def inject_all(self, min_quality: float = 0.0) -> Dict[str, Any]:
@@ -325,8 +333,8 @@ class SlangLearner:
         # key 统一走凭据管理器（get_provider_api_key：专属 > 全局），不再读 JSON 里的明文。
         try:
             import sys as _sys
-            # PLUGIN_DIR=.../app/plugins/ego/slang_learner → 上溯 3 层到 app 根
-            _root = os.path.dirname(os.path.dirname(os.path.dirname(PLUGIN_DIR)))
+            # APP_ROOT 已由模块头统一计算（原为在此处重复上溯 3 层）
+            _root = APP_ROOT
             if _root not in _sys.path:
                 _sys.path.insert(0, _root)
             from config import get_provider_api_key as _gpak
@@ -828,8 +836,7 @@ def add_manual(term: str, meaning: str, source: str = "手动输入", quality: f
     existing_ids = {x["id"] for x in _learner.pending}
     existing_ids.update(x["id"] for x in _learner.injected)
     try:
-        slang_path = os.path.join(os.path.dirname(PLUGIN_DIR), "slang_dict.json")
-        existing_ids.update(_load_json(slang_path, {"entries": {}}).get("entries", {}).keys())
+        existing_ids.update(_load_json(SLANG_DICT_PATH, {"entries": {}}).get("entries", {}).keys())
     except Exception:
         pass
     if term in existing_ids:
@@ -905,8 +912,7 @@ def web_enrich(games=None, batch=5, fallback=True, template=""):
         existing_ids = {x["id"] for x in _learner.pending}
         existing_ids.update(x["id"] for x in _learner.injected)
         try:
-            slang_path = os.path.join(os.path.dirname(PLUGIN_DIR), "slang_dict.json")
-            existing_ids.update(_load_json(slang_path, {"entries": {}}).get("entries", {}).keys())
+            existing_ids.update(_load_json(SLANG_DICT_PATH, {"entries": {}}).get("entries", {}).keys())
         except Exception:
             pass
         for item in cleaned:
@@ -936,7 +942,8 @@ def web_enrich(games=None, batch=5, fallback=True, template=""):
 
 
 # ---------------------------------------------------------------- 回复模板
-_REPLIES_PATH = os.path.join(os.path.dirname(PLUGIN_DIR), "slang_replies.json")
+# 同样指向应用根真源（与 slang_injector.SLANG_REPLIES_PATH 保持一致）
+_REPLIES_PATH = SLANG_REPLIES_PATH
 
 
 def get_reply_templates(term: str = "") -> Dict[str, Any]:
