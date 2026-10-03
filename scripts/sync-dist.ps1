@@ -135,14 +135,28 @@ $excludeFiles = @(
     # 真实前端只有 webui\webui_artistic_v3.html（_frontend_path = HERE/"webui_artistic_v3.html"）。
     # 根目录若出现同名文件即为重复副本——同步时不要把它搬到发行包根目录，
     # 否则又会出现"改错文件"的坑（2026-10-03 已被此脚本搬回去过一次）。
-    "webui_artistic_v3.html"
+    "webui_artistic_v3.html",
+    # ★ 黑话词典：这是**运行时数据**（由 slang_learner 在运行中写入），
+    #   源码库里那份只是空壳（{"entries":{}}）。
+    #   2026-10-03 事故：根目录 .json 在白名单里，同步时空壳把发行包里的
+    #   105 条真实黑话覆盖成 21 字节 —— 学习成果被一次同步抹掉。
+    #   凡"运行时会增长"的根目录 json，一律不得同步（只增不减 ≠ 不覆盖同名）。
+    "slang_dict.json", "slang_replies.json"
 )
+
+# 运行时数据目录（根目录下），整目录不同步
+$excludeRootDirs = @("data", "logs", "chat_logs", ".neurobase", "memory")
 
 # 保留作业汇总表（要用它统计 Copied 数量），但去掉逐文件列表
 $roboArgs = @("/E", "/NFL", "/NDL", "/NJH", "/NP", "/R:1", "/W:1")
 if ($DryRun) { $roboArgs += "/L" }
 foreach ($d in $excludeDirs)  { $roboArgs += @("/XD", $d) }
 foreach ($f in $excludeFiles) { $roboArgs += @("/XF", $f) }
+# ★ 运行时数据：黑话词典可能出现在任意层级（历史上分裂成 plugins/ego/ 与 app 根），
+#   一律按**文件名**排除，避免它再次被空壳覆盖。
+foreach ($f in @("slang_dict.json", "slang_replies.json", "slang_conflicts.json")) {
+    $roboArgs += @("/XF", $f)
+}
 
 $result = [ordered]@{ files = 0; dirs = 0; failed = 0 }
 
