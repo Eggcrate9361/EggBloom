@@ -26,11 +26,13 @@
     tool_result 一次工具结果（含是否 spill）
     final      最终答复
 """
-import json
 import time
 
 from . import session_log as _slog
-from . import spill as _spill
+from . import tool_runner as _tr
+# `_spill` 保留为模块级别名：spill 是 agent 的存储约定，
+# 外部（测试/诊断）通过它拿到 SPILL_DIR 做隔离，属于既有接口，不要删。
+from . import spill as _spill  # noqa: F401
 
 # 事件类型
 EV_USER = "user_msg"
@@ -40,7 +42,7 @@ EV_TOOL_RESULT = "tool_result"
 EV_FINAL = "final"
 
 DEFAULT_MAX_STEPS = 12
-DEFAULT_MAX_TOOL_RESULT_TOKENS = 1500   # 单条工具结果的内联预算
+DEFAULT_MAX_TOOL_RESULT_TOKENS = _tr.DEFAULT_MAX_TOOL_RESULT_TOKENS  # 单点定义，避免两处漂移
 #: 单步（一次模型返回）里最多执行几个工具调用
 MAX_CALLS_PER_STEP = 8
 #: 整个 run 里最多执行几次工具调用（成本硬闸；主程序 agent 也用它）
@@ -97,15 +99,8 @@ def _normalize_chat_return(ret):
     return (content or ""), (tool_calls or []), (usage or {})
 
 
-def _parse_args(raw):
-    if isinstance(raw, dict):
-        return raw
-    if isinstance(raw, str):
-        try:
-            return json.loads(raw) if raw.strip() else {}
-        except Exception:
-            return {}
-    return {}
+# 参数解析复用单点实现（避免与 tool_runner 各写一份）
+_parse_args = _tr._parse_args
 
 
 def run_agent(*, session_id, user_input, chat_fn, tool_functions,
@@ -250,22 +245,8 @@ def run_agent(*, session_id, user_input, chat_fn, tool_functions,
                                 "error": res.error, "elapsed": round(time.time() - t0, 2)})
                 return res
 
-            # 归一化 tool_calls：不同厂商字段名不同；缺 id 时补一个稳定 id
-            norm_calls = []
-            for i, tc in enumerate(tool_calls):
-                if not isinstance(tc, dict):
-                    continue
-                fn = tc.get("function")
-                if not isinstance(fn, dict):
-                    # 兼容 Anthropic 风格的平铺结构
-                    fn = {"name": tc.get("name") or "", "arguments": tc.get("arguments")}
-                elif fn.get("name") is None and tc.get("name"):
-                    fn = {"name": tc.get("name"), "arguments": fn.get("arguments")}
-                if not fn.get("name"):
-                    # 连工具名都取不到 → 这条不可用（不要塞给模型一对无意义的空调用）
-                    continue
-                tc_id = tc.get("id") or f"call_{session_id}_{step}_{i}"
-                norm_calls.append({"id": tc_id, "type": "function", "function": fn})
+            # 归一化 tool_calls（单点实现，主链共用同一套语义）
+            norm_calls = _tr.normalize_tool_calls(tool_calls, session_id=session_id, step=step)
             if not norm_calls:
                 # 有 tool_calls 字段但结构全不可用 → 视作无工具，收敛
                 res.ok = True
@@ -282,90 +263,59 @@ def run_agent(*, session_id, user_input, chat_fn, tool_functions,
 
             for tc in tool_calls:
                 _check_abort()
-                fn = tc.get("function") or {}
-                name = fn.get("name") or ""
-                args = _parse_args(fn.get("arguments"))
+                name = (tc.get("function") or {}).get("name") or ""
                 tc_id = tc.get("id") or ""
 
                 # 工具调用预算闸：单步调用数与总调用数双上限，防模型刷调用把成本打爆
                 if total_tool_calls >= MAX_TOOL_CALLS:
                     raw_result = (f"已达本次任务工具调用上限 {MAX_TOOL_CALLS}，"
                                   f"请用已有信息给出结论，不要再调用工具。")
-                    ok = False
                     _append_log(EV_TOOL_RESULT, {"tool": name, "ok": False, "step": step + 1,
                                                  "error": "tool_budget"})
                     _emit("tool_result", {"tool": name, "ok": False, "step": step + 1,
                                           "id": tc_id, "summary": raw_result})
-                    messages.append({"role": "tool", "tool_call_id": tc_id,
-                                     "content": raw_result})
+                    messages.append(_tr.make_tool_message(tc_id, raw_result))
                     continue
                 if step_tool_count >= MAX_CALLS_PER_STEP:
                     raw_result = (f"单步工具调用数超限（{MAX_CALLS_PER_STEP}），"
                                   f"本次调用被忽略；请一次只调少量工具。")
-                    ok = False
                     _append_log(EV_TOOL_RESULT, {"tool": name, "ok": False, "step": step + 1,
                                                  "error": "per_step_budget"})
                     _emit("tool_result", {"tool": name, "ok": False, "step": step + 1,
                                           "id": tc_id, "summary": raw_result})
-                    messages.append({"role": "tool", "tool_call_id": tc_id,
-                                     "content": raw_result})
+                    messages.append(_tr.make_tool_message(tc_id, raw_result))
                     continue
                 total_tool_calls += 1
                 step_tool_count += 1
 
-                _append_log(EV_TOOL_CALL, {"tool": name, "args": args, "step": step + 1})
-                _emit("tool_call", {"tool": name, "args": args, "step": step + 1,
-                                    "id": tc_id})
+                _append_log(EV_TOOL_CALL, {"tool": name, "step": step + 1,
+                                           "args": _parse_args((tc.get("function") or {}).get("arguments"))})
+                _emit("tool_call", {"tool": name, "step": step + 1, "id": tc_id,
+                                    "args": _parse_args((tc.get("function") or {}).get("arguments"))})
 
-                t_tool = time.time()
-                func = tool_functions.get(name)
-                if func is None:
-                    raw_result = f"未知工具: {name}"
-                    ok = False
-                else:
-                    try:
-                        raw_result = func(args)
-                        ok = True
-                    except Exception as e:
-                        raw_result = f"工具执行异常: {e}"
-                        ok = False
-                elapsed = round(time.time() - t_tool, 2)
-
-                # ── retention + spill：超长结果有界保留 / 落盘可恢复 ──
-                text_result = raw_result if isinstance(raw_result, str) else json.dumps(
-                    raw_result, ensure_ascii=False, default=str)
-                sp = _spill.spill_text(
-                    text_result, kind="agent_tool", tag=name,
-                    max_inline_tokens=max_tool_result_tokens,
+                # ── 执行（单点实现：越界防护 + 异常隔离 + retention/spill）──
+                r = _tr.execute_tool_call(
+                    tc, tool_functions=tool_functions,
+                    offered_names=None,          # agent 侧工具集由调用方控制，不做额外越界拦截
+                    max_tokens=max_tool_result_tokens, logger=log,
                 )
-                inline = sp["inline"]
-                spilled = sp["spilled"]
 
                 _append_log(EV_TOOL_RESULT, {
-                    "tool": name, "ok": ok, "step": step + 1,
-                    "truncated": sp["truncated"], "spilled": spilled,
-                    "path": sp["path"], "omitted_bytes": sp["omitted_bytes"],
+                    "tool": name, "ok": r["ok"], "step": step + 1,
+                    "blocked": r["blocked"], "truncated": r["truncated"],
+                    "spilled": r["spilled"], "path": r["path"],
+                    "omitted_bytes": r["omitted_bytes"], "error": r["error"],
                 })
                 _emit("tool_result", {
-                    "tool": name, "ok": ok, "step": step + 1, "id": tc_id,
-                    "summary": text_result[:200].replace("\n", " "),
-                    "elapsed": elapsed, "truncated": sp["truncated"],
-                    "spilled": spilled, "path": sp["path"],
-                    "omitted_bytes": sp["omitted_bytes"],
-                    "full_text": text_result if not spilled else None,
+                    "tool": name, "ok": r["ok"], "step": step + 1, "id": tc_id,
+                    "summary": (r["full_text"] or "")[:200].replace("\n", " "),
+                    "elapsed": r["elapsed"], "truncated": r["truncated"],
+                    "spilled": r["spilled"], "path": r["path"],
+                    "omitted_bytes": r["omitted_bytes"],
+                    "full_text": r["full_text"] if not r["spilled"] else None,
                 })
 
-                # 是否需要让模型"先读再说"：结果被截断/落盘时必须给出读取路径
-                # 否则模型会以为这就是全部内容 → 产生错误结论（比不截断更糟）
-                read_hint = ""
-                if spilled and sp.get("path"):
-                    read_hint = (f"\n（完整内容较长，已保存到：{sp['path']}；"
-                                 f"需要时用读取工具取全文）")
-                elif sp["truncated"]:
-                    read_hint = ("\n（内容较长已截断；如需完整内容请缩小查询范围重新调用）")
-
-                messages.append({"role": "tool", "tool_call_id": tc_id,
-                                 "content": inline + read_hint})
+                messages.append(_tr.make_tool_message(tc_id, r["inline"]))
 
         # 超过步数上限仍未收敛
         res.ok = False

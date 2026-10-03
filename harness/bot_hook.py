@@ -38,10 +38,29 @@ _WEB_KW = ("网页", "网站", "链接", "http://", "https://", "打开网", "�
 _GROUP_KW = ("谁", "成员", "群里", "随机", "@", "在线", "画", "生成图", "画个",
              "画张", "来张图", "配图")
 
+#: 触发 skill 子集的关键词 —— 命中才注入 skill__load / skill__read 两个工具。
+#  刻意保守：闲聊、情绪、日常对话**不**给（skill 工具的定义也不便宜）。
+_SKILL_KW = ("技能", "skill", "帮我做", "帮我搞", "帮我弄", "帮我处理", "帮我转",
+             "帮我生成", "帮我整理", "帮我分析", "怎么做", "怎么办", "如何",
+             "教程", "步骤", "流程", "专业", "处理一下", "帮我写", "帮我查文档",
+             "pdf", "word", "excel", "ppt", "文档", "表格", "幻灯片", "格式转换")
+
 
 def _any_in(text, kws):
     t = (text or "").lower()
     return any(k.lower() in t for k in kws)
+
+
+def has_skills():
+    """当前是否发现了任何 skill（无 skill 则永远不注入 skill 工具）。"""
+    try:
+        return bool(_sk.discover())
+    except Exception:
+        return False
+
+
+def _should_offer_skills(user_msg):
+    return _any_in(user_msg, _SKILL_KW)
 
 
 def agent_tools_for(user_msg, *, is_group=True, extra_groups=(), enable_desktop=True):
@@ -52,17 +71,21 @@ def agent_tools_for(user_msg, *, is_group=True, extra_groups=(), enable_desktop=
       - 命中桌面关键词 → + desktop（仅私聊 / enable_desktop）
       - 命中网页关键词 → + web
       - 命中群能力关键词 → + group
+      - **命中技能关键词 → + skill**（这是 skill 体系在主链的入口）
       - extra_groups 由调用方显式追加
 
     返回：schema 列表（可能为 []）
     """
     groups = [_tr.GROUP_CORE]
-    if _any_in(user_msg, _WEB_KW) or _tr.has("web_operate") and _any_in(user_msg, _WEB_KW):
+    if _any_in(user_msg, _WEB_KW):
         groups.append(_tr.GROUP_WEB)
     if not is_group and enable_desktop and _any_in(user_msg, _DESKTOP_KW):
         groups.append(_tr.GROUP_DESKTOP)
     if is_group and _any_in(user_msg, _GROUP_KW):
         groups.append(_tr.GROUP_GROUP)
+    # skill 入口：只有"看起来像要干专业活"时才给，避免闲聊也背两个工具的定义
+    if has_skills() and _should_offer_skills(user_msg):
+        groups.append(_tr.GROUP_SKILL)
     for g in (extra_groups or ()):
         if g not in groups:
             groups.append(g)

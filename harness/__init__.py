@@ -15,6 +15,7 @@
   - tool_registry: 工具按需加载 + 固定序列化顺序 + MCP 命名空间（省 token 的关键）
   - skill_loader : Skill 三级渐进披露（L1 元数据常驻 / L2 触发时载入 / L3 按需读文件）
   - mcp_hub      : MCP 最小实现（stdio + server__ 命名空间 + 惰性枚举 + 缓存 tools/list）
+  - tool_runner  : 工具执行的**单点实现**（主回复链与 agent 共用，避免语义分裂）
   - agent_loop   : Agent 运行时内核（主程序 agent 能力：两入口共用）
   - agent_service: Agent 服务层（注入依赖 + 会话管理 + 群内双闸）
   - bot_hook     : bot 主回复链薄接入点（时间分级 + 动态 tools + skill 元数据）
@@ -28,6 +29,7 @@ from . import time_ctx
 from . import tool_registry
 from . import skill_loader
 from . import mcp_hub
+from . import tool_runner
 from . import agent_loop
 from . import agent_service
 from . import bot_hook
@@ -43,6 +45,7 @@ __all__ = [
     "tool_registry",
     "skill_loader",
     "mcp_hub",
+    "tool_runner",
     "agent_loop",
     "agent_service",
     "bot_hook",

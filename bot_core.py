@@ -5821,6 +5821,18 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
             mins = max(1, int(elapsed / 60))
             dynamic_parts.append(f"【重要】你{mins}分钟前刚说过退场语，这次回来不要再重复退场语。")
 
+    # ── skill L1 元数据（harness.skill_loader）──
+    #  只在"本轮真的会注入 skill 工具"时给出清单，避免闲聊也背这段文字。
+    #  放 dynamic_parts（尾部）→ 不影响前面的前缀缓存。
+    try:
+        from harness import bot_hook as _bh2
+        if _bh2.has_skills() and _bh2._should_offer_skills(user_msg):
+            _sk_block = _bh2.skill_l1_block()
+            if _sk_block:
+                dynamic_parts.append(_sk_block)
+    except Exception:
+        pass
+
     # 选择历史 + 构建消息（用缓存优化版）
     if is_group and group_id:
         history = group_chat_history.get(group_id, [])[-10:]
@@ -5907,51 +5919,51 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
 
             tool_calls = msg.get("tool_calls")
             if tool_calls:
-                tool_calls = [dict(tc) for tc in tool_calls]
-                log(f"工具调用: {[tc['function']['name'] for tc in tool_calls]}")
-                # T5 观测：工具轮 token 也计入（群聊/私聊/网页场景）
-                try:
-                    from token_stats import record as _ts_record
-                    _ts_record("web" if _web_hint else ("group" if is_group else "private"), usage, {"round": "tool"})
-                except Exception:
+                # 归一化 + 单点执行（harness.tool_runner）：与 agent 侧共用同一套语义
+                #  → 异常隔离 / spill 落盘恢复 / truncated 与 error 分列，主链同样具备。
+                from harness import tool_runner as _trunner
+                tool_calls = _trunner.normalize_tool_calls(
+                    tool_calls, session_id=(f"g{group_id}" if is_group else f"p{target_qq}"),
+                    step=web_rounds)
+                if not tool_calls:
+                    # 结构不可用 → 视为无工具，走下面的最终回复分支
                     pass
-                messages.append({"role": "assistant", "content": msg.get("content") or "", "tool_calls": tool_calls})
-                web_rounds += 1
-                for tc in tool_calls:
-                    func_name = tc["function"]["name"]
+                else:
+                    log(f"工具调用: {[tc['function']['name'] for tc in tool_calls]}")
+                    # T5 观测：工具轮 token 也计入（群聊/私聊/网页场景）
                     try:
-                        func_args = json.loads(tc["function"]["arguments"])
+                        from token_stats import record as _ts_record
+                        _ts_record("web" if _web_hint else ("group" if is_group else "private"), usage, {"round": "tool"})
                     except Exception:
-                        func_args = {}
-                    if is_group and group_id and "group_id" not in func_args:
-                        func_args["group_id"] = group_id
-                    elif (not is_group) and target_qq and "target_qq" not in func_args:
-                        func_args["target_qq"] = target_qq
-                    _act = (func_args or {}).get("action") or ""
-                    _url = (func_args or {}).get("url") or ""
-                    func = TOOL_FUNCTIONS.get(func_name)
-                    # 越界防护：模型可能"幻觉"调用本轮未提供的工具
-                    #   （按需加载后工具集变小，这类情况会变多；如实回灌而非静默执行）
-                    if func_name not in _offered_tool_names:
-                        if func is None:
-                            result = f"未知工具: {func_name}"
-                        else:
-                            result = (f"本轮未提供工具 {func_name}（本轮只提供："
-                                      f"{', '.join(sorted(_offered_tool_names)) or '无'}）。"
-                                      f"请用已有工具，或用自然语言直接回答。")
-                    else:
-                        result = func(func_args) if func else f"未知工具: {func_name}"
-                    _res_parts = str(result)[:140].replace("\n", " ") if result else ""
-                    log(f"  → {func_name}: action={_act}" + (f" url={_url[:60]}" if _url else "") + f" (第{web_rounds}轮) → {_res_parts}")
-                    messages.append({"role": "tool", "tool_call_id": tc["id"], "content": result})
-                # 网页任务：继续多轮推进，直到模型主动收尾或达到轮次上限
-                if _web_hint:
-                    if web_rounds >= MAX_WEB_ROUNDS:
-                        log(f"[网页任务] 达到轮次上限 {MAX_WEB_ROUNDS}，强制流式收尾")
-                        return _stream_chat_lines(messages, runtime_cfg=None, max_tokens=effective_max_tokens, with_tools=tools_for_call, scene="web")
-                    continue
-                # 非网页工具：维持原行为，工具一轮后流式生成最终回复
-                return _stream_chat_lines(messages, runtime_cfg=None, max_tokens=effective_max_tokens, with_tools=tools_for_call, scene=("group" if is_group else "private"))
+                        pass
+                    messages.append({"role": "assistant", "content": msg.get("content") or "", "tool_calls": tool_calls})
+                    web_rounds += 1
+                    for tc in tool_calls:
+                        _r = _trunner.execute_tool_call(
+                            tc,
+                            tool_functions=TOOL_FUNCTIONS,
+                            offered_names=_offered_tool_names,
+                            group_id=group_id, target_qq=target_qq, is_group=is_group,
+                            logger=log,
+                        )
+                        _act = ""
+                        try:
+                            _act = (json.loads(tc["function"].get("arguments") or "{}") or {}).get("action") or ""
+                        except Exception:
+                            pass
+                        _res_parts = (_r["full_text"] or "")[:140].replace("\n", " ")
+                        _mark = "" if _r["ok"] else (" [被拒:%s]" % _r["blocked"] if _r["blocked"] else " [失败]")
+                        log(f"  → {_r['tool']}: action={_act} (第{web_rounds}轮)"
+                            f"{_mark} → {_res_parts}")
+                        messages.append(_trunner.make_tool_message(tc["id"], _r["inline"]))
+                    # 网页任务：继续多轮推进，直到模型主动收尾或达到轮次上限
+                    if _web_hint:
+                        if web_rounds >= MAX_WEB_ROUNDS:
+                            log(f"[网页任务] 达到轮次上限 {MAX_WEB_ROUNDS}，强制流式收尾")
+                            return _stream_chat_lines(messages, runtime_cfg=None, max_tokens=effective_max_tokens, with_tools=tools_for_call, scene="web")
+                        continue
+                    # 非网页工具：维持原行为，工具一轮后流式生成最终回复
+                    return _stream_chat_lines(messages, runtime_cfg=None, max_tokens=effective_max_tokens, with_tools=tools_for_call, scene=("group" if is_group else "private"))
 
             reply = str(msg.get("content") or "").strip()
             total = usage.get("total_tokens", 0) if isinstance(usage, dict) else 0
@@ -6690,11 +6702,12 @@ def main():
 
     log("OneBot 已连接")
 
-    # ── harness：把内置工具注册进 tool_registry（供 Agent 按需加载）──
+    # ── harness：把内置工具注册进 tool_registry（供 Agent/主链按需加载）──
     #  **只注册元数据**（schema + 分组），实现仍在 TOOL_FUNCTIONS。
-    #  这样 agent 侧可以"按场景只注入用得上的工具" → 省大量 token。
+    #  这样可以"按场景只注入用得上的工具" → 省大量 token。
     try:
         from harness import tool_registry as _treg
+        from harness import bot_hook as _bh
         _treg.register_many(TOOLS, groups=(_treg.GROUP_CORE,))
         # 覆盖分组：web_operate 归 web；桌面操控类归 desktop
         for _t in TOOLS:
@@ -6704,22 +6717,45 @@ def main():
             elif _n != "search_web":
                 _treg.register(_n, _t, groups=(_treg.GROUP_DESKTOP,), source="builtin")
         _treg.register_many(GROUP_TOOLS, groups=(_treg.GROUP_GROUP,))
-        # skill 内部工具（skill__load / skill__read）
-        from harness import bot_hook as _bh
+        # ── skill 体系接入主链（此前 skill 在主链无入口 = 死的）──
+        #  注册 schema + 把实现塞进 TOOL_FUNCTIONS，模型才能真正调 skill__load/read。
         _treg.register_many(_bh.SKILL_TOOLS, groups=(_treg.GROUP_SKILL,), source="skill")
+        try:
+            _sk_fns = _bh.skill_tool_functions()
+            TOOL_FUNCTIONS.update(_sk_fns)
+            from harness import skill_loader as _skl
+            _sk_cnt = len(_skl.discover())
+            log(f"[harness] skill 已接入主链: {list(_sk_fns.keys())}，发现 {_sk_cnt} 个技能")
+            if _sk_cnt == 0:
+                log("[harness] 提示：未发现任何 skill，skill__load/read 不会被注入（零成本）")
+        except Exception as _e:
+            log(f"[harness] skill 接入失败: {_e}")
         log(f"[harness] 工具注册表就绪: {_treg.stats()['by_group']}")
     except Exception as e:
-        log(f"[harness] 工具注册失败（Agent 将退回全量工具）: {e}")
+        log(f"[harness] 工具注册失败（将退回全量工具）: {e}")
 
     # ── harness：MCP（惰性；未配置/未装包时零成本）──
+    #  配置来源见 harness.mcp_hub（<data_dir>/mcp.json 或 ~/.workbuddy/mcp.json）。
+    #  默认**不预取**工具（每个 server 要起进程+握手）→ 首次被需要时才拉，并缓存。
     try:
         from harness import mcp_hub as _mcp
         _servers = _mcp.server_names()
         if _servers:
             if _mcp.available():
                 log(f"[harness] MCP server 已配置: {_servers}（惰性枚举，首次用到才拉取）")
+                # 若开了 mcp_prefetch，启动时预热（默认关，避免拖慢启动）
+                if _config.get("mcp_prefetch", False):
+                    for _s in _servers:
+                        _r = _mcp.prefetch(_s)
+                        _ok = _r.get("ok")
+                        log(f"[harness] MCP 预热 {_s}: {'OK ' + str(_r.get('count')) + ' 个工具' if _ok else _r.get('error')}")
+                        if _ok:
+                            _mcp.register_into_tool_registry(_s)
+                            TOOL_FUNCTIONS.update(_mcp.tool_functions())
             else:
                 log(f"[harness] 检测到 MCP 配置 {_servers}，但 {_mcp.unavailable_reason()}")
+        else:
+            log("[harness] 未配置 MCP server（如需接入见 data/mcp.json）")
     except Exception as e:
         log(f"[harness] MCP 初始化跳过: {e}")
 
