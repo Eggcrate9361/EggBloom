@@ -5775,6 +5775,17 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
     if is_group and group_id:
         history = group_chat_history.get(group_id, [])[-10:]
         cache_key = f"g_{group_id}"
+        # 任务 5.3 事件溯源试点：白名单群改为**从仅追加日志派生** history。
+        # 派生是纯函数，与内存版记录同一字符串；日志为空（首次/刚启用）时回退内存，
+        # 控制爆炸半径。启用条件见 harness.session_log.enabled_for（默认全关）。
+        try:
+            from harness import session_log as _slog
+            if _slog.enabled_for(group_id):
+                _derived = _slog.replay(group_id, limit=10)
+                if _derived:
+                    history = _derived
+        except Exception:
+            pass
     else:
         history = chat_history.get(target_qq, [])[-10:]
         cache_key = f"p_{target_qq}"
@@ -6445,10 +6456,23 @@ def process_buffered_message(group_id):
             gh = group_chat_history.setdefault(group_id, [])
             # 群聊历史：user 消息带上发送者前缀，让 AI 区分不同用户
             # merged_text 已包含 [昵称(QQ号)] 格式，直接存储
-            gh.append({"role": "user", "content": merged_text[:300]})
-            gh.append({"role": "assistant", "content": reply[:300]})
+            _hist_user = merged_text[:300]
+            _hist_reply = reply[:300]
+            gh.append({"role": "user", "content": _hist_user})
+            gh.append({"role": "assistant", "content": _hist_reply})
             # C2 存储对齐：群聊截断 30→16 轮（组装只取最近10轮）
             group_chat_history[group_id] = gh[-16:]
+
+            # 任务 5.3 事件溯源试点：把**模型可见的形态**追加到仅追加会话日志。
+            # 铁律「模型可见即已记录」——这里记录的字符串与进入 history、最终进 prompt 的
+            # 完全一致（同为 [:300]），因此可由日志**纯函数回放**出同样的 messages。
+            try:
+                from harness import session_log as _slog
+                if _slog.enabled_for(group_id):
+                    _slog.append_user_msg(group_id, _hist_user)
+                    _slog.append_bot_reply(group_id, _hist_reply)
+            except Exception:
+                pass
 
             # 统一记忆分发（1.5 任务 2.3）：回复侧同步（sandglass 画像/偏移/阶段 + super_memory 问答对）
             try:
