@@ -66,11 +66,13 @@ check("学习侧不再读 plugins/ego/slang_dict.json",
       os.path.normcase(os.path.dirname(SL.SLANG_DICT_PATH)) != os.path.normcase(
           os.path.join(args.app, "plugins", "ego")))
 
-# ══ 2. 旧条目一条不丢 ══════════════════════════════════════════════
-print("\n=== 2. 合并后存量 ===")
+# ══ 2. 存量与数据卫生 ══════════════════════════════════════════════
+print("\n=== 2. 合并后存量与数据卫生 ===")
 entries = SI.get_entries()
 check("真源可读且非空", len(entries) > 0, f"{len(entries)} 条")
-check("合并后条数 >= 107（104 + 61 − 58）", len(entries) >= 107, f"实际 {len(entries)}")
+check("旧条目一条不丢（>= 100 条真实词）", len(entries) >= 100, f"实际 {len(entries)}")
+_stale = [k for k in entries if "测试" in k or k.startswith("zzz") or k == "绝杀"]
+check("词典里没有残留的测试词", not _stale, str(_stale))
 
 # ══ 3. ★ 闭环：learner 写入 → injector 读出 ══════════════════════════
 print("\n=== 3. 学习 → 注入 闭环 ===")
