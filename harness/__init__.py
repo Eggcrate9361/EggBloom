@@ -17,6 +17,10 @@
   - mcp_hub      : MCP 最小实现（stdio + server__ 命名空间 + 惰性枚举 + 缓存 tools/list）
   - tool_runner  : 工具执行的**单点实现**（主回复链与 agent 共用，避免语义分裂）
   - retry_policy : LLM 调用的**重试策略**（错误分类 + 指数退避 + 抖动 + Retry-After）
+  - freshness    : **时效性护栏**（知识截止差距 + 时效敏感判定 + 结果过期标注）
+  - workspace    : 工作区**安全边界**（路径解析单点实现；越界/候选/人话错误）
+  - tool_fs      : 工作型文件工具（ws_read/ws_edit/ws_glob/ws_grep/ws_write/ws_edit_many）
+  - tool_proc    : 持久 Python 会话与后台任务（py_run/job_*）+ 任务清单（todo_write）
   - agent_loop   : Agent 运行时内核（主程序 agent 能力：两入口共用）
   - agent_service: Agent 服务层（注入依赖 + 会话管理 + 群内双闸）
   - bot_hook     : bot 主回复链薄接入点（时间分级 + 动态 tools + skill 元数据）
@@ -32,6 +36,10 @@ from . import skill_loader
 from . import mcp_hub
 from . import tool_runner
 from . import retry_policy
+from . import freshness
+from . import workspace
+from . import tool_fs
+from . import tool_proc
 from . import agent_loop
 from . import agent_service
 from . import bot_hook
@@ -49,6 +57,10 @@ __all__ = [
     "mcp_hub",
     "tool_runner",
     "retry_policy",
+    "freshness",
+    "workspace",
+    "tool_fs",
+    "tool_proc",
     "agent_loop",
     "agent_service",
     "bot_hook",

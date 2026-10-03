@@ -39,6 +39,12 @@ from . import spill as _spill
 
 DEFAULT_MAX_TOOL_RESULT_TOKENS = 1500
 
+#: 需要打"时效戳"的工具：这些工具返回的是**会变的外部事实**。
+#  命中即记录时刻，过期后结果前会加显式警告（见 harness.freshness）。
+_FRESHNESS_TOOLS = frozenset({
+    "search_web", "web_fetch", "web_operate", "get_system_info",
+})
+
 
 def _parse_args(raw):
     if isinstance(raw, dict):
@@ -74,6 +80,7 @@ def normalize_tool_calls(tool_calls, *, session_id="", step=0):
 
 def execute_tool_call(tc, *, tool_functions, offered_names=None,
                       group_id=None, target_qq=None, is_group=False,
+                      session_id="default",
                       max_tokens=DEFAULT_MAX_TOOL_RESULT_TOKENS,
                       logger=None):
     """执行**一个**工具调用，返回统一结构（见模块 docstring）。
@@ -83,6 +90,7 @@ def execute_tool_call(tc, *, tool_functions, offered_names=None,
       tool_functions  : {name: callable(args)->result}
       offered_names   : 本轮提供给模型的工具名集合（越界防护）；None=不校验
       group_id/target_qq/is_group : 参数自动补齐（群聊补 group_id，私聊补 target_qq）
+      session_id      : 会话标识（用于时效戳的记录与过期判定）
       max_tokens      : 单条结果的内联预算（超预算落盘 + 给恢复路径）
     """
     log = logger or (lambda m: None)
@@ -133,6 +141,19 @@ def execute_tool_call(tc, *, tool_functions, offered_names=None,
     elapsed = round(time.time() - t0, 2)
 
     text = raw if isinstance(raw, str) else json.dumps(raw, ensure_ascii=False, default=str)
+
+    # ── 时效性：外部信息类工具**成功**后打时间戳（供过期判定/标注）──
+    #  只在成功时打戳 —— 失败的结果本来就不该被当事实引用。
+    #  同时把"过期警告"拼在结果前面：模型看到后不会把旧结果当成当前情况。
+    if ok and name in _FRESHNESS_TOOLS:
+        try:
+            from . import freshness as _fr
+            _fr.mark(session_id, name)
+            _stale = _fr.stale_note(session_id, name)
+            if _stale:
+                text = _stale.strip() + "\n\n" + text
+        except Exception:
+            pass
 
     # ── retention + spill ──
     #  **硬纪律**：truncated 是"预算事实"，绝不等于"没找到/没权限"（并列不同字段）。

@@ -45,6 +45,24 @@ _SKILL_KW = ("技能", "skill", "帮我做", "帮我搞", "帮我弄", "帮我�
              "教程", "步骤", "流程", "专业", "处理一下", "帮我写", "帮我查文档",
              "pdf", "word", "excel", "ppt", "文档", "表格", "幻灯片", "格式转换")
 
+# ── 工作型工具（harness 自带）的注入闸门 ──────────────────────────
+#  ws_read / ws_glob / ws_grep 是**只读零副作用**，命中即给；
+#  ws_write / ws_edit / ws_edit_many 有副作用，附加"私聊 or 明确改文件意图"
+#  py_run / job_* 成本最高，只在明确要"跑代码"时给。
+_WORK_READ_KW = ("文件", "代码", "源码", "脚本", "配置", "日志", "目录", "文件夹",
+                 "项目", "仓库", "报错", "错误", "异常", "堆栈", "traceback",
+                 "查找", "搜索", "搜一下", "找一下", "定位", "在哪", "哪一行",
+                 "打开看", "看一下", "读一下", "内容是", "写了什么",
+                 ".py", ".js", ".json", ".md", ".txt", ".yml", ".toml", ".cfg",
+                 ".log", ".html", ".css", "harness", "bot_core", "plugin")
+_WORK_WRITE_KW = ("修改", "改一下", "改成", "改成", "替换", "替换成", "删掉", "删除",
+                  "加上", "增加", "添加", "新建文件", "创建文件", "写个文件",
+                  "改文件", "编辑", "重写", "重构", "修复", "patch", "fix",
+                  "写入", "保存到", "另存为")
+_PROC_KW = ("跑一下", "运行一下", "执行一下", "跑个", "跑段", "计算", "算一下",
+            "统计一下", "批量", "处理数据", "数据分析", "跑脚本", "执行代码",
+            "python", "写个脚本", "写段代码", "测试一下", "跑测试", "验证")
+
 
 def _any_in(text, kws):
     t = (text or "").lower()
@@ -63,41 +81,122 @@ def _should_offer_skills(user_msg):
     return _any_in(user_msg, _SKILL_KW)
 
 
-def agent_tools_for(user_msg, *, is_group=True, extra_groups=(), enable_desktop=True):
+def agent_tools_for(user_msg, *, is_group=True, extra_groups=(), enable_desktop=True,
+                    enable_write=True):
     """按场景挑选工具子集，返回**稳定顺序**的 OpenAI schema 列表。
 
     规则（保守优先，宁可少给不可多给）
-      - 永远含 core（搜索）
-      - 命中桌面关键词 → + desktop（仅私聊 / enable_desktop）
+      - 永远含 core（搜索）+ **work 只读**（读/找/搜；零副作用，且省下的往返
+        远比它的定义文本贵 —— 这是"极低成本"与"高效率"同时成立的少数选择）
       - 命中网页关键词 → + web
+      - 命中桌面关键词 → + desktop（仅私聊 / enable_desktop）
       - 命中群能力关键词 → + group
       - **命中技能关键词 → + skill**（这是 skill 体系在主链的入口）
+      - **命中写意图 → + write**（有副作用；群聊默认不给，见 write_gate）
+      - **命中执行意图 → + proc**（py_run / job_*；最贵，条件最严）
+      - **多步任务 → + todo**
       - extra_groups 由调用方显式追加
 
     返回：schema 列表（可能为 []）
     """
-    groups = [_tr.GROUP_CORE]
+    groups = [_tr.GROUP_CORE, _tr.GROUP_WORK]
     if _any_in(user_msg, _WEB_KW):
         groups.append(_tr.GROUP_WEB)
     if not is_group and enable_desktop and _any_in(user_msg, _DESKTOP_KW):
         groups.append(_tr.GROUP_DESKTOP)
     if is_group and _any_in(user_msg, _GROUP_KW):
         groups.append(_tr.GROUP_GROUP)
-    # skill 入口：只有"看起来像要干专业活"时才给，避免闲聊也背两个工具的定义
+    # ── 写型：有副作用。群聊里默认**不给**（群里改本机文件风险太高）；
+    #    私聊且命中写意图才给。这是一道独立闸门，不靠关键词巧合。
+    if enable_write and (not is_group) and _any_in(user_msg, _WORK_WRITE_KW):
+        groups.append(_tr.GROUP_WRITE)
+    # ── 执行型：最贵。私聊 + 明确"跑代码"意图才给。
+    if (not is_group) and _any_in(user_msg, _PROC_KW):
+        groups.append(_tr.GROUP_PROC)
+    # ── 规划型：多步任务（"帮我…然后…"、明确的多件事）才给。
     if has_skills() and _should_offer_skills(user_msg):
         groups.append(_tr.GROUP_SKILL)
+    if _should_plan(user_msg):
+        groups.append(_tr.GROUP_TODO)
     for g in (extra_groups or ()):
         if g not in groups:
             groups.append(g)
     return _tr.resolve_groups(groups)
 
 
-def tool_names_for(user_msg, *, is_group=True, extra_groups=(), enable_desktop=True):
+#: 多步信号：出现"然后/接着/再/最后/依次/批量/第一步"这类顺序词，
+#  或一句里出现多个动作诉求 → 值得给 todo（规划的成本只有在多步时才划算）。
+_MULTISTEP_KW = ("然后", "接着", "再然后", "最后", "依次", "第一步", "第二步",
+                 "分步", "批量", "逐个", "先…再", "一件事一件事",
+                 "整个流程", "从头到尾", "完成后再")
+
+
+def _should_plan(user_msg):
+    t = user_msg or ""
+    if _any_in(t, _MULTISTEP_KW):
+        return True
+    # 并列动词计数：出现 >=2 个动作词，视为多步
+    verbs = ("改", "写", "加", "删", "查", "搜", "跑", "建", "读", "看", "统计", "整理")
+    return sum(1 for v in verbs if v in t) >= 3
+
+
+def tool_names_for(user_msg, *, is_group=True, extra_groups=(), enable_desktop=True,
+                   enable_write=True):
     """同上，但只返回**工具名**（供 chat_fn 的 loader 用，避免重复建 schema）。"""
     return [s["function"]["name"]
             for s in agent_tools_for(user_msg, is_group=is_group,
                                      extra_groups=extra_groups,
-                                     enable_desktop=enable_desktop)]
+                                     enable_desktop=enable_desktop,
+                                     enable_write=enable_write)]
+
+
+# ── 时效性护栏（harness.freshness 的薄封装）─────────────────────────
+def freshness_parts(user_msg, *, has_search=True):
+    """返回 (anchors, directive)。
+
+    anchors   : 可放**靠前**稳定区的时效锚（知识截止 + 日期基准）——变化慢，保缓存
+    directive : 只在本轮**时效敏感**时才非空；放在当前用户消息**之前**（尾部）
+
+    为什么分两段：锚点（"我的知识截止于 X"）是**长期事实**，一天内不变 → 放前面
+    也能命中前缀缓存；而"这句话要用工具核实"是**本轮指令** → 只能放尾部。
+    这样"时效性在场"与"前缀缓存不失效"同时成立。
+    """
+    try:
+        from . import freshness as _fr
+    except Exception:
+        return "", ""
+    anchors = ""
+    try:
+        gap = _fr.knowledge_cutoff_gap()
+        anchor = _fr.date_anchor()
+        parts = [x for x in (anchor, gap) if x]
+        anchors = "\n".join(parts)
+    except Exception:
+        anchors = ""
+    directive = ""
+    try:
+        directive = _fr.freshness_directive(user_msg, has_search=has_search)
+    except Exception:
+        directive = ""
+    return anchors, directive
+
+
+def note_tool_freshness(session_key, tool_name):
+    """记录一次外部信息类工具的**成功时刻**（供过期判定）。"""
+    try:
+        from . import freshness as _fr
+        _fr.mark(session_key, tool_name)
+    except Exception:
+        pass
+
+
+def stale_note(session_key, tool_name):
+    """该工具结果是否已过期 → 返回可用作事实引用的警告（空串=未过期）。"""
+    try:
+        from . import freshness as _fr
+        return _fr.stale_note(session_key, tool_name)
+    except Exception:
+        return ""
 
 
 # ── 时间分级注入 ────────────────────────────────────────────────────

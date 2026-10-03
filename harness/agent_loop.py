@@ -297,6 +297,7 @@ def run_agent(*, session_id, user_input, chat_fn, tool_functions,
                 r = _tr.execute_tool_call(
                     tc, tool_functions=tool_functions,
                     offered_names=None,          # agent 侧工具集由调用方控制，不做额外越界拦截
+                    session_id=session_id,       # 时效戳按会话隔离
                     max_tokens=max_tool_result_tokens, logger=log,
                 )
 

@@ -46,6 +46,13 @@ AGENT_MODE_SNAPSHOT = (
     "3. 一次只推进一件事：先想清楚这一步要调什么工具，拿到结果再决定下一步。\n"
     "4. 任务完成或无法继续时，用**简洁自然**的话给出结论，不要罗列调用流水账。\n"
     "5. 不要输出工具调用的原始 JSON 给用户看。\n"
+    "6. **本地文件工作**：用 ws_glob 按模式找文件、ws_grep 按内容定位、"
+    "ws_read 读（返回带行号）、ws_edit 精确改（要求原文唯一，防改错位置）。"
+    "路径可直接写相对路径（相对项目根）。\n"
+    "7. **执行代码**：用 py_run 跑 Python —— 会话是**持久**的，"
+    "变量/import/当前目录跨调用保留，所以可以分步推进而不必一次写完。\n"
+    "8. 报错信息里通常已给出**候选位置/相似文件/下一步建议**，"
+    "照它说的改一次再试，不要盲目重试同样的调用。\n"
 )
 
 
@@ -129,6 +136,15 @@ def build_system_prompt(is_group=True, extra=""):
             p += "\n\n" + _sk1
     except Exception:
         pass
+    # 时效锚（知识截止 + 日期基准）：**长期事实**，放这里能长期命中前缀缓存。
+    # 这是"不让 AI 拿过时信息当事实回答"的第一道护栏 —— 让模型知道自己的知识边界。
+    try:
+        from . import freshness as _fr
+        _gap = _fr.knowledge_cutoff_gap()
+        if _gap:
+            p += "\n\n" + _gap
+    except Exception:
+        pass
     if extra:
         p += "\n\n" + extra
     return p
@@ -157,6 +173,20 @@ def run_chat(*, user_input, session_id=None, is_group=False, context_hint="",
 
     system_prompt = build_system_prompt(is_group=is_group, extra=context_hint)
 
+    # ── 时效指令（本轮事实 → 只在时效敏感时追加；闲聊零成本）──
+    #  放 user_input 的**同一轮**里，而不是 system prompt ——
+    #  因为"这句话需要核实"是**本轮**信息，塞进 system 会破坏前缀缓存。
+    _user_input = str(user_input or "")
+    try:
+        from . import freshness as _fr
+        from . import tool_registry as _trg
+        _has_search = _trg.has("search_web")
+        _dir = _fr.freshness_directive(_user_input, has_search=_has_search)
+        if _dir:
+            _user_input = _dir + "\n\n" + _user_input
+    except Exception:
+        pass
+
     # 工具按需加载：优先走注册表（顺序稳定 + 只在需要时给），失败则全量退回。
     _tool_names = list(_CFG["tool_functions"].keys())
     _provider = _CFG.get("tool_schema_provider")
@@ -170,7 +200,7 @@ def run_chat(*, user_input, session_id=None, is_group=False, context_hint="",
 
     kwargs = dict(
         session_id=session_id,
-        user_input=user_input,
+        user_input=_user_input,
         chat_fn=_CFG["chat_fn"],
         tool_functions=_CFG["tool_functions"],
         system_prompt=system_prompt,

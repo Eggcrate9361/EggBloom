@@ -18,11 +18,15 @@
     - `groups_of(tool)` / `names_in(group)` 供"按场景挑选工具子集"。
     - `serialize_signature(names)` 给出该子集的**稳定指纹**，可用于缓存键/诊断。
 
-内置分组（对应 bot_core 的 TOOLS / GROUP_TOOLS）
+内置分组（对应 bot_core 的 TOOLS / GROUP_TOOLS，以及 harness 自带的工作型工具）
     core     : 永远可用（search_web）——"能联网"是底线能力
+    work     : **只读工作型**（ws_read/ws_glob/ws_grep）——零副作用，默认常驻
+    todo     : 规划型（todo_write）——多步任务才注入
     desktop  : 本机操控（open_app/take_screenshot/get_system_info/control_*/manage_process/search_files/send_user_file）
     web      : 网页操作（web_operate）
     group    : 群内安全（get_group_members/generate_image）
+    write    : **有副作用**（ws_write/ws_edit/ws_edit_many）——私聊 + 明确意图才注入
+    proc     : **执行型**（py_run/job_*）——成本最高，注入条件最严
     mcp      : 外部 MCP（名字前缀 server__）
     skill    : Skill 暴露的工具（名字前缀 skill__）
 """
@@ -38,17 +42,24 @@ _ORDER = []
 
 # ── 分组定义（顺序即"重要性"，core 最前 → 命中缓存最稳）──
 GROUP_CORE = "core"
+GROUP_WORK = "work"          # 只读工作型（读/找/搜）—— 零副作用，可常驻
 GROUP_DESKTOP = "desktop"
 GROUP_WEB = "web"
 GROUP_GROUP = "group"
+GROUP_WRITE = "write"        # 写型（写文件/改文件）—— 有副作用，需私聊+意图
+GROUP_PROC = "proc"          # 执行型（py_run / job_*）—— 成本最高，最严格注入
+GROUP_TODO = "todo"          # 规划型（todo_write）
 GROUP_MCP = "mcp"
 GROUP_SKILL = "skill"
 
-#: 分组展示顺序（serialize 时按此排序，保证跨请求一致）
-GROUP_SEQ = (GROUP_CORE, GROUP_GROUP, GROUP_WEB, GROUP_DESKTOP, GROUP_SKILL, GROUP_MCP)
+#: 分组展示顺序（serialize 时按此排序，保证跨请求一致）。
+#:  顺序 = 前缀缓存里的稳定位置；改动此元组等于**全局缓存失效一次**，慎重。
+GROUP_SEQ = (GROUP_CORE, GROUP_WORK, GROUP_TODO, GROUP_GROUP, GROUP_WEB,
+             GROUP_DESKTOP, GROUP_WRITE, GROUP_PROC, GROUP_SKILL, GROUP_MCP)
 
-#: 默认"常驻"分组：只有这些分组会进**静态**工具列表（其余按需加载）
-DEFAULT_RESIDENT_GROUPS = (GROUP_CORE,)
+#: 默认"常驻"分组：只有这些分组会进**静态**工具列表（其余按需加载）。
+#:  work 只读、零副作用、定义短 → 常驻；省下的往返远比它的定义贵。
+DEFAULT_RESIDENT_GROUPS = (GROUP_CORE, GROUP_WORK)
 
 MCP_PREFIX = "mcp__"
 SKILL_PREFIX = "skill__"

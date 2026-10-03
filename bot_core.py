@@ -5833,6 +5833,25 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
     except Exception:
         pass
 
+    # ── 时效性护栏（harness.freshness）──
+    #  比"提醒模型注意时效"更强：不给它"凭记忆自信回答"的机会。
+    #    · 锚点（知识截止 + 日期基准）：**长期事实**，一天内不变 → 可长期复用；
+    #    · 指令（"这句要核实"）：**本轮事实** → 只在本轮时效敏感时追加，闲聊零成本。
+    #  这是"不让 AI 拿过时信息当事实回答"的落点：
+    #  模型一旦知道"我的知识截止于 X，已过去 800+ 天"，
+    #  对价格/版本/排名/新闻这类问题就会转向工具，而不是硬答。
+    try:
+        from harness import bot_hook as _bh3
+        _fr_anchors, _fr_directive = _bh3.freshness_parts(
+            user_msg, has_search=True)
+        if _fr_anchors and _bh3._any_in(user_msg, _bh3._WEB_KW + _bh3._DESKTOP_KW +
+                                        ("今天", "现在", "最新", "目前", "今年", "最近")):
+            dynamic_parts.append(_fr_anchors)
+        if _fr_directive:
+            dynamic_parts.append(_fr_directive)
+    except Exception:
+        pass
+
     # 选择历史 + 构建消息（用缓存优化版）
     if is_group and group_id:
         history = group_chat_history.get(group_id, [])[-10:]
@@ -5944,6 +5963,8 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
                             tool_functions=TOOL_FUNCTIONS,
                             offered_names=_offered_tool_names,
                             group_id=group_id, target_qq=target_qq, is_group=is_group,
+                            session_id=(f"g_{group_id}" if is_group and group_id
+                                        else f"p_{target_qq}"),
                             logger=log,
                         )
                         _act = ""
@@ -6721,6 +6742,13 @@ def main():
     # ── harness：把内置工具注册进 tool_registry（供 Agent/主链按需加载）──
     #  **只注册元数据**（schema + 分组），实现仍在 TOOL_FUNCTIONS。
     #  这样可以"按场景只注入用得上的工具" → 省大量 token。
+    #  工作区根：默认=项目根；可用 config.workspace_root 指向别处（如 D:\workspace）。
+    try:
+        from harness import workspace as _wk
+        _WORKSPACE_ROOT = _wk.set_root(_config.get("workspace_root") or
+                                       os.path.dirname(os.path.abspath(__file__)))
+    except Exception:
+        _WORKSPACE_ROOT = os.path.dirname(os.path.abspath(__file__))
     try:
         from harness import tool_registry as _treg
         from harness import bot_hook as _bh
@@ -6733,6 +6761,19 @@ def main():
             elif _n != "search_web":
                 _treg.register(_n, _t, groups=(_treg.GROUP_DESKTOP,), source="builtin")
         _treg.register_many(GROUP_TOOLS, groups=(_treg.GROUP_GROUP,))
+        # ── 工作型工具（harness 自带）：只读常驻 / 写型与执行型按意图注入 ──
+        #  本地能力的地基：读、找、搜、改、跑。没有它们 agent 只能"空转"。
+        #  分组即风险级别，注入闸门见 harness.bot_hook.agent_tools_for。
+        try:
+            from harness import tool_fs as _tfs
+            from harness import tool_proc as _tproc
+            _work_fns = {}
+            _work_fns.update(_tfs.register_all(root=_WORKSPACE_ROOT))
+            _work_fns.update(_tproc.register_all())
+            TOOL_FUNCTIONS.update(_work_fns)
+            log(f"[harness] 工作型工具已接入: {sorted(_work_fns)}（工作区根 {_WORKSPACE_ROOT}）")
+        except Exception as _we:
+            log(f"[harness] 工作型工具接入失败（agent 将缺少文件/执行能力）: {_we}")
         # ── skill 体系接入主链（此前 skill 在主链无入口 = 死的）──
         #  注册 schema + 把实现塞进 TOOL_FUNCTIONS，模型才能真正调 skill__load/read。
         _treg.register_many(_bh.SKILL_TOOLS, groups=(_treg.GROUP_SKILL,), source="skill")
