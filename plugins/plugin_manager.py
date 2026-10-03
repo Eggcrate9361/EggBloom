@@ -47,6 +47,8 @@ class PluginManager:
     def __init__(self):
         self._plugins: Dict[str, dict] = {}           # name → {module, meta, hooks, error?}
         self._ai_client: Any = None
+        self._host_api: Dict[str, Any] = {}            # ABI v2：宿主注入的能力（api_call 等）
+        self._emit_depth: int = 0                      # 事件总线递归保护
         self._state: Dict[str, bool] = {}              # name → enabled
         self._load_state()
 
@@ -484,6 +486,46 @@ class PluginManager:
                 continue
 
         return results
+
+    # ── 宿主能力注入（ABI v2）──────────────────────────────
+
+    def set_host_api(self, **caps: Any) -> List[str]:
+        """注入宿主能力（如 api_call）。
+
+        纯追加：v1 插件完全不受影响；未注入时 ctx.api_call() 返回 None 并告警，
+        插件据此降级 —— 不会因为宿主没提供能力而崩。
+        返回已注入的能力名列表。
+        """
+        self._host_api.update({k: v for k, v in caps.items() if v is not None})
+        return self.get_host_api()
+
+    def get_host_api(self) -> List[str]:
+        """已注入的能力名（供自检与插件页展示）。"""
+        return sorted(self._host_api.keys())
+
+    # ── 事件总线（ABI v2）──────────────────────────────────
+
+    MAX_EMIT_DEPTH = 5
+
+    def emit_event(self, event_name: str, payload: Optional[dict] = None,
+                   source: str = "") -> List[Tuple[str, Any]]:
+        """把事件派发给所有启用 spec 插件的 on_event 钩子。
+
+        - 按 manifest 的 priority 升序派发（与其它类型化钩子一致）；
+        - 单个插件抛异常只打印，不影响其他订阅方（沿用 execute_typed_hooks 的隔离）；
+        - 带递归保护：插件在 on_event 里再 emit 同一/其他事件时，超过深度即丢弃。
+        """
+        if self._emit_depth >= self.MAX_EMIT_DEPTH:
+            print(f"[Plugin] 事件 {event_name} 递归过深（>{self.MAX_EMIT_DEPTH}），已丢弃"
+                  f"（source={source or '?'}）")
+            return []
+        self._emit_depth += 1
+        try:
+            return self.execute_typed_hooks(
+                "on_event", event_name=event_name, payload=payload or {}
+            )
+        finally:
+            self._emit_depth -= 1
 
     # ── AI 客户端传播 ──────────────────────────────────────
 

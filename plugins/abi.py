@@ -41,7 +41,7 @@ import json
 import os
 from typing import Any, Callable, Dict, List, Optional
 
-PLUGIN_API_VERSION = 1
+PLUGIN_API_VERSION = 2
 
 # ── 钩子名（签名见各自文档） ──
 HOOK_LOAD = "on_load"                    # (ctx)
@@ -150,9 +150,53 @@ class PluginContext:
                   headers: Optional[dict] = None) -> Optional[dict]:
         return _http("POST", url, timeout=timeout, json_body=json_body, headers=headers)
 
-    # ── 事件广播（扩展点：当前记录，供 on_event 消费方后续接入）──
-    def emit(self, event_name: str, **payload: Any) -> None:
-        self.log(f"emit {event_name} {list(payload.keys())}", "debug")
+    # ── 宿主能力：OneBot 调用（ABI v2，由主程序 set_host_api 注入）──
+    def _host(self, key: str):
+        try:
+            return (self._manager._host_api or {}).get(key) if self._manager else None
+        except Exception:
+            return None
+
+    def api_call(self, action: str, params: Optional[dict] = None) -> Optional[dict]:
+        """调用 OneBot 动作 —— 走主程序唯一出口（含 token 与信任处理）。
+
+        SnowLuma 等驱动提供 184 个动作，标准 OneBot v11 之外的扩展动作
+        （send_qzone_msg / set_self_longnick / send_group_ai_record …）也由此调用。
+        宿主未注入时返回 None —— 插件应据此降级，而不是抛异常。
+        """
+        fn = self._host("api_call")
+        if not callable(fn):
+            self.log("api_call 未注入（宿主未提供该能力）", "warn")
+            return None
+        try:
+            return fn(action, params or {})
+        except Exception as e:
+            self.log(f"api_call {action} 失败: {e}", "warn")
+            return None
+
+    def send_group(self, group_id, text: str) -> Optional[dict]:
+        """发群消息。"""
+        return self.api_call("send_group_msg", {"group_id": str(group_id), "message": text})
+
+    def send_private(self, user_id, text: str) -> Optional[dict]:
+        """发私聊消息。"""
+        return self.api_call("send_private_msg", {"user_id": str(user_id), "message": text})
+
+    # ── 事件广播：真总线（ABI v2）──
+    def emit(self, event_name: str, **payload: Any) -> list:
+        """广播事件给其他插件。
+
+        订阅方在自己的 PLUGIN_HOOKS 里声明：
+            def on_event(ctx, event_name, payload): ...
+        返回 [(插件名, 返回值)]；无人订阅时返回 []。
+        """
+        if not self._manager:
+            return []
+        try:
+            return self._manager.emit_event(event_name, payload, source=self.name)
+        except Exception as e:
+            self.log(f"emit {event_name} 失败: {e}", "warn")
+            return []
 
 
 def _http(method: str, url: str, timeout: float = 15, json_body: Optional[dict] = None,

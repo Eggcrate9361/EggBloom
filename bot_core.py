@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python
+#!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
 EggBloom - OneBot + DeepSeek AI + 远程控制
@@ -121,6 +121,16 @@ except Exception as e:
 try:
     from plugins.plugin_manager import init_plugin_manager, get_plugin_manager
     _pm = init_plugin_manager()
+    # ABI v2：注入宿主能力（唯一 OneBot 出口）。
+    # api_call 在本文件下方才定义，用 lambda 延迟解析 —— 调用时才查模块全局，此处安全。
+    # 注入必须在 load_all() 之前，插件 on_load 时就能用。
+    try:
+        _caps = _pm.set_host_api(
+            api_call=lambda action, params=None: api_call(action, params or {}),
+        )
+        print(f"[PluginSystem] 已注入宿主能力: {_caps}")
+    except Exception as _ce:
+        print(f"[PluginSystem] 注入宿主能力失败: {_ce}")
     _pm.load_all()
     PLUGIN_OK = True
     print("[PluginSystem] 插件系统初始化完成")
