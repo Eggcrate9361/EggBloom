@@ -147,3 +147,9 @@ local_config.json
 machine_config.json
 # NeuroBase 记忆库（已迁入程序目录，属用户数据不入库）
 .neurobase/
+
+# 黑话词典 / 回复模板：**运行态数据**，由程序自己维护，不入库。
+# 存在意义是"每个安装实例长出来的词表不一样"，入库会造成互相覆盖。
+# 曾因缺这一条，测试跑一遍把真源清空后也被 git 无视 → 无声丢数据。
+slang_dict.json
+slang_replies.json

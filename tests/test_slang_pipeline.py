@@ -97,6 +97,47 @@ check("词典里没有残留的测试词", not _stale, str(_stale))
 print("\n=== 3. 学习 → 注入 闭环 ===")
 before = SI.get_entries()
 had_probe = PROBE in before
+
+# ── 安全网：这是**真源文件**，测试是破坏性的（写探针→删探针）。
+#    任何中途异常都可能留下被改写的词典；先落一份快照，最后无条件复原。
+#    历史事故：remove 路径在异常态下会把整份词典写成 {"entries":{}}，
+#    105 条真实词一次性归零 —— 所以这条安全网不是可选优化。
+import shutil as _shutil
+import tempfile as _tempfile
+
+_SNAP_DIR = _tempfile.mkdtemp(prefix="slang_snap_")
+_SNAPS = []
+for _p in (SI.SLANG_DICT_PATH, SI.SLANG_REPLIES_PATH,
+           getattr(SL, "PENDING_FILE", None), getattr(SL, "INJECTED_FILE", None)):
+    if _p and os.path.exists(_p):
+        _dst = os.path.join(_SNAP_DIR, os.path.basename(_p))
+        try:
+            _shutil.copy2(_p, _dst)
+            _SNAPS.append((_dst, _p))
+        except Exception:
+            pass
+
+
+def _restore_snapshot():
+    """把快照写回真源。只在"重新读出来条目数比快照少"时兜底。"""
+    for src, dst in _SNAPS:
+        try:
+            with open(src, "r", encoding="utf-8") as fh:
+                snap = json.load(fh)
+            with open(dst, "r", encoding="utf-8") as fh:
+                cur = json.load(fh)
+            s_n = len(snap.get("entries", snap) if isinstance(snap, dict) else snap)
+            c_n = len(cur.get("entries", cur) if isinstance(cur, dict) else cur)
+            if c_n < s_n:
+                _shutil.copy2(src, dst)
+        except Exception:
+            # 读不出来（文件被删/损坏）→ 直接复原
+            try:
+                _shutil.copy2(src, dst)
+            except Exception:
+                pass
+
+
 ctx = SL.add_manual(PROBE, "闭环自检用探针词，验证学习侧写入能被注入侧读到", source="自检")
 check("add_manual 接受新词", bool(ctx.get("ok")), str(ctx.get("error", "")))
 check("add_manual 拒绝重复词（去重读的是同一真源）",
@@ -152,6 +193,17 @@ if not args.keep:
     SL.delete_reply_template("_闭环探针")
     check("探针回复模板已清理", "_闭环探针" not in SI.get_replies())
     check("清理后与自检前一致", "_闭环探针" not in SL.get_reply_templates().get("entries", {}))
+
+# ── 收尾：比对快照，若真源真的被写坏则无条件复原 ────────────────────
+if not args.keep:
+    _restore_snapshot()
+    _post = len(SI.get_entries())
+    check("真源条目数未因测试减少（安全网）", _post >= len(before) - 1,
+          f"快照前 {len(before)} → 收尾 {_post}")
+    try:
+        _shutil.rmtree(_SNAP_DIR, ignore_errors=True)
+    except Exception:
+        pass
 
 print("\n" + "=" * 58)
 if fails:

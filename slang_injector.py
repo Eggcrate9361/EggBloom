@@ -4,6 +4,8 @@ slang_injector：读取 slang_dict.json，供 persona/reply 逻辑调用。
 """
 import json
 import os
+import tempfile
+import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 # ★ 黑话词典的**唯一真源**（2026-10-03 统一）
@@ -14,56 +16,113 @@ SLANG_DICT_PATH = os.path.join(HERE, "slang_dict.json")
 SLANG_REPLIES_PATH = os.path.join(HERE, "slang_replies.json")
 
 
+class _ReadError(Exception):
+    """文件存在但读不出来（被占用 / 半截写入 / 编码坏）。"""
+
+
 def _load(path):
+    """读 JSON。
+
+    返回 ``(data, ok)``：``ok=False`` 表示**这次读不可信**（不是文件不存在，
+    而是存在却读不动）。调用方必须据此拒绝写回，否则会把整份词典清空。
+
+    ★ 历史事故：旧实现把"读失败"和"文件不存在"一律压成 ``{"entries": {}}``，
+    随后 ``remove()`` 拿着这个空 dict 落盘 → 105 条真实词一次性归零。
+    "文件不存在"可以当空起步；"读失败"绝不能。
+    """
+    if not os.path.exists(path):
+        return {"entries": {}}, True          # 首次使用，空起步是安全的
     try:
         with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return {"entries": {}}
+            return json.load(f), True
+    except Exception as e:                     # noqa: BLE001
+        print(f"[slang_injector] load failed (拒绝写回): {path} {e}")
+        return {"entries": {}}, False
 
 
 def _save(path, data):
+    """原子写：先写同目录临时文件再 ``os.replace``，避免半截文件。
+
+    返回 True/False。写失败不再静默 —— 调用方需要知道数据没落盘。
+    """
+    tmp = None
     try:
-        with open(path, "w", encoding="utf-8") as f:
+        d = os.path.dirname(os.path.abspath(path))
+        os.makedirs(d, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(prefix=".slang_", suffix=".tmp", dir=d)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
-    except Exception as e:
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+        return True
+    except Exception as e:  # noqa: BLE001
         print(f"[slang_injector] save failed: {e}")
+        try:
+            if tmp and os.path.exists(tmp):
+                os.remove(tmp)
+        except Exception:
+            pass
+        return False
+
+
+def _load_entries(path):
+    """读 entries；顺便把 ok 带出来。"""
+    data, ok = _load(path)
+    if not isinstance(data, dict):
+        return {}, False
+    ents = data.get("entries")
+    if not isinstance(ents, dict):
+        # 形状不对：比如被写成 list / 包装层丢了 —— 同样视为不可信
+        return {}, False
+    return ents, ok
 
 
 def get_entries():
-    data = _load(SLANG_DICT_PATH)
-    return data.get("entries", {})
+    return _load_entries(SLANG_DICT_PATH)[0]
 
 
 def get_replies():
-    data = _load(SLANG_REPLIES_PATH)
-    return data.get("entries", {})
+    return _load_entries(SLANG_REPLIES_PATH)[0]
 
 
 def set_replies(replies):
-    _save(SLANG_REPLIES_PATH, {"entries": replies})
+    return _save(SLANG_REPLIES_PATH, {"entries": replies})
 
 
 def inject_reply(term, replies):
-    r = get_replies()
+    """加回复模板。读不可信时放弃（宁可这次没写，也不清空）。"""
+    r, ok = _load_entries(SLANG_REPLIES_PATH)
+    if not ok:
+        return False
     r[term] = replies
-    set_replies(r)
+    return set_replies(r)
 
 
 def set_entries(entries):
-    _save(SLANG_DICT_PATH, {"entries": entries})
+    return _save(SLANG_DICT_PATH, {"entries": entries})
 
 
 def inject(term, meaning):
-    entries = get_entries()
+    entries, ok = _load_entries(SLANG_DICT_PATH)
+    if not ok:
+        return False
     entries[term] = meaning
-    set_entries(entries)
+    return set_entries(entries)
 
 
 def remove(term):
-    entries = get_entries()
+    """删除词条。
+
+    读不可信时**直接放弃**：删一个词不值得赌上整本词典。
+    """
+    entries, ok = _load_entries(SLANG_DICT_PATH)
+    if not ok:
+        return False
+    if term not in entries:
+        return True
     entries.pop(term, None)
-    set_entries(entries)
+    return set_entries(entries)
 
 
 def get_context_for_llm(user_msg: str = "") -> str:
