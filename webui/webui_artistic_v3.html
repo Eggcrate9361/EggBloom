@@ -503,9 +503,72 @@
 .fx-breathe{animation:fxBreathe 2.4s ease-in-out infinite}
 @keyframes fxBreathe{0%,100%{opacity:1}50%{opacity:.55}}
 [data-aos]{opacity:1!important;transform:none!important;transition:none!important;pointer-events:auto!important}
+/* ===== Agent 页（对话 / 执行轨迹卡 / 沙漏时间轴）===== */
+.ag-shell{display:grid;grid-template-columns:1fr 280px;gap:14px;height:calc(100vh - 250px);min-height:420px}
+@media (max-width:1180px){.ag-shell{grid-template-columns:1fr}}
+.ag-main{display:flex;flex-direction:column;min-height:0;background:var(--paper);border:1px solid var(--ink5);border-radius:2px}
+.ag-stream{flex:1;overflow-y:auto;padding:18px 20px;display:flex;flex-direction:column;gap:16px}
+.ag-msg{max-width:100%;display:flex;flex-direction:column;gap:6px;animation:agIn .22s cubic-bezier(0.22,1,0.36,1)}
+@keyframes agIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+.ag-msg.ag-me{align-items:flex-end}
+.ag-bubble{font-size:15px;line-height:1.72;padding:11px 15px;border:1px solid var(--ink5);border-radius:2px;background:var(--bg);color:var(--ink);white-space:pre-wrap;word-break:break-word;max-width:min(78%,680px)}
+.ag-msg.ag-me .ag-bubble{background:rgba(201,169,110,0.10);border-color:rgba(201,169,110,0.30);color:var(--ink)}
+.ag-msg.ag-err .ag-bubble{border-color:var(--crimson);color:#e07070;background:rgba(139,58,58,0.10)}
+.ag-role{font-family:var(--font-m);font-size:11px;color:var(--ink3);letter-spacing:0.14em;text-transform:uppercase}
+/* 执行轨迹卡 */
+.ag-card{border:1px solid var(--ink5);border-left:2px solid var(--gold);border-radius:2px;background:var(--bg);margin:2px 0;overflow:hidden;max-width:min(88%,760px)}
+.ag-card.ag-fail{border-left-color:var(--crimson)}
+.ag-card-hd{display:flex;align-items:center;gap:9px;padding:8px 12px;cursor:pointer;user-select:none;transition:background var(--ease)}
+.ag-card-hd:hover{background:rgba(201,169,110,0.06)}
+.ag-card-tool{font-family:var(--font-m);font-size:12.5px;font-weight:700;color:var(--gold);letter-spacing:0.04em}
+.ag-card-sum{font-family:var(--font-m);font-size:12px;color:var(--ink3);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.ag-card-ms{font-family:var(--font-m);font-size:11.5px;color:var(--ink3);white-space:nowrap}
+.ag-card-bd{display:none;border-top:1px solid var(--ink5);padding:10px 12px;font-family:var(--font-m);font-size:12px;color:var(--ink2);line-height:1.72;white-space:pre-wrap;word-break:break-word;max-height:340px;overflow-y:auto;background:rgba(0,0,0,0.18)}
+.ag-card.open .ag-card-bd{display:block}
+.ag-card-bar{display:flex;gap:8px;align-items:center;padding:6px 12px;border-top:1px solid var(--ink5);flex-wrap:wrap}
+.ag-mini{font-family:var(--font-m);font-size:11px;letter-spacing:0.06em;text-transform:uppercase;color:var(--ink3);border:1px solid var(--ink5);background:transparent;padding:3px 9px;cursor:pointer;border-radius:2px;transition:all var(--ease)}
+.ag-mini:hover{border-color:var(--gold);color:var(--gold)}
+.ag-mini[disabled]{opacity:.45;cursor:not-allowed}
+/* 输入区 */
+.ag-input{border-top:1px solid var(--ink5);padding:12px 16px;display:flex;gap:10px;align-items:flex-end;background:rgba(0,0,0,0.10)}
+.ag-ta{flex:1;min-height:44px;max-height:170px;resize:none;background:var(--input);border:1px solid var(--ink5);border-radius:2px;color:var(--ink);font-family:var(--font-m);font-size:13.5px;line-height:1.6;padding:11px 13px;outline:none;user-select:text;-webkit-user-select:text}
+.ag-ta:focus{border-color:var(--gold);box-shadow:0 0 0 3px rgba(201,169,110,0.12)}
+.ag-ta::placeholder{color:var(--ink4)}
+.ag-hint{font-family:var(--font-m);font-size:11px;color:var(--ink4);padding:5px 18px 9px;letter-spacing:0.03em}
+/* 侧栏：沙漏时间轴 */
+.ag-side{display:flex;flex-direction:column;gap:12px;overflow-y:auto;min-height:0}
+.ag-panel{background:var(--paper);border:1px solid var(--ink5);border-radius:2px;padding:14px 16px}
+.ag-panel-t{font-family:var(--font-m);font-size:11.5px;font-weight:700;color:var(--ink2);letter-spacing:0.12em;text-transform:uppercase;margin-bottom:11px;display:flex;align-items:center;justify-content:space-between}
+.ag-panel-t::before{content:'';width:6px;height:6px;background:var(--gold);margin-right:8px;box-shadow:0 0 8px rgba(201,169,110,0.45)}
+.ag-hg{position:relative;padding-left:16px;margin-left:3px;border-left:1px solid var(--ink5)}
+.ag-hg-node{position:relative;margin-bottom:11px}
+.ag-hg-node::before{content:'';position:absolute;left:-20px;top:6px;width:6px;height:6px;border-radius:50%;background:var(--paper);border:1px solid var(--ink4)}
+.ag-hg-node.on::before{background:var(--gold);border-color:var(--gold);box-shadow:0 0 9px rgba(201,169,110,0.6)}
+.ag-hg-k{font-family:var(--font-m);font-size:10.5px;color:var(--ink3);letter-spacing:0.1em;text-transform:uppercase}
+.ag-hg-v{font-size:14px;color:var(--ink);font-weight:600;margin-top:1px}
+.ag-kv{display:flex;justify-content:space-between;gap:10px;padding:5px 0;font-family:var(--font-m);font-size:12px;border-bottom:1px dashed rgba(58,63,72,0.5)}
+.ag-kv:last-child{border-bottom:none}
+.ag-kv span:first-child{color:var(--ink3)}
+.ag-kv span:last-child{color:var(--ink);text-align:right;word-break:break-all}
+.ag-sess{display:flex;flex-direction:column;gap:3px;padding:7px 9px;border:1px solid transparent;border-radius:2px;cursor:pointer;transition:all var(--ease)}
+.ag-sess:hover{border-color:var(--ink4);background:rgba(201,169,110,0.05)}
+.ag-sess.on{border-color:var(--gold);background:rgba(201,169,110,0.10)}
+.ag-sess-id{font-family:var(--font-m);font-size:11.5px;color:var(--ink2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ag-sess-meta{font-family:var(--font-m);font-size:10.5px;color:var(--ink4)}
+.ag-dot{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--ink4);margin-right:5px;vertical-align:middle}
+.ag-dot.ok{background:var(--gold);box-shadow:0 0 7px rgba(201,169,110,0.6)}
+.ag-dot.bad{background:var(--crimson)}
+.ag-pill{font-family:var(--font-m);font-size:10.5px;padding:2px 7px;border:1px solid var(--ink5);border-radius:2px;color:var(--ink3);letter-spacing:0.06em}
+.ag-pill.live{border-color:var(--gold);color:var(--gold)}
+.ag-pill.ok{border-color:rgba(122,160,120,0.55);color:#8fbf8a}
+.ag-pill.bad{border-color:rgba(160,90,90,0.55);color:#c98f8f}
 </style></head><body><div class="aurora-bg" aria-hidden="true"></div><div class="decode-splash" id="decodeSplash">  <div class="decode-title" id="decodeText">EggBloom<span class="decode-caret"></span></div>  <div class="decode-sub" id="splashSub">系统初始化中</div>  <div class="splash-bar"><div class="splash-bar-fill" id="splashBarFill"></div></div></div><div class="obo-overlay" id="oboOverlay"><div class="obo-card"><div class="obo-head"><div class="obo-kicker" id="oboKicker">EGGBLOOM</div><div class="obo-title" id="oboTitle"></div><div class="obo-sub" id="oboSub"></div><div class="obo-prog" id="oboProg"></div></div><div class="obo-body" id="oboBody"></div><div class="obo-foot"><button class="btn ghost" id="oboPrev" style="visibility:hidden">上一步</button><span class="obo-skip" id="oboSkiplnk">跳过引导</span><button class="btn primary" id="oboNext">下一步</button></div></div></div><div class="titlebar" id="appTitlebar"><div class="titlebar-drag"><span class="titlebar-brand">EggBloom</span></div><div class="titlebar-btns"><button class="tb-btn" id="tbMin" title="最小化">–</button><button class="tb-btn" id="tbMax" title="最大化">□</button><button class="tb-btn tb-close" id="tbClose" title="关闭">✕</button></div></div><div class="app">  <header class="topbar">    <div class="status-pills">      <div class="pill"><span id="statusDot" class="dot"></span><span id="statusText">离线</span></div>      <div class="pill" id="uptimePill">运行时长 --</div>      <div class="pill" id="clock"></div>      <div class="pill obo-pill" id="oboPreviewBtn" title="重新查看新手引导">?</div><div class="pill" id="modelQuickPill" style="width:240px" title="快速切换对话模型（保存即热重载）"><select id="modelQuickSelect" style="width:100%;height:20px;border:none;background:transparent;box-shadow:none;padding:0;font-size:12px;color:inherit;cursor:pointer"><option value="">模型…</option></select></div>    </div>  </header>  <div class="layout">    <nav id="sideRail">
       <div class="side-rail-group">
         <div class="side-rail-group-label">系统</div>
+        <div class="side-rail-item" data-page="agent">
+        <svg class="side-rail-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l2.4 5.6L20 9l-4 4 1 6-5-3-5 3 1-6-4-4 5.6-1.4z"/><circle cx="12" cy="11" r="2"/></svg>
+        <span class="side-rail-label"><span class="shuffle-text" data-shuffle="Agent">Agent</span></span>
+      </div>
         <div class="side-rail-item" data-page="dashboard">
         <svg class="side-rail-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
         <span class="side-rail-label"><span class="shuffle-text" data-shuffle="仪表盘">仪表盘</span></span>
@@ -826,7 +889,510 @@ function getSelectedDashLogText(){  var el = $('dashLog');  if (!el) return ''; 
     showDriverCfg(window._protoCurDriver);
     try { const _at = $('protoAutoToggle'); if (_at && localStorage.getItem('egg_proto_auto') === '1') _at.checked = true; } catch(e){}
     if (!window._protoAutoRan){      window._protoAutoRan = true;      try {        if (localStorage.getItem('egg_proto_auto') === '1'){          API('/protocol/auto-detect', {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'}).then(function(r){            if (r && r.ok && r.recommended && r.recommended !== (window._protoCurDriver || '')){              showToast('检测到推荐协议驱动「' + r.recommended + '」，可点「自动识别」查看并应用');            }          }).catch(function(){});        }      } catch(e){}    }
-  });  const protoLogEl = $('protoLog');  if (protoLogEl){    const renderProtoLogs = () => {      API('/protocol/logs', { method:'POST', headers:{'Content-Type':'application/json'}, body: '{"limit":200}' }).then(r => {        const logs = (r && r.logs !== undefined ? r.logs : []) || [];        if (!logs.length){          protoLogEl.innerHTML = '<div class="empty"><div class="empty-desc">暂无协议日志</div></div>';          return;        }        protoLogEl.innerHTML = logs.map(l => '<div class="log"><span class="log-time">' + escapeHtml(l.time || '') + '<\\/span>' + escapeHtml(l.text || '') + '</div>').join('');        protoLogEl.scrollTop = protoLogEl.scrollHeight;      });    };    renderProtoLogs();    setInterval(renderProtoLogs, 1200);  }}qsa('.toggle').forEach(t => {  if (t.dataset.plugin) return;  t.addEventListener('click', () => t.classList.toggle('on'));});let current = 'dashboard';function poll(){  loadDashStatus();  loadDashLog();}/* Splash decode - premium minimal style */(function(){  const CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()_+-=[]{}|;:,.<>?';  const el = $('decodeText');  const grid = $('decodeGrid');  if (!el || !grid) return;    const titleText = 'EggBloom';  const cols = 40;  const rows = Math.floor(window.innerHeight / 14);  const speed = 70;  const scrambleCount = 5;  const revealOrder = Array.from({length: titleText.length}, (_, i) => i);    const cells = [];  grid.innerHTML = '';  grid.style.gridTemplateColumns = 'repeat(' + cols + ', 1fr)';  grid.style.gridAutoRows = '14px';  for (let y = 0; y < rows; y++){    for (let x = 0; x < cols; x++){      const cell = document.createElement('div');      cell.className = 'decode-cell';      cell.textContent = CHARS[Math.floor(Math.random() * CHARS.length)];      grid.appendChild(cell);      cells.push(cell);    }  }    const codeContainer = document.createElement('div');  codeContainer.className = 'decode-code';  const lineCount = 4;  const codeLines = [];  for (let l = 0; l < lineCount; l++){    const line = document.createElement('div');    line.className = 'decode-code-line';    const chars = [];    const len = 50 + Math.floor(Math.random() * 30);    for (let i = 0; i < len; i++){      const span = document.createElement('span');      span.textContent = CHARS[Math.floor(Math.random() * CHARS.length)];      line.appendChild(span);      chars.push(span);    }    codeContainer.appendChild(line);    codeLines.push(chars);  }  grid.parentElement.appendChild(codeContainer);    const revealedSet = new Set();  const scrambleSet = new Set();    function getRandomChar(){    return CHARS[Math.floor(Math.random() * CHARS.length)];  }    function updateTitle(){    const chars = titleText.split('');    for (let i = 0; i < chars.length; i++){      if (revealedSet.has(i)){        chars[i] = titleText[i];      } else if (scrambleSet.has(i)){        chars[i] = getRandomChar();      } else {        chars[i] = getRandomChar();      }    }    el.textContent = chars.join('');  }    function updateBackground(){    for (let i = 0; i < cells.length; i++){      if (Math.random() < 0.6){        cells[i].textContent = getRandomChar();      }    }  }    function updateCode(){    for (let l = 0; l < codeLines.length; l++){      const chars = codeLines[l];      for (let i = 0; i < chars.length; i++){        if (Math.random() < 0.5){          chars[i].textContent = getRandomChar();        }      }    }  }    const splash = $('decodeSplash');  if (splash) splash.classList.add('show');  function hideSplash(){ if (!splash) return; splash.classList.remove('show'); splash.style.display = 'none'; }    let currentIndex = 0;    function revealNext(){    if (currentIndex >= titleText.length){      updateTitle();      setTimeout(() => {        hideSplash();      }, 600);      return;    }        const idx = revealOrder[currentIndex];    scrambleSet.add(idx);    updateTitle();        let count = 0;        function doScramble(){      count++;      updateTitle();            if (count >= scrambleCount){        scrambleSet.delete(idx);        revealedSet.add(idx);        updateTitle();        currentIndex++;        setTimeout(revealNext, speed);      } else {        setTimeout(doScramble, speed / scrambleCount);      }    }        setTimeout(doScramble, speed / scrambleCount);  }    updateTitle();  updateBackground();  updateCode();    setTimeout(revealNext, 400);    const bgInterval = setInterval(() => {    updateBackground();    updateCode();  }, 80);    if (splash){    splash.addEventListener('transitionend', () => {      if (!splash.classList.contains('show')){        clearInterval(bgInterval);      }    }, {once: true});  }    if (typeof typeof window.__restartDecodeSplash === 'function'){    window.__restartDecodeSplash = function(){};  }    return { start: revealNext };})();function boot() {  const splash = $('decodeSplash');  const barFill = $('splashBarFill');  const splashSub = $('splashSub');  if (splash) splash.classList.add('show');  if (barFill) barFill.style.width = '0%';  var start = performance.now();  var duration = 2200;  function tick(now){    var t = Math.min(1, (now - start) / duration);    if (barFill) barFill.style.width = (t * 100) + '%';    if (t < 1) requestAnimationFrame(tick);  }  requestAnimationFrame(tick);  setTimeout(function(){    if (splash) splash.classList.add('fade-out');    setTimeout(function(){ if (splash) splash.remove(); }, 500);  }, duration);  const titleEl = $('decodeText');  if (titleEl){    const finalText = 'EggBloom';    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*';    const totalSteps = 28;    const stepMs = 70;    let step = 0;    const interval = setInterval(function(){      step++;      let revealed = Math.floor((step / totalSteps) * finalText.length);      let out = '';      for (let i = 0; i < finalText.length; i++){        if (i < revealed){ out += finalText[i]; } else { out += chars[Math.floor(Math.random() * chars.length)]; }      }      let caretPos = Math.min(revealed, finalText.length);      titleEl.innerHTML = out.slice(0, caretPos) + '<span class="decode-caret"></span>' + out.slice(caretPos);      if (step >= totalSteps){ clearInterval(interval); titleEl.innerHTML = finalText + '<span class="decode-caret"></span>'; }    }, stepMs);  }  try {   router('dashboard');  poll();  pollTimer = setInterval(poll, 5000);  } catch(e) { console.error('Boot error:', e); } }const pageTitles = {  dashboard: ['仪表盘','总览 / 运行状态'],  monitor: ['通知','事件通知 / 资源监测'],  chatlogs: ['日志控制','协议端日志 / 终端'],  console: ['底层控制','指令 / 状态'],  imagegen: ['生图控制','ComfyUI / 参数'],  memory: ['记忆','自学习 / 私聊记忆'],  plugins: ['插件管理','启停 / 状态'],  settings: ['配置中心','API / 界面'],  commands: ['远程控制','指令'],  bot: ['Bot 控制','启动 / 停止 / 状态'],  protocol: ['协议层','OneBot / QQNT / NapCat / LLOneBot / SnowLuma'],  behavior: ['群聊行为','触发词 / 判定词'],  groupmanage: ['联系人管理','群聊与好友：卡片 / 限制 / 备注'],  tokens: ['Token 消耗','使用量 / 费用'],memes: ['表情包管理','浏览 / 上传 / 删除']};const pageMounts = {  dashboard: mountDashboard,  monitor: mountMonitor,  chatlogs: mountChatlogs,  console: mountConsole,  imagegen: mountImagegen,  memory: mountMemory,  plugins: mountPlugins,  settings: mountSettings,  commands: mountCommands,  bot: mountBot,  protocol: mountProtocol,  behavior: mountBehavior,  groupmanage: mountGroupManager,  tokens: mountTokens,  memes: mountMemes,};function mountDashboard(root){    root.innerHTML = `    <div class="grid grid-3" style="margin-bottom:24px">      <div class="panel" id="dashBotStatus" style="cursor:pointer" onclick="router('bot')">        <div class="panel-title" style="font-size:13px">Bot</div>        <div style="font-size:28px;font-weight:700;color:var(--ink);margin:8px 0" id="dashBotState">--</div>        <div class="meta" id="dashBotInfo">PID: --</div>      </div>      <div class="panel" id="dashProtoStatus" style="cursor:pointer" onclick="router('protocol')">        <div class="panel-title" style="font-size:13px">\u534f\u8bae\u5c42</div>        <div style="font-size:28px;font-weight:700;color:var(--ink);margin:8px 0" id="dashProtoState">--</div>        <div class="meta" id="dashProtoInfo">API: 3000</div>      </div>      <div class="panel" style="cursor:pointer" onclick="router('chatlogs')">        <div class="panel-title" style="font-size:13px">\u65e5\u5fd7</div>        <div style="font-size:28px;font-weight:700;color:var(--ink);margin:8px 0" id="dashLogCount">--</div>        <div class="meta">\u5b9e\u65f6\u65e5\u5fd7\u6d41</div>      </div>    </div>    <div class="panel" style="max-height:calc(100vh - 280px);overflow:hidden;display:flex;flex-direction:column">      <div class="panel-title">\u7cfb\u7edf\u65e5\u5fd7 <span class="meta">\u5b9e\u65f6<\/span></div>      <div id="dashLog" style="font-family:var(--font-m);font-size:13px;color:var(--ink2);line-height:1.8;padding:8px 4px;flex:1;overflow-y:auto;border:1px solid var(--ink5);border-radius:2px;background:rgba(0,0,0,0.15)"><\/div>    <\/div>  `;  loadDashLog();  loadDashStatus();;  
+  });  const protoLogEl = $('protoLog');  if (protoLogEl){    const renderProtoLogs = () => {      API('/protocol/logs', { method:'POST', headers:{'Content-Type':'application/json'}, body: '{"limit":200}' }).then(r => {        const logs = (r && r.logs !== undefined ? r.logs : []) || [];        if (!logs.length){          protoLogEl.innerHTML = '<div class="empty"><div class="empty-desc">暂无协议日志</div></div>';          return;        }        protoLogEl.innerHTML = logs.map(l => '<div class="log"><span class="log-time">' + escapeHtml(l.time || '') + '<\\/span>' + escapeHtml(l.text || '') + '</div>').join('');        protoLogEl.scrollTop = protoLogEl.scrollHeight;      });    };    renderProtoLogs();    setInterval(renderProtoLogs, 1200);  }}qsa('.toggle').forEach(t => {  if (t.dataset.plugin) return;  t.addEventListener('click', () => t.classList.toggle('on'));});let current = 'dashboard';function poll(){  loadDashStatus();  loadDashLog();}/* Splash decode - premium minimal style */(function(){  const CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()_+-=[]{}|;:,.<>?';  const el = $('decodeText');  const grid = $('decodeGrid');  if (!el || !grid) return;    const titleText = 'EggBloom';  const cols = 40;  const rows = Math.floor(window.innerHeight / 14);  const speed = 70;  const scrambleCount = 5;  const revealOrder = Array.from({length: titleText.length}, (_, i) => i);    const cells = [];  grid.innerHTML = '';  grid.style.gridTemplateColumns = 'repeat(' + cols + ', 1fr)';  grid.style.gridAutoRows = '14px';  for (let y = 0; y < rows; y++){    for (let x = 0; x < cols; x++){      const cell = document.createElement('div');      cell.className = 'decode-cell';      cell.textContent = CHARS[Math.floor(Math.random() * CHARS.length)];      grid.appendChild(cell);      cells.push(cell);    }  }    const codeContainer = document.createElement('div');  codeContainer.className = 'decode-code';  const lineCount = 4;  const codeLines = [];  for (let l = 0; l < lineCount; l++){    const line = document.createElement('div');    line.className = 'decode-code-line';    const chars = [];    const len = 50 + Math.floor(Math.random() * 30);    for (let i = 0; i < len; i++){      const span = document.createElement('span');      span.textContent = CHARS[Math.floor(Math.random() * CHARS.length)];      line.appendChild(span);      chars.push(span);    }    codeContainer.appendChild(line);    codeLines.push(chars);  }  grid.parentElement.appendChild(codeContainer);    const revealedSet = new Set();  const scrambleSet = new Set();    function getRandomChar(){    return CHARS[Math.floor(Math.random() * CHARS.length)];  }    function updateTitle(){    const chars = titleText.split('');    for (let i = 0; i < chars.length; i++){      if (revealedSet.has(i)){        chars[i] = titleText[i];      } else if (scrambleSet.has(i)){        chars[i] = getRandomChar();      } else {        chars[i] = getRandomChar();      }    }    el.textContent = chars.join('');  }    function updateBackground(){    for (let i = 0; i < cells.length; i++){      if (Math.random() < 0.6){        cells[i].textContent = getRandomChar();      }    }  }    function updateCode(){    for (let l = 0; l < codeLines.length; l++){      const chars = codeLines[l];      for (let i = 0; i < chars.length; i++){        if (Math.random() < 0.5){          chars[i].textContent = getRandomChar();        }      }    }  }    const splash = $('decodeSplash');  if (splash) splash.classList.add('show');  function hideSplash(){ if (!splash) return; splash.classList.remove('show'); splash.style.display = 'none'; }    let currentIndex = 0;    function revealNext(){    if (currentIndex >= titleText.length){      updateTitle();      setTimeout(() => {        hideSplash();      }, 600);      return;    }        const idx = revealOrder[currentIndex];    scrambleSet.add(idx);    updateTitle();        let count = 0;        function doScramble(){      count++;      updateTitle();            if (count >= scrambleCount){        scrambleSet.delete(idx);        revealedSet.add(idx);        updateTitle();        currentIndex++;        setTimeout(revealNext, speed);      } else {        setTimeout(doScramble, speed / scrambleCount);      }    }        setTimeout(doScramble, speed / scrambleCount);  }    updateTitle();  updateBackground();  updateCode();    setTimeout(revealNext, 400);    const bgInterval = setInterval(() => {    updateBackground();    updateCode();  }, 80);    if (splash){    splash.addEventListener('transitionend', () => {      if (!splash.classList.contains('show')){        clearInterval(bgInterval);      }    }, {once: true});  }    if (typeof typeof window.__restartDecodeSplash === 'function'){    window.__restartDecodeSplash = function(){};  }    return { start: revealNext };})();function boot() {  const splash = $('decodeSplash');  const barFill = $('splashBarFill');  const splashSub = $('splashSub');  if (splash) splash.classList.add('show');  if (barFill) barFill.style.width = '0%';  var start = performance.now();  var duration = 2200;  function tick(now){    var t = Math.min(1, (now - start) / duration);    if (barFill) barFill.style.width = (t * 100) + '%';    if (t < 1) requestAnimationFrame(tick);  }  requestAnimationFrame(tick);  setTimeout(function(){    if (splash) splash.classList.add('fade-out');    setTimeout(function(){ if (splash) splash.remove(); }, 500);  }, duration);  const titleEl = $('decodeText');  if (titleEl){    const finalText = 'EggBloom';    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*';    const totalSteps = 28;    const stepMs = 70;    let step = 0;    const interval = setInterval(function(){      step++;      let revealed = Math.floor((step / totalSteps) * finalText.length);      let out = '';      for (let i = 0; i < finalText.length; i++){        if (i < revealed){ out += finalText[i]; } else { out += chars[Math.floor(Math.random() * chars.length)]; }      }      let caretPos = Math.min(revealed, finalText.length);      titleEl.innerHTML = out.slice(0, caretPos) + '<span class="decode-caret"></span>' + out.slice(caretPos);      if (step >= totalSteps){ clearInterval(interval); titleEl.innerHTML = finalText + '<span class="decode-caret"></span>'; }    }, stepMs);  }  try {   router('dashboard');  poll();  pollTimer = setInterval(poll, 5000);  } catch(e) { console.error('Boot error:', e); } }const pageTitles = {  agent: ['Agent','对话 / 执行轨迹 / 本体记忆'],  dashboard: ['仪表盘','总览 / 运行状态'],  monitor: ['通知','事件通知 / 资源监测'],  chatlogs: ['日志控制','协议端日志 / 终端'],  console: ['底层控制','指令 / 状态'],  imagegen: ['生图控制','ComfyUI / 参数'],  memory: ['记忆','自学习 / 私聊记忆'],  plugins: ['插件管理','启停 / 状态'],  settings: ['配置中心','API / 界面'],  commands: ['远程控制','指令'],  bot: ['Bot 控制','启动 / 停止 / 状态'],  protocol: ['协议层','OneBot / QQNT / NapCat / LLOneBot / SnowLuma'],  behavior: ['群聊行为','触发词 / 判定词'],  groupmanage: ['联系人管理','群聊与好友：卡片 / 限制 / 备注'],  tokens: ['Token 消耗','使用量 / 费用'],memes: ['表情包管理','浏览 / 上传 / 删除']};const pageMounts = {  agent: mountAgent,  dashboard: mountDashboard,  monitor: mountMonitor,  chatlogs: mountChatlogs,  console: mountConsole,  imagegen: mountImagegen,  memory: mountMemory,  plugins: mountPlugins,  settings: mountSettings,  commands: mountCommands,  bot: mountBot,  protocol: mountProtocol,  behavior: mountBehavior,  groupmanage: mountGroupManager,  tokens: mountTokens,  memes: mountMemes,};function mountAgent(root){
+  // ── 状态（全部挂 window 上，方便页面切走再切回来时恢复）────────────────
+  const W = window;
+  W.__ag = W.__ag || {
+    sessionId: '', busy: false, stream: null, abort: false,
+    history: [], trace: [], stepMap: {}, lastInput: '', inputs: [],
+    inputIdx: -1, chars: 0, startedAt: 0, seq: 0, ready: null
+  };
+  const S = W.__ag;
+
+  if (!S.sessionId) {
+    S.sessionId = 'desk-' + Date.now() + '-' + Math.floor(Math.random() * 1000);
+  }
+
+  const IM = '<svg class="side-rail-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:14px;height:14px"><path d="M12 2l2.4 5.6L20 9l-4 4 1 6-5-3-5 3 1-6-4-4 5.6-1.4z"/></svg>';
+
+  root.innerHTML =
+    '<div class="ag-shell">' +
+      '<div class="ag-main">' +
+        '<div class="panel-title" style="padding:13px 18px 0;margin-bottom:10px">对话' +
+          '<span class="ag-pill" id="agSess">—</span>' +
+          '<span class="ag-pill" id="agStatus">检测中…</span>' +
+        '</div>' +
+        '<div class="ag-stream" id="agStream"></div>' +
+        '<div class="ag-input">' +
+          '<textarea class="ag-ta" id="agTa" rows="1" placeholder="交给 Agent 一件事…（Enter 发送 / Shift+Enter 换行 / Esc 中止 / ↑ 调上条）"></textarea>' +
+          '<button class="btn primary" id="agSend">执行</button>' +
+          '<button class="btn" id="agStop" disabled>中止</button>' +
+        '</div>' +
+        '<div class="ag-hint" id="agHint">就绪 · 工具与记忆由主程序提供</div>' +
+      '</div>' +
+      '<div class="ag-side">' +
+        '<div class="ag-panel">' +
+          '<div class="ag-panel-t">沙漏时间轴</div>' +
+          '<div class="ag-hg" id="agHourglass">' +
+            '<div class="ag-hg-node" id="hgIdle"><div class="ag-hg-k">距上次对话</div><div class="ag-hg-v" id="hgIdleV">—</div></div>' +
+            '<div class="ag-hg-node"><div class="ag-hg-k">本次步数</div><div class="ag-hg-v" id="hgSteps">0</div></div>' +
+            '<div class="ag-hg-node"><div class="ag-hg-k">Token</div><div class="ag-hg-v" id="hgTokens">0</div></div>' +
+            '<div class="ag-hg-node"><div class="ag-hg-k">工具调用</div><div class="ag-hg-v" id="hgTools">0</div></div>' +
+          '</div>' +
+        '</div>' +
+        '<div class="ag-panel">' +
+          '<div class="ag-panel-t">本体记忆</div>' +
+          '<div id="agMem"><div class="meta">读取中…</div></div>' +
+        '</div>' +
+        '<div class="ag-panel" style="flex:1;min-height:130px;display:flex;flex-direction:column">' +
+          '<div class="ag-panel-t">会话 <button class="ag-mini" id="agNew">新建</button></div>' +
+          '<div id="agSessList" style="overflow-y:auto;flex:1"><div class="meta">—</div></div>' +
+        '</div>' +
+      '</div>' +
+    '</div>';
+
+  const streamEl = $('agStream');
+  const ta = $('agTa');
+  const hintEl = $('agHint');
+  const sendBtn = $('agSend');
+  const stopBtn = $('agStop');
+
+  // ── 渲染：一条用户消息 ────────────────────────────────────────────
+  function pushUser(text){
+    const d = document.createElement('div');
+    d.className = 'ag-msg ag-me';
+    d.innerHTML = '<div class="ag-role">我</div><div class="ag-bubble">' + escapeHtml(text) + '</div>';
+    streamEl.appendChild(d);
+    scrollBottom();
+  }
+  // ── 渲染：Agent 最终答复 ──────────────────────────────────────────
+  function pushBot(text, err){
+    const d = document.createElement('div');
+    d.className = 'ag-msg' + (err ? ' ag-err' : '');
+    d.innerHTML = '<div class="ag-role">Agent' + (err ? ' · 出错' : '') + '</div>' +
+                  '<div class="ag-bubble">' + escapeHtml(text) + '</div>';
+    streamEl.appendChild(d);
+    scrollBottom();
+    return d;
+  }
+  function pushSys(text){
+    const d = document.createElement('div');
+    d.className = 'ag-msg';
+    d.innerHTML = '<div class="ag-role">系统</div><div class="ag-bubble" style="font-family:var(--font-m);font-size:12.5px;color:var(--ink3)">' + escapeHtml(text) + '</div>';
+    streamEl.appendChild(d);
+    scrollBottom();
+  }
+  function scrollBottom(){
+    streamEl.scrollTop = streamEl.scrollHeight;
+  }
+
+  // ── 执行轨迹卡（EggBloom 式）─────────────────────────────────────
+  //  每步工具调用一张卡：工具名 + 参数摘要 + 结果摘要 + 耗时；可折叠看全文；
+  //  超长结果走 spill 时给路径；支持「单步重跑」。
+  function makeStepCard(step, tool, args){
+    const id = 'agstep-' + S.sessionId.replace(/[^a-zA-Z0-9]/g, '') + '-' + step + '-' + tool;
+    let card = $(id);
+    if (card) return card;
+    card = document.createElement('div');
+    card.className = 'ag-card';
+    card.id = id;
+    let argSum = '';
+    try {
+      argSum = typeof args === 'string' ? args : JSON.stringify(args || {});
+    } catch(e){ argSum = String(args || ''); }
+    if (argSum.length > 110) argSum = argSum.slice(0, 110) + '…';
+    card.innerHTML =
+      '<div class="ag-card-hd">' +
+        '<span class="ag-dot" data-role="dot"></span>' +
+        '<span class="ag-card-tool">' + escapeHtml(tool) + '</span>' +
+        '<span class="ag-card-sum">' + escapeHtml(argSum) + '</span>' +
+        '<span class="ag-card-ms" data-role="ms">…</span>' +
+      '</div>' +
+      '<div class="ag-card-bd" data-role="bd">执行中…</div>' +
+      '<div class="ag-card-bar">' +
+        '<button class="ag-mini" data-role="rerun">从这一步重跑</button>' +
+        '<button class="ag-mini" data-role="copy">复制全文</button>' +
+        '<span class="ag-mini" style="border:none;cursor:default" data-role="spill"></span>' +
+      '</div>';
+    card.querySelector('.ag-card-hd').addEventListener('click', () => card.classList.toggle('open'));
+    card.querySelector('[data-role="rerun"]').addEventListener('click', (e) => {
+      e.stopPropagation();
+      rerunFrom(step);
+    });
+    card.querySelector('[data-role="copy"]').addEventListener('click', (e) => {
+      e.stopPropagation();
+      const t = card.querySelector('[data-role="bd"]').textContent || '';
+      try { navigator.clipboard.writeText(t); showToast('已复制全文', 'success'); }
+      catch(err){ showToast('复制失败（浏览器限制）', 'error'); }
+    });
+    streamEl.appendChild(card);
+    scrollBottom();
+    return card;
+  }
+  function fillStepCard(card, res){
+    if (!card) return;
+    const dot = card.querySelector('[data-role="dot"]');
+    const ms = card.querySelector('[data-role="ms"]');
+    const bd = card.querySelector('[data-role="bd"]');
+    const spill = card.querySelector('[data-role="spill"]');
+    if (res.ok === false) card.classList.add('ag-fail');
+    dot.className = 'ag-dot ' + (res.ok === false ? 'bad' : 'ok');
+    if (res.elapsed != null) ms.textContent = Number(res.elapsed).toFixed(2) + 's';
+    let body = res.full_text || res.summary || '(无输出)';
+    if (res.truncated) body += '\n\n[输出已被截断（预算保护）]';
+    bd.textContent = body;
+    if (res.spilled && res.path) spill.textContent = '完整结果落盘: ' + res.path;
+  }
+
+  // ── 时间轴 / 统计 ────────────────────────────────────────────────
+  function refreshHourglass(usage){
+    const steps = Object.keys(S.stepMap).length;
+    $('hgSteps').textContent = steps;
+    $('hgTools').textContent = Object.values(S.stepMap).reduce((a, b) => a + b, 0);
+    let tk = 0;
+    if (usage) {
+      tk = usage.total || ((usage.input || 0) + (usage.output || 0));
+    }
+    $('hgTokens').textContent = tk ? Number(tk).toLocaleString() : '0';
+    // 距上次对话：用会话日志的 updated 粗略反映
+    if (S.lastTurnAt) {
+      const sec = Math.max(0, Math.floor((Date.now() - S.lastTurnAt) / 1000));
+      const v = sec < 60 ? (sec + ' 秒前')
+             : sec < 3600 ? (Math.floor(sec / 60) + ' 分钟前')
+             : (Math.floor(sec / 3600) + ' 小时前');
+      $('hgIdleV').textContent = v;
+      $('hgIdle').classList.add('on');
+    }
+  }
+  setInterval(() => { if (currentPage === 'agent') refreshHourglass(S.lastUsage); }, 10000);
+
+  // ── 面板：运行状态（agent 后端是否就绪 / 工具数 / 会话数）───────────
+  function loadStatus(){
+    API('/agent/status')
+      .then(r => {
+        const ready = !!(r && r.ready);
+        const botOn = !!(r && r.bot_running);
+        const tools = (r && r.tools && r.tools.total != null) ? r.tools.total : null;
+        const sess = (r && r.sessions != null) ? r.sessions : null;
+        const mem = (r && r.memory) || {};
+        let txt = ready ? 'Agent 就绪' : (botOn ? 'Agent 未就绪' : 'Bot 未运行');
+        if (ready && tools != null) txt += ' · 工具 ' + tools;
+        if (ready && sess != null) txt += ' · 会话 ' + sess;
+        if (ready && mem.available) txt += ' · 记忆在线';
+        const el = $('agStatus');
+        if (el) {
+          el.textContent = txt;
+          el.className = 'ag-pill ' + (ready ? 'ok' : 'bad');
+          el.title = ready
+            ? 'Agent 后端已就绪，可直接对话'
+            : (botOn ? 'Bot 在跑但 Agent 未就绪：检查 harness 是否加载' : 'Bot 未运行：先在「Bot 控制」里启动');
+        }
+        S.ready = ready;
+      })
+      .catch(() => {
+        const el = $('agStatus');
+        if (el) {
+          el.textContent = '状态未知';
+          el.className = 'ag-pill bad';
+          el.title = '无法读取 /api/agent/status（WebUI 到 Bot 的链路可能未通）';
+        }
+        S.ready = false;
+      });
+  }
+
+  // ── 面板：本体记忆 ──────────────────────────────────────────────
+  function loadMemory(){
+    API('/agent/memory', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}' })
+      .then(r => {
+        const m = (r && r.memory) || {};
+        const avail = !!m.available;
+        let rows = '<div class="ag-kv"><span>状态</span><span><span class="ag-dot ' + (avail ? 'ok' : 'bad') + '"></span>' + (avail ? '可用' : '不可用') + '</span></div>';
+        if (m.messages != null) rows += '<div class="ag-kv"><span>记忆条数</span><span>' + Number(m.messages).toLocaleString() + '</span></div>';
+        if (m.stage) rows += '<div class="ag-kv"><span>阶段</span><span>' + escapeHtml(m.stage) + '</span></div>';
+        if (m.offset && m.offset.direction) {
+          const dirs = { frugal: '省钱', spend: '愿投', drift: '放弃', neutral: '平稳' };
+          rows += '<div class="ag-kv"><span>决策偏移</span><span>' + escapeHtml(dirs[m.offset.direction] || m.offset.direction) + ' (' + (m.offset.offset > 0 ? '+' : '') + (m.offset.offset || 0) + '%)</span></div>';
+        }
+        if (!avail && m.reason) rows += '<div class="ag-kv"><span>原因</span><span style="color:var(--ink3)">' + escapeHtml(m.reason) + '</span></div>';
+        $('agMem').innerHTML = rows;
+      })
+      .catch(() => { $('agMem').innerHTML = '<div class="meta">记忆状态读取失败</div>'; });
+  }
+
+  // ── 面板：会话列表（刷新页面不丢）────────────────────────────────
+  function loadSessions(){
+    API('/agent/sessions', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{"kind":"desk","limit":40}' })
+      .then(r => {
+        let list = (r && r.sessions) || [];
+        if (!list.length) { $('agSessList').innerHTML = '<div class="meta">还没有历史会话</div>'; return; }
+        $('agSessList').innerHTML = list.map(s => {
+          const on = s.session_id === S.sessionId ? ' on' : '';
+          const when = s.updated ? new Date(s.updated * 1000).toLocaleString() : '';
+          const src = s.source === 'live' ? '<span class="ag-pill live">运行中</span>' : '';
+          return '<div class="ag-sess' + on + '" data-sid="' + escapeHtml(s.session_id) + '">' +
+                   '<div class="ag-sess-id">' + escapeHtml(s.session_id) + '</div>' +
+                   '<div class="ag-sess-meta">' + escapeHtml(when) + ' ' + src + '</div>' +
+                 '</div>';
+        }).join('');
+        qsa('#agSessList .ag-sess').forEach(n => {
+          n.addEventListener('click', () => switchSession(n.dataset.sid));
+        });
+      })
+      .catch(() => { $('agSessList').innerHTML = '<div class="meta">会话列表读取失败</div>'; });
+  }
+
+  // ── 会话切换 / 新建 ─────────────────────────────────────────────
+  function switchSession(sid){
+    if (!sid || sid === S.sessionId) return;
+    if (S.busy) { showToast('当前任务执行中，先中止再切换', 'error'); return; }
+    S.sessionId = sid;
+    S.stepMap = {}; S.trace = [];
+    streamEl.innerHTML = '';
+    $('agSess').textContent = sid;
+    replaySession(sid);
+    loadSessions();
+  }
+  function replaySession(sid){
+    API('/agent/history', { method: 'POST', headers: {'Content-Type': 'application/json'},
+                            body: JSON.stringify({session_id: sid, limit: 200}) })
+      .then(r => {
+        const tr = (r && r.trace) || [];
+        if (!tr.length) { pushSys('（这个会话没有可回放的记录）'); return; }
+        pushSys('已从日志回放该会话（' + tr.length + ' 条事件）');
+        renderTrace(tr);
+      })
+      .catch(e => pushSys('回放失败：' + e.message));
+  }
+  function renderTrace(trace){
+    // 轨迹事件 → 对话流 + 轨迹卡（**真回放**，不是重新请求模型）
+    S.stepMap = {};
+    let curCard = null;
+    (trace || []).forEach(ev => {
+      const t = ev.type, p = ev.payload || {};
+      if (t === 'user_msg') {
+        pushUser(p.content || '');
+      } else if (t === 'tool_call') {
+        curCard = makeStepCard(p.step || 0, p.tool || '', p.args);
+        S.stepMap[p.step || 0] = (S.stepMap[p.step || 0] || 0) + 1;
+      } else if (t === 'tool_result') {
+        fillStepCard(curCard, p);
+      } else if (t === 'final') {
+        if (p.content) pushBot(p.content, false);
+        else if (p.error) pushBot(p.error, true);
+      }
+    });
+    refreshHourglass(S.lastUsage);
+  }
+  function newSession(){
+    if (S.busy) { showToast('当前任务执行中，先中止', 'error'); return; }
+    S.sessionId = 'desk-' + Date.now() + '-' + Math.floor(Math.random() * 1000);
+    S.stepMap = {}; S.trace = []; S.lastUsage = null;
+    streamEl.innerHTML = '';
+    $('agSess').textContent = S.sessionId;
+    refreshHourglass(null);
+    loadSessions();
+    showToast('已新建会话', 'success');
+  }
+
+  // ── 单步重跑 ─────────────────────────────────────────────────────
+  function rerunFrom(step){
+    if (S.busy) { showToast('当前任务执行中', 'error'); return; }
+    API('/agent/rerun', { method: 'POST', headers: {'Content-Type': 'application/json'},
+                          body: JSON.stringify({session_id: S.sessionId, from_step: step}) })
+      .then(r => {
+        pushSys('从第 ' + step + ' 步重跑（重建历史 ' + (r.history_rebuilt || 0) + ' 条）');
+        if (r.answer) pushBot(r.answer, !r.ok);
+        else if (r.error) pushBot(r.error, true);
+        if (r.trace) renderTrace(r.trace);
+        S.lastUsage = r.usage_total || S.lastUsage;
+        S.lastTurnAt = Date.now();
+        refreshHourglass(S.lastUsage);
+        loadSessions();
+      })
+      .catch(e => pushBot('重跑失败：' + e.message, true));
+  }
+
+  // ── SSE 事件处理 ────────────────────────────────────────────────
+  let curCard = null;
+  function onEvent(ev){
+    const t = ev.type, d = ev.data || {};
+    if (t === 'start') {
+      S.startedAt = Date.now(); S.seq = 0;
+      hintEl.textContent = '执行中…';
+    } else if (t === 'user') {
+      // 已在提交时渲染，避免重复
+    } else if (t === 'tool_call') {
+      curCard = makeStepCard(d.step || 0, d.tool || '', d.args);
+      S.stepMap[d.step || 0] = (S.stepMap[d.step || 0] || 0) + 1;
+      refreshHourglass(S.lastUsage);
+    } else if (t === 'tool_result') {
+      fillStepCard(curCard, d);
+    } else if (t === 'final') {
+      if (d.content) pushBot(d.content, false);
+      else if (d.error) pushBot(d.error, true);
+    } else if (t === 'done') {
+      S.lastUsage = null;
+      S.lastTurnAt = Date.now();
+      setBusy(false);
+      hintEl.textContent = d.error ? ('结束（' + d.error + '）') : ('完成 · ' + (d.elapsed != null ? d.elapsed + 's' : ''));
+      loadSessions();
+    } else if (t === 'aborted') {
+      pushSys('已中止');
+      setBusy(false);
+    } else if (t === 'error') {
+      pushBot(d.error || '未知错误', true);
+      setBusy(false);
+    }
+  }
+
+  function setBusy(v){
+    S.busy = !!v;
+    sendBtn.disabled = S.busy;
+    sendBtn.textContent = S.busy ? '执行中' : '执行';
+    stopBtn.disabled = !S.busy;
+    if (S.busy) $('hgIdle').classList.remove('on');
+  }
+
+  // ── 起 SSE 连接（ndjson 逐行读）──────────────────────────────────
+  function startStream(){
+    stopStream();
+    try {
+      const ctl = new AbortController();
+      S.stream = ctl;
+      fetch('/api/agent/stream?session_id=' + encodeURIComponent(S.sessionId), { signal: ctl.signal })
+        .then(res => {
+          if (!res.body) throw new Error('浏览器不支持流式读取');
+          const reader = res.body.getReader();
+          const dec = new TextDecoder('utf-8');
+          let buf = '';
+          const pump = () => reader.read().then(({done, value}) => {
+            if (done) return;
+            buf += dec.decode(value, { stream: true });
+            let nl;
+            while ((nl = buf.indexOf('\n')) >= 0) {
+              const line = buf.slice(0, nl).trim();
+              buf = buf.slice(nl + 1);
+              if (!line) continue;
+              try { onEvent(JSON.parse(line)); } catch(e){ /* 忽略坏行 */ }
+            }
+            return pump();
+          });
+          return pump();
+        })
+        .catch(err => {
+          if (err && err.name === 'AbortError') return;
+          hintEl.textContent = '事件流断开（不影响任务本身）：' + (err && err.message ? err.message : err);
+        });
+    } catch(e) {
+      hintEl.textContent = '事件流不可用（任务仍会执行，完成后回显结果）';
+    }
+  }
+  function stopStream(){
+    if (S.stream) { try { S.stream.abort(); } catch(e){} S.stream = null; }
+  }
+
+  // ── 提交任务 ─────────────────────────────────────────────────────
+  function submit(){
+    const text = (ta.value || '').trim();
+    if (!text) return;
+    if (S.busy) { showToast('已有任务在执行中', 'error'); return; }
+    S.lastInput = text;
+    S.inputs.push(text);
+    if (S.inputs.length > 50) S.inputs.shift();
+    S.inputIdx = S.inputs.length;
+    ta.value = '';
+    ta.style.height = 'auto';
+    pushUser(text);
+    setBusy(true);
+    S.stepMap = {};
+    curCard = null;
+    refreshHourglass(null);
+    startStream();
+    loadSessions();
+    API('/agent/chat', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ input: text, session_id: S.sessionId, is_group: false })
+    }).then(r => {
+      // 兜底：SSE 断了/没拿到 final 时，用返回把结果补上
+      if (!r) return;
+      if (r.error && r.hint === 'bot_not_running') {
+        pushBot(r.error, true);
+        setBusy(false);
+        return;
+      }
+      if (r.trace && r.trace.length && !S.trace.length) renderTrace(r.trace);
+      if (r.answer && !streamEl.querySelector('.ag-msg:last-child .ag-role')) { /* noop */ }
+      if (r.usage_total) { S.lastUsage = r.usage_total; refreshHourglass(S.lastUsage); }
+      S.lastTurnAt = Date.now();
+      setBusy(false);
+    }).catch(e => {
+      pushBot('请求失败：' + (e && e.message ? e.message : e), true);
+      setBusy(false);
+    });
+  }
+
+  // ── 中止 ─────────────────────────────────────────────────────────
+  function abort(){
+    if (!S.busy) return;
+    API('/agent/abort', { method: 'POST', headers: {'Content-Type': 'application/json'},
+                          body: JSON.stringify({session_id: S.sessionId}) })
+      .then(() => showToast('已请求中止', 'info'))
+      .catch(() => {});
+  }
+
+  // ── 键盘优先（设计文档 §5.4）────────────────────────────────────
+  ta.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit(); }
+    else if (e.key === 'ArrowUp' && !ta.value.trim() && S.inputs.length) {
+      e.preventDefault();
+      if (S.inputIdx > 0) S.inputIdx--;
+      ta.value = S.inputs[S.inputIdx] || '';
+    }
+    else if (e.key === 'ArrowDown' && !ta.value.trim() && S.inputs.length) {
+      e.preventDefault();
+      if (S.inputIdx < S.inputs.length - 1) { S.inputIdx++; ta.value = S.inputs[S.inputIdx] || ''; }
+      else { S.inputIdx = S.inputs.length; ta.value = ''; }
+    }
+  });
+  ta.addEventListener('input', () => {
+    ta.style.height = 'auto';
+    ta.style.height = Math.min(170, ta.scrollHeight) + 'px';
+  });
+  sendBtn.addEventListener('click', submit);
+  stopBtn.addEventListener('click', abort);
+  $('agNew').addEventListener('click', newSession);
+
+  // Esc 中止：只在 Agent 页生效，且不打扰输入法
+  if (!W.__agEscBound) {
+    W.__agEscBound = true;
+    document.addEventListener('keydown', (e) => {
+      if (currentPage !== 'agent') return;
+      if (e.key === 'Escape' && W.__ag && W.__ag.busy) {
+        e.preventDefault();
+        W.__ag.requestAbort && W.__ag.requestAbort();
+      }
+    });
+  }
+  // 把中止函数暴露给全局 keydown（避免闭包作用域问题）
+  S.requestAbort = abort;
+
+  // ── 初始化 ───────────────────────────────────────────────────────
+  $('agSess').textContent = S.sessionId;
+  if (streamEl.children.length === 0) {
+    pushSys('Agent 已就绪。直接说要做什么——我会调用真实工具去做，并把每一步的执行留痕给你看。');
+    replaySession(S.sessionId);
+  }
+  loadMemory();
+  loadSessions();
+  loadStatus();
+  refreshHourglass(S.lastUsage);
+  ta.focus();
+  // 离开页面时断开事件流（避免后台挂着长连接）
+  if (!W.__agLeaveBound) {
+    W.__agLeaveBound = true;
+    const _router = window.router;
+    // 用 MutationObserver 更稳妥：页面容器被清空即视为离开
+    const ctn = $('page-content');
+    if (ctn && W.MutationObserver) {
+      const mo = new MutationObserver(() => {
+        if (ctn.dataset.page !== 'agent') { stopStream(); }
+      });
+      mo.observe(ctn, { attributes: true, attributeFilter: ['data-page'] });
+    }
+  }
+}
+function mountDashboard(root){    root.innerHTML = `    <div class="grid grid-3" style="margin-bottom:24px">      <div class="panel" id="dashBotStatus" style="cursor:pointer" onclick="router('bot')">        <div class="panel-title" style="font-size:13px">Bot</div>        <div style="font-size:28px;font-weight:700;color:var(--ink);margin:8px 0" id="dashBotState">--</div>        <div class="meta" id="dashBotInfo">PID: --</div>      </div>      <div class="panel" id="dashProtoStatus" style="cursor:pointer" onclick="router('protocol')">        <div class="panel-title" style="font-size:13px">\u534f\u8bae\u5c42</div>        <div style="font-size:28px;font-weight:700;color:var(--ink);margin:8px 0" id="dashProtoState">--</div>        <div class="meta" id="dashProtoInfo">API: 3000</div>      </div>      <div class="panel" style="cursor:pointer" onclick="router('chatlogs')">        <div class="panel-title" style="font-size:13px">\u65e5\u5fd7</div>        <div style="font-size:28px;font-weight:700;color:var(--ink);margin:8px 0" id="dashLogCount">--</div>        <div class="meta">\u5b9e\u65f6\u65e5\u5fd7\u6d41</div>      </div>    </div>    <div class="panel" style="max-height:calc(100vh - 280px);overflow:hidden;display:flex;flex-direction:column">      <div class="panel-title">\u7cfb\u7edf\u65e5\u5fd7 <span class="meta">\u5b9e\u65f6<\/span></div>      <div id="dashLog" style="font-family:var(--font-m);font-size:13px;color:var(--ink2);line-height:1.8;padding:8px 4px;flex:1;overflow-y:auto;border:1px solid var(--ink5);border-radius:2px;background:rgba(0,0,0,0.15)"><\/div>    <\/div>  `;  loadDashLog();  loadDashStatus();;  
    loadDashLog();  if (window._dashLogInterval) clearInterval(window._dashLogInterval);  window._dashLogInterval = setInterval(loadDashLog, 3000);}let __logAll = [];let __logFiltered = [];let __logAuto = true;let __logQuery = '';let __logLevel = 'ALL';var __chatlogAutoTimer = null;function __logLevelOf(text){  if (/error|异常|失败|failed/i.test(text)) return 'error';  if (/warn|警告|warning/i.test(text)) return 'warn';  return 'info';}function __logMatches(l){  const q = (__logQuery || '').trim().toLowerCase();  if (!q) return true;  return (l.time || '').toLowerCase().includes(q) || (l.text || '').toLowerCase().includes(q);}function __logApplyFilter(){  __logFiltered = __logAll.filter(l => {    const lv = __logLevelOf(l.text || '');    if (__logLevel !== 'ALL' && lv !== __logLevel.toLowerCase()) return false;    if (!__logMatches(l)) return false;    return true;  });}function __logRender(){  const stream = document.getElementById('logStream');  if (!stream) return;  const atBottom = stream.scrollHeight - stream.scrollTop - stream.clientHeight < 40;  if (!window.__logSelectedKeys) window.__logSelectedKeys = {};
   const rowHtml = [];
   __logFiltered.forEach(l => {    const lv = __logLevelOf(l.text || '');    const k = encodeURIComponent((l.time || '') + '|' + (l.direction || '') + '|' + (l.text || ''));    const on = window.__logSelectedKeys[k] ? ' on' : '';    const selCls = window.__logSelectedKeys[k] ? ' selected' : '';

@@ -1242,6 +1242,88 @@ class Handler(BaseHTTPRequestHandler):
         bare = host.split(":")[0]
         return bare in ("localhost", "127.0.0.1", "::1", "")
 
+    def _proxy_agent_post(self, path, data):
+        """把 /api/agent/* 的 POST 转发给 bot_core（agent 逻辑都在那边）。
+
+        为什么不做成"webui 自己实现 agent"：设计文档 §3 定了**折中**方案 ——
+        逻辑放 harness，bot_core 加薄路由，webui 只转发。这样：
+          · agent 只有一份实现（不会两处漂移）；
+          · 前端始终只跟一个端口说话（不必知道 3005）；
+          · bot 没起来时给出人话错误，而不是超时。
+        """
+        payload = json.dumps(data or {}, ensure_ascii=False).encode("utf-8")
+        # 转发前先探测一次（避免 0.5s 超时把正常的慢请求也判死）
+        if not _is_bot_core_alive():
+            self._send_json(200, {
+                "ok": False,
+                "error": "Bot 未运行：Agent 需要 bot_core 提供模型与工具。请先在「Bot 控制」页启动。",
+                "hint": "bot_not_running",
+            })
+            return
+        try:
+            req = urllib.request.Request(
+                f"{BOT_CORE_URL}{path}",
+                data=payload,
+                headers={"Content-Type": "application/json", "Accept": "application/json"},
+                method="POST",
+            )
+            # agent 任务可能跑很久（多步工具调用）→ 给足超时
+            with urllib.request.urlopen(req, timeout=180) as r:
+                raw = r.read()
+            try:
+                out = json.loads(raw.decode("utf-8"))
+            except Exception:
+                out = {"ok": False, "error": "agent 返回了非 JSON 数据",
+                       "raw": raw[:500].decode("utf-8", "replace")}
+            self._send_json(200, out)
+        except urllib.error.HTTPError as e:
+            try:
+                detail = e.read().decode("utf-8", "replace")[:500]
+            except Exception:
+                detail = ""
+            self._send_json(200, {"ok": False, "error": f"agent 端点返回 {e.code}", "detail": detail})
+        except Exception as e:
+            self._send_json(200, {"ok": False, "error": f"{type(e).__name__}: {e}"})
+
+    def _proxy_agent_stream(self, raw_path):
+        """把 /api/agent/stream（ndjson 长连接）原样透传给 bot_core。
+
+        必须**流式复制**，不能先 read() 再转发 —— 否则前端拿不到实时进度，
+        "流式"就退化成"等全部跑完再一次性给"。
+        """
+        if not _is_bot_core_alive():
+            self._send_json(200, {"ok": False,
+                                  "error": "Bot 未运行：Agent 流需要 bot_core。",
+                                  "hint": "bot_not_running"})
+            return
+        try:
+            req = urllib.request.Request(f"{BOT_CORE_URL}{raw_path}",
+                                         headers={"Accept": "application/x-ndjson"})
+            with urllib.request.urlopen(req, timeout=330) as up:
+                self.send_response(200)
+                self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
+                self.send_header("Cache-Control", "no-cache, no-store")
+                self.send_header("Connection", "close")
+                self.end_headers()
+                while True:
+                    chunk = up.read(2048)
+                    if not chunk:
+                        break
+                    try:
+                        self.wfile.write(chunk)
+                        self.wfile.flush()
+                    except (ConnectionAbortedError, BrokenPipeError):
+                        break
+        except (ConnectionAbortedError, BrokenPipeError):
+            pass
+        except Exception as e:
+            try:
+                self.wfile.write((json.dumps({"type": "error",
+                                              "error": f"{type(e).__name__}: {e}"},
+                                             ensure_ascii=False) + "\n").encode("utf-8"))
+            except Exception:
+                pass
+
     def _send_json(self, status, data):
         try:
             body = json.dumps(data, ensure_ascii=False).encode("utf-8")
@@ -1300,6 +1382,30 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             return
         path = urlparse(self.path).path
+
+        # ── Agent 事件流：长连接透传（放在最前，避免被静态文件/HTML 分支截走）──
+        if path == "/api/agent/stream":
+            self._proxy_agent_stream(self.path)
+            return
+
+        # ── 只读 Agent 端点：GET 也转发（前端刷新时可直读，不必都走 POST）──
+        #  /api/agent/status | sessions | tools | memory | history?
+        if path in ("/api/agent/status", "/api/agent/sessions", "/api/agent/tools",
+                    "/api/agent/memory"):
+            bc = fetch_from_bot_core(path)
+            if bc is None:
+                # bot 没起 → 给一个"能力未知"的占位，前端能正常渲染并提示
+                self._send_json(200, {
+                    "ok": True,
+                    "ready": False,
+                    "bot_running": False,
+                    "memory": {"available": False, "reason": "Bot 未运行"},
+                    "tools": {"total": 0, "by_group": {}},
+                    "sessions": [],
+                })
+            else:
+                self._send_json(200, bc)
+            return
 
         if path == "/" or path == "/index.html":
             try:
@@ -2338,6 +2444,13 @@ class Handler(BaseHTTPRequestHandler):
                 data = json.loads(body)
         except Exception:
             pass
+
+        # ── Agent 端点转发（前端只跟 webui_server 说话，agent 逻辑在 bot_core）──
+        #  设计文档 §3 明确：「不新增独立进程/端口（复用 webui_server 转发）」。
+        #  bot 未运行时返回一个可读的错误（前端能提示"先启动 Bot"），而不是静默失败。
+        if path.startswith("/api/agent/"):
+            self._proxy_agent_post(path, data)
+            return
 
         if path == "/api/imagegen/generate":
             payload = dict(data or {})
