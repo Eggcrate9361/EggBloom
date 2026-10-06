@@ -142,7 +142,10 @@ def before_reply(message="", group_id="", context=None, **kwargs):
                 if content:
                     all_parts.append(content)
                 # 情绪注入的温度应优先（mood 第一个执行，取它）
-                if "temperature" in result:
+                # P0-1 修复：原实现每轮都覆盖，导致「最后一个带温度的模块」胜出
+                # （mem→style→rhythm 里 rhythm 若给温度就会盖掉 mood），与上面注释写明的
+                # 「mood 优先」相矛盾。改为**首个非空即定**，匹配文档化契约。
+                if "temperature" in result and temperature is None:
                     try:
                         temperature = float(result["temperature"])
                     except (TypeError, ValueError):

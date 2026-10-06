@@ -5888,12 +5888,35 @@ def _post_chat_stream(url, payload, api_key="", timeout=60):
     return urllib.request.urlopen(req, timeout=timeout, context=CTX)
 
 
-def _call_chat_sync(messages, runtime_cfg=None, max_tokens=AI_MAX_TOKENS, stream=False, with_tools=True):
+def _effective_temperature(personality_temperature=None) -> float:
+    """决定本次请求真正使用的 temperature。
+
+    P0-1 修复：此前 `personality_temperature`（EGO 按情绪/人格档位算出的温度）
+    从 call_deepseek 一路透传到 _call_deepseek_sync，最终**没有任何一处使用它** ——
+    整条链路恒用全局 AI_TEMPERATURE，"情绪影响说话风格"实际不存在。
+
+    规则（保持可回退、绝不因脏值炸掉请求）：
+      · 传了可用数值 → 用它（夹到 [0.2, 2.0]，与 EGO 各子模块的产出区间一致）
+      · 没传 / 非数值 / 超范围外的脏值 → 回退全局 AI_TEMPERATURE（原行为）
+    """
+    if personality_temperature is not None:
+        try:
+            t = float(personality_temperature)
+        except (TypeError, ValueError):
+            return AI_TEMPERATURE
+        if t != t:                      # NaN
+            return AI_TEMPERATURE
+        return max(0.2, min(2.0, t))
+    return AI_TEMPERATURE
+
+
+def _call_chat_sync(messages, runtime_cfg=None, max_tokens=AI_MAX_TOKENS, stream=False,
+                    with_tools=True, personality_temperature=None):
     cfg = _llm_config(runtime_cfg)
     model_name = cfg.get("model_name") or "deepseek-flash"
     api_url = cfg.get("api_url") or DEEPSEEK_URL
     api_key = cfg.get("api_key") or ""
-    effective_temperature = AI_TEMPERATURE
+    effective_temperature = _effective_temperature(personality_temperature)
     ptype = cfg.get("provider_type") or _resolve_provider_type(cfg)
     if ptype in ("anthropic", "gemini"):
         # 非 OpenAI 兼容协议（Claude / Gemini）：走 providers.py 专属适配器
@@ -5901,7 +5924,8 @@ def _call_chat_sync(messages, runtime_cfg=None, max_tokens=AI_MAX_TOKENS, stream
             raise ValueError(f"{ptype} 流式调用请走 _stream_chat_lines")
         from providers import make_provider
         prov = make_provider(api_url=api_url, api_key=api_key, model=model_name,
-                             provider=ptype, max_retries=3)
+                             provider=ptype, max_retries=3,
+                             temperature=effective_temperature)
         tools = with_tools if isinstance(with_tools, list) else TOOLS
         content, tool_calls, usage = prov.chat(messages, tools=tools, stream=False, max_tokens=max_tokens)
         return {"content": content or "", "tool_calls": tool_calls}, usage
@@ -6195,7 +6219,9 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
     error_retries = 0
     while True:
         try:
-            msg, usage = _call_chat_sync(messages, runtime_cfg=None, max_tokens=effective_max_tokens, stream=False, with_tools=tools_for_call)
+            msg, usage = _call_chat_sync(messages, runtime_cfg=None, max_tokens=effective_max_tokens,
+                                         stream=False, with_tools=tools_for_call,
+                                         personality_temperature=personality_temperature)
 
             tool_calls = msg.get("tool_calls")
             if tool_calls:
