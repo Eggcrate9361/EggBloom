@@ -1145,10 +1145,57 @@ _MEME_CACHE_MAX = 1200
 def _meme_dirs():
     return [PROJECT / 'memes' / 'memes', PROJECT.parent / 'memes' / 'memes'] if PROJECT else []
 
+
+def _within(child, base) -> bool:
+    """child 是否位于 base 之内（realpath + 大小写归一后比较）。
+
+    P0-4：用于表情包路径校验。此前 `_serve_meme` 是裸的 `meme_dir / rel`，
+    `/memes/../../bot_config.json` 这类上溯可读出 meme 目录之外的任意文件
+    （含 bot_config.json 里的 onebot_token）。
+    """
+    try:
+        c = os.path.normcase(os.path.abspath(str(child)))
+        b = os.path.normcase(os.path.abspath(str(base)))
+    except Exception:
+        return False
+    return c == b or c.startswith(b + os.sep)
+
+
+def _safe_meme_rel(rel):
+    """把 URL 里的相对路径规整成安全的相对路径；不安全则返回 None。
+
+    拒绝：空、绝对路径、含 `..` 的任一段、含盘符/UNC 前缀。
+    """
+    if not rel:
+        return None
+    s = str(rel).replace('\\', '/')
+    if s.startswith('/') or s.startswith('~'):
+        return None
+    parts = [p for p in s.split('/') if p not in ('', '.')]
+    if not parts or any(p == '..' for p in parts):
+        return None
+    if ':' in parts[0]:                 # C:xxx / UNC 之类
+        return None
+    return '/'.join(parts)
+
+
 def _serve_meme(self, rel):
-    """Serve a meme file with in-memory caching. Returns True if served."""
+    """Serve a meme file with in-memory caching. Returns True if served.
+
+    安全（P0-4）：rel 来自 URL，必须先规整 + 做 realpath 容器校验，
+    双重把关后再读盘。校验失败**不返回任何内容**（调用方走 404）。
+    """
+    safe_rel = _safe_meme_rel(rel)
+    if safe_rel is None:
+        return False
     for meme_dir in _meme_dirs():
-        file_path = meme_dir / rel
+        try:
+            base = meme_dir.resolve()
+            file_path = (base / safe_rel).resolve()
+        except Exception:
+            continue
+        if not _within(file_path, base):
+            continue                    # 软链接/拼接绕过 → 直接跳过
         if file_path.is_file():
             key = str(file_path)
             st = file_path.stat()
@@ -1174,26 +1221,32 @@ def _serve_meme(self, rel):
             return True
     # Fallback: search by filename across meme dirs (slower path, no caching)
     try:
-        base = Path(rel).name
+        base = Path(safe_rel).name            # 只取文件名，天然不含上溯
         if base:
             for meme_dir in _meme_dirs():
                 if not meme_dir.exists():
                     continue
                 for candidate in meme_dir.rglob(base):
-                    if candidate.is_file():
-                        ext = candidate.suffix.lower()
-                        ct = {'jpg': 'image/jpeg', 'jpeg': 'image/jpeg', 'png': 'image/png', 'gif': 'image/gif', 'webp': 'image/webp'}.get(ext[1:], 'application/octet-stream')
-                        data = candidate.read_bytes()
-                        self.send_response(200)
-                        self.send_header('Content-Type', ct)
-                        self.send_header('Content-Length', str(len(data)))
-                        self.send_header('Cache-Control', 'public, max-age=86400')
-                        self.end_headers()
-                        try:
-                            self.wfile.write(data)
-                        except (BrokenPipeError, ConnectionResetError):
-                            pass
-                        return True
+                    if not candidate.is_file():
+                        continue
+                    try:
+                        if not _within(candidate.resolve(), meme_dir.resolve()):
+                            continue              # 符号链接可能指向目录外，跳过
+                    except Exception:
+                        continue
+                    ext = candidate.suffix.lower()
+                    ct = {'jpg': 'image/jpeg', 'jpeg': 'image/jpeg', 'png': 'image/png', 'gif': 'image/gif', 'webp': 'image/webp'}.get(ext[1:], 'application/octet-stream')
+                    data = candidate.read_bytes()
+                    self.send_response(200)
+                    self.send_header('Content-Type', ct)
+                    self.send_header('Content-Length', str(len(data)))
+                    self.send_header('Cache-Control', 'public, max-age=86400')
+                    self.end_headers()
+                    try:
+                        self.wfile.write(data)
+                    except (BrokenPipeError, ConnectionResetError):
+                        pass
+                    return True
     except Exception:
         pass
     return False
@@ -3104,9 +3157,19 @@ class Handler(BaseHTTPRequestHandler):
                 data = json.loads(self.rfile.read(int(self.headers.get('Content-Length', 0))))
                 name = data.get('name', '')
                 tags = data.get('tags', [])
-                meme_dir = PROJECT / 'memes' / 'memes'
-                target = meme_dir / name
+                # P0-4：name 来自请求体且**用于写盘**。此前是裸的 `meme_dir / name`，
+                # name="../../bot_config" → with_suffix('.json') 会**覆盖 bot_config.json**
+                # （任意 .json 写的路径穿越，比读更严重）。这里双重校验后再写。
+                safe = _safe_meme_rel(name)
+                d_base = (PROJECT / 'memes' / 'memes').resolve()
+                target = (d_base / safe).resolve() if safe else None
+                if not safe or not _within(target, d_base):
+                    self._send_json(200, {'success': False, 'error': '非法的表情包名'})
+                    return
                 tag_file = target.with_suffix('.json')
+                if not _within(tag_file.resolve(), d_base):
+                    self._send_json(200, {'success': False, 'error': '非法的表情包名'})
+                    return
                 tag_file.write_text(json.dumps({'tags': tags}, ensure_ascii=False), encoding='utf-8')
                 self._send_json(200, {'success': True})
             except Exception as e:
@@ -3124,6 +3187,10 @@ class Handler(BaseHTTPRequestHandler):
                         if fpath.suffix.lower() in ('.png', '.jpg', '.jpeg', '.gif', '.webp'):
                             rel_name = str(fpath.relative_to(src))
                             dest = meme_dir / rel_name
+                            # P0-4：rel_name 由 relative_to 产出、理论安全，但仍做一次
+                            # 容器校验作为纵深防御（若将来改成别的取名方式不至于失守）。
+                            if not _within(dest.resolve(), meme_dir.resolve()):
+                                continue
                             dest.parent.mkdir(parents=True, exist_ok=True)
                             if not dest.exists():
                                 dest.write_bytes(fpath.read_bytes())
