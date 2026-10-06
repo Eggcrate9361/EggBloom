@@ -482,6 +482,9 @@ _meme_lock = Lock()            # MEME_LAST_SENT
 
 LAST_MSG_TIME: float = 0
 
+# P0-3：状态写盘失败的观测位（原实现是裸 `except: pass`，失败无声无息）
+_STATE_SAVE_FAILS: dict = {"n": 0, "last": ""}
+
 # 事件去重：优先按 message_id 去重（同一秒多条消息不丢）；无 id 时才回退时间戳水位线。
 # 此前按秒级时间戳 `_msg_time <= LAST_MSG_TIME` 会吞掉同一秒的第二条及后续消息。
 _SEEN_MSG_IDS: set = set()
@@ -2180,7 +2183,20 @@ def save_state(force: bool = False):
                 "chat_history": {qq: ch[-24:] for qq, ch in chat_history.items()} if chat_history else {},
                 "group_chat_history": group_chat_history,
             })
-        except: pass
+            if _STATE_SAVE_FAILS["n"]:
+                log(f"[状态] 写盘已恢复（此前连续失败 {_STATE_SAVE_FAILS['n']} 次）")
+                _STATE_SAVE_FAILS["n"] = 0
+                _STATE_SAVE_FAILS["last"] = ""
+        except Exception as e:
+            # P0-3：原为裸 `except: pass` —— 写盘失败无声无息，重启后状态莫名其妙丢失。
+            # 这里**只记录、不抛出**：save_state 在主循环里被调用，抛异常会打断消息处理
+            # （对齐 DSH 不变量 A10「绝不向主循环抛异常」）。
+            _STATE_SAVE_FAILS["n"] += 1
+            _STATE_SAVE_FAILS["last"] = str(e)
+            try:
+                log(f"[状态] 写盘失败（连续第 {_STATE_SAVE_FAILS['n']} 次，已跳过本轮）: {e}")
+            except Exception:
+                pass
 
 
 def _extract_card_text(data_str) -> str:
