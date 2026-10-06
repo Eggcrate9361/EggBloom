@@ -237,6 +237,12 @@ DEFAULT_CONFIG = {
     "group_idle_exit_probability": 0.3,
     "group_idle_exit_min_silence": 600,
 
+    # 群聊白名单（P0-2）：Bot 只在这些群里参与，其余群完全静默。
+    #   [] 或未设置 = 不限制（兼容现状：所有群都参与，升级不改变现网行为）
+    #   非空       = 只有列出的群号允许
+    # 逐群开关 group_restrictions[gid].reply_enabled=False 优先级更高，始终拒绝。
+    "group_whitelist": [],
+
     # 表情包
     "meme_enable": True,
     "meme_idle_exit_enable": True,

@@ -662,6 +662,9 @@ def start_event_server():
                         except Exception:
                             pass
                         ginfo["reply_enabled"] = _group_restriction(gid, "reply_enabled", True)
+                        # P0-2：把白名单判定也暴露出来，否则「Bot 为什么不在这个群说话」无从排查
+                        ginfo["whitelisted"] = _group_allowed(gid)
+                        ginfo["block_reason"] = _group_block_reason(gid) or ""
                         ginfo["new_member_card"] = _group_restriction(gid, "new_member_card", "") or ""
                         out.append(ginfo)
                     resp["groups"] = out
@@ -4710,6 +4713,68 @@ def _group_restriction(gid, key, default=None):
     return default
 
 
+# ── 群聊白名单（P0-2）──────────────────────────────────────────────
+# 缺陷：群分支原先只查逐群 reply_enabled（默认 True），**没有任何"只在这些群工作"
+# 的开关** —— 适配器转发什么群，Bot 就在什么群说话。被拉进陌生群会立刻开口。
+_GROUP_BLOCK_NOTICE: dict = {}
+_GROUP_BLOCK_NOTICE_COOLDOWN = 1800.0   # 每个群每 30 分钟最多提示一次，避免刷屏
+
+
+def _group_whitelist() -> list:
+    """解析配置 group_whitelist。空/未设置 → []（表示不限制）。"""
+    raw = _config.get("group_whitelist")
+    if raw is None or raw == "":
+        return []
+    if isinstance(raw, str):
+        raw = re.split(r"[\s,;，；]+", raw)
+    if not isinstance(raw, (list, tuple, set)):
+        return []
+    out = []
+    for x in raw:
+        if x is None:
+            continue                      # None 不能被 str() 成 "None" 混进白名单
+        if isinstance(x, (list, tuple, dict, set)):
+            continue                      # 嵌套容器不是群号，跳过
+        s = str(x).strip()
+        if s:
+            out.append(s)
+    return out
+
+
+def _group_block_reason(gid):
+    """该群是否被拒绝参与；返回原因字符串，None = 允许。
+
+    语义（P0-2，**空白名单 = 不限制**，保证升级不改变现网行为）：
+      1. 逐群 reply_enabled=False  → 拒绝（该开关优先，语义与从前完全一致）
+      2. 白名单非空且该群不在其中  → 拒绝
+      3. 其余                      → 允许
+    """
+    g = str(gid).strip()
+    if _group_restriction(gid, "reply_enabled", True) is False:
+        return "该群自动回复已关闭（群管理页 reply_enabled=False）"
+    wl = _group_whitelist()
+    if wl and g not in wl:
+        return f"不在群白名单（白名单共 {len(wl)} 个群）"
+    return None
+
+
+def _group_allowed(gid) -> bool:
+    """该群是否允许 Bot 参与（白名单 + 逐群开关一并判定）。"""
+    return _group_block_reason(gid) is None
+
+
+def _notice_group_blocked(gid, reason):
+    """按冷却时间提示"某群被白名单挡住" —— 否则用户只会看到 Bot 不说话、无从排查。"""
+    try:
+        g = str(gid)
+        now = time.time()
+        if now - float(_GROUP_BLOCK_NOTICE.get(g) or 0) >= _GROUP_BLOCK_NOTICE_COOLDOWN:
+            _GROUP_BLOCK_NOTICE[g] = now
+            log(f"群[{g}] 不参与：{reason}")
+    except Exception:
+        pass
+
+
 def _persist_config_file(new_cfg):
     """把配置原子写入程序目录 bot_config.json（真实文件）。
 
@@ -7429,6 +7494,10 @@ def main():
                 now = time.time()
                 # 遍历所有有会话的群
                 for gid in list(GROUP_SESSION.keys()):
+                    # 白名单收紧后：不再对已排除的群发言，并顺手清掉它的会话
+                    if not _group_allowed(gid):
+                        GROUP_SESSION.pop(gid, None)
+                        continue
                     gs = GROUP_SESSION.get(gid)
                     if gs:
                         bot_last = GROUP_LAST_BOT_MSG.get(gid, 0)
@@ -7450,6 +7519,8 @@ def main():
                 for gid in list(GROUP_IDS):
                     if gid in GROUP_SESSION:
                         continue  # 已经在上面处理了
+                    if not _group_allowed(gid):
+                        continue  # 白名单/逐群开关拒绝 → 不发退场语
                     bot_last = GROUP_LAST_BOT_MSG.get(gid, 0)
                     last_any = GROUP_LAST_ANY_MSG.get(gid, 0)
                     elapsed = now - bot_last if bot_last > 0 else 0
@@ -7489,10 +7560,13 @@ def main():
                             if _plugin_reply and str(_plugin_reply).strip():
                                 _pr = str(_plugin_reply).strip()
                                 if _mtype == "group" and msg.get("_group_id"):
-                                    # 尊重群回复开关（与正常路径一致）
-                                    if _group_restriction(msg.get("_group_id"), "reply_enabled", True) is not False:
-                                        smart_send_group(msg.get("_group_id"), _pr)
+                                    # 尊重群开关 + 白名单（与正常路径一致）
+                                    _pid_gid = msg.get("_group_id")
+                                    if _group_allowed(_pid_gid):
+                                        smart_send_group(_pid_gid, _pr)
                                         log(f"[Plugin] on_message 插件回复: {_pr[:60]}")
+                                    else:
+                                        _notice_group_blocked(_pid_gid, _group_block_reason(_pid_gid))
                                 elif _msender:
                                     smart_send(_pr, target_qq=_msender)
                                     log(f"[Plugin] on_message 插件回复: {_pr[:60]}")
@@ -7509,8 +7583,9 @@ def main():
                     msg_uid = str(msg.get("user_id", ""))
                     if sender == BOT_QQ or msg_uid == BOT_QQ or msg.get("post_type") == "message_sent":
                         continue
-                    # 群限制：该群自动回复已关闭（webui 群管理页），完全静默
-                    if _group_restriction(group_id, "reply_enabled", True) is False:
+                    # 群限制：该群自动回复已关闭（webui 群管理页）或不在白名单 → 完全静默
+                    if not _group_allowed(group_id):
+                        _notice_group_blocked(group_id, _group_block_reason(group_id))
                         continue
                     text = extract_text(msg).strip()
                     
