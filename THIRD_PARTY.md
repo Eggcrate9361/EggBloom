@@ -10,17 +10,19 @@
 
 | 组件 | 用途 | 许可证 | 位置 | 状态 |
 |---|---|---|---|---|
-| **NexSandglass** | 沙漏记忆系统（分层记忆 / 画像 / 决策粒子） | **MIT**（`Copyright (c) 2026 NexSandglass`） | `nexsandglass/` | ✅ 已声明（`nexsandglass/LICENSE`） |
+| **NexSandglass** | 沙漏记忆系统（分层记忆 / 画像 / 决策粒子） | **MIT**（`Copyright (c) 2026 NexSandglass`） | `nexsandglass/`（内嵌 v2.9.10） | ✅ 已声明（`nexsandglass/LICENSE`） |
 | Fusion Pixel Font 12px SC | 中文像素字体 | SIL OFL-1.1 | `webui/fonts/fusion-pixel-12px-sc.*` | ✅ 已署名 |
 | Press Start 2P | 显示体 | SIL OFL-1.1 | `webui/fonts/press-start-2p-latin-400.woff2` | ✅ 已署名 |
 | Silkscreen | 等宽/标注体 | SIL OFL-1.1 | `webui/fonts/silkscreen-latin-400.woff2` | ✅ 已署名 |
 | card-icons | UI 图标 | 自绘 / 自制 | `webui/card-icons/` | ✅ |
 | 表情包图库 | 动漫二创表情图 | **来源不明** | `memes/`（git 忽略） | 🚫 **不分发**：仅本机自用 |
 
-> NexSandglass 于 2026-08-21 随初始提交进入本仓库（提交者 EggBloom），无第三方版权头、
-> 无上游引用。按自有代码处理，用**独立版权行** `Copyright (c) 2026 NexSandglass`
-> 单独授权（`nexsandglass/LICENSE`）——与根目录的 `EggBloom Team` 分开，
-> 将来它独立成仓库时不用改版权归属。
+> NexSandglass 是独立上游项目，源码内嵌于本仓库 `nexsandglass/`（当前版本 v2.9.10）：
+> 上游仓库 <https://github.com/lovevin1314-tech/NexSandglass-Agent-DedicatedMemory>，
+> MIT 许可，版权行 `Copyright (c) 2026 NexSandglass`（`nexsandglass/LICENSE` 为该上游的原始许可文件）。
+> EggBloom 对其的使用方式是**内嵌集成 + 桥接层**（`sandglass_bridge.py`、`nexsandglass/memory_provider.py`），
+> 不改动其版权归属；该目录的代码著作权属于上游作者。
+> 若需同步上游更新（当前上游已至 V3.x），按上游仓库自身的发布说明进行。
 
 字体版权与来源详见 `webui/fonts/README.txt`。
 
@@ -47,7 +49,7 @@ NapCat / SnowLuma / LLOneBot / OneBot v11 实现、DeepSeek 等云端模型、Ol
 
 | 组件 | 结论 |
 |---|---|
-| NexSandglass | 自有代码 → `nexsandglass/LICENSE`（MIT，`Copyright (c) 2026 NexSandglass`） |
+| NexSandglass | **独立上游项目** → 内嵌 v2.9.10 + 桥接（`sandglass_bridge.py`）。上游 MIT，版权行 `Copyright (c) 2026 NexSandglass`，保留上游 `LICENSE` 原文。来源：<https://github.com/lovevin1314-tech/NexSandglass-Agent-DedicatedMemory> |
 | LiGGUF | 上游 README 声明 MIT → `models/LICENSE-ligguf.txt` 随包分发 |
 | 表情包图库 | 283 张二创动漫图来源不明 → **不随任何包对外分发**（仓库里本就未跟踪） |
 | 字体 | Press Start 2P / Silkscreen / Fusion Pixel 均 OFL-1.1，署名见 `webui/fonts/README.txt` |

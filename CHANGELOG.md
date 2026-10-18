@@ -13,6 +13,10 @@
 
 ### 变更
 
+- **`NexSandglass` 归属修正**：确认为独立上游项目
+  [`lovevin1314-tech/NexSandglass-Agent-DedicatedMemory`](https://github.com/lovevin1314-tech/NexSandglass-Agent-DedicatedMemory)
+  （MIT，`Copyright (c) 2026 NexSandglass`，内嵌 v2.9.10）。
+  `README.md` / `THIRD_PARTY.md` / `docs/RELEASE_CHECKLIST.md` 三处此前写作「本项目自有」「无上游引用」，已改为上游来源标注。
 - 代码与文档中的真实 QQ / 群号 / 人名全部替换为占位符；默认值不再指向任何真实账号。
 - `group_trigger_words` 默认改为 `["小a"]`（为空时仍自动派生 Bot 昵称）。
 - `.gitignore` 补齐 `chat_logs/`、`personality/`、`logs/`、`image_cache/`、`self_learning_db/` 等隐私目录。

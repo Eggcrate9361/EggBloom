@@ -106,7 +106,7 @@ python webui/webui_server.py
 | LiGGUF | 进程内 GGUF 推理引擎（记忆向量化 DLL） | [matrixsmaster/ligguf](https://github.com/matrixsmaster/ligguf) |
 | Playwright | 浏览器自动化（web_operator 插件） | [microsoft/playwright](https://github.com/microsoft/playwright) |
 | Electron | 桌面外壳 | [electron/electron](https://github.com/electron/electron) |
-| NexSandglass | 沙漏记忆系统 | 本项目自有，MIT |
+| NexSandglass | 沙漏记忆系统（分层记忆 / 画像 / 决策粒子） | [lovevin1314-tech/NexSandglass-Agent-DedicatedMemory](https://github.com/lovevin1314-tech/NexSandglass-Agent-DedicatedMemory) |
 
 完整清单与许可归属见 [`THIRD_PARTY.md`](THIRD_PARTY.md)。
 

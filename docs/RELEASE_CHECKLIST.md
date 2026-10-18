@@ -10,7 +10,7 @@
 | # | 事项 | 现状 | 谁定 |
 |---|---|---|---|
 | 0.1 | **仓库地址 / 用户名** | `Eggcrate9361/EggBloom`（已替换 README / CONTRIBUTING / issue 模板） | ✅ |
-| 0.2 | **NexSandglass 的许可证** | 已按「本项目自有」补 `nexsandglass/LICENSE`（MIT） | ✅ |
+| 0.2 | **NexSandglass 的许可证** | **上游项目** [lovevin1314-tech/NexSandglass-Agent-DedicatedMemory](https://github.com/lovevin1314-tech/NexSandglass-Agent-DedicatedMemory)，MIT。已保留上游 `LICENSE` 原文（`Copyright (c) 2026 NexSandglass`），`THIRD_PARTY.md` 已按上游来源标注 | ✅ |
 | 0.3 | **LiGGUF DLL 的再分发许可** | README 明写 MIT；已补 `models/LICENSE-ligguf.txt`（随 zip 分发） | ✅ |
 | 0.4 | 表情包 / 图标来源 | 混合，部分不明 | 抽查后决定 |
 
@@ -20,10 +20,9 @@
 
 ### 1.1 许可证冲突
 
-- [ ] **NexSandglass**：确认上游仓库与许可证。
-  - 若 MIT/ Apache 兼容 → 在 `THIRD_PARTY.md` 补来源与许可，保留版权头。
-  - 若是 GPL/AGPL → 二选一：整仓改 GPL，或把它移出仓库改为安装时拉取。
-  - 若来源不明 → 公开发布前必须移出，否则属于**无授权再分发**。
+- [x] **NexSandglass**：上游已确认 → <https://github.com/lovevin1314-tech/NexSandglass-Agent-DedicatedMemory>。
+  MIT 许可（`Copyright (c) 2026 NexSandglass`），与 Apache/MIT 兼容 → 可继续内嵌分发。
+  已保留上游 `LICENSE` 原文，`THIRD_PARTY.md` 标注来源与内嵌版本（v2.9.10）。
 - [x] **LiGGUF**：README 末尾声明 MIT；已在 `models/` 放 `LICENSE-ligguf.txt`，随包分发。
 - [ ] `LICENSE` 年份/署名确认：当前 `MIT / Copyright (c) 2026 EggBloom Team`。
 
