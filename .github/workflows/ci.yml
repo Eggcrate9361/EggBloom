@@ -27,6 +27,12 @@ jobs:
       # 修一个就往这里加一个 —— 不要让 CI 长期红着。
       - name: Run smoke tests
         shell: pwsh
+        env:
+          # GitHub 的 windows runner 是英文系统，控制台编码 cp1252；
+          # 测试打印中文会直接 UnicodeEncodeError（本机 cp936 复现不了）。
+          # 强制 Python 用 UTF-8 模式跑，两边行为一致。
+          PYTHONUTF8: "1"
+          PYTHONIOENCODING: "utf-8"
         run: |
           $tests = @(
             "test_persona_tag",
