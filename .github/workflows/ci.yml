@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    # 项目是 Windows 桌面程序，用 windows runner 更贴近真实环境
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install minimal deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests Pillow
+
+      # 只跑「纯逻辑、无 GUI、无网络」的测试。
+      # 完整套件里还有若干已知失败（见 docs/RELEASE_CHECKLIST.md §6），
+      # 修一个就往这里加一个 —— 不要让 CI 长期红着。
+      - name: Run smoke tests
+        shell: pwsh
+        run: |
+          $tests = @(
+            "test_persona_tag",
+            "test_dev_watch",
+            "test_decider_degrade",
+            "test_decider_pacing",
+            "test_group_decider_logic",
+            "test_memory_feed",
+            "test_scope_policy_text",
+            "test_prompt_segments"
+          )
+          $failed = @()
+          foreach ($t in $tests) {
+            Write-Host "::group::$t"
+            python "tests/$t.py"
+            if ($LASTEXITCODE -ne 0) { $failed += $t }
+            Write-Host "::endgroup::"
+          }
+          if ($failed.Count -gt 0) {
+            Write-Host "::error::失败: $($failed -join ', ')"
+            exit 1
+          }
+          Write-Host "全部通过"

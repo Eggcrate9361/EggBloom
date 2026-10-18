@@ -1,0 +1,58 @@
+# 预览/审计产物（临时生成，不入库）
+_fontwalk/
+_parity_report.json
+_font_audit.png
+_check.js
+*.tmp
+
+# Python
+__pycache__/
+*.py[cod]
+
+# 参考资料与运行时数据（文件保留在磁盘，只是不入库）
+_ref/
+data/
+last_port.txt
+
+# 单文件版（由 scripts/embed_fonts.py 生成，1.2MB 不入库）
+webui/webui_v4_standalone.html
+
+# 调试日志不入库（2026-10-11 曾误提交 webui/meme-debug.log，
+# 导致 git archive 出的 Lite 包带调试痕迹；运行时自会再生成）
+*.log
+
+# ── 隐私与运行时状态（发布前最关键的一段）────────────────────────────
+# 这些目录里是真实聊天记录、人格语料、图片缓存与学习库。
+# 它们从未被跟踪，但**此前也没被忽略** —— 一个 `git add .` 就会全部推上去。
+chat_logs/
+personality_versions/
+image_cache/
+self_learning_db/
+logs/
+personality/
+plugins/state/
+plugins/conversation_state/
+plugins/plugin_state.json
+
+# 嵌入模型与黑话词典：运行时资源，不进源码树（Lite 版由用户自行下载/生成）
+plugins/ego/super_memory/models/
+slang_dict.json
+slang_replies.json
+slang_conflicts.json
+
+# 表情包图片库（只保留代码；图片是 Full 版的运行时资源）
+memes/kagura_nana/
+memes/vrchat/
+memes/memes/kagura/
+memes/memes/vrchat/
+memes/memes/zhenxun/
+
+# 开发过程产物
+_fw7/
+_fwR/
+_fwU/
+
+
+# 编辑器/Agent 工作产物
+.qoder/
+.neurobase/

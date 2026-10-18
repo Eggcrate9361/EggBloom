@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>心情 · EGO</title>
+<style>
+  :root{
+    --bg:#0a0a0f;--surface:#111118;--paper:#16161f;--elevated:#1e1e28;--input:#14141b;
+    --ink:#f0f0f5;--ink2:#b8b8c8;--ink3:#8a8f9a;--ink4:#3a3f48;--ink5:#26262f;
+    --gold:#c9a96e;--gold-dim:#8a7350;--red:#b54a4a;--green:#4a9b6a;
+    --font-d:'Outfit','Noto Sans SC','PingFang SC',system-ui,sans-serif;
+    --font-m:'JetBrains Mono','Consolas',monospace;--radius:12px;
+    --shadow-sm:0 1px 2px rgba(0,0,0,0.35);--shadow-md:0 4px 14px rgba(0,0,0,0.45);
+    --shadow-lg:0 10px 34px rgba(0,0,0,0.55);--shadow-gold:0 0 22px rgba(201,169,110,0.22);
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--ink);font-family:var(--font-d);font-size:14px;line-height:1.6;padding:18px}
+  .wrap{max-width:860px;margin:0 auto}
+  .head{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px}
+  .head .t{font-size:18px;font-weight:800}
+  .head .m{font-size:12px;color:var(--ink3);margin-top:2px}
+  .back{font-size:12px;color:var(--gold);cursor:pointer;text-decoration:none;border:1px solid var(--gold);padding:4px 12px;border-radius:7px}
+  .panel{background:var(--paper);border:1px solid var(--ink5);border-radius:var(--radius);padding:16px;margin-bottom:14px}
+  .panel-title{font-weight:700;font-size:15px;margin-bottom:10px;color:var(--ink)}
+  .panel-title .meta{font-size:12px;color:var(--ink3);font-weight:400;margin-left:8px}
+  .row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .muted{color:var(--ink3);font-size:12px}
+  .badge{display:inline-block;padding:4px 14px;border-radius:999px;font-size:13px;font-weight:600}
+  .badge.ok{background:rgba(74,155,106,0.18);color:#7fd7a5;border:1px solid rgba(74,155,106,0.4)}
+  .badge.err{background:rgba(181,74,74,0.18);color:#ff9a9a;border:1px solid rgba(181,74,74,0.4)}
+  .badge.flat{background:var(--input);color:var(--ink2);border:1px solid var(--ink5)}
+  button.btn,.btn{background:var(--input);color:var(--ink);border:1px solid var(--ink5);padding:7px 16px;border-radius:8px;cursor:pointer;font-size:13px;transition:all .15s ease}
+  button.btn.primary{background:var(--gold);color:#0a0a0f;border-color:var(--gold);font-weight:700}
+  button.btn.danger{background:transparent;color:#ff9a9a;border-color:rgba(181,74,74,0.5)}
+  button.btn:hover{filter:brightness(1.1)}
+  input[type=number]{background:var(--input);color:var(--ink);border:1px solid var(--ink5);border-radius:8px;padding:7px 10px;font-size:13px;width:140px;font-family:var(--font-m)}
+  .mood-list{margin-top:12px}
+  .mood-item{display:flex;align-items:center;justify-content:space-between;padding:8px 12px;background:var(--surface);border:1px solid var(--ink5);border-radius:8px;margin-bottom:8px}
+  .mood-item .gid{font-family:var(--font-m);font-size:12px;color:var(--ink3)}
+  .mood-item .score{font-weight:700;font-size:14px}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  @media(max-width:640px){.grid2{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="head">
+    <div>
+      <div class="t">心情 · EGO 子模块</div>
+      <div class="m">Bot 因收到开心/难过/夸奖/辱骂而改变心情，随时间自然恢复，注入回复语气并微调温度</div>
+    </div>
+    <a class="back" href="/page?plugin_id=ego" target="_self">← 返回 EGO</a>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">当前心情</div>
+    <div class="row">
+      <span class="badge flat" id="mood-current">加载中...</span>
+      <button class="btn ghost" onclick="loadMood()">刷新</button>
+      <button class="btn danger" onclick="resetAll()">全部重置</button>
+    </div>
+    <div class="mood-list" id="mood-list"><div class="muted">加载中...</div></div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">情绪配置</div>
+    <div class="grid2">
+      <div>
+        <div class="muted">情绪衰减时长（秒）</div>
+        <input type="number" id="mood-decay" min="30" step="30" value="600">
+      </div>
+      <div>
+        <div class="muted">单次最大情绪冲击</div>
+        <input type="number" id="mood-max-boost" min="1" max="10" value="8">
+      </div>
+    </div>
+    <div class="row" style="margin-top:12px">
+      <button class="btn primary" onclick="saveConfig()">保存配置</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast" style="position:fixed;top:16px;left:50%;transform:translateX(-50%);background:#1e1e28;color:#f0f0f5;padding:8px 18px;border-radius:8px;font-size:13px;opacity:0;transition:opacity .2s;pointer-events:none;border:1px solid #26262f;z-index:99"></div>
+
+<script>
+const API='/api/plugins/action';
+function $(id){return document.getElementById(id)}
+function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})}
+function toast(msg){var t=$('toast');t.textContent=msg;t.style.opacity=1;setTimeout(function(){t.style.opacity=0},1800)}
+function action(name,params){
+  return api(API,{method:'POST',body:JSON.stringify({plugin_id:'mood_engine',action:name,params:params||{}})});
+}
+async function api(path,opts){var r=await fetch(path,Object.assign({headers:{'Content-Type':'application/json'}},opts));return r.json()}
+
+async function loadMood(){
+  try{
+    var cfgRes=await action('get_config');
+    var cfg=cfgRes&&cfgRes.config?cfgRes.config:(cfgRes||{});
+    if($('mood-decay')) $('mood-decay').value=cfg.decay_seconds!=null?cfg.decay_seconds:600;
+    if($('mood-max-boost')) $('mood-max-boost').value=cfg.max_boost!=null?cfg.max_boost:8;
+    var moodsRes=await action('get_moods');
+    var moods=(moodsRes&&moodsRes.moods)||(moodsRes&&moodsRes.data)||{};
+    var keys=Object.keys(moods);
+    var cur=$('mood-current');
+    if(keys.length){
+      var first=moods[keys[0]];
+      cur.className='badge '+(first.score>=0?'ok':'err');
+      cur.textContent=first.text+' ('+first.score+')';
+    }else{
+      cur.className='badge flat';
+      cur.textContent='平静';
+    }
+    var list=$('mood-list');
+    if(!keys.length){
+      list.innerHTML='<div class="muted">暂无心情记录（收到消息后开始记录）</div>';
+    }else{
+      list.innerHTML=keys.map(function(gid){
+        var m=moods[gid];
+        var sc=typeof m.score==='number'?m.score:0;
+        return '<div class="mood-item"><span class="gid">'+esc(gid)+'</span><span class="score" style="color:'+(sc>=0?'#7fd7a5':'#ff9a9a')+'">'+sc+'</span></div>';
+      }).join('');
+    }
+  }catch(e){ toast('加载失败: '+e.message); }
+}
+
+async function saveConfig(){
+  var payload={plugin_id:'mood_engine',action:'set_config',params:{
+    decay_seconds:parseInt($('mood-decay').value||'600',10),
+    max_boost:parseInt($('mood-max-boost').value||'8',10)
+  }};
+  try{
+    var r=await api(API,{method:'POST',body:JSON.stringify(payload)});
+    toast(r!==undefined&&r!==null?'已保存':'保存失败');
+  }catch(e){ toast('保存失败: '+e.message); }
+}
+
+async function resetAll(){
+  try{ await action('reset',{scope_id:''}); toast('已重置'); loadMood(); }
+  catch(e){ toast('重置失败: '+e.message); }
+}
+
+loadMood();
+</script>
+</body>
+</html>

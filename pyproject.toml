@@ -1,0 +1,125 @@
+[project]
+name = "EggBloom-Desktop"
+version = "1.5.5"
+description = "EggBloom Desktop — 桌面陪伴型 AI (OneBot/QQ) 全端:聊天核心 + 记忆 + 人格 + WebUI + 插件系统"
+requires-python = ">=3.13,<3.14"
+dependencies = [
+    # ── 核心运行时 (Python 3.13 实测版本,已固化) ──
+    "customtkinter==6.0.0",      # 桌面 GUI (主窗口/协议面板/图像生成面板)
+    "psutil==7.2.2",             # 进程管理/系统状态
+    "requests==2.34.2",          # HTTP 客户端 (WebUI/OneBot/ComfyUI)
+    "pystray==0.19.5",           # 系统托盘
+    "Pillow==12.2.0",            # 图像处理 (表情/头像)
+    "PyAutoGUI==0.9.54",         # 桌面自动化 (pyautogui)
+    "pyperclip==1.11.0",         # 剪贴板
+    "winotify==1.1.0",           # Windows 原生通知
+    "pycaw==20251023",           # Windows 音量控制 (含 comtypes)
+    "comtypes==1.4.16",          # 系统音量 COM 接口
+    "pywin32==312",              # win32crypt 凭据解密 (migrate_v2_4)
+]
+
+[project.optional-dependencies]
+dev = [
+    # ── 测试/开发工具 ──
+    "playwright==1.62.0",        # UI 自动化测试
+    "pytest>=8.0",               # 单元测试框架
+    "pytest-cov>=5.0",           # 覆盖率
+    "pyright>=1.1",              # 类型检查
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+# 本仓库为扁平脚本应用(非库),不发布到 PyPI;pyproject 仅用于固化版本与元数据。
+packages = []
+py-modules = []
+
+[tool.ruff]
+target-version = "py313"
+line-length = 120
+exclude = [
+    "app-src",
+    "resources",
+    "_ref",
+    "eggbot",
+    "build",
+    "dist",
+    "node_modules",
+    "venv",
+    "__pycache__",
+    "logs",
+    "temp",
+    "chat_logs",
+    "private_memory",
+    "self_learning_db",
+]
+
+[tool.ruff.lint]
+# 渐进策略:只启用 Pyflakes 错误级(F),存量老代码(巨型文件/旧副本)逐步清理
+select = ["F"]
+
+[tool.ruff.lint.per-file-ignores]
+# bot_core.py 为 7500+ 行存量,部分 F 级为人工后续清理(不阻断提交)
+# TODO(P1): 优先清理 F821/F823（未定义名称/变量引用错误，是潜在 bug）
+"bot_core.py" = ["F401", "F841", "F811", "F821", "F823"]
+# 插件/组件/遗留模块存量(未用 import/变量/重定义),逐步清理;真错误级保留
+"plugins/*/__init__.py" = ["F401", "F841", "F811"]
+"plugins/__init__.py" = ["F401", "F841", "F811"]
+"webui/plugins/ego/__init__.py" = ["F401", "F841", "F811"]
+"plugins/ego/*/__init__.py" = ["F401", "F841", "F811"]
+# TODO(P1): 清理 webui_server.py 的 F821 豁免
+"webui/webui_server.py" = ["F401", "F841", "F811", "F821"]
+"components/*.py" = ["F401", "F841", "F811"]
+# TODO(P1): 清理 nexsandglass 的 F821 豁免（外部依赖，低优先级）
+"nexsandglass/*.py" = ["F401", "F841", "F811", "F821"]
+# 存量未用变量/重复 key(无害),人工后续清理;保留 F821 等潜在 bug 级
+"animator.py" = ["F841"]
+"design_system.py" = ["F601"]
+"main_window.py" = ["F841"]
+"meme_engine.py" = ["F601"]
+"protocol_manager.py" = ["F841"]
+"protocol_panel.py" = ["F841"]
+"self_learning.py" = ["F841"]
+"memes/memes/tag_memes.py" = ["F841"]
+"plugins/board_voice/voice.py" = ["F841"]
+"plugins/web_operator/operators/vision.py" = ["F841"]
+"plugins/web_operator/operators/web.py" = ["F841"]
+"ai_client.py" = ["F401"]
+
+[tool.pyinstaller]
+# 打包入口与参数见 EggBloom-debug.spec,此处仅声明
+name = "EggBloom Desktop"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"
+markers = [
+    "integration: 集成测试（需手动运行: -m integration）",
+]
+
+[tool.pyright]
+pythonVersion = "3.13"
+typeCheckingMode = "basic"
+include = [
+    "config.py",
+    "data_store.py",
+    "protocols/",
+    "plugins/",
+]
+exclude = [
+    "bot_core.py",
+    "webui/",
+    "nexsandglass/",
+    "components/",
+    "memes/",
+    "**/__pycache__",
+]
+reportMissingImports = true
+reportMissingTypeStubs = false
+reportUnusedImport = "warning"
+reportUnusedVariable = "warning"

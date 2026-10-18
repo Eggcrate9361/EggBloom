@@ -1,0 +1,707 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>Web Operator</title>
+<style>
+  :root{--bg:#0a0a0f;--surface:#111118;--paper:#16161f;--elevated:#1e1e28;--input:#14141b;--ink:#f0f0f5;--ink2:#b8b8c8;--ink3:#8a8f9a;--ink4:#3a3f48;--ink5:#26262f;--gold:#c9a96e;--gold-dim:#8a7350;--red:#b54a4a;--green:#4a9b6a;--font-d:'Outfit','Noto Sans SC','PingFang SC',system-ui,sans-serif;--font-m:'JetBrains Mono','Consolas',monospace;--radius:12px;--shadow-sm:0 1px 2px rgba(0,0,0,0.35);--shadow-md:0 4px 14px rgba(0,0,0,0.45);--shadow-lg:0 10px 34px rgba(0,0,0,0.55);--shadow-gold:0 0 22px rgba(201,169,110,0.22);--ease:180ms cubic-bezier(0.4,0,0.2,1);--ease-spring:280ms cubic-bezier(0.34,1.56,0.64,1);}
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);font-family:var(--font-d);-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;text-rendering:optimizeLegibility}
+  body{background-image:radial-gradient(ellipse at 10% 0%, rgba(201,169,110,0.06), transparent 45%),radial-gradient(ellipse at 90% 100%, rgba(90,122,138,0.05), transparent 45%)}
+  ::selection{background:rgba(201,169,110,0.25);color:var(--ink)}
+  ::-webkit-scrollbar{width:7px;height:7px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:var(--ink5);border-radius:3px}::-webkit-scrollbar-thumb:hover{background:var(--ink3)}
+  .wrap{max-width:1000px;margin:0 auto;padding:18px}
+  .panel{background:linear-gradient(180deg,var(--surface),var(--paper));border:1px solid var(--ink4);border-radius:var(--radius);padding:16px;margin-bottom:12px;position:relative;transition:border-color 200ms ease,box-shadow 200ms ease,transform 200ms ease}
+  .panel:hover{border-color:rgba(201,169,110,0.25);box-shadow:var(--shadow-md);transform:translateY(-1px)}
+  .panel-title{font-size:16px;font-weight:700;margin-bottom:10px}
+  .meta{font-size:12px;color:var(--ink3);margin-left:8px;font-weight:400}
+  .desc{color:var(--ink2);font-size:13px;line-height:1.7;margin-top:8px}
+  .row{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:12px;padding:10px;background:var(--elevated);border:1px solid var(--ink4);border-radius:10px;transition:border-color 200ms ease}
+  .row:hover{border-color:rgba(201,169,110,0.25)}
+  .label{font-size:13px;color:var(--ink2)}
+  .value{font-size:12px;color:var(--ink3);font-family:var(--font-m)}
+  .switch{position:relative;width:44px;height:24px;background:#2a2a35;border-radius:999px;cursor:pointer;border:1px solid var(--ink4);transition:background .2s,box-shadow .2s}
+  .switch:hover{border-color:rgba(201,169,110,0.4)}
+  .switch.on{background:var(--gold);box-shadow:var(--shadow-gold)}
+  .switch::after{content:'';position:absolute;left:2px;top:2px;width:18px;height:18px;background:#fff;border-radius:50%;transition:transform .2s;box-shadow:0 1px 3px rgba(0,0,0,0.3)}
+  .switch.on::after{transform:translateX(20px)}
+  input[type="text"],input[type="password"],input[type="number"],textarea,select{width:100%;background:var(--input);color:var(--ink);border:1px solid var(--ink4);border-radius:8px;padding:8px 10px;font-size:13px;outline:none;font-family:var(--font-m);transition:all 200ms cubic-bezier(0.4,0,0.2,1)}
+  input:focus,textarea:focus,select:focus{border-color:var(--gold);box-shadow:0 0 0 3px rgba(201,169,110,0.12)}
+  textarea{min-height:80px;resize:vertical}
+  .field{display:flex;flex-direction:column;gap:6px;margin-top:12px}
+  .field-title{font-size:13px;color:var(--ink2);font-weight:500}
+  .hint{font-size:12px;color:var(--ink3)}
+  .actions{display:flex;gap:10px;margin-top:14px;flex-wrap:wrap}
+  .btn{background:var(--elevated);color:var(--ink);border:1px solid var(--ink4);padding:8px 12px;border-radius:8px;cursor:pointer;font-size:13px;transition:all 150ms cubic-bezier(0.4,0,0.2,1);font-family:var(--font-d);font-weight:500}
+  .btn:hover:not(:disabled){background:var(--paper);border-color:var(--gold);transform:translateY(-1px);box-shadow:var(--shadow-sm)}
+  .btn:active:not(:disabled){transform:scale(0.97)}
+  .btn.primary{background:linear-gradient(135deg, rgba(201,169,110,0.18), rgba(201,169,110,0.08));color:var(--gold);border-color:rgba(201,169,110,0.35);font-weight:600}
+  .btn.primary:hover{background:linear-gradient(135deg, rgba(201,169,110,0.28), rgba(201,169,110,0.14));border-color:rgba(201,169,110,0.5);box-shadow:var(--shadow-gold)}
+  .btn.danger{color:#ff8a80;border-color:rgba(255,80,80,0.25);background:rgba(255,80,80,0.08)}
+  .btn.danger:hover{background:rgba(255,80,80,0.16);border-color:rgba(255,80,80,0.4);box-shadow:none}
+  .status{font-size:12px;color:var(--ink3);margin-top:8px;min-height:16px}
+  .status.error{color:#ff8a8a}
+  .status.ok{color:#8aff9a}
+  .tabs{display:flex;gap:8px;margin:12px 0;flex-wrap:wrap}
+  .tab{background:var(--elevated);color:var(--ink2);border:1px solid var(--ink4);padding:6px 12px;border-radius:999px;cursor:pointer;font-size:13px;transition:all 150ms ease;font-weight:500}
+  .tab:hover{border-color:var(--gold);color:var(--ink)}
+  .tab.ac{background:var(--gold);color:#0a0a0f;border-color:var(--gold);font-weight:700;box-shadow:var(--shadow-gold)}
+  .tabpage{display:none}
+  .tabpage.ac{display:block;animation:fadeIn 0.3s cubic-bezier(0.22,1,0.36,1)}
+  .log{background:rgba(0,0,0,0.15);border:1px solid var(--ink4);border-radius:8px;padding:10px;max-height:260px;overflow:auto;font-family:var(--font-m);font-size:12px;line-height:1.8;white-space:pre-wrap;word-break:break-all}
+  .log .info{color:var(--ink2)}.log .success{color:#8aff9a}.log .warn{color:#ffd166}.log .error{color:#ff8a8a}
+  .item{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px;border:1px solid var(--ink4);border-radius:8px;background:var(--elevated);margin-top:8px;transition:border-color 150ms ease,transform 150ms ease}
+  .item:hover{border-color:rgba(201,169,110,0.3)}
+  .back{display:inline-block;margin-top:14px;color:var(--gold);cursor:pointer;font-size:14px;transition:opacity 150ms ease}
+  .back:hover{opacity:0.85}
+  .empty{color:var(--ink3);font-size:13px;padding:8px 0}
+  img.screenshot{max-width:100%;border:1px solid var(--ink4);border-radius:8px;background:#000;margin-top:8px}
+  #toast{position:fixed;right:20px;bottom:20px;max-width:360px;padding:12px 16px;border-radius:10px;background:rgba(22,22,31,.96);border:1px solid var(--ink4);color:var(--ink);font-size:13px;line-height:1.5;box-shadow:0 8px 28px rgba(0,0,0,.55);z-index:9999;opacity:0;transform:translateY(12px);transition:opacity .25s,transform .25s;pointer-events:none}
+  #toast.show{opacity:1;transform:translateY(0)}
+  #toast.ok{border-color:#3f9d58;box-shadow:0 8px 28px rgba(0,0,0,.55),0 0 0 1px rgba(63,157,88,.35)}
+  #toast.error{border-color:#ff4d4f;box-shadow:0 8px 28px rgba(0,0,0,.55),0 0 0 1px rgba(255,77,79,.35)}
+  .key-dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#8a8f9a;margin-right:6px;vertical-align:middle}
+  .key-dot.on{background:#8aff9a;box-shadow:0 0 6px rgba(138,255,154,.6)}
+  button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-visible{outline:2px solid var(--gold);outline-offset:2px}
+  @keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+
+  /* eggb-motion */
+  @media (prefers-reduced-motion: reduce){*,*::before,*::after{animation-duration:0.01ms !important;animation-iteration-count:1 !important;transition-duration:0.01ms !important;scroll-behavior:auto !important}}
+  .btn-ripple{position:absolute;border-radius:50%;background:rgba(201,169,110,0.3);transform:scale(0);pointer-events:none;animation:rippleAnim 550ms ease-out forwards}
+  @keyframes rippleAnim{to{transform:scale(3);opacity:0}}
+  .card,.panel,.stat-card,.tool-item,.list-item{transition:transform 160ms cubic-bezier(0.22,1,0.36,1),box-shadow 200ms ease,border-color 200ms ease}
+  .card:hover,.panel:hover,.stat-card:hover{transform:translateY(-2px);box-shadow:0 4px 14px rgba(0,0,0,0.45)}
+  .tool-item:hover,.list-item:hover{transform:translateX(2px)}
+  button{transition:all 160ms cubic-bezier(0.4,0,0.2,1)}
+  button:active:not(:disabled){transform:scale(0.96)}
+  .tab{transition:transform 160ms ease,background 160ms ease,color 160ms ease,border-color 160ms ease}
+  .tab:hover{transform:translateY(-1px)}
+  .tab.active{transform:scale(1.05)}
+  .toast{display:flex;align-items:center;gap:8px;overflow:hidden;position:relative}
+  .toast::before{content:attr(data-icon);width:18px;text-align:center;font-size:13px;line-height:1;flex-shrink:0}
+  .toast::after{content:'';position:absolute;left:0;bottom:0;height:2px;width:100%;transform:scaleX(0);transform-origin:left;animation:toastProgress 2s linear forwards}
+  .toast.success::after{background:#6ecf8e}
+  .toast.error::after{background:#ff8a80}
+  .toast.info::after{background:#c9a96e}
+  @keyframes toastProgress{to{transform:scaleX(1)}}
+  .toast.show{animation:toastIn 260ms cubic-bezier(0.34,1.56,0.64,1)}
+  @keyframes toastIn{from{opacity:0;transform:translateY(-14px) scale(0.92)}to{opacity:1;transform:translateY(0) scale(1)}}
+  .panel-title{position:relative}
+  .panel-title::after{content:'';position:absolute;bottom:-2px;left:0;width:34px;height:2px;background:linear-gradient(90deg,#c9a96e,transparent);border-radius:2px;transition:width 300ms cubic-bezier(0.22,1,0.36,1)}
+  .panel:hover .panel-title::after{width:60px}
+  
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <div class="panel">
+    <div class="panel-title">Web Operator<span class="meta">全能操作插件</span></div>
+    <div class="desc">网页自动化 / 命令执行 / 文件操作 / 软件控制 / 系统能力 / 任务编排。默认启用，默认超时 30s。</div>
+    <div class="row">
+      <div>
+        <div class="label">启用插件</div>
+        <div class="value" id="enabledValue">加载中...</div>
+      </div>
+      <div class="switch" id="enableSwitch" role="switch" aria-checked="false" tabindex="0"></div>
+    </div>
+    <div class="actions">
+      <button class="btn" id="refreshBtn">刷新状态</button>
+    </div>
+    <div class="status" id="status"></div>
+  </div>
+
+  <div class="tabs">
+    <button class="tab ac" data-tab="web">网页</button>
+    <button class="tab" data-tab="cli">命令</button>
+    <button class="tab" data-tab="fs">文件</button>
+    <button class="tab" data-tab="app">软件</button>
+    <button class="tab" data-tab="chain">编排</button>
+    <button class="tab" data-tab="history">历史</button>
+    <button class="tab" data-tab="config">配置</button>
+  </div>
+
+  <div class="tabpage ac" id="tab-web">
+    <div class="panel">
+      <div class="panel-title">网页操作<span class="meta">v2 snapshot+ref</span></div>
+      <div class="field">
+        <div class="field-title">URL</div>
+        <input type="text" id="webUrl" placeholder="https://example.com">
+      </div>
+      <div class="actions">
+        <button class="btn primary" id="webOpen">打开(自动快照)</button>
+        <button class="btn" id="webSnapshot">获取快照</button>
+        <button class="btn" id="webText">获取文本</button>
+        <button class="btn" id="webScreenshot">📸 截图</button>
+      </div>
+      <div class="field">
+        <div class="field-title">页面快照（可交互元素 ref 列表）</div>
+        <textarea id="webSnapOut" readonly placeholder="打开页面或点“获取快照”后显示" style="min-height:160px"></textarea>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-title">按 ref 操作</div>
+      <div class="field">
+        <div class="field-title">ref 编号（如 e5，优先于 selector）</div>
+        <input type="text" id="webRef" placeholder="e5">
+      </div>
+      <div class="field">
+        <div class="field-title">selector / text（兜底）</div>
+        <input type="text" id="webSelector" placeholder="CSS 选择器 或 按钮文字">
+      </div>
+      <div class="field">
+        <div class="field-title">value / 选择值 / 按键</div>
+        <input type="text" id="webValue" placeholder="填入文本 / 选项值 / Enter">
+      </div>
+      <div class="actions" style="margin-top:8px">
+        <button class="btn" id="webClick">点击</button>
+        <button class="btn" id="webFill">填写</button>
+        <button class="btn" id="webSelect">选择</button>
+        <button class="btn" id="webPress">按键</button>
+        <button class="btn" id="webScrollDown">↓ 下滚</button>
+        <button class="btn" id="webScrollUp">↑ 上滚</button>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-title">自主 Agent</div>
+      <div class="field">
+        <div class="field-title">目标 goal</div>
+        <textarea id="autoGoal" placeholder="例：打开这个链接，把问卷答完并提交"></textarea>
+      </div>
+      <div class="row">
+        <div><div class="label">最大步数</div><input type="text" id="autoSteps" value="25" style="width:80px"></div>
+        <div><button class="btn primary" id="autoRun" style="margin-top:18px">运行自主任务</button></div>
+      </div>
+      <div class="hint">自主模式会在插件内部循环“看快照→按 ref 操作→再看”，需要宿主已配置可用的文本模型。</div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-title">标签页 / 登录态</div>
+      <div class="actions">
+        <button class="btn" id="tabList">列出标签页</button>
+        <button class="btn" id="tabNew">新建标签页</button>
+        <button class="btn" id="tabSwitch">切换到序号</button>
+        <button class="btn" id="stateSave">保存登录态</button>
+        <button class="btn" id="stateLoad">载入登录态</button>
+      </div>
+      <div id="webResult" class="log" style="min-height:40px"><div class="empty">暂无结果</div></div>
+    </div>
+  </div>
+
+  <div class="tabpage" id="tab-cli">
+    <div class="panel">
+      <div class="panel-title">命令执行</div>
+      <div class="field">
+        <div class="field-title">命令</div>
+        <textarea id="cliCmd" placeholder="dir / echo hello / python --version"></textarea>
+      </div>
+      <div class="field">
+        <div class="field-title">工作目录</div>
+        <input type="text" id="cliCwd" placeholder="C:\Users\YourName">
+      </div>
+      <div class="field">
+        <div class="field-title">超时（秒）</div>
+        <input type="text" id="cliTimeout" placeholder="30">
+      </div>
+      <div class="actions">
+        <button class="btn primary" id="cliRun">执行</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="tabpage" id="tab-fs">
+    <div class="panel">
+      <div class="panel-title">文件系统</div>
+      <div class="field">
+        <div class="field-title">路径</div>
+        <input type="text" id="fsPath" placeholder="C:\YourProject">
+      </div>
+      <div class="field">
+        <div class="field-title">内容 / 关键词</div>
+        <textarea id="fsContent" placeholder="写入内容 / 搜索关键词"></textarea>
+      </div>
+      <div class="actions">
+        <button class="btn" id="fsRead">读取</button>
+        <button class="btn" id="fsWrite">写入</button>
+        <button class="btn" id="fsAppend">追加</button>
+        <button class="btn" id="fsList">列目录</button>
+        <button class="btn" id="fsSearch">搜索</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="tabpage" id="tab-app">
+    <div class="panel">
+      <div class="panel-title">软件控制</div>
+      <div class="field">
+        <div class="field-title">程序路径 / 进程名</div>
+        <input type="text" id="appExe" placeholder="C:\Program Files\... 或 notepad">
+      </div>
+      <div class="actions">
+        <button class="btn" id="appLaunch">启动</button>
+        <button class="btn danger" id="appKill">结束进程</button>
+        <button class="btn" id="clipRead">读剪贴板</button>
+        <button class="btn" id="clipWrite">写剪贴板</button>
+        <button class="btn" id="notify">通知</button>
+      </div>
+      <div class="field">
+        <div class="field-title">通知标题 / 内容</div>
+        <input type="text" id="notifyTitle" placeholder="EggBloom">
+        <textarea id="notifyText" placeholder="内容"></textarea>
+      </div>
+    </div>
+  </div>
+
+  <div class="tabpage" id="tab-chain">
+    <div class="panel">
+      <div class="panel-title">任务编排</div>
+      <div class="field">
+        <div class="field-title">任务名</div>
+        <input type="text" id="chainName" placeholder="my_survey">
+      </div>
+      <div class="field">
+        <div class="field-title">编排链 JSON</div>
+        <textarea id="chainJson" placeholder='[{"type":"web.open_url","params":{"url":"https://..."}}]'></textarea>
+      </div>
+      <div class="actions">
+        <button class="btn primary" id="chainSave">保存任务</button>
+        <button class="btn" id="chainRun">执行</button>
+        <button class="btn" id="chainLoad">加载已保存</button>
+      </div>
+      <div class="field" style="margin-top:10px">
+        <div class="field-title">已保存任务</div>
+        <div id="taskList"><div class="empty">暂无任务</div></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="tabpage" id="tab-history">
+    <div class="panel">
+      <div class="panel-title">执行历史</div>
+      <div class="actions">
+        <button class="btn" id="historyRefresh">刷新</button>
+        <button class="btn danger" id="historyClear">清空历史</button>
+      </div>
+      <div id="historyList"><div class="empty">暂无历史</div></div>
+    </div>
+  </div>
+
+  <div class="tabpage" id="tab-config">
+    <div class="panel">
+      <div class="panel-title">配置</div>
+      <div class="field">
+        <div class="field-title">依赖状态</div>
+        <div class="value" id="depStatus">加载中...</div>
+        <div class="actions" style="margin-top:8px">
+          <button class="btn primary" id="depCheck">检查依赖</button>
+          <button class="btn" id="depInstall">🔧 自动安装依赖</button>
+        </div>
+      </div>
+      <div class="field">
+        <div class="field-title">默认超时（秒）</div>
+        <input type="text" id="cfgTimeout">
+      </div>
+      <div class="field">
+        <div class="field-title">CLI 允许任意命令</div>
+        <input type="text" id="cfgCliAny" placeholder="true/false">
+      </div>
+
+      <div class="field" style="margin-top:18px; padding:14px; background:rgba(201,169,110,0.08); border:1px solid var(--gold); border-radius:10px;">
+        <div class="field-title" style="color:var(--gold); font-size:14px; font-weight:700;">🧠 视觉辅助（VLM）配置</div>
+        <div class="desc" style="margin-top:8px; color:var(--ink2); line-height:1.8;">
+          <strong style="color:var(--gold);">用途说明：</strong>当用户在聊天中要求 AI 访问网页并执行操作（例如打开问卷链接、填写表单、点击按钮）时启用。<br>
+          这不是用来在插件里“固定配置某个网页”的，而是给 AI 提供<strong>视觉理解能力</strong>，让 AI 能像人一样看懂网页截图，再决定下一步操作。<br>
+          <strong style="color:#ff8a8a;">注意：</strong>只有纯文本模型（如 DeepSeek）需要开启；多模态模型本身就能看图片，通常不需要此功能。
+        </div>
+      </div>
+
+      <div class="field" style="margin-top:12px">
+        <div class="field-title">启用视觉辅助</div>
+        <input type="text" id="cfgVisionEnabled" placeholder="true / false，默认 false">
+        <div class="hint">关闭时，纯文本模型将无法看懂网页截图；开启后会调用 VLM 模型分析截图</div>
+      </div>
+      <div class="field" style="margin-top:12px">
+        <div class="field-title">VLM 提供商</div>
+        <input type="text" id="cfgVisionProvider" placeholder="zhipu / openai / anthropic ...">
+        <div class="hint">默认 zhipu（智谱 AI）。需与下方 base_url 对应</div>
+      </div>
+      <div class="field" style="margin-top:12px">
+        <div class="field-title">VLM 模型</div>
+        <input type="text" id="cfgVisionModel" placeholder="glm-4.6v">
+        <div class="hint">推荐：glm-4.6v、glm-4v、gpt-4o、claude-3-5-sonnet-20240620</div>
+      </div>
+      <div class="field" style="margin-top:12px">
+        <div class="field-title">API Key</div>
+        <input type="password" id="cfgVisionKey" placeholder="输入你的 API Key">
+        <div class="hint">仅保存在本地配置文件，不会上传。智谱 Key 示例：xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.xxxxxxxx</div>
+      </div>
+      <div class="field" style="margin-top:12px">
+        <div class="field-title">API Base URL</div>
+        <input type="text" id="cfgVisionBaseUrl" placeholder="https://open.bigmodel.cn/api/paas/v4">
+        <div class="hint">智谱官方：https://open.bigmodel.cn/api/paas/v4</div>
+      </div>
+      <div class="field" style="margin-top:12px">
+        <div class="field-title">请求超时（秒）</div>
+        <input type="text" id="cfgVisionTimeout" placeholder="30">
+        <div class="hint">单次 VLM 调用超时，默认 30 秒</div>
+      </div>
+      <div class="field" style="margin-top:12px">
+        <div class="field-title">单任务最大调用次数</div>
+        <input type="text" id="cfgVisionMaxCalls" placeholder="20">
+        <div class="hint">防止无限循环调用，默认 20 次/任务</div>
+      </div>
+      <div class="field" style="margin-top:12px">
+        <div class="field-title">仅回退模式</div>
+        <input type="text" id="cfgVisionFallback" placeholder="true / false，默认 true">
+        <div class="hint">true = 仅在常规网页操作失败时才启用 VLM；false = 每次都先让 VLM 看截图</div>
+      </div>
+
+      <div class="actions" style="margin-top:18px">
+        <button class="btn primary" id="cfgSave">保存配置</button>
+      </div>
+      <div class="status" id="cfgStatus"></div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">日志流</div>
+    <div class="actions">
+      <button class="btn" id="logClear">清空日志</button>
+    </div>
+    <div class="log" id="logStream"><div class="empty">暂无日志</div></div>
+  </div>
+
+  <div class="back" onclick="window.parent.postMessage({type:'ego-back'},'*')">返回插件列表</div>
+</div>
+<div id="toast"></div>
+
+<script>
+const API = '/api/plugins/action';
+const statusEl = document.getElementById('status');
+const logStream = document.getElementById('logStream');
+let defaults = {};
+
+function qs(id){ return document.getElementById(String(id).replace(/^#/, '')) }
+function setStatus(text, kind){ statusEl.textContent = text; statusEl.className = 'status ' + (kind || '') }
+function appendLog(level, text){
+  const el = qs('logStream');
+  if(!el) return;
+  if(el.querySelector('.empty')) el.innerHTML = '';
+  const line = document.createElement('div');
+  line.className = level;
+  const time = new Date().toLocaleTimeString();
+  line.textContent = `[${time}] ${text}`;
+  el.appendChild(line);
+  el.scrollTop = el.scrollHeight;
+}
+async function call(action, params){
+  const body = {plugin_id:'web_operator', action, ...(params ? {params} : {})};
+  const res = await fetch(API, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+  const text = await res.text();
+  let data;
+  try { data = JSON.parse(text); } catch { data = {raw:text}; }
+  if(!res.ok) throw new Error(data.error || text || ('HTTP ' + res.status));
+  return data;
+}
+function switchTab(name){
+  document.querySelectorAll('.tab').forEach(b => b.classList.toggle('ac', b.dataset.tab === name));
+  document.querySelectorAll('.tabpage').forEach(p => p.classList.toggle('ac', p.id === 'tab-' + name));
+}
+function setToggleUI(enabled){
+  qs('#enableSwitch').classList.toggle('on', enabled);
+  qs('#enableSwitch').setAttribute('aria-checked', String(enabled));
+  qs('#enabledValue').textContent = enabled ? '已启用' : '未启用';
+}
+function toast(msg, level){
+  if(level === undefined) level = String(msg||'').includes('失败') ? 'error' : 'ok';
+  setStatus(msg, level);
+  const t = document.getElementById('toast');
+  if(t){
+    t.textContent = msg;
+    t.className = 'show ' + level;
+    clearTimeout(t._hide);
+    t._hide = setTimeout(()=>{ t.className = ''; }, 2600);
+  }
+  if(level === 'error') setTimeout(()=>{ if(qs('#status')) qs('#status').textContent = ''; }, 2600);
+}
+
+document.querySelectorAll('.tab').forEach(btn => btn.addEventListener('click', ()=> switchTab(btn.dataset.tab)));
+qs('#enableSwitch').addEventListener('click', async ()=>{
+  setStatus('切换中...');
+  try {
+    const res = await call('toggle');
+    setToggleUI(Boolean(res.enabled));
+    setStatus(Boolean(res.enabled) ? '已启用' : '已停用', 'ok');
+  } catch(e){ setStatus('切换失败：' + e.message, 'error'); }
+});
+qs('#refreshBtn').addEventListener('click', async ()=>{ await init(); toast('已刷新'); });
+
+function setSnap(res){ if(res&&res.ok&&res.result&&res.result.snapshot){ qs('#webSnapOut').value=res.result.snapshot; } }
+function showResult(res){ const el=qs('#webResult'); if(!el)return; if(el.querySelector('.empty'))el.innerHTML=''; const line=document.createElement('div'); line.className=(res&&res.ok)?'success':'error'; line.textContent=((res&&res.ok)?'✓ ':'✗ ')+JSON.stringify((res&&res.result)||{error:(res&&res.error)}).slice(0,500); el.appendChild(line); el.scrollTop=el.scrollHeight; }
+function refParams(){ const ref=qs('#webRef').value.trim(); const sel=qs('#webSelector').value.trim(); const p={}; if(ref)p.ref=ref; else if(sel)p.selector=sel; return p; }
+
+qs('#webOpen').addEventListener('click', async ()=>{
+  const url = qs('#webUrl').value.trim();
+  if(!url){ toast('请输入 URL'); return; }
+  appendLog('info', '正在打开页面...');
+  const res = await call('web.open_url', {url});
+  if(res && res.ok){ appendLog('success', '页面已打开：' + (res.result && res.result.title)); setSnap(res); showResult(res); renderScreenshot(res.result); }
+  else { appendLog('error', '打开失败：' + (res && res.error)); showResult(res); }
+});
+qs('#webSnapshot').addEventListener('click', async ()=>{
+  appendLog('info', '正在获取快照...');
+  const res = await call('web.snapshot', {});
+  if(res && res.ok){ appendLog('success', '快照：' + (res.result && res.result.ref_count) + ' 个元素'); qs('#webSnapOut').value=(res.result&&res.result.snapshot)||''; }
+  else { appendLog('error', '快照失败：'+(res&&res.error)); }
+});
+qs('#webText').addEventListener('click', async ()=>{
+  appendLog('info', '正在获取页面文本...');
+  const res = await call('web.get_page', {});
+  if(res && res.ok){ appendLog('success', '页面文本长度：' + (res.result && res.result.length)); setSnap(res); }
+  else { appendLog('error', '获取失败：' + (res && res.error)); }
+});
+qs('#webScreenshot').addEventListener('click', async ()=>{
+  appendLog('info', '正在截图...');
+  const res = await call('web.screenshot', {full_page:false});
+  if(res && res.ok){ appendLog('success', '截图完成'); renderScreenshot(res.result); }
+  else { appendLog('error', '截图失败'); }
+});
+qs('#webClick').addEventListener('click', async ()=>{
+  const p = refParams();
+  if(!p.ref && !p.selector){ toast('请输入 ref 或 selector'); return; }
+  appendLog('info', '点击 '+JSON.stringify(p));
+  const res = await call('web.click', p); showResult(res); setSnap(res);
+});
+qs('#webFill').addEventListener('click', async ()=>{
+  const p = refParams(); p.value = qs('#webValue').value;
+  if(!p.ref && !p.selector){ toast('请输入 ref 或 selector'); return; }
+  appendLog('info', '填写 '+JSON.stringify(p));
+  const res = await call('web.fill', p); showResult(res); setSnap(res);
+});
+qs('#webSelect').addEventListener('click', async ()=>{
+  const p = refParams(); p.value = qs('#webValue').value;
+  if(!p.ref && !p.selector){ toast('请输入 ref 或 selector'); return; }
+  appendLog('info', '选择 '+JSON.stringify(p));
+  const res = await call('web.select', p); showResult(res); setSnap(res);
+});
+qs('#webPress').addEventListener('click', async ()=>{
+  const p = refParams(); p.value = qs('#webValue').value.trim() || 'Enter';
+  appendLog('info', '按键 '+p.value);
+  const res = await call('web.press', p); showResult(res); setSnap(res);
+});
+qs('#webScrollDown').addEventListener('click', async ()=>{ appendLog('info','下滚'); const res=await call('web.scroll',{direction:'down',amount:400}); setSnap(res); });
+qs('#webScrollUp').addEventListener('click', async ()=>{ appendLog('info','上滚'); const res=await call('web.scroll',{direction:'up',amount:400}); setSnap(res); });
+qs('#autoRun').addEventListener('click', async ()=>{
+  const goal = qs('#autoGoal').value.trim();
+  if(!goal){ toast('请输入目标'); return; }
+  const url = qs('#webUrl').value.trim();
+  appendLog('info', '自主任务启动...'); toast('自主任务运行中，可能耗时...');
+  const p = {goal, max_steps: Number(qs('#autoSteps').value||25)}; if(url) p.url=url;
+  const res = await call('web.autonomous', p);
+  if(res && res.ok){ appendLog('success','[自主] '+(res.result&&res.result.answer||'').slice(0,300)); setSnap(res); }
+  else { appendLog('error','[自主] 失败：'+(res&&res.error)); }
+  showResult(res);
+});
+qs('#tabList').addEventListener('click', async ()=>{ const res=await call('web.tab_list',{}); showResult(res); });
+qs('#tabNew').addEventListener('click', async ()=>{ const url=qs('#webUrl').value.trim(); const res=await call('web.tab_new', url?{url}:{}); showResult(res); setSnap(res); });
+qs('#tabSwitch').addEventListener('click', async ()=>{ const idx=qs('#webValue').value.trim(); if(idx===''){toast('在 value 框输入标签序号');return;} const res=await call('web.tab_switch',{index:Number(idx)}); showResult(res); setSnap(res); });
+qs('#stateSave').addEventListener('click', async ()=>{ const res=await call('web.save_state',{}); showResult(res); });
+qs('#stateLoad').addEventListener('click', async ()=>{ const res=await call('web.load_state',{}); showResult(res); setSnap(res); });
+
+qs('#cliRun').addEventListener('click', async ()=>{
+  const cmd = qs('#cliCmd').value.trim();
+  if(!cmd){ toast('请输入命令'); return; }
+  appendLog('info', '执行命令：' + cmd);
+  const res = await call('cli.run', {cmd, cwd:qs('#cliCwd').value.trim() || undefined, timeout: Number(qs('#cliTimeout').value || 30)});
+  if(res && res.ok){ appendLog('success', '命令完成'); if(res.result && res.result.stdout) appendLog('info', res.result.stdout.slice(-800)); if(res.result && res.result.stderr) appendLog('warn', res.result.stderr.slice(-800)); }
+  else { appendLog('error', '命令失败：' + (res && res.error)); }
+});
+
+qs('#fsRead').addEventListener('click', async ()=>{ const p=qs('#fsPath').value.trim(); if(!p){toast('请输入路径');return;} const res=await call('fs.read',{path:p}); if(res && res.ok){ appendLog('success','读取成功'); appendLog('info', (res.result && res.result.text || '').slice(-1000)); } else { appendLog('error','读取失败'); } });
+qs('#fsWrite').addEventListener('click', async ()=>{ const p=qs('#fsPath').value.trim(); const c=qs('#fsContent').value; if(!p){toast('请输入路径');return;} const res=await call('fs.write',{path:p, content:c}); toast(res && res.ok ? '已写入' : '写入失败'); });
+qs('#fsAppend').addEventListener('click', async ()=>{ const p=qs('#fsPath').value.trim(); const c=qs('#fsContent').value; if(!p){toast('请输入路径');return;} const res=await call('fs.append',{path:p, content:c}); toast(res && res.ok ? '已追加' : '追加失败'); });
+qs('#fsList').addEventListener('click', async ()=>{ const p=qs('#fsPath').value.trim(); if(!p){toast('请输入路径');return;} const res=await call('fs.list',{path:p}); if(res && res.ok){ const items=(res.result && res.result.entries) || []; appendLog('success','列出 ' + items.length + ' 项'); items.slice(0,20).forEach(x=>appendLog('info', (x.is_dir?'[DIR] ':'[FILE] ') + x.name)); } else { appendLog('error','列目录失败'); } });
+qs('#fsSearch').addEventListener('click', async ()=>{ const p=qs('#fsPath').value.trim(); const k=qs('#fsContent').value.trim(); if(!p||!k){toast('请输入路径和关键词');return;} const res=await call('fs.search',{path:p, keyword:k}); if(res && res.ok){ const m=(res.result && res.result.matches) || []; appendLog('success','搜索到 ' + m.length); m.slice(0,20).forEach(x=>appendLog('info', x)); } else { appendLog('error','搜索失败'); } });
+
+qs('#appLaunch').addEventListener('click', async ()=>{ const exe=qs('#appExe').value.trim(); if(!exe){toast('请输入程序路径');return;} const res=await call('app.launch',{exe}); toast(res && res.ok ? '已启动' : '启动失败'); });
+qs('#appKill').addEventListener('click', async ()=>{ const name=qs('#appExe').value.trim(); if(!name){toast('请输入进程名');return;} const res=await call('app.kill',{name}); toast(res && res.ok ? '已结束' : '结束失败'); });
+qs('#clipRead').addEventListener('click', async ()=>{ const res=await call('app.clipboard_read'); if(res && res.ok){ appendLog('success','剪贴板：' + (res.result && res.result.text)); } else { appendLog('error','读取剪贴板失败'); } });
+qs('#clipWrite').addEventListener('click', async ()=>{ const text=prompt('剪贴板内容'); if(text===null) return; const res=await call('app.clipboard_write',{text}); toast(res && res.ok ? '已写入' : '写入失败'); });
+qs('#notify').addEventListener('click', async ()=>{ const title=qs('#notifyTitle').value.trim() || 'EggBloom'; const text=qs('#notifyText').value.trim(); const res=await call('app.notify',{title, text}); toast(res && res.ok ? '通知已发送' : '通知失败'); });
+
+qs('#chainSave').addEventListener('click', async ()=>{
+  const name = qs('#chainName').value.trim();
+  const raw = qs('#chainJson').value.trim();
+  if(!name || !raw){ toast('请输入任务名和 JSON'); return; }
+  let chain;
+  try { chain = JSON.parse(raw); } catch { toast('JSON 格式错误'); return; }
+  const res = await call('save_tasks', {name, chain});
+  toast(res && res.ok ? '已保存' : '保存失败');
+  loadTasks();
+});
+qs('#chainLoad').addEventListener('click', loadTasks);
+qs('#chainRun').addEventListener('click', async ()=>{
+  const raw = qs('#chainJson').value.trim();
+  let chain;
+  try { chain = JSON.parse(raw); } catch { toast('JSON 格式错误'); return; }
+  appendLog('info', '开始执行编排链...');
+  const res = await call('chain.run', {chain});
+  if(res && res.ok){ appendLog('success', '编排链完成'); }
+  else { appendLog('error', '编排链失败'); }
+});
+
+qs('#historyRefresh').addEventListener('click', loadHistory);
+qs('#historyClear').addEventListener('click', async ()=>{ const res=await call('clear_history'); toast(res && res.ok ? '已清空' : '清空失败'); loadHistory(); });
+qs('#logClear').addEventListener('click', ()=>{ qs('logStream').innerHTML = '<div class="empty">暂无日志</div>'; });
+
+qs('#cfgSave').addEventListener('click', async ()=>{
+  const params = {};
+  const t = qs('#cfgTimeout').value.trim();
+  const c = qs('#cfgCliAny').value.trim();
+  const ve = qs('#cfgVisionEnabled').value.trim();
+  const vp = qs('#cfgVisionProvider').value.trim();
+  const v = qs('#cfgVisionModel').value.trim();
+  const k = qs('#cfgVisionKey').value.trim();
+  const vb = qs('#cfgVisionBaseUrl').value.trim();
+  const vt = qs('#cfgVisionTimeout').value.trim();
+  const vmc = qs('#cfgVisionMaxCalls').value.trim();
+  const vf = qs('#cfgVisionFallback').value.trim();
+  if(t) params.default_timeout = Number(t);
+  if(c) params.cli = { allow_any_command: c === 'true' };
+  if(v || k || ve || vp || vb || vt || vmc || vf) {
+    const va = { ...(defaults.vision_assist || {}) };
+    delete va._has_api_key;
+    delete va.api_key;
+    if(ve) va.enabled = ve === 'true';
+    if(vp) va.provider = vp;
+    if(v) va.model = v;
+    if(k) va.api_key = k;
+    if(vb) va.base_url = vb;
+    if(vt) va.timeout = Number(vt);
+    if(vmc) va.max_calls_per_task = Number(vmc);
+    if(vf) va.fallback_only = vf === 'true';
+    params.vision_assist = va;
+  }
+  const res = await call('set_config', params);
+  const saved = res && res.ok;
+  toast(saved ? '配置已保存' : ('保存失败：' + (res && res.error || '未知错误')), saved ? 'ok' : 'error');
+  if(saved){
+    const cfg = res.config || {};
+    const nva = cfg.vision_assist || {};
+    const keyEl = qs('#cfgVisionKey');
+    if(keyEl){ keyEl.placeholder = nva._has_api_key ? '已配置 API Key（密钥已保存，此处不回显）' : '输入 API Key 后保存'; }
+  }
+});
+
+function renderScreenshot(res){
+  if(!res) return;
+  const src = res.data_url || res.screenshot_data_url || res.path || res.screenshot_path;
+  if(!src) return;
+  const panel = document.querySelector('.panel');
+  if(!panel) return;
+  let box = document.getElementById('screenshotBox');
+  if(!box){ box = document.createElement('div'); box.id='screenshotBox'; box.style.marginTop='10px'; panel.parentNode.insertBefore(box, panel.nextSibling); }
+  box.innerHTML = '<img class="screenshot" src="' + String(src).replace(/"/g,'&quot;') + '" alt="screenshot">';
+}
+function loadTasks(){
+  call('get_tasks').then(res=>{
+    const el = qs('taskList');
+    if(!el) return;
+    const items = (res && res.tasks) || {};
+    const keys = Object.keys(items);
+    if(!keys.length){ el.innerHTML = '<div class="empty">暂无任务</div>'; return; }
+    el.innerHTML = keys.map(k => `<div class="item"><div><div>${escapeHtml(k)}</div><div class="value">${escapeHtml(JSON.stringify(items[k].chain||[]).slice(0,120))}</div></div><button class="btn" data-task="${escapeHtml(k)}">加载</button></div>`).join('');
+    el.querySelectorAll('button[data-task]').forEach(b=> b.addEventListener('click', ()=>{ qs('#chainName').value=b.dataset.task; qs('#chainJson').value=JSON.stringify(items[b.dataset.task].chain||[], null, 2); }));
+  });
+}
+function loadHistory(){
+  call('get_history', {limit:50}).then(res=>{
+    const el = qs('historyList');
+    if(!el) return;
+    const items = (res && res.history) || [];
+    if(!items.length){ el.innerHTML = '<div class="empty">暂无历史</div>'; return; }
+    el.innerHTML = items.slice().reverse().map(item => `<div class="item"><div><div>${escapeHtml(item.type || item.task_type || 'task')}</div><div class="value">${escapeHtml(JSON.stringify(item.result || item).slice(0,180))}</div></div><div class="value">${escapeHtml(item.created_at || '')}</div></div>`).join('');
+  });
+}
+function escapeHtml(s){ return String(s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+async function init(){
+  setStatus('加载中...');
+  try {
+    const cfg = await call('get_config');
+    defaults = cfg && cfg.config ? cfg.config : (cfg || {});
+    setToggleUI(Boolean(cfg && cfg.config && cfg.config.enabled));
+    const t = (defaults.default_timeout || '');
+    const c = (defaults.cli && defaults.cli.allow_any_command !== undefined) ? String(defaults.cli.allow_any_command) : '';
+    const va = (defaults.vision_assist || {});
+    const v = va.model || '';
+    const k = va.api_key || '';
+    const ve = va.enabled !== undefined ? String(va.enabled) : '';
+    const vp = va.provider || '';
+    const vb = va.base_url || '';
+    const vt = va.timeout !== undefined ? String(va.timeout) : '';
+    const vmc = va.max_calls_per_task !== undefined ? String(va.max_calls_per_task) : '';
+    const vf = va.fallback_only !== undefined ? String(va.fallback_only) : '';
+    if(qs('#cfgTimeout')) qs('#cfgTimeout').value = t;
+    if(qs('#cfgCliAny')) qs('#cfgCliAny').value = c;
+    if(qs('#cfgVisionEnabled')) qs('#cfgVisionEnabled').value = ve;
+    if(qs('#cfgVisionProvider')) qs('#cfgVisionProvider').value = vp;
+    if(qs('#cfgVisionModel')) qs('#cfgVisionModel').value = v;
+    if(qs('#cfgVisionKey')) qs('#cfgVisionKey').value = k;
+    const keyEl = qs('#cfgVisionKey');
+    if(keyEl){
+      const hasKey = Boolean(va._has_api_key);
+      keyEl.value = k;
+      keyEl.placeholder = hasKey ? '已配置 API Key（密钥已保存，此处不回显，清空后保存即删除）' : '输入 API Key 后保存';
+    }
+    if(qs('#cfgVisionBaseUrl')) qs('#cfgVisionBaseUrl').value = vb;
+    if(qs('#cfgVisionTimeout')) qs('#cfgVisionTimeout').value = vt;
+    if(qs('#cfgVisionMaxCalls')) qs('#cfgVisionMaxCalls').value = vmc;
+    if(qs('#cfgVisionFallback')) qs('#cfgVisionFallback').value = vf;
+    setStatus('已加载', 'ok');
+  } catch(e){ setStatus('加载失败：' + e.message, 'error'); }
+  loadHistory();
+  loadTasks();
+  refreshDepStatus();
+}
+function refreshDepStatus(){
+  call('check_dependencies').then(res=>{
+    const el = qs('#depStatus');
+    if(!el) return;
+    const dep = (res && res.dependencies) || {};
+    const missing = (dep.missing || []);
+    const chromium = dep.playwright_chromium_ready ? 'Chromium: 就绪' : 'Chromium: 未就绪';
+    el.textContent = missing.length ? `缺失: ${missing.join(', ')} | ${chromium}` : `已安装 | ${chromium}`;
+  }).catch(()=>{ const el=qs('#depStatus'); if(el) el.textContent='检查失败'; });
+}
+qs('#depCheck').addEventListener('click', ()=> refreshDepStatus());
+qs('#depInstall').addEventListener('click', async ()=>{
+  appendLog('info', '开始自动安装依赖...');
+  const res = await call('install_dependencies');
+  const logs = (res && res.logs) || [];
+  logs.forEach(l => appendLog(l.level || 'info', l.text));
+  refreshDepStatus();
+  if(res && !res.ok){ appendLog('warn', '部分依赖安装失败，请查看日志'); }
+});
+init();
+</script>
+<script>
+(function(){
+  if (window.__eggbMotion) return; window.__eggbMotion = true;
+  document.addEventListener('click', function(e){
+    var btn = e.target && e.target.closest ? e.target.closest('button, .btn, .tool-item') : null;
+    if(!btn || btn.disabled) return;
+    var rect = btn.getBoundingClientRect();
+    var size = Math.max(rect.width, rect.height) * 1.2;
+    var r = document.createElement('span');
+    r.className = 'btn-ripple';
+    r.style.width = r.style.height = size + 'px';
+    r.style.left = (e.clientX - rect.left - size/2) + 'px';
+    r.style.top = (e.clientY - rect.top - size/2) + 'px';
+    btn.appendChild(r);
+    setTimeout(function(){ r.remove(); }, 600);
+  });
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,15 @@
+# Windows 脚本必须 CRLF，否则 start.bat 在某些环境下会解析失败
+*.bat   text eol=crlf
+*.cmd   text eol=crlf
+*.ps1   text eol=crlf
+
+# 二进制：不要让 git 尝试合并/换行
+*.ttf    binary
+*.woff2  binary
+*.png    binary
+*.ico    binary
+*.zip    binary
+*.db     binary
+*.gguf   binary
+*.dll    binary
+*.exe    binary

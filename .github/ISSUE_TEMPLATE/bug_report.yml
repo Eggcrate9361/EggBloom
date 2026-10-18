@@ -1,0 +1,79 @@
+name: Bug 报告
+description: 功能不对、报错、卡住、效果异常
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        > 提交前请先搜一下现有 Issue。
+        > **不要贴 API Key、OneBot Token、真实 QQ 号或聊天记录原文**，用 `sk-***`、`QQ***` 代替。
+  - type: textarea
+    id: what
+    attributes:
+      label: 发生了什么
+      description: 一句话说清现象（哪个群/私聊、哪条消息触发的）
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      placeholder: |
+        1. 启动方式（双击 EggBloom Desktop.exe / python webui_server.py）
+        2. 做了什么
+        3. 看到了什么
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 预期 vs 实际
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: 版本
+      description: 发行包根目录 `VERSION` 里的 `release=` 和 `source_commit=`
+      placeholder: "release=1.5.5 / source_commit=fdd3ac9"
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: 安装方式
+      options:
+        - Standard（解压即用）
+        - Lite（源码 + 系统 Python）
+        - 从源码运行（git clone）
+        - 其他
+    validations:
+      required: true
+  - type: input
+    id: env
+    attributes:
+      label: 环境
+      description: Windows 版本、Python 版本、协议驱动（SnowLuma / NapCat / LLOneBot）与版本
+      placeholder: "Windows 11 23H2 / Python 3.13.7 / NapCat 4.0.12"
+    validations:
+      required: true
+  - type: input
+    id: model
+    attributes:
+      label: 模型
+      description: 提供商 + 模型名（不用写 Key）
+      placeholder: "DeepSeek / deepseek-v4-flash"
+  - type: textarea
+    id: logs
+    attributes:
+      label: 日志
+      description: 贴 `logs/` 里相关片段；先删掉密钥、QQ 号、聊天内容
+      render: text
+  - type: checkboxes
+    id: confirm
+    attributes:
+      label: 确认
+      options:
+        - label: 已删除日志/截图中的密钥与真实 QQ 号
+          required: true

@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>能力面板 · EggBloom</title>
+<style>
+:root{--bg:#0a0a0f;--paper:#16161f;--line:#26262f;--ink:#f0f0f5;--ink2:#b8b8c8;--ink3:#8a8f9a;
+  --gold:#c9a96e;--ok:#6f9e78;--err:#b05a52;--warn:#c9a35e;
+  --f:'Outfit','Noto Sans SC',system-ui,sans-serif;--m:'JetBrains Mono',Consolas,monospace}
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:var(--bg);color:var(--ink);font-family:var(--f);font-size:13.5px;padding:18px 20px 40px}
+h2{font-size:16px;font-weight:600;margin-bottom:4px}
+.sub{color:var(--ink3);font-size:12px;margin-bottom:16px}
+button{font-family:var(--m);font-size:11px;letter-spacing:.06em;padding:6px 12px;cursor:pointer;
+  background:transparent;color:var(--ink2);border:1px solid var(--line);border-radius:4px}
+button:hover{border-color:var(--gold);color:var(--gold)}
+button:disabled{opacity:.35;cursor:not-allowed}
+button.primary{color:var(--gold);border-color:#5a4a33}
+button.danger{color:var(--err);border-color:#3a2523}
+.card{border:1px solid var(--line);border-radius:6px;padding:14px;background:var(--paper);margin-bottom:14px}
+.card h3{font-size:13px;font-weight:600;margin-bottom:10px}
+.bar{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.stat{font-family:var(--m);font-size:11px;color:var(--ink3)}
+.stat b{color:var(--ink2);font-weight:500}
+.sw{display:inline-flex;align-items:center;gap:8px;font-family:var(--m);font-size:11.5px;
+  border:1px solid var(--line);border-radius:4px;padding:6px 10px;cursor:pointer;user-select:none}
+.sw.on{border-color:#5a4a33;color:var(--gold)}
+.sw .dot{width:7px;height:7px;border-radius:50%;background:var(--line)}
+.sw.on .dot{background:var(--ok)}
+table{width:100%;border-collapse:collapse;margin-top:6px}
+th{font-family:var(--m);font-size:10px;letter-spacing:.1em;color:var(--ink3);text-align:left;
+  padding:7px 8px;border-bottom:1px solid var(--line);font-weight:400}
+td{padding:7px 8px;border-bottom:1px solid #1c1c22;font-size:11.5px;color:var(--ink2);vertical-align:top}
+tr.off td{opacity:.4}
+td.mono{font-family:var(--m);font-size:11px}
+.tag{font-family:var(--m);font-size:10px;padding:1px 6px;border-radius:3px;border:1px solid var(--line);color:var(--ink3)}
+pre{font-family:var(--m);font-size:11px;background:#0e0e14;border:1px solid var(--line);border-radius:5px;
+  padding:10px;overflow:auto;max-height:420px;white-space:pre-wrap;word-break:break-all;color:var(--ink2)}
+.warnbox{border:1px solid #4a3d24;background:#1a160f;border-radius:5px;padding:9px 11px;
+  font-size:12px;color:var(--warn);margin-bottom:12px}
+.rowform{display:flex;gap:6px;flex-wrap:wrap;align-items:flex-end;margin-top:6px}
+.f{display:flex;flex-direction:column;gap:3px}
+.f label{font-family:var(--m);font-size:10px;color:var(--ink3)}
+input,select{background:#14141b;border:1px solid var(--line);border-radius:4px;color:var(--ink);
+  font-family:var(--m);font-size:12px;padding:5px 7px;outline:none}
+input:focus,select:focus{border-color:var(--gold)}
+input.sm{width:70px} input.md{width:150px} input.wide{width:240px}
+.hint{color:var(--ink3);font-size:11px;margin-top:8px}
+.ok{color:var(--ok)}.err{color:var(--err)}
+</style>
+</head>
+<body>
+<h2>能力面板</h2>
+<div class="sub">项目里闲置的 OneBot 扩展动作，集中在这里手动触发。每个动作都显示<b>原始返回</b>。默认全关。</div>
+
+<div id="warn"></div>
+
+<div class="card">
+  <h3>总开关与分组</h3>
+  <div class="bar" style="margin-bottom:10px">
+    <span class="sw" id="sw_enabled" onclick="toggleEnabled()"><span class="dot"></span>面板启用</span>
+    <span class="stat" id="stat">加载中…</span>
+  </div>
+  <div class="bar" id="groups"></div>
+  <div class="hint">头像组单独二次确认（风控风险）。发语音（send_group_ai_record）按决定不收录。</div>
+</div>
+
+<div class="card">
+  <h3>动作列表</h3>
+  <div class="hint" style="margin-bottom:10px">灰色的动作说明其所属分组未开启 —— 先开分组再执行。群待办三个动作必须先点 <b>get_group_todo_list</b> 取 id。</div>
+  <table>
+    <thead><tr><th>动作</th><th>分组</th><th>说明</th><th>参数</th><th></th></tr></thead>
+    <tbody id="rows"></tbody>
+  </table>
+</div>
+
+<div class="card">
+  <h3>返回结果（原始 JSON）</h3>
+  <pre id="out">（尚未执行任何动作）</pre>
+</div>
+
+<script>
+const API='/api/plugins/action';
+let S=null;
+async function call(action,params){
+  const r=await fetch(API,{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({plugin_id:'capabilities',action,params:params||{}})});
+  return r.json();
+}
+function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+function show(o){document.getElementById('out').textContent=JSON.stringify(o,null,2);}
+function showErr(m){document.getElementById('warn').innerHTML=`<div class="warnbox">${esc(m)}</div>`;}
+function clearErr(){document.getElementById('warn').innerHTML='';}
+const GZH={safe:'只读',profile:'资料',group:'群内容',avatar:'头像'};
+
+// 每个动作的参数字段定义（按驱动契约）
+const FIELDS={
+  set_self_longnick:[{k:'longNick',l:'签名内容',t:'text',w:'wide'}],
+  set_online_status:[{k:'status',l:'status(必填,非0)',t:'number'},{k:'ext_status',l:'ext_status',t:'number',v:0},{k:'battery_status',l:'battery',t:'number',v:100}],
+  set_diy_online_status:[{k:'face_id',l:'face_id(必填)',t:'number'},{k:'face_type',l:'face_type',t:'number',v:1},{k:'wording',l:'wording',t:'text',w:'md'}],
+  set_qq_profile:[{k:'nickname',l:'昵称',t:'text',w:'md'},{k:'personal_note',l:'个人说明',t:'text',w:'md'}],
+  set_qq_avatar:[{k:'file',l:'图片(file://)',t:'text',w:'wide'},{k:'confirm',l:'确认',t:'check'}],
+  get_group_signed_list:[{k:'group_id',l:'群号',t:'number'}],
+  get_group_todo_list:[{k:'group_id',l:'群号',t:'number'}],
+  set_group_todo:[{k:'group_id',l:'群号',t:'number'},{k:'message_id',l:'待办id(先取列表)',t:'text',w:'md'}],
+  complete_group_todo:[{k:'group_id',l:'群号',t:'number'},{k:'message_id',l:'待办id',t:'text',w:'md'}],
+  cancel_group_todo:[{k:'group_id',l:'群号',t:'number'},{k:'message_id',l:'待办id',t:'text',w:'md'}],
+  get_group_album_list:[{k:'group_id',l:'群号',t:'number'}],
+  get_group_album_media_list:[{k:'group_id',l:'群号',t:'number'},{k:'album_id',l:'album_id',t:'text',w:'md'},{k:'attach_info',l:'attach_info',t:'text',w:'md'}],
+  upload_image_to_qun_album:[{k:'group_id',l:'群号',t:'number'},{k:'album_id',l:'album_id',t:'text',w:'md'},{k:'album_name',l:'相册名',t:'text',w:'md'},{k:'file',l:'图片',t:'text',w:'md'}],
+  del_group_album_media:[{k:'group_id',l:'群号',t:'number'},{k:'album_id',l:'album_id',t:'text',w:'md'},{k:'lloc',l:'lloc',t:'text',w:'md'},{k:'confirm',l:'确认删',t:'check'}],
+};
+
+function field(id,f){
+  if(f.t==='check') return `<div class="f"><label><input type="checkbox" id="${id}" style="width:auto"> ${esc(f.l)}</label></div>`;
+  const v=f.v!=null?` value="${f.v}"`:'';
+  return `<div class="f"><label>${esc(f.l)}</label><input type="${f.t}" id="${id}" class="${f.w||'sm'}"${v}></div>`;
+}
+function buildRows(){
+  let h='';
+  for(const a of S.actions){
+    const on=S.enabled && S.groups[a.group];
+    h+=`<tr class="${on?'':'off'}">
+      <td class="mono">${esc(a.action)}${a.readonly?' <span class="tag">只读</span>':''}</td>
+      <td class="mono">${GZH[a.group]||a.group}</td>
+      <td>${esc(a.desc)}</td>
+      <td><div class="rowform">${(FIELDS[a.action]||[]).map(f=>field('p_'+a.action+'_'+f.k,f)).join('')}</div></td>
+      <td><button class="primary" onclick="run('${a.action}')">执行</button></td></tr>`;
+  }
+  document.getElementById('rows').innerHTML=h;
+}
+function collect(a){
+  const p={};
+  for(const f of (FIELDS[a]||[])){
+    const el=document.getElementById('p_'+a+'_'+f.k); if(!el) continue;
+    let v = f.t==='check' ? el.checked : el.value;
+    if(f.t!=='check' && f.t!=='number' && v==='') continue;
+    if(f.t==='check'){ if(!v) continue; p[f.k]=true; continue; }
+    if(f.t==='number'){ if(v==='') continue; p[f.k]=parseInt(v,10); continue; }
+    p[f.k]=v;
+  }
+  return p;
+}
+async function run(a){ clearErr(); const r=await call('run',{action:a,params:collect(a)}); show(r); }
+function toggleEnabled(){ call('set_config',{enabled:!S.enabled}).then(()=>load()); }
+function toggleGroup(k){
+  const groups=Object.assign({},S.groups); groups[k]=!groups[k];
+  const body={groups};
+  if(k==='avatar' && groups[k]){
+    if(!confirm('改头像有风控风险，确定要开启「头像」组吗？')) return;
+    body.confirm_avatar=true;
+  }
+  call('set_config',body).then(r=>{show(r);load();});
+}
+async function load(){
+  const d=await call('status');
+  if(d.error){ showErr(d.error); return; }
+  S=d;
+  document.getElementById('sw_enabled').className='sw'+(d.enabled?' on':'');
+  const on=Object.entries(d.groups).filter(([,v])=>v).map(([k])=>GZH[k]||k);
+  document.getElementById('stat').innerHTML=
+    `总开关 <b>${d.enabled?'开':'关'}</b> · 已开分组 <b>${on.length?on.join('/'):'全关'}</b>`;
+  document.getElementById('groups').innerHTML=d.groups_meta.map(g=>
+    `<span class="sw ${d.groups[g.key]?'on':''}" onclick="toggleGroup('${g.key}')" title="${esc(g.label)}"><span class="dot"></span>${GZH[g.key]||g.key}</span>`).join('');
+  buildRows();
+  const tc=d.todo_cached||{};
+  const keys=Object.keys(tc);
+  if(keys.length){ document.getElementById('warn').innerHTML =
+    `<div class="warnbox">已缓存群待办 id：${keys.map(k=>`群${k}→[${tc[k].join(',')}]`).join('；')}</div>`; }
+}
+load();
+setInterval(load, 8000);
+</script>
+</body>
+</html>

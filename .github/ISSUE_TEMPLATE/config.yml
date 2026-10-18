@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: 安全漏洞（不要公开）
+    url: https://github.com/Eggcrate9361/EggBloom/security/advisories/new
+    about: 越权、凭据泄漏、提示注入绕过工具白名单等，请走私密报告
+  - name: 使用问题 / 交流
+    url: https://github.com/Eggcrate9361/EggBloom/discussions
+    about: 装不上、配置不会、想问效果 —— 先来这里，不要开 Issue

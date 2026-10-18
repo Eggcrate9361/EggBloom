@@ -1,0 +1,37 @@
+name: 功能建议
+description: 想要的能力、体验改进、新平台/新模型支持
+title: "[feat] "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: 你遇到的问题
+      description: 先说场景，再说方案。例如「群里 @ 它但它在跟别人聊，插不进去」
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 你希望的解法
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: 你试过的替代方案 / 其他项目怎么做的
+  - type: dropdown
+    id: area
+    attributes:
+      label: 属于哪一块
+      options:
+        - 群聊决策（该不该说话）
+        - 人格 / 记忆 / 蒸馏
+        - 工具 / Agent / 插件
+        - WebUI / 桌面壳
+        - 协议驱动（QQ 接入）
+        - 打包 / 安装
+        - 文档
+        - 其他
+    validations:
+      required: true

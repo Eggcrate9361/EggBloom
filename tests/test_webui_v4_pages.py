@@ -1,0 +1,733 @@
+# -*- coding: utf-8 -*-
+"""v4 页面功能验证：用 mock 数据把已迁移页面整页跑通。
+
+为什么必须做这个
+----------------
+v4 是**新建**的前端，不是改旧文件。所以"页面能渲染"不等于"功能没丢" ——
+必须逐页验证：接口有没有接对、**风控二次确认这类小流程有没有保留**、
+自检/检测结果有没有逐项渲染。
+
+已覆盖：
+  · 协议页 —— /api/protocol/* 全部六个端点 + **风控二次确认** + 启动前自检 + 自动检测
+
+它抓到过的真 bug：
+  `fmt()` 对所有数字套了 `toLocaleString()`，端口 3000 被渲染成「3,000」。
+  端口/QQ号这类**标识性数值必须原样输出**，千分位只适用于"计数"。
+
+⚠️ 必须用**系统 Python**（Playwright）。缺 Playwright 时整体跳过，不会让套件变红。
+   为什么起本地 HTTP 服务：`file://` 下 `fetch('/api/...')` 会变成
+   `file:///D:/api/...`，Playwright 的 route 匹配不到，mock 不生效（踩过）。
+"""
+import os
+import functools, base64, sys, http.server, io, json, re, socketserver, subprocess, sys, threading
+from pathlib import Path
+
+try:
+    from playwright.sync_api import sync_playwright
+except Exception as _e:
+    print(f"[SKIP] 未安装 Playwright（{type(_e).__name__}）→ 跳过 v4 页面验证")
+    sys.exit(0)
+
+WEBUI = Path(r"D:\git\EggBloom\webui")
+OUT = Path(r"D:\workbuddy_tmp")
+errors, checks = [], []
+
+
+def ck(name, cond, detail=""):
+    checks.append((name, bool(cond), detail))
+    print(("  [OK]   " if cond else "  [FAIL] ") + name + ("" if cond else "  " + str(detail)))
+
+
+# ── 0. 起本地服务 ──
+class Quiet(http.server.SimpleHTTPRequestHandler):
+    def log_message(self, *a):
+        pass
+
+
+handler = functools.partial(Quiet, directory=str(WEBUI))
+srv = socketserver.TCPServer(("127.0.0.1", 0), handler)
+port = srv.server_address[1]
+threading.Thread(target=srv.serve_forever, daemon=True).start()
+BASE = f"http://127.0.0.1:{port}"
+print(f"本地服务: {BASE}")
+
+STATUS = {
+    "protocol_running": True, "protocol_driver": "snowluma",
+    "drivers": ["napcat", "llonebot", "snowluma"],
+    "api_port": 3000, "event_port": 3005, "qq_path": r"E:\QQ\QQ.exe", "status": {},
+    "risks": {
+        "napcat": {"level": "notice", "label": "风险提示",
+                   "text": "NapCat BootMain 注入真实 QQ，重启会重扫登录态。"},
+        "llonebot": {"level": "warning", "label": "未测试 · 不保证兼容",
+                     "text": "LLOneBot 为 QQNT 插件，本项目未实测。"},
+        "snowluma": {"level": "notice", "label": "风险提示",
+                     "text": "SnowLuma 需手动打开 QQ 客户端保持登录。"},
+    },
+}
+CHECK = {"ok": False, "driver": "snowluma", "items": [
+    {"key": "exe", "label": "SnowLuma 运行时", "ok": True, "hint": "已找到 node.exe"},
+    {"key": "qq", "label": "QQ 客户端路径", "ok": False, "hint": "未配置，请在下方填写"}]}
+AUTO = {"ok": True, "recommended": "snowluma", "candidates": [
+    {"driver": "snowluma", "name": "SnowLuma", "exe": r"E:\SnowLuma\index.mjs",
+     "found": True, "running": True, "desc": "手动登录，风控低"},
+    {"driver": "napcat", "name": "NapCat", "exe": "", "found": False,
+     "running": False, "desc": ""}]}
+LOGS = {"logs": [
+    {"time": "16:01:02", "level": "info", "msg": "协议层已启动"},
+    {"time": "16:01:03", "level": "warn", "msg": "事件端口 3005 被占用，已顺延"},
+    {"time": "16:01:05", "level": "error", "msg": "登录态失效，需重新扫码"}]}
+
+GROUPS = {"ok": True, "groups": [
+    {"group_id": "123456", "group_name": "核院 2026 级", "member_count": 128,
+     "bot_role": "admin", "bot_is_admin": True, "bot_card": "水星",
+     "reply_enabled": True, "whitelisted": True, "block_reason": "", "new_member_card": ""},
+    {"group_id": "301444", "group_name": "某个陌生群", "member_count": 301,
+     "bot_role": "member", "bot_is_admin": False, "bot_card": "",
+     "reply_enabled": True, "whitelisted": False,
+     "block_reason": "不在群白名单（白名单共 12 个群）", "new_member_card": ""},
+    {"group_id": "777888", "group_name": "已关自动回复的群", "member_count": 40,
+     "bot_role": "owner", "bot_is_admin": True, "bot_card": "",
+     "reply_enabled": False, "whitelisted": True,
+     "block_reason": "该群自动回复已关闭（群管理页 reply_enabled=False）",
+     "new_member_card": "欢迎新同学"},
+]}
+GROUP_MEMBERS = {"ok": True, "group_id": "123456", "bot_qq": "10001", "members": [
+    {"user_id": "10001", "nickname": "水星", "card": "水星", "role": "admin", "title": "",
+     "is_bot": True},
+    {"user_id": "20002", "nickname": "同学甲", "card": "", "role": "owner", "title": "", "is_bot": False},
+]}
+BOT_STATUS = {"data": {"bot_running": True, "pid": 12345, "uptime": 3725,
+                       "qq_path": r"E:\QQ\QQ.exe", "protocol_enabled": True}}
+TOKENS = {"snapshot": {
+    "group": {"requests": 120, "input_tokens": 400000, "output_tokens": 30000,
+              "total_tokens": 430000, "cache_hit_tokens": 350000,
+              "cache_miss_tokens": 50000, "cache_hit_rate": 87.5},
+    "private": {"requests": 15, "input_tokens": 30000, "output_tokens": 4000,
+                "total_tokens": 34000, "cache_hit_tokens": 20000,
+                "cache_miss_tokens": 10000, "cache_hit_rate": 66.7},
+    "all": {"requests": 135, "input_tokens": 430000, "output_tokens": 34000,
+            "total_tokens": 464000, "cache_hit_tokens": 370000,
+            "cache_miss_tokens": 60000, "cache_hit_rate": 86.0}},
+    "recent": [{"scene": "group", "total_tokens": 3355, "cache_hit_rate": 87.5, "time": "16:20:01"},
+               {"scene": "private", "total_tokens": 1200, "cache_hit_rate": 66.7, "time": "16:20:05"}]}
+CONFIG = {
+    "bot_qq": "10001", "api_provider": "deepseek", "model_name": "deepseek-flash",
+    "api_url": "https://api.deepseek.com/chat/completions",
+    # 敏感字段：服务端回传的是**掩码**（webui_server._mask_secret）
+    "api_key": "«redacted:sk-123…»",
+    "onebot_token": "«redacted:abc123…»",
+    "ai_temperature": 0.7, "ai_max_tokens": 800, "ai_top_p": 0.95,
+    "ai_frequency_penalty": 0.1, "ai_presence_penalty": 0.15,
+    "group_idle_exit_min_silence": 600, "group_last_exit_cooldown": 3000,
+    "group_msg_buffer_window": 3, "group_recent_msgs_window": 30,
+    "group_session_max_replies": 20, "group_idle_exit_probability": 0.3,
+    "group_idle_exit_enable": True,
+    "protocol_enabled": True, "protocol_api_port": 3000, "protocol_event_port": 3005,
+    "protocol_driver": "snowluma",
+    "meme_enable": True, "meme_idle_exit_enable": True, "meme_cooldown": 60,
+    "recall_feedback_enable": True, "recall_window_seconds": 10,
+    "embed_enabled": True, "embed_top_k": 8,
+    "session_ttl": 300, "session_max_rounds": 7,
+    "admin_qqs": ["10001"], "admin_commands_enable": True,
+    "private_reply_enabled": True, "startup_cooldown": 60,
+    "notify_admin": False, "msg_split_len": 500, "idle_timeout": 300,
+    "group_whitelist": ["123456", "234567"],
+    "recall_feedback_pre_messages": ["？", "你撤回了一条消息", "还好你撤了 我差点就回了"],
+    "recall_feedback_post_messages": ["撤回了？行 那我也不用回了"],
+    "custom_exit_phrases_idle": ["困了 先撤了", "有事 回头聊"],
+    "custom_exit_phrases_short": ["嗯 走了"],
+    "llama_driver": "llama-server", "llama_model_path": r"E:\models\x.gguf",
+    "llama_model_name": "qwen", "llama_port": 8081,
+    "comfyui_host": "127.0.0.1", "comfyui_port": 8000, "comfyui_timeout": 120,
+    "providers": [{"id": "deepseek", "name": "DeepSeek", "base_url": "https://api.deepseek.com",
+                   "api_key": "«redacted:sk-123…»", "has_api_key": True,
+                   "models": [{"id": "deepseek-flash", "name": "DeepSeek Chat"}]}],
+    "group_restrictions": {"123456": {"reply_enabled": True}},
+}
+config_calls = []
+action_calls = []
+group_calls = []
+bot_calls = []
+switch_calls = []
+# 卡片 <img> 用的 1x1 PNG：表情包页会真的去取 /memes/<dir>/<file>，
+# 不 mock 就会 404，而 404 会被「无 JS 报错」那条断言当成页面故障。
+PNG1X1 = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==")
+
+with sync_playwright() as pw:
+    b = pw.chromium.launch(executable_path=os.environ.get("PW_CHROME") or None)  # 本机 chromium-1228
+    pg = b.new_page(viewport={"width": 1440, "height": 900})
+    pg.on("pageerror", lambda e: errors.append("pageerror: " + str(e)[:240]))
+    pg.on("console", lambda m: errors.append("console." + m.type + ": " + m.text[:200])
+          if m.type == "error" else None)
+
+    def route(r):
+        u = r.request.url
+        if "/api/plugins" in u and "/api/plugins/toggle" not in u:
+            return r.fulfill(status=200, content_type="application/json", body=json.dumps({
+                "plugins": [{"name": "ego", "enabled": True},
+                            {"name": "mood_engine", "enabled": False}]}))
+        if "/api/protocol/status" in u:
+            return r.fulfill(status=200, content_type="application/json", body=json.dumps(STATUS))
+        if "/api/protocol/check" in u:
+            return r.fulfill(status=200, content_type="application/json", body=json.dumps(CHECK))
+        if "/api/protocol/auto-detect" in u:
+            return r.fulfill(status=200, content_type="application/json", body=json.dumps(AUTO))
+        if "/api/protocol/logs/clear" in u:
+            return r.fulfill(status=200, content_type="application/json", body='{"ok":true}')
+        if "/api/protocol/logs" in u:
+            return r.fulfill(status=200, content_type="application/json", body=json.dumps(LOGS))
+        # 配置页的「接入与诊断」动作
+        # 控制台 / 记忆 / 生图 / 表情包
+        if "/api/command" in u:
+            action_calls.append(("command", json.loads(r.request.post_data or "{}")))
+            return r.fulfill(status=200, content_type="application/json",
+                             body='{"ok":true,"output":"状态: 运行中 | 运行时长: 01:02:03"}')
+        if "/api/memory/detail" in u:
+            return r.fulfill(status=200, content_type="application/json", body=json.dumps({
+                "qq": "20002", "rounds": [{"time": "16:00", "user": "你好", "bot": "在的"}]}))
+        if "/api/memory/list" in u:
+            return r.fulfill(status=200, content_type="application/json", body=json.dumps({
+                "items": [{"qq": "20002", "count": 12, "last": "16:00"},
+                          {"qq": "30003", "count": 5, "last": "15:20"}]}))
+        if u.rstrip("/").endswith("/api/memory"):
+            return r.fulfill(status=200, content_type="application/json", body=json.dumps({
+                "data": {"memory_total": 4080, "learned_messages": 4080, "active_groups": 7,
+                         "storage_kb": 1024.5,
+                         "expressions": [{"text": "666 太强了", "scene": "praise", "score": 85}]}}))
+        if "/api/imagegen/generate" in u:
+            action_calls.append(("generate", json.loads(r.request.post_data or "{}")))
+            return r.fulfill(status=200, content_type="application/json",
+                             body='{"ok":true,"image":"/memes/demo.png"}')
+        if "/api/imagegen/status" in u:
+            return r.fulfill(status=200, content_type="application/json", body=json.dumps({
+                "comfyui_running": True, "comfyui_host": "127.0.0.1", "comfyui_port": 8000,
+                "comfyui_checkpoint": "sd_xl_base.safetensors", "workflow_path": "wf.json",
+                "prompt_node_id": "353", "comfyui_default_width": 1024,
+                "comfyui_default_height": 1536, "comfyui_timeout": 120}))
+        if "/api/memes/import" in u:
+            action_calls.append(("memes_import", json.loads(r.request.post_data or "{}")))
+            return r.fulfill(status=200, content_type="application/json",
+                             body='{"success":true,"imported":3}')
+        if "/api/memes/delete" in u:
+            action_calls.append(("memes_delete", json.loads(r.request.post_data or "{}")))
+            return r.fulfill(status=200, content_type="application/json", body='{"ok":true}')
+        if u.rstrip("/").endswith("/api/memes"):
+            return r.fulfill(status=200, content_type="application/json", body=json.dumps({
+                "memes": [{"name": "kaguya/a.png", "tags": ["可爱", "日常"]},
+                         {"name": "kaguya/b.jpg", "tags": ["可爱"]},
+                         {"name": "vrchat/c.gif", "tags": ["无语"]}]}))
+
+        if "/api/llm/test" in u:
+            action_calls.append(("llm_test", json.loads(r.request.post_data or "{}")))
+            return r.fulfill(status=200, content_type="application/json",
+                             body='{"ok":true,"model":"deepseek-flash","reply":"你好"}')
+        if "/api/llama/scan" in u:
+            action_calls.append(("llama_scan", json.loads(r.request.post_data or "{}")))
+            return r.fulfill(status=200, content_type="application/json", body=json.dumps({
+                "ok": True,
+                "llama_servers": [{"path": r"E:\llama\llama-server.exe"}],
+                "models": [{"path": r"E:\models\qwen.gguf"}]}))
+        if "/api/llama/start" in u:
+            action_calls.append(("llama_start", json.loads(r.request.post_data or "{}")))
+            return r.fulfill(status=200, content_type="application/json",
+                             body='{"ok":true,"driver":"llama-server"}')
+        if "/api/llama/stop" in u:
+            action_calls.append(("llama_stop", {}))
+            return r.fulfill(status=200, content_type="application/json", body='{"ok":true}')
+        if "/api/llama/open" in u:
+            action_calls.append(("llama_open", json.loads(r.request.post_data or "{}")))
+            return r.fulfill(status=200, content_type="application/json",
+                             body='{"ok":true,"url":"http://127.0.0.1:8081"}')
+        if "/api/llama/test" in u:
+            action_calls.append(("llama_test", json.loads(r.request.post_data or "{}")))
+            return r.fulfill(status=200, content_type="application/json", body='{"ok":true,"model":"qwen"}')
+        if "/api/imagegen/test" in u:
+            action_calls.append(("imagegen_test", json.loads(r.request.post_data or "{}")))
+            return r.fulfill(status=200, content_type="application/json", body='{"ok":true}')
+        if "/api/config/model" in u:
+            config_calls.append(("model", json.loads(r.request.post_data or "{}")))
+            return r.fulfill(status=200, content_type="application/json",
+                             body='{"success":true}')
+        if "/api/config/reload" in u:
+            return r.fulfill(status=200, content_type="application/json", body='{"ok":true}')
+        if u.rstrip("/").endswith("/api/config"):
+            if r.request.method == "POST":
+                config_calls.append(("save", json.loads(r.request.post_data or "{}")))
+                return r.fulfill(status=200, content_type="application/json", body='{"ok":true}')
+            return r.fulfill(status=200, content_type="application/json", body=json.dumps(CONFIG))
+        if "/api/bot/status" in u:
+            return r.fulfill(status=200, content_type="application/json", body=json.dumps(BOT_STATUS))
+        if "/api/bot/start" in u:
+            bot_calls.append("start")
+            return r.fulfill(status=200, content_type="application/json",
+                             body='{"success":true,"output":"Bot 已启动"}')
+        if "/api/bot/stop" in u:
+            bot_calls.append("stop")
+            return r.fulfill(status=200, content_type="application/json",
+                             body='{"success":true,"output":"Bot 已停止"}')
+        if "/api/token-stats" in u:
+            return r.fulfill(status=200, content_type="application/json", body=json.dumps(TOKENS))
+        if "/api/groups/members" in u:
+            return r.fulfill(status=200, content_type="application/json", body=json.dumps(GROUP_MEMBERS))
+        if "/api/groups/settings" in u:
+            body = json.loads(r.request.post_data or "{}")
+            group_calls.append(("settings", body))
+            return r.fulfill(status=200, content_type="application/json", body='{"ok":true}')
+        if "/api/groups/action" in u:
+            body = json.loads(r.request.post_data or "{}")
+            group_calls.append(("action", body))
+            return r.fulfill(status=200, content_type="application/json", body='{"ok":true}')
+        if "/api/groups" in u:
+            return r.fulfill(status=200, content_type="application/json", body=json.dumps(GROUPS))
+        if "/api/protocol/switch" in u:
+            body = json.loads(r.request.post_data or "{}")
+            switch_calls.append(body)
+            if not body.get("confirm"):
+                return r.fulfill(status=200, content_type="application/json", body=json.dumps({
+                    "success": False, "need_confirm": True,
+                    "output": "「napcat」属非官方登录通道。重启会重扫 QQ 登录态，如需继续请二次确认。"}))
+            return r.fulfill(status=200, content_type="application/json",
+                             body='{"success":true,"output":"已切换到 napcat"}')
+        return r.fulfill(status=200, content_type="application/json", body="{}")
+
+    # 表情包图片：mock 环境没有真文件，回 1×1 PNG。
+    # ⚠️ 必须单独注册路由 —— 上面那条是 `**/api/**`，`/memes/a.png` 根本不会进去
+    #   （第一版把图片分支写在 api route 里 = 死代码，404 依旧）。
+    # ⚠️ glob 必须是 `**/memes/**`：表情包名可能带子目录（kaguya/a.png），
+    #   `*` 不跨 `/`，写成 `**/memes/*` 会漏掉带目录的那批 → 404 → 被当成页面故障。
+    MEME_PNG = ("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQ"
+                "AAAABJRU5ErkJggg==")
+    pg.route("**/memes/**", lambda r: r.fulfill(
+        status=200, content_type="image/png", body=base64.b64decode(MEME_PNG)))
+    pg.route("**/api/**", route)
+    pg.goto(f"{BASE}/webui_artistic_v4.html", wait_until="load")
+    pg.wait_for_timeout(900)
+    pg.evaluate("() => go(1)")
+    pg.wait_for_timeout(1100)
+
+    print("\n=== 协议页渲染 ===")
+    txt = pg.inner_text(".panel")
+    ck("标题是「协议」", "协议" in pg.inner_text("#ttl"), pg.inner_text("#ttl"))
+    ck("连接状态＝运行中", "运行中" in txt, txt[:200])
+    ck("★ API/事件端口", "3000" in txt and "3005" in txt)
+    ck("★ QQ 路径", "QQ.exe" in txt)
+    ck("★ 三个驱动都在", all(d in txt for d in ("napcat", "llonebot", "snowluma")))
+    ck("★ 风险说明逐条渲染", "未测试" in txt and "不保证兼容" in txt)
+    ck("★ 日志渲染（含 ERROR）", "登录态失效" in txt and "ERROR" in txt)
+
+    print("\n=== ★ 风控二次确认 ===")
+    pg.click('[data-drv="napcat"]')
+    pg.wait_for_timeout(700)
+    t2 = pg.inner_text(".panel")
+    ck("第一次点击 → 弹二次确认而非直接切换", "二次确认" in t2, t2[-300:])
+    ck("确认文案带风险说明", "非官方登录通道" in t2)
+    ck("此时只发了一次请求且未带 confirm",
+       len(switch_calls) == 1 and not switch_calls[0].get("confirm"), switch_calls)
+    pg.click("#pConfirm")
+    pg.wait_for_timeout(1000)
+    ck("★ 确认后第二次请求带 confirm=true",
+       len(switch_calls) == 2 and switch_calls[1].get("confirm") is True, switch_calls)
+
+    print("\n=== 启动前自检 ===")
+    pg.click("#pCheck")
+    pg.wait_for_timeout(600)
+    t3 = pg.inner_text("#pOut")
+    ck("逐项渲染", "SnowLuma 运行时" in t3 and "QQ 客户端路径" in t3, t3[:200])
+    ck("★ 就绪/缺失分别标注", "就绪" in t3 and "缺失" in t3)
+    ck("结论如实（存在未就绪项）", "存在未就绪项" in t3)
+
+    print("\n=== 自动检测 ===")
+    pg.click("#pAuto")
+    pg.wait_for_timeout(600)
+    t4 = pg.inner_text("#pOut")
+    ck("渲染 + 推荐", "推荐" in t4 and "SnowLuma" in t4, t4[:160])
+    ck("状态区分", "运行中" in t4 and "未找到" in t4)
+
+    print("\n=== 群管理页 ===")
+    pg.evaluate("() => go(2)")          # 第 3 项 = 群管理
+    pg.wait_for_timeout(1400)
+    g = pg.inner_text(".panel")
+    ck("标题是「群管理」", "群管理" in pg.inner_text("#ttl"), pg.inner_text("#ttl"))
+    ck("总览读数（群总数/参与中/被拦截）",
+       "群总数" in g and "参与中" in g and "被拦截" in g, g[:220])
+    ck("★ 群名与群号都在", "核院 2026 级" in g and "123456" in g and "301444" in g)
+    ck("★ Bot 身份渲染（群主/管理员/成员）",
+       "管理员" in g and "成员" in g and "群主" in g)
+
+    print("\n=== ★ block_reason 必须可见（P0-2 的成果不能被埋掉）===")
+    ck("白名单外群的拦截原因直接显示在列表里", "不在群白名单" in g)
+    ck("reply_enabled=False 的原因也显示", "自动回复已关闭" in g)
+
+    print("\n=== 入群名片（只在详情里渲染，列表行保持干净）===")
+    pg.click('[data-open="777888"]')
+    pg.wait_for_timeout(1000)
+    ck("★ 打开有配置的群 → 名片值被带进输入框",
+       pg.input_value("#gCard") == "欢迎新同学", pg.input_value("#gCard"))
+    pg.click("#gClose")
+    pg.wait_for_timeout(400)
+
+    print("\n=== 参与开关 ===")
+    group_calls.clear()
+    pg.click('[data-toggle="123456"]')
+    pg.wait_for_timeout(1000)
+    ck("★ 切换参与 → POST /groups/settings 带 reply_enabled",
+       any(k == "settings" and "reply_enabled" in c for k, c in group_calls), group_calls)
+
+    print("\n=== 展开详情：成员 + 群动作 ===")
+    pg.evaluate("() => go(2)")
+    pg.wait_for_timeout(1300)
+    group_calls.clear()
+    pg.click('[data-open="123456"]')
+    pg.wait_for_timeout(1200)
+    d = pg.inner_text(".panel")
+    ck("成员列表渲染（含「本机」标记）", "同学甲" in d and "本机" in d, d[-400:])
+    pg.click('#gSaveCard')
+    pg.wait_for_timeout(800)
+    ck("★ 保存名片 → POST /groups/settings 带 new_member_card",
+       any(k == "settings" and "new_member_card" in c for k, c in group_calls), group_calls)
+    group_calls.clear()
+    # v4 从 1.5 起**不再用系统 confirm**（用户反馈"群管理的弹窗是系统弹窗"）：
+    # 全员禁言改成"应用内二次确认"= 点两下（第一下武装、第二下执行）；
+    # 成员禁言改成"原地展开时长选项"（1分/10分/1时/1天）。用户反馈"只能禁言 10 分钟"。
+    pg.once("dialog", lambda d: d.accept())   # 兜底：若还有别的 dialog 不至于卡住
+    pg.click('#gWholeBan')
+    pg.wait_for_timeout(400)
+    pg.click('#gWholeBan')                    # 第二下才真正执行
+    pg.wait_for_timeout(800)
+    ck("★ 全员禁言 → POST /groups/action {action:'whole_ban'}",
+       any(k == "action" and c.get("action") == "whole_ban" for k, c in group_calls), group_calls)
+    group_calls.clear()
+    pg.click('[data-m="ban"][data-u="20002"]')
+    pg.wait_for_timeout(400)
+    ck("★ 成员禁言 → 原地展开时长选项（不再写死 10 分钟）",
+       pg.locator('[data-d]').count() >= 3, pg.locator('[data-d]').count())
+    pg.click('[data-d="60"]')                 # 选「1 小时」
+    pg.wait_for_timeout(800)
+    ck("★ 成员禁言 → {action:'ban', user_id, duration_minutes=60}",
+       any(k == "action" and c.get("action") == "ban" and c.get("user_id") == "20002"
+           and c.get("duration_minutes") == 60 for k, c in group_calls), group_calls)
+
+    pg.screenshot(path=str(OUT / "_v4_groups.png"), full_page=True)
+
+    print("\n=== Bot 页 ===")
+    bot_calls.clear()
+    pg.evaluate("() => go(8)")          # 第 9 项 = Bot
+    pg.wait_for_timeout(1200)
+    bt = pg.inner_text(".panel")
+    ck("标题是「Bot」", "Bot" in pg.inner_text("#ttl"), pg.inner_text("#ttl"))
+    ck("运行状态＝运行中", "运行中" in bt, bt[:160])
+    ck("★ PID 原样显示（不被千分位）", "12345" in bt and "12,345" not in bt, bt[:200])
+    ck("★ 运行时长人性化（3725s → 1 时 2 分）", "1 时 2 分" in bt, bt[:200])
+    ck("QQ 路径", "QQ.exe" in bt)
+    ck("协议开关＝已启用", "已启用" in bt)
+    ck("运行中时「启动」按钮应为禁用",
+       pg.eval_on_selector("#bStart", "e => e.disabled") is True)
+    pg.click("#bStop")
+    pg.wait_for_timeout(900)
+    ck("★ 停止 → POST /api/bot/stop", "stop" in bot_calls, bot_calls)
+    ck("停止结果有反馈", "已停止" in pg.inner_text("#bOut"), pg.inner_text("#bOut"))
+
+    print("\n=== Token 页（零图表）===")
+    pg.evaluate("() => go(6)")          # 第 7 项 = Token
+    pg.wait_for_timeout(1200)
+    tk = pg.inner_text(".panel")
+    ck("标题是「Token」", "Token" in pg.inner_text("#ttl"), pg.inner_text("#ttl"))
+    ck("★ 总 Token 渲染", "464,000" in tk, tk[:220])
+    ck("★ 缓存命中率渲染（86%）", "86" in tk and "%" in tk, tk[:260])
+    ck("★ 按场景表（群聊/私聊）", "群聊" in tk and "私聊" in tk, tk[:300])
+    ck("★ 最近记录渲染（含 tokens 与命中率）",
+       "3355 tokens" in tk or "3,355 tokens" in tk, tk[-300:])
+    ck("★ 页面内没有 canvas/svg 图表",
+       pg.eval_on_selector_all(".panel canvas, .panel svg", "els => els.length") == 0)
+
+    pg.screenshot(path=str(OUT / "_v4_token.png"), full_page=True)
+
+    print("\n=== 配置中心 ===")
+    pg.evaluate("() => go(7)")          # 第 8 项 = 配置中心
+    pg.wait_for_timeout(1300)
+    cf = pg.inner_text(".panel")
+    ck("标题是「配置中心」", "配置中心" in pg.inner_text("#ttl"), pg.inner_text("#ttl"))
+    # ★ 设置项现在按 v3 的**面板**归位并带中文标签（不再按 key 前缀分 8 组）。
+    #   面板标签的覆盖度由 scripts/audit_config_parity.py 逐项核对，
+    #   这里只锁"面板存在 + 当前面板字段带中文标签 + 其他键仍可编辑"三件事。
+    tabs = pg.eval_on_selector_all(".cf-tab", "e=>e.map(x=>x.textContent)")
+    ck("★ 设置项按 v3 面板分组（中文面板名）",
+       all(any(w in "".join(tabs) for w in [k]) for k in ("基础", "对话大脑", "群聊",
+                                                          "表情包", "撤回反馈", "退场语",
+                                                          "权限", "自动通过")), tabs)
+    ck("★ 当前面板字段带中文标签而不是裸键名",
+       pg.evaluate("()=>{const f=document.querySelector('#cfPanel .cf-fld');"
+                   "return !!f && !!f.querySelector('.cf-lab') && !!f.querySelector('[data-k],[data-sw]');}"))
+    nctl = pg.eval_on_selector_all(".panel [data-k]", "e => e.length")
+    names = pg.eval_on_selector_all(".panel [data-k]", "e => e.map(x=>x.dataset.k)")
+    print(f"    [诊断] data-k 控件 {nctl} 个；前 20 个：{names[:20]}")
+    print(f"    [诊断] 页面 JS 报错 {len(errors)} 条：{errors[:3]}")
+    ck("★ 未登记标签的键仍在「其他配置项」里可编辑", nctl > 10, nctl)
+    masked = pg.eval_on_selector_all('.panel [data-k][data-masked="1"]', "e => e.map(x=>x.dataset.k)")
+    ck("★ 敏感字段标了 data-masked", bool(masked), masked)
+
+    print("\n=== ★ 只读键不能有可编辑入口（providers 含掩码 Key）===")
+    editable = pg.eval_on_selector_all(".panel [data-k]", "e => e.map(x=>x.dataset.k)")
+    ck("`providers` 不在可编辑控件里", "providers" not in editable, editable[:12])
+    ck("`group_restrictions` 也不在（归群管理页）", "group_restrictions" not in editable)
+    ck("列表类配置（group_whitelist）可以编辑", "group_whitelist" in editable)
+
+    print("\n=== ★★ 掩码不能被写回（不可逆损坏）===")
+    ck("未改动时「保存改动」按钮禁用",
+       pg.eval_on_selector("#cSave", "e => e.disabled") is True)
+    config_calls.clear()
+    pg.fill('[data-k="bot_qq"]', "20002")          # 只改一个普通字段
+    pg.wait_for_timeout(400)
+    ck("改动后按钮启用且计数正确",
+       pg.eval_on_selector("#cSave", "e => !e.disabled") is True
+       and "1" in pg.inner_text("#cSave"), pg.inner_text("#cSave"))
+    pg.click("#cSave")
+    pg.wait_for_timeout(1000)
+    saved = [c[1] for c in config_calls if c[0] == "save"]
+    ck("确实提交了一次保存", len(saved) == 1, config_calls)
+    if saved:
+        body = saved[0]
+        ck("★ 提交内容只含改动的键（bot_qq）", list(body.keys()) == ["bot_qq"], body)
+        ck("★★ 提交内容**不含** api_key（否则真 Key 会被写成占位符）", "api_key" not in body, body)
+        ck("★★ 提交内容不含 onebot_token", "onebot_token" not in body, body)
+        ck("★★ 提交内容不含 providers（内部全是掩码 Key）", "providers" not in body, body)
+        ck("★ 提交的掩码字段值里没有 «redacted",
+           not any(isinstance(v, str) and "redacted" in v for v in body.values()), body)
+
+    print("\n=== 类型化编辑 ===")
+    config_calls.clear()
+    pg.evaluate("() => go(7)")
+    pg.wait_for_timeout(1300)
+    # 「其他配置项」默认收起（用户定稿）——先展开才能操作兜底区的控件
+    pg.evaluate("() => { const h = document.getElementById('cOrphanHd'); if (h && document.getElementById('cOrphanBody').hidden) h.click(); }")
+    pg.wait_for_timeout(400)
+    pg.select_option('[data-k="protocol_enabled"]', "0")
+    pg.wait_for_timeout(400)
+    pg.click("#cSave")
+    pg.wait_for_timeout(900)
+    saved2 = [c[1] for c in config_calls if c[0] == "save"]
+    ck("★ 布尔项提交为 false（不是字符串 '0'）",
+       bool(saved2) and saved2[0].get("protocol_enabled") is False, saved2)
+
+    config_calls.clear()
+    pg.evaluate("() => go(7)")
+    pg.wait_for_timeout(1300)
+    # ★ 设置项现在按 v3 的面板归位并带中文标签，所以要先切到字段所属面板。
+    #   （protocol_enabled 没在 v3 的面板里登记，仍留在下方「其他配置项」区，
+    #     那里布尔项还是原生 select —— 两种形态都要能改，这是有意的。）
+    pg.evaluate("""(k) => {
+      const m = window.FIELD_META.fields[k];
+      if (!m) return;
+      const t = [...document.querySelectorAll('.cf-tab')].find(x => x.dataset.cfTab === m.panel);
+      if (t) t.click();
+    }""", "ai_temperature")
+    pg.wait_for_timeout(350)
+    ck("字段已归入带中文标签的面板（温度）",
+       pg.evaluate("()=>{const e=document.querySelector('#cfArea [data-k=\\'ai_temperature\\']');"
+                   "return !!e && !!e.closest('.cf-fld') && /温度/.test(e.closest('.cf-fld').textContent);}"))
+    pg.fill('#cfArea [data-k="ai_temperature"]', "1.25")
+    pg.wait_for_timeout(400)
+    pg.click("#cSave")
+    pg.wait_for_timeout(900)
+    saved3 = [c[1] for c in config_calls if c[0] == "save"]
+    ck("★ 数字项提交为 number（不是字符串）",
+       bool(saved3) and saved3[0].get("ai_temperature") == 1.25, saved3)
+
+    pg.screenshot(path=str(OUT / "_v4_config.png"), full_page=True)
+
+    print("\n=== ★ 配置页的「接入与诊断」动作（旧版有 23 个按钮，不能丢）===")
+    pg.evaluate("() => go(7)")
+    pg.wait_for_timeout(1300)
+    btn_ids = ["cWizard", "cTest", "cKeyClear", "cScan", "cLsStart", "cLsStop",
+               "cLsTest", "cLsOpen", "cImgTest", "cImgStart", "cImgStop", "cImgOpen"]
+    miss = [b for b in btn_ids if pg.eval_on_selector_all(f"#{b}", "e => e.length") == 0]
+    ck("★ 12 个动作按钮全部渲染（旧版 23 个按钮的核心动作）", not miss, miss)
+    ck("★ 4 个预览按钮渲染",
+       pg.eval_on_selector_all("[data-pv]", "e => e.length") == 4,
+       pg.eval_on_selector_all("[data-pv]", "e => e.map(x=>x.dataset.pv)"))
+
+    action_calls.clear()
+    pg.click("#cTest")
+    pg.wait_for_timeout(900)
+    ck("★ 测试连接 → POST /llm/test",
+       any(k == "llm_test" for k, _ in action_calls), action_calls)
+    _t = [c for k, c in action_calls if k == "llm_test"]
+    ck("★ 测试连接带上 provider/model",
+       bool(_t) and _t[0].get("model_name") and _t[0].get("api_provider"), _t)
+
+    action_calls.clear()
+    pg.click("#cScan")
+    pg.wait_for_timeout(1200)
+    ck("★ 探测本地模型 → POST /llama/scan", any(k == "llama_scan" for k, _ in action_calls))
+    ck("探测结果逐条渲染（exe 与 gguf 路径）",
+       "llama-server.exe" in pg.inner_text("#cDiag")
+       and "qwen.gguf" in pg.inner_text("#cDiag"), pg.inner_text("#cDiag")[:200])
+
+    action_calls.clear()
+    pg.click("#cLsStart")
+    pg.wait_for_timeout(900)
+    _st = [c for k, c in action_calls if k == "llama_start"]
+    ck("★ 启动 llama-server → use_local_llm=true 且 driver=llama-server",
+       bool(_st) and _st[0].get("use_local_llm") is True
+       and _st[0].get("driver") == "llama-server", _st)
+    action_calls.clear()
+    pg.click("#cLsOpen")
+    pg.wait_for_timeout(800)
+    ck("★ 打开 8081 → /llama/open {port:8081}",
+       any(k == "llama_open" and c.get("port") == 8081 for k, c in action_calls), action_calls)
+
+    action_calls.clear()
+    pg.click("#cLsTest")
+    pg.wait_for_timeout(800)
+    ck("★ 测试本地连接 → POST /llama/test", any(k == "llama_test" for k, _ in action_calls),
+       action_calls)
+    action_calls.clear()
+    pg.click("#cImgStart")
+    pg.wait_for_timeout(800)
+    ck("★ 启动生图模型 → /llama/start（用 image_llama_* 配置）",
+       any(k == "llama_start" for k, _ in action_calls), action_calls)
+    action_calls.clear()
+    pg.click("#cImgStop")
+    pg.wait_for_timeout(700)
+    ck("★ 停止生图模型 → /llama/stop", any(k == "llama_stop" for k, _ in action_calls))
+
+    action_calls.clear()
+    pg.click("#cImgTest")
+    pg.wait_for_timeout(900)
+    _it = [c for k, c in action_calls if k == "imagegen_test"]
+    ck("★ 测试生图 → /imagegen/test 带 host/port/timeout",
+       bool(_it) and _it[0].get("host") and _it[0].get("port") and _it[0].get("timeout"), _it)
+
+    print("\n=== ★ 配置向导（三步）===")
+    pg.click("#cWizard")
+    pg.wait_for_timeout(700)
+    wz = pg.inner_text(".modal")
+    ck("向导打开且是三步结构", "步骤 1" in wz and "步骤 2" in wz and "步骤 3" in wz, wz[:220])
+    ck("★ 步骤 2 的 Key 是 password 输入",
+       pg.eval_on_selector("#wzKey", "e => e.type") == "password")
+    ck("★ 选提供商后自动填充 API URL", pg.input_value("#wzUrl") != "", pg.input_value("#wzUrl"))
+    action_calls.clear()
+    pg.fill("#wzModel", "deepseek-flash")
+    pg.click("#wzTest")
+    pg.wait_for_timeout(900)
+    ck("★ 向导「测试连接」→ /llm/test", any(k == "llm_test" for k, _ in action_calls))
+    pg.click("#wzCancel")
+    pg.wait_for_timeout(400)
+    ck("取消后弹窗关闭", pg.eval_on_selector_all(".modal-ov", "e => e.length") == 0)
+
+    print("\n=== ★ 预览按钮（纯前端）===")
+    pg.click('[data-pv="recall_feedback_pre_messages"]')
+    pg.wait_for_timeout(600)
+    pv = pg.inner_text(".modal")
+    ck("★ 预览弹窗打开并列出内容", "撤回了一条消息" in pv, pv[:220])
+    ck("★ 显示条数", "共 3 条" in pv, pv[:160])
+    pg.click("#pvX")
+    pg.wait_for_timeout(300)
+
+    pg.screenshot(path=str(OUT / "_v4_config2.png"), full_page=True)
+
+    print("\n=== ★ 全 15 页冒烟：逐页导航，不得有 JS 报错、不得是「未迁移」占位 ===")
+    PAGE_NAMES = ["仪表盘", "协议", "群管理", "表情包", "生图", "群聊行为", "Token",
+                  "配置中心", "Bot", "日志", "通知", "控制台", "记忆", "插件", "Agent"]
+    for i, nm in enumerate(PAGE_NAMES):
+        before = len(errors)
+        pg.evaluate("(i) => go(i)", i)
+        pg.wait_for_timeout(950)
+        title = pg.inner_text("#ttl")
+        body = pg.inner_text(".panel")
+        ok_title = nm in title or title.strip() == nm
+        ok_no_pending = "尚未迁移" not in body
+        ok_rendered = len(body.strip()) > 20
+        ok_no_err = len(errors) == before
+        ck(f"第 {i+1:2d} 页「{nm}」：标题对/已渲染/非占位/无报错",
+           ok_title and ok_no_pending and ok_rendered and ok_no_err,
+           {"title": title, "pending": not ok_no_pending,
+            "len": len(body.strip()), "newErr": errors[before:]})
+    ck("★ 全站没有任何页面仍是「未迁移」占位",
+       pg.evaluate("() => document.querySelectorAll('.ni.todo').length") == 0,
+       pg.evaluate("() => document.querySelectorAll('.ni.todo').length"))
+
+    print("\n=== 新迁移页的关键行为 ===")
+    action_calls.clear()
+    pg.evaluate("() => go(11)")          # 控制台
+    pg.wait_for_timeout(1000)
+    pg.fill("#cxIn", "status")
+    pg.click("#cxGo")
+    pg.wait_for_timeout(900)
+    ck("★ 控制台执行指令 → /api/command",
+       any(k == "command" and c.get("command") == "status" for k, c in action_calls), action_calls)
+    ck("控制台有输出", "运行中" in pg.inner_text("#cxOut"), pg.inner_text("#cxOut")[:120])
+
+    pg.evaluate("() => go(12)")          # 记忆
+    pg.wait_for_timeout(1100)
+    mm = pg.inner_text(".panel")
+    ck("★ 记忆总览读数", "4,080" in mm or "4080" in mm, mm[:200])
+    ck("★ 表达模式渲染", "666 太强了" in mm, mm[:260])
+    pg.fill("#mmQq", "20002")
+    pg.click("#mmGo")
+    pg.wait_for_timeout(900)
+    ck("★ 按 QQ 查详情有结果", "在的" in pg.inner_text("#mmDetail"), pg.inner_text("#mmDetail")[:200])
+
+    action_calls.clear()
+    pg.evaluate("() => go(4)")           # 生图
+    pg.wait_for_timeout(1100)
+    ig = pg.inner_text(".panel")
+    ck("★ 生图状态渲染（在线 + checkpoint）", "在线" in ig and "sd_xl_base" in ig, ig[:240])
+    pg.fill("#igP", "a cat")
+    pg.click("#igGo")
+    pg.wait_for_timeout(1100)
+    ck("★ 生成 → /imagegen/generate 带 prompt",
+       any(k == "generate" and c.get("prompt") == "a cat" for k, c in action_calls), action_calls)
+
+    action_calls.clear()
+    pg.evaluate("() => go(3)")           # 表情包
+    pg.wait_for_timeout(1100)
+    me = pg.inner_text(".panel")
+    ck("★ 表情包列表与标签渲染", "3 张" in me and "可爱" in me, me[:240])
+    # v3 的陈列结构：左栏目录 + 标签云；工具条有网格/Masonry 切换
+    ck("★ 左栏目录分类与标签云", pg.eval_on_selector_all("#meDirs .it", "e=>e.length") >= 2
+       and pg.eval_on_selector_all("#meCloud .tg", "e=>e.length") >= 1,
+       (pg.eval_on_selector_all("#meDirs .it", "e=>e.map(x=>x.textContent)"),
+        pg.eval_on_selector_all("#meCloud .tg", "e=>e.map(x=>x.textContent)")))
+    ck("★ 网格 / Masonry 视图可切换",
+       pg.evaluate("()=>{document.getElementById('meViewMas').click();"
+                   "return document.getElementById('meGrid').className.indexOf('mas')>0;}"))
+    pg.click("#meViewGrid")
+    # 目录导入的输入框已换成 v4 模态（Electron 不支持 window.prompt），
+    # 不再触发原生 dialog 事件 —— 直接填模态输入框并点确定。
+    pg.click("#meImportDir")
+    pg.wait_for_timeout(400)
+    pg.fill("#ppIn", "D:/pics")
+    pg.click("[data-pp=ok]")
+    pg.wait_for_timeout(900)
+    ck("★ 导入目录 → /memes/import 带 directory",
+       any(k == "memes_import" and c.get("directory") == "D:/pics" for k, c in action_calls),
+       action_calls)
+
+    print("\n=== 行为 / 通知（聚焦表单）===")
+    pg.evaluate("() => go(5)")
+    pg.wait_for_timeout(1100)
+    bh = pg.inner_text(".panel")
+    ck("★ 行为页渲染关键字段",
+       "group_idle_exit_probability" in bh and "poke_timeout" in bh, bh[:240])
+    pg.evaluate("() => go(10)")
+    pg.wait_for_timeout(1100)
+    mo = pg.inner_text(".panel")
+    ck("★ 通知页渲染", "notify_admin" in mo or "启用管理员通知" in mo, mo[:240])
+    ck("★ 通知页没有图表（旧版那个 chartTrend 是死的）",
+       pg.eval_on_selector_all(".panel canvas, .panel svg", "e => e.length") == 0)
+
+    pg.evaluate("() => go(1)")
+    pg.wait_for_timeout(1100)
+    pg.screenshot(path=str(OUT / "_v4_protocol.png"), full_page=True)
+    b.close()
+
+srv.shutdown()
+print("\n=== JS 报错 ===")
+ck("无 JS 报错", not errors, errors[:4])
+
+npass = sum(1 for _, ok, _ in checks if ok)
+print("\n" + "=" * 60)
+print(f"通过 {npass} / 失败 {len(checks) - npass}")
+sys.exit(0 if npass == len(checks) else 1)

@@ -1,0 +1,940 @@
+{
+ "panels": [
+  [
+   "provider",
+   "提供商管理"
+  ],
+  [
+   "basic",
+   "基础"
+  ],
+  [
+   "llm",
+   "对话大脑"
+  ],
+  [
+   "session",
+   "会话"
+  ],
+  [
+   "group",
+   "群聊"
+  ],
+  [
+   "meme",
+   "表情包"
+  ],
+  [
+   "recall",
+   "撤回反馈"
+  ],
+  [
+   "switches",
+   "功能开关"
+  ],
+  [
+   "deai",
+   "去 AI 味"
+  ],
+  [
+   "length",
+   "回复长度"
+  ],
+  [
+   "exit",
+   "退场语"
+  ],
+  [
+   "trigger",
+   "触发"
+  ],
+  [
+   "perm",
+   "权限"
+  ],
+  [
+   "autoaccept",
+   "自动通过"
+  ],
+  [
+   "protoRisk",
+   "协议风险"
+  ]
+ ],
+ "fields": {
+  "de_ai.enabled": {
+   "label": "启用去AI味总开关",
+   "desc": "",
+   "ctl": "bool",
+   "panel": "deai",
+   "unit": "",
+   "id": "sDeAiEnable",
+   "nested": "de_ai",
+   "sub": "enabled"
+  },
+  "de_ai.prompt_inject": {
+   "label": "prompt 注入说话铁律",
+   "desc": "",
+   "ctl": "bool",
+   "panel": "deai",
+   "unit": "",
+   "id": "sDeAiPromptInject",
+   "nested": "de_ai",
+   "sub": "prompt_inject"
+  },
+  "de_ai.post_process": {
+   "label": "规则级后处理",
+   "desc": "",
+   "ctl": "bool",
+   "panel": "deai",
+   "unit": "",
+   "id": "sDeAiPostProcess",
+   "nested": "de_ai",
+   "sub": "post_process"
+  },
+  "de_ai.ban_words": {
+   "label": "清理 AI 高频词",
+   "desc": "",
+   "ctl": "bool",
+   "panel": "deai",
+   "unit": "",
+   "id": "sDeAiBanWords",
+   "nested": "de_ai",
+   "sub": "ban_words"
+  },
+  "de_ai.ban_dashes": {
+   "label": "清理磕破折号",
+   "desc": "",
+   "ctl": "bool",
+   "panel": "deai",
+   "unit": "",
+   "id": "sDeAiBanDashes",
+   "nested": "de_ai",
+   "sub": "ban_dashes"
+  },
+  "de_ai.ban_rule_of_three": {
+   "label": "压缩三点式排比",
+   "desc": "",
+   "ctl": "bool",
+   "panel": "deai",
+   "unit": "",
+   "id": "sDeAiBanTriple",
+   "nested": "de_ai",
+   "sub": "ban_rule_of_three"
+  },
+  "de_ai.ban_filler": {
+   "label": "清理套话/路标词",
+   "desc": "",
+   "ctl": "bool",
+   "panel": "deai",
+   "unit": "",
+   "id": "sDeAiBanFiller",
+   "nested": "de_ai",
+   "sub": "ban_filler"
+  },
+  "de_ai.ban_sycophancy": {
+   "label": "清理谄媚口吻",
+   "desc": "",
+   "ctl": "bool",
+   "panel": "deai",
+   "unit": "",
+   "id": "sDeAiBanSyco",
+   "nested": "de_ai",
+   "sub": "ban_sycophancy"
+  },
+  "de_ai.max_sentence_len": {
+   "label": "超长句拆分阈值（字，0=不拆）",
+   "desc": "",
+   "ctl": "number",
+   "panel": "deai",
+   "unit": "字，0=不拆",
+   "id": "sDeAiMaxLen",
+   "nested": "de_ai",
+   "sub": "max_sentence_len"
+  },
+  "bot_qq": {
+   "label": "Bot QQ",
+   "desc": "Bot 的 QQ 号",
+   "ctl": "text",
+   "panel": "basic",
+   "unit": "",
+   "id": "sBotQq"
+  },
+  "bot_group_nick": {
+   "label": "Bot 昵称",
+   "desc": "群聊中识别 Bot 的昵称",
+   "ctl": "text",
+   "panel": "basic",
+   "unit": "",
+   "id": "sBotNick"
+  },
+  "startup_cooldown": {
+   "label": "启动冷却（秒）",
+   "desc": "Bot 启动后忽略消息的冷却时间",
+   "ctl": "number",
+   "panel": "basic",
+   "unit": "秒",
+   "id": "sStartupCooldown"
+  },
+  "target_qqs": {
+   "label": "目标 QQ（每行一个）",
+   "desc": "Bot 启动后忽略消息的冷却时间",
+   "ctl": "lines",
+   "panel": "basic",
+   "unit": "",
+   "id": "sTargetQqs"
+  },
+  "group_ids": {
+   "label": "群 ID（每行一个）",
+   "desc": "Bot 启动后忽略消息的冷却时间",
+   "ctl": "lines",
+   "panel": "basic",
+   "unit": "",
+   "id": "sGroupIds"
+  },
+  "api_provider": {
+   "label": "提供商",
+   "desc": "切换后自动填充 API 地址并拉取模型列表；每个提供商可保存独立 Key（在「多提供商管理」里编辑）",
+   "ctl": "select",
+   "panel": "llm",
+   "unit": "",
+   "id": "sProvider"
+  },
+  "api_url": {
+   "label": "API URL",
+   "desc": "Chat Completions 完整地址，切换提供商时会自动覆盖",
+   "ctl": "text",
+   "panel": "llm",
+   "unit": "",
+   "id": "sApiUrl"
+  },
+  "api_key": {
+   "label": "模型",
+   "desc": "Key 只写不回显：保存后写入 Windows 凭据管理器，页面不再显示；切换提供商自动使用对应 Key",
+   "ctl": "text",
+   "panel": "llm",
+   "unit": "",
+   "id": "sApiKey"
+  },
+  "model_name": {
+   "label": "模型",
+   "desc": "Key 只写不回显：保存后写入 Windows 凭据管理器，页面不再显示；切换提供商自动使用对应 Key",
+   "ctl": "select",
+   "panel": "llm",
+   "unit": "",
+   "id": "sModel",
+   "_panels": [
+    "llm",
+    "llm"
+   ]
+  },
+  "use_local_llm": {
+   "label": "LLaMA 驱动程序",
+   "desc": "本地模式自动管理 GGUF 模型（llama-server / Ollama / LM Studio），无需 API Key；与远程 API 互斥",
+   "ctl": "bool",
+   "panel": "llm",
+   "unit": "",
+   "id": "sUseLocalLlm"
+  },
+  "llama_driver": {
+   "label": "LLaMA 驱动程序",
+   "desc": "选择你本机已安装的 LLaMA 运行时",
+   "ctl": "select",
+   "panel": "llm",
+   "unit": "",
+   "id": "sLlamaDriver"
+  },
+  "llama_exe_path": {
+   "label": "llama-server 路径",
+   "desc": "仅 llama-server 需要填写可执行文件路径；留空使用内置默认路径",
+   "ctl": "text",
+   "panel": "llm",
+   "unit": "",
+   "id": "sLlamaExePath"
+  },
+  "llama_model_path": {
+   "label": "模型文件路径",
+   "desc": "仅 llama-server 需要填写完整 .gguf 路径；Ollama/LM Studio 可留空",
+   "ctl": "text",
+   "panel": "llm",
+   "unit": "",
+   "id": "sLlamaModelPath"
+  },
+  "llama_port": {
+   "label": "服务端口",
+   "desc": "llama-server/Ollama/LM Studio 的本地监听端口",
+   "ctl": "number",
+   "panel": "llm",
+   "unit": "",
+   "id": "sLlamaPort"
+  },
+  "llama_model_name": {
+   "label": "模型名称",
+   "desc": "调用时使用的模型 ID；留空则自动按驱动程序推断",
+   "ctl": "text",
+   "panel": "llm",
+   "unit": "",
+   "id": "sLlamaModelName"
+  },
+  "llama_search_root": {
+   "label": "搜索目录（可选）",
+   "desc": "点击自动探测时优先扫描此目录；填对目录能更快并避免全盘扫描",
+   "ctl": "text",
+   "panel": "llm",
+   "unit": "",
+   "id": "sLlamaScanRoot"
+  },
+  "use_local_image_llm": {
+   "label": "使用本地模型生成生图提示词",
+   "desc": "本地聊天模型与生图提示词模型同时启用时，同时跑两个本地模型可能显存爆炸；建议生图提示词模型使用 DeepSeek 或与聊天模型相同。",
+   "ctl": "bool",
+   "panel": "llm",
+   "unit": "",
+   "id": "sUseLocalImageLlm"
+  },
+  "image_llm_driver": {
+   "label": "生图 LLM 驱动程序",
+   "desc": "仅用于将用户描述转为英文 prompt；可与聊天模型独立",
+   "ctl": "select",
+   "panel": "llm",
+   "unit": "",
+   "id": "sImageLlamaDriver"
+  },
+  "image_llm_exe_path": {
+   "label": "生图 llama-server 路径",
+   "desc": "仅 llama-server 需要填写；留空使用内置默认路径",
+   "ctl": "text",
+   "panel": "llm",
+   "unit": "",
+   "id": "sImageLlamaExePath"
+  },
+  "image_llm_model_path": {
+   "label": "生图模型文件路径",
+   "desc": "仅 llama-server 需要填写完整 .gguf 路径",
+   "ctl": "text",
+   "panel": "llm",
+   "unit": "",
+   "id": "sImageLlamaModelPath"
+  },
+  "image_llm_port": {
+   "label": "生图服务端口",
+   "desc": "生图提示词模型的本地监听端口",
+   "ctl": "number",
+   "panel": "llm",
+   "unit": "",
+   "id": "sImageLlamaPort"
+  },
+  "image_llm_model_name": {
+   "label": "生图模型名称",
+   "desc": "调用时使用的模型 ID；留空则自动按驱动程序推断",
+   "ctl": "text",
+   "panel": "llm",
+   "unit": "",
+   "id": "sImageLlamaModelName"
+  },
+  "ai_temperature": {
+   "label": "温度",
+   "desc": "0 = 固定，2 = 非常随机",
+   "ctl": "number",
+   "panel": "llm",
+   "unit": "",
+   "id": "sAiTemp"
+  },
+  "ai_max_tokens": {
+   "label": "Top P",
+   "desc": "0 = 固定，2 = 非常随机",
+   "ctl": "number",
+   "panel": "llm",
+   "unit": "",
+   "id": "sAiMaxTokens"
+  },
+  "ai_top_p": {
+   "label": "频率惩罚",
+   "desc": "0 = 固定，2 = 非常随机",
+   "ctl": "number",
+   "panel": "llm",
+   "unit": "",
+   "id": "sAiTopP"
+  },
+  "ai_frequency_penalty": {
+   "label": "存在惩罚",
+   "desc": "0 = 固定，2 = 非常随机",
+   "ctl": "number",
+   "panel": "llm",
+   "unit": "",
+   "id": "sAiFreqPenalty"
+  },
+  "ai_presence_penalty": {
+   "label": "存在惩罚",
+   "desc": "0 = 固定，2 = 非常随机",
+   "ctl": "number",
+   "panel": "llm",
+   "unit": "",
+   "id": "sAiPresencePenalty"
+  },
+  "session_ttl": {
+   "label": "对话最大轮次",
+   "desc": "一次会话持续多久后视为结束（连续对话可延续，超时则清空上下文重新开始）",
+   "ctl": "number",
+   "panel": "session",
+   "unit": "",
+   "id": "sSessionTtl"
+  },
+  "session_max_rounds": {
+   "label": "私聊回复间隔（秒）",
+   "desc": "一次会话内最多来回对话多少轮，超出后视为本段对话结束",
+   "ctl": "number",
+   "panel": "session",
+   "unit": "秒",
+   "id": "sSessionMaxRounds"
+  },
+  "private_reply_interval": {
+   "label": "离线判定（秒）",
+   "desc": "私聊长回复分多条发送时，每条之间的最小间隔",
+   "ctl": "number",
+   "panel": "session",
+   "unit": "秒",
+   "id": "sPrivateReplyInterval"
+  },
+  "idle_timeout": {
+   "label": "离线判定（秒）",
+   "desc": "私聊中用户超过该时长未回复，Bot 视为对方已离开（区别于下方群聊的退场静默）",
+   "ctl": "number",
+   "panel": "session",
+   "unit": "秒",
+   "id": "sIdleTimeout"
+  },
+  "group_msg_buffer_window": {
+   "label": "引用回抓窗口（秒）",
+   "desc": "同一群短时间内几条消息合并成一次回复的条数上限",
+   "ctl": "number",
+   "panel": "group",
+   "unit": "秒",
+   "id": "sGroupMsgBuffer"
+  },
+  "group_recent_msgs_window": {
+   "label": "每会话最大回复数",
+   "desc": "记录多久内的群消息，用于 Bot 回复时回看上下文 / 处理引用消息",
+   "ctl": "number",
+   "panel": "group",
+   "unit": "",
+   "id": "sGroupRecentMsgs"
+  },
+  "group_session_max_replies": {
+   "label": "会话维持时长（秒）",
+   "desc": "被 @ 或提及后进入会话模式，Bot 最多连续回复多少轮",
+   "ctl": "number",
+   "panel": "group",
+   "unit": "秒",
+   "id": "sGroupMaxReplies"
+  },
+  "group_session_idle_timeout": {
+   "label": "退场冷却（秒）",
+   "desc": "会话模式保持多长时间（期间 Bot 持续参与群里互动）",
+   "ctl": "number",
+   "panel": "group",
+   "unit": "秒",
+   "id": "sGroupIdleTimeout"
+  },
+  "group_last_exit_cooldown": {
+   "label": "退场冷却（秒）",
+   "desc": "两次「退场语」之间的最小间隔，避免反复退场",
+   "ctl": "number",
+   "panel": "group",
+   "unit": "秒",
+   "id": "sGroupExitCooldown"
+  },
+  "group_idle_exit_enable": {
+   "label": "启用空闲退出",
+   "desc": "Bot 说完话后没人理, 超过下方静默时间后发一句「退场语」",
+   "ctl": "bool",
+   "panel": "group",
+   "unit": "",
+   "id": "sGroupIdleExitEnable"
+  },
+  "group_idle_exit_probability": {
+   "label": "退场静默时间（秒）",
+   "desc": "满足静默条件时, 触发退场的概率（0-1, 0.3 = 30% 概率退场）",
+   "ctl": "number",
+   "panel": "group",
+   "unit": "秒",
+   "id": "sGroupIdleExitProb"
+  },
+  "poke_timeout": {
+   "label": "会话缓冲窗口（秒）",
+   "desc": "同一人同一群戳 Bot 的连击计数保留时长, 超时后重新计数",
+   "ctl": "number",
+   "panel": "group",
+   "unit": "秒",
+   "id": "sPokeTimeout"
+  },
+  "group_msg_buffer_window_session": {
+   "label": "触发缓冲窗口（秒）",
+   "desc": "会话模式下消息合并的时间窗口",
+   "ctl": "number",
+   "panel": "group",
+   "unit": "秒",
+   "id": "sGroupMsgBufferSession"
+  },
+  "group_msg_buffer_window_trigger": {
+   "label": "触发缓冲窗口（秒）",
+   "desc": "被触发（@/小a）前后, 额外合并消息的时间窗口",
+   "ctl": "number",
+   "panel": "group",
+   "unit": "秒",
+   "id": "sGroupMsgBufferTrigger"
+  },
+  "meme_enable": {
+   "label": "启用表情包",
+   "desc": "",
+   "ctl": "bool",
+   "panel": "meme",
+   "unit": "",
+   "id": "sMemeEnable"
+  },
+  "meme_cooldown": {
+   "label": "冷却（秒）",
+   "desc": "",
+   "ctl": "number",
+   "panel": "meme",
+   "unit": "秒",
+   "id": "sMemeCooldown"
+  },
+  "meme_idle_exit_enable": {
+   "label": "启用空闲退出",
+   "desc": "",
+   "ctl": "bool",
+   "panel": "meme",
+   "unit": "",
+   "id": "sMemeIdleExitEnable"
+  },
+  "meme_auto_detect_emotion": {
+   "label": "自动检测情绪",
+   "desc": "",
+   "ctl": "bool",
+   "panel": "meme",
+   "unit": "",
+   "id": "sMemeAutoEmotion"
+  },
+  "recall_feedback_enable": {
+   "label": "启用群聊撤回反馈",
+   "desc": "",
+   "ctl": "bool",
+   "panel": "recall",
+   "unit": "",
+   "id": "sRecallEnable"
+  },
+  "recall_feedback_cooldown": {
+   "label": "冷却（秒）",
+   "desc": "Bot 的 AI 回复被撤回截断时的反馈语",
+   "ctl": "number",
+   "panel": "recall",
+   "unit": "秒",
+   "id": "sRecallCooldown"
+  },
+  "recall_private_enable": {
+   "label": "启用私聊撤回反馈",
+   "desc": "好友私聊撤回时的回应，与群聊独立配置",
+   "ctl": "bool",
+   "panel": "recall",
+   "unit": "",
+   "id": "sRecallPrivateEnable"
+  },
+  "recall_private_cooldown": {
+   "label": "冷却（秒）",
+   "desc": "私聊撤回时的反馈语",
+   "ctl": "number",
+   "panel": "recall",
+   "unit": "秒",
+   "id": "sRecallPrivateCooldown"
+  },
+  "image_cache_enable": {
+   "label": "图片缓存",
+   "desc": "生图/表情图是否落缓存，减少重复上传",
+   "ctl": "bool",
+   "panel": "switches",
+   "unit": "",
+   "id": "sImageCacheEnable"
+  },
+  "self_learning_enable": {
+   "label": "自学习",
+   "desc": "从对话中学习新知识/用语，增强后续回复",
+   "ctl": "bool",
+   "panel": "switches",
+   "unit": "",
+   "id": "sSelfLearningEnable"
+  },
+  "private_memory_enable": {
+   "label": "私聊记忆",
+   "desc": "记住私聊中聊过的事，跨会话关联上下文",
+   "ctl": "bool",
+   "panel": "switches",
+   "unit": "",
+   "id": "sPrivateMemoryEnable"
+  },
+  "slang_injector_enable": {
+   "label": "俚语注入",
+   "desc": "回复时注入网络热词/黑话，让口气更像真人网友",
+   "ctl": "bool",
+   "panel": "switches",
+   "unit": "",
+   "id": "sSlangInjectorEnable"
+  },
+  "nsfw_enabled": {
+   "label": "NSFW 内容",
+   "desc": "是否允许 Bot 参与/回复成人向话题，关闭则回避",
+   "ctl": "bool",
+   "panel": "switches",
+   "unit": "",
+   "id": "sNsfwEnable"
+  },
+  "private_reply_max_length": {
+   "label": "群聊回复最大长度（字）",
+   "desc": "私聊单条回复的最大字数，超出会按句子拆分多条发送",
+   "ctl": "number",
+   "panel": "length",
+   "unit": "字",
+   "id": "sPrivateReplyMaxLen"
+  },
+  "group_reply_max_length": {
+   "label": "超长消息切分阈值（字）",
+   "desc": "群聊单条回复的最大字数，防止刷屏霸版",
+   "ctl": "number",
+   "panel": "length",
+   "unit": "字",
+   "id": "sGroupReplyMaxLen"
+  },
+  "group_quote_mode": {
+   "label": "群引用回复",
+   "desc": "回复时是否引用它正在回的那条消息：off=不引用 / auto=只在对象明确时引用（合并多条历史、或对方本来就发了引用）/ always=每条都引用",
+   "ctl": "select",
+   "panel": "group",
+   "unit": "",
+   "id": "sGroupQuoteMode",
+   "options": [
+    [
+     "auto",
+     "自动（推荐）"
+    ],
+    [
+     "always",
+     "每条都引用"
+    ],
+    [
+     "off",
+     "从不引用"
+    ]
+   ]
+  },
+  "msg_split_len": {
+   "label": "超长消息切分阈值（字）",
+   "desc": "Bot 输出的消息超过该字数时按句子拆分多条发送（0 = 不拆分）",
+   "ctl": "number",
+   "panel": "length",
+   "unit": "字",
+   "id": "sMsgSplitLen"
+  },
+  "group_trigger_words": {
+   "label": "触发词（每行一个）",
+   "desc": "",
+   "ctl": "lines",
+   "panel": "trigger",
+   "unit": "",
+   "id": "sTriggerWords"
+  },
+  "bot_nicknames": {
+   "label": "Bot 昵称（每行一个）",
+   "desc": "Bot 的全部称呼：群友叫其中任何一个都算在叫它。第一个当作网名用；留空则用群名片，再空才兜底 小a。大小写/全角/@ 不敏感",
+   "ctl": "lines",
+   "panel": "trigger",
+   "unit": "",
+   "id": "sBotNicknames"
+  },
+  "group_trigger_include_bot_nick": {
+   "label": "包含 Bot 昵称",
+   "desc": "",
+   "ctl": "bool",
+   "panel": "trigger",
+   "unit": "",
+   "id": "sTriggerBotNick"
+  },
+  "group_trigger_include_text_at": {
+   "label": "包含纯文本 @",
+   "desc": "",
+   "ctl": "bool",
+   "panel": "trigger",
+   "unit": "",
+   "id": "sTriggerTextAt"
+  },
+  "group_trigger_include_quote": {
+   "label": "包含引用消息",
+   "desc": "",
+   "ctl": "bool",
+   "panel": "trigger",
+   "unit": "",
+   "id": "sTriggerQuote"
+  },
+  "command_permission": {
+   "label": "权限模式",
+   "desc": "除 target_qqs（私聊白名单）与 Bot 本人外，追加可执行管理员指令的 QQ",
+   "ctl": "select",
+   "panel": "perm",
+   "unit": "",
+   "id": "sCmdPermMode"
+  },
+  "command_admins": {
+   "label": "群管理白名单 QQ（每行一个）",
+   "desc": "除 target_qqs（私聊白名单）与 Bot 本人外，追加可执行管理员指令的 QQ",
+   "ctl": "lines",
+   "panel": "perm",
+   "unit": "",
+   "id": "sCmdAdmins"
+  },
+  "admin_qqs": {
+   "label": "群管理白名单 QQ（每行一个）",
+   "desc": "可在群里 @Bot 执行踢人/禁言/改名片等管理指令的 QQ；留空 = 仅 Bot 本人 + 上方管理员",
+   "ctl": "lines",
+   "panel": "perm",
+   "unit": "",
+   "id": "sAdminQqs"
+  },
+  "admin_commands_enable": {
+   "label": "启用群管理指令",
+   "desc": "可在群里 @Bot 执行踢人/禁言/改名片等管理指令的 QQ；留空 = 仅 Bot 本人 + 上方管理员",
+   "ctl": "bool",
+   "panel": "perm",
+   "unit": "",
+   "id": "sAdminCmdsEnable"
+  },
+  "auto_accept.enabled": {
+   "label": "总开关（自动同意）",
+   "desc": "",
+   "ctl": "bool",
+   "panel": "autoaccept",
+   "unit": "",
+   "id": "sAutoAcceptEnabled",
+   "nested": "auto_accept",
+   "sub": "enabled"
+  },
+  "auto_accept.friend": {
+   "label": "自动同意好友申请",
+   "desc": "",
+   "ctl": "bool",
+   "panel": "autoaccept",
+   "unit": "",
+   "id": "sAutoAcceptFriend",
+   "nested": "auto_accept",
+   "sub": "friend"
+  },
+  "auto_accept.group_add": {
+   "label": "自动同意加群申请",
+   "desc": "",
+   "ctl": "bool",
+   "panel": "autoaccept",
+   "unit": "",
+   "id": "sAutoAcceptGroupAdd",
+   "nested": "auto_accept",
+   "sub": "group_add"
+  },
+  "auto_accept.group_invite": {
+   "label": "自动同意被邀请入群",
+   "desc": "",
+   "ctl": "bool",
+   "panel": "autoaccept",
+   "unit": "",
+   "id": "sAutoAcceptGroupInvite",
+   "nested": "auto_accept",
+   "sub": "group_invite"
+  },
+  "auto_accept.add_to_targets": {
+   "label": "同意后写入 target_qqs / group_ids",
+   "desc": "",
+   "ctl": "bool",
+   "panel": "autoaccept",
+   "unit": "",
+   "id": "sAutoAcceptAddTargets",
+   "nested": "auto_accept",
+   "sub": "add_to_targets"
+  },
+  "auto_accept.welcome_new_member": {
+   "label": "新成员入群自动发欢迎语",
+   "desc": "留空 = 新好友不发送欢迎语；不填且未保存过 = 默认「你好，我是小a～」",
+   "ctl": "bool",
+   "panel": "autoaccept",
+   "unit": "",
+   "id": "sAutoAcceptWelcomeNew",
+   "nested": "auto_accept",
+   "sub": "welcome_new_member"
+  },
+  "auto_accept.welcome_private": {
+   "label": "加好友欢迎语",
+   "desc": "留空 = 新好友不发送欢迎语；不填且未保存过 = 默认「你好，我是小a～」",
+   "ctl": "text",
+   "panel": "autoaccept",
+   "unit": "",
+   "id": "sAutoAcceptWelcomePrivate",
+   "nested": "auto_accept",
+   "sub": "welcome_private"
+  },
+  "auto_accept.welcome_group": {
+   "label": "白名单 QQ/群（每行一个，空 = 全部通过）",
+   "desc": "留空 = 新好友不发送欢迎语；不填且未保存过 = 默认「你好，我是小a～」",
+   "ctl": "text",
+   "panel": "autoaccept",
+   "unit": "",
+   "id": "sAutoAcceptWelcomeGroup",
+   "nested": "auto_accept",
+   "sub": "welcome_group"
+  },
+  "auto_accept.allowlist": {
+   "label": "黑名单 QQ/群（每行一个，直接拒绝）",
+   "desc": "留空 = 新好友不发送欢迎语；不填且未保存过 = 默认「你好，我是小a～」",
+   "ctl": "lines",
+   "panel": "autoaccept",
+   "unit": "",
+   "id": "sAutoAcceptAllowlist",
+   "nested": "auto_accept",
+   "sub": "allowlist"
+  },
+  "auto_accept.denylist": {
+   "label": "黑名单 QQ/群（每行一个，直接拒绝）",
+   "desc": "留空 = 新好友不发送欢迎语；不填且未保存过 = 默认「你好，我是小a～」",
+   "ctl": "lines",
+   "panel": "autoaccept",
+   "unit": "",
+   "id": "sAutoAcceptDenylist",
+   "nested": "auto_accept",
+   "sub": "denylist"
+  },
+  "group_tool_allowlist": {
+   "label": "群聊工具白名单",
+   "desc": "勾选允许在群聊使用的工具",
+   "ctl": "toolcheck",
+   "panel": "group",
+   "mount": "sGroupToolList",
+   "key": "group_tool_allowlist"
+  },
+  "recall_feedback_pre_messages": {
+   "label": "撤回前反馈",
+   "desc": "Bot 的 AI 回复被撤回截断时的反馈语",
+   "ctl": "editable",
+   "panel": "recall",
+   "mount": "recallPreList",
+   "key": "recall_feedback_pre_messages"
+  },
+  "recall_feedback_post_messages": {
+   "label": "撤回后反馈",
+   "desc": "Bot 已回复后被撤回时的反馈语",
+   "ctl": "editable",
+   "panel": "recall",
+   "mount": "recallPostList",
+   "key": "recall_feedback_post_messages"
+  },
+  "recall_private_post_messages": {
+   "label": "私聊撤回反馈",
+   "desc": "私聊撤回时的反馈语",
+   "ctl": "editable",
+   "panel": "recall",
+   "mount": "recallPrivateList",
+   "key": "recall_private_post_messages"
+  },
+  "custom_exit_phrases_short": {
+   "label": "短退场语",
+   "desc": "每行一条，Bot 主动离开时随机发送",
+   "ctl": "editable",
+   "panel": "exit",
+   "mount": "exitShortList",
+   "key": "custom_exit_phrases_short"
+  },
+  "custom_exit_phrases_idle": {
+   "label": "空闲退场语",
+   "desc": "长时间无人对话时触发",
+   "ctl": "editable",
+   "panel": "exit",
+   "mount": "exitIdleList",
+   "key": "custom_exit_phrases_idle"
+  }
+ },
+ "actions": {
+  "llmModeRemote": {
+   "label": "远程 API",
+   "panel": "llm"
+  },
+  "llmModeLocal": {
+   "label": "本地模型",
+   "panel": "llm"
+  },
+  "sOpenWizard": {
+   "label": "配置向导",
+   "panel": "llm"
+  },
+  "sApiKeyEdit": {
+   "label": "修改 Key",
+   "panel": "llm"
+  },
+  "sApiKeyClear": {
+   "label": "清除当前提供商的 Key",
+   "panel": "llm"
+  },
+  "sFetchModels": {
+   "label": "获取模型列表",
+   "panel": "llm"
+  },
+  "sTestLlmForm": {
+   "label": "测试连接",
+   "panel": "llm"
+  },
+  "sTestLocalLlm": {
+   "label": "测试本地连接",
+   "panel": "llm"
+  },
+  "sScanLocalLlm": {
+   "label": "自动探测",
+   "panel": "llm"
+  },
+  "sStartLocalLlm": {
+   "label": "启动 llama-server",
+   "panel": "llm"
+  },
+  "sStopLocalLlm": {
+   "label": "停止 llama-server",
+   "panel": "llm"
+  },
+  "sOpenLocalLlm": {
+   "label": "打开 8081",
+   "panel": "llm"
+  },
+  "sTestImageLlm": {
+   "label": "测试生图模型",
+   "panel": "llm"
+  },
+  "sStartImageLlm": {
+   "label": "启动生图模型",
+   "panel": "llm"
+  },
+  "sStopImageLlm": {
+   "label": "停止生图模型",
+   "panel": "llm"
+  },
+  "sOpenImageLlm": {
+   "label": "打开生图端口",
+   "panel": "llm"
+  },
+  "recallPrePreview": {
+   "label": "预览撤回前",
+   "panel": "recall"
+  },
+  "recallPostPreview": {
+   "label": "预览撤回后",
+   "panel": "recall"
+  },
+  "recallPrivatePreview": {
+   "label": "预览私聊反馈",
+   "panel": "recall"
+  },
+  "exitPreview": {
+   "label": "模拟空闲退场预览",
+   "panel": "exit"
+  }
+ }
+}

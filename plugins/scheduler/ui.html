@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>定时任务 · EggBloom</title>
+<style>
+:root{--bg:#0a0a0f;--paper:#16161f;--line:#26262f;--ink:#f0f0f5;--ink2:#b8b8c8;--ink3:#8a8f9a;
+  --gold:#c9a96e;--ok:#6f9e78;--err:#b05a52;--f:'Outfit','Noto Sans SC',system-ui,sans-serif;
+  --m:'JetBrains Mono',Consolas,monospace}
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:var(--bg);color:var(--ink);font-family:var(--f);font-size:13.5px;padding:18px 20px 40px}
+h2{font-size:16px;font-weight:600;margin-bottom:4px}
+.sub{color:var(--ink3);font-size:12px;margin-bottom:14px}
+.bar{display:flex;gap:8px;align-items:center;margin-bottom:14px;flex-wrap:wrap}
+button{font-family:var(--m);font-size:11px;letter-spacing:.08em;padding:6px 12px;cursor:pointer;
+  background:transparent;color:var(--ink2);border:1px solid var(--line);border-radius:4px}
+button:hover{border-color:var(--gold);color:var(--gold)}
+button.primary{color:var(--gold);border-color:#5a4a33}
+button.danger{color:var(--err);border-color:#3a2523}
+.stat{font-family:var(--m);font-size:11px;color:var(--ink3);margin-left:auto}
+.stat b{color:var(--ink2);font-weight:500}
+table{width:100%;border-collapse:collapse}
+th{font-family:var(--m);font-size:10px;letter-spacing:.12em;color:var(--ink3);text-align:left;
+  padding:7px 8px;border-bottom:1px solid var(--line);font-weight:400;text-transform:uppercase}
+td{padding:8px;border-bottom:1px solid #1c1c22;vertical-align:middle}
+tr.off td{opacity:.45}
+td.n{font-family:var(--m);font-size:11.5px;color:var(--ink2)}
+td.s{font-family:var(--m);font-size:11px;color:var(--ink3)}
+.name{font-weight:500}
+.err{color:var(--err);font-size:11px;font-family:var(--m)}
+.dot{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--line);margin-right:6px}
+.dot.on{background:var(--ok)}
+.dot.run{background:var(--gold);animation:p 1.2s infinite}
+@keyframes p{50%{opacity:.3}}
+.add{margin-top:18px;border:1px solid var(--line);border-radius:6px;padding:14px;background:var(--paper)}
+.add h3{font-size:13px;font-weight:600;margin-bottom:10px}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end}
+.f{display:flex;flex-direction:column;gap:4px}
+.f label{font-family:var(--m);font-size:10px;color:var(--ink3);letter-spacing:.1em}
+input,select{background:#14141b;border:1px solid var(--line);border-radius:4px;color:var(--ink);
+  font-family:var(--m);font-size:12px;padding:6px 8px;outline:none}
+input:focus,select:focus{border-color:var(--gold)}
+input.wide{width:230px}
+input.sm{width:82px}
+.hint{color:var(--ink3);font-size:11px;margin-top:8px}
+.empty{color:var(--ink3);padding:20px 8px;text-align:center}
+</style>
+</head>
+<body>
+<h2>定时任务</h2>
+<div class="sub">全项目只留一处 sleep。任务到点广播事件，由订阅它的插件决定做什么。</div>
+
+<div class="bar">
+  <button onclick="load()">刷新</button>
+  <button class="primary" onclick="document.getElementById('addbox').style.display='block'">＋ 新建任务</button>
+  <span class="stat" id="stat">加载中…</span>
+</div>
+
+<div id="list"></div>
+
+<div class="add" id="addbox" style="display:none">
+  <h3>新建任务</h3>
+  <div class="row">
+    <div class="f"><label>名称</label><input id="a_name" class="wide" placeholder="例如：凌晨蒸馏"></div>
+    <div class="f"><label>类型</label>
+      <select id="a_kind" onchange="kindChanged()">
+        <option value="interval">每隔 N 秒</option>
+        <option value="daily">每天 HH:MM</option>
+        <option value="weekly">每周某天 HH:MM</option>
+      </select></div>
+    <div class="f" id="f_every"><label>间隔（秒）</label><input id="a_every" class="sm" value="900"></div>
+    <div class="f" id="f_at" style="display:none"><label>时间 HH:MM</label><input id="a_at" class="sm" value="04:30"></div>
+    <div class="f" id="f_wd" style="display:none"><label>星期</label>
+      <select id="a_weekday"><option value="0">周一</option><option value="1">周二</option>
+      <option value="2">周三</option><option value="3">周四</option><option value="4">周五</option>
+      <option value="5">周六</option><option value="6">周日</option></select></div>
+    <div class="f"><label>广播事件名</label><input id="a_event" class="wide" value="scheduler.tick"></div>
+    <div class="f"><label>附带参数（JSON）</label><input id="a_payload" class="wide" value="{}"></div>
+    <button class="primary" onclick="add()">创建</button>
+    <button onclick="document.getElementById('addbox').style.display='none'">取消</button>
+  </div>
+  <div class="hint">订阅方在自己的插件里写 <code>on_event(ctx, event_name, payload)</code> 接收。事件名建议用「插件名.动作」。</div>
+</div>
+
+<script>
+const API = '/api/plugins/action';
+async function call(action, params){
+  const r = await fetch(API, {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({plugin_id:'scheduler', action, params: params||{}})});
+  return r.json();
+}
+function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+function schedText(t){
+  if(t.kind==='interval') return '每 '+t.every+' 秒';
+  const wd=['一','二','三','四','五','六','日'][t.weekday||0];
+  return (t.kind==='daily'?'每天 ':'每周'+wd+' ')+esc(t.at);
+}
+function kindChanged(){
+  const k=document.getElementById('a_kind').value;
+  document.getElementById('f_every').style.display = k==='interval'?'flex':'none';
+  document.getElementById('f_at').style.display    = k==='interval'?'none':'flex';
+  document.getElementById('f_wd').style.display    = k==='weekly'?'flex':'none';
+}
+async function load(){
+  const d = await call('list');
+  const s = d.stats||{};
+  document.getElementById('stat').innerHTML =
+    `引擎 <b>${d.engine?'运行中':'已停止'}</b> · 任务 <b>${(d.tasks||[]).length}</b> · ` +
+    `已派发 <b>${s.fired||0}</b> · 跳过 <b>${s.skipped||0}</b> · 错误 <b>${s.errors||0}</b>`;
+  const rows = d.tasks||[];
+  if(!rows.length){ document.getElementById('list').innerHTML='<div class="empty">还没有任务</div>'; return; }
+  let h = '<table><thead><tr><th>状态</th><th>名称</th><th>排程</th><th>下次</th>'+
+          '<th>已运行</th><th>事件</th><th></th></tr></thead><tbody>';
+  for(const t of rows){
+    const running=(d.running||[]).includes(t.id);
+    h += `<tr class="${t.enabled?'':'off'}">
+      <td><span class="dot ${running?'run':(t.enabled?'on':'')}"></span>${running?'执行中':(t.enabled?'启用':'停用')}</td>
+      <td class="name">${esc(t.name)}${t.last_error?`<div class="err">${esc(t.last_error)}</div>`:''}</td>
+      <td class="s">${schedText(t)}</td>
+      <td class="s">${esc(t.next_at)}${t.next_in!=null?` <span style="opacity:.6">(${t.next_in}s)</span>`:''}</td>
+      <td class="n">${t.runs||0}${t.skipped?` <span style="opacity:.5">/跳${t.skipped}</span>`:''}</td>
+      <td class="s">${esc(t.event)}</td>
+      <td style="white-space:nowrap">
+        <button onclick="act('toggle',{id:'${t.id}'})">${t.enabled?'停用':'启用'}</button>
+        <button onclick="act('run_now',{id:'${t.id}'})">立即</button>
+        <button class="danger" onclick="if(confirm('删除任务：${esc(t.name)}？'))act('remove',{id:'${t.id}'})">删除</button>
+      </td></tr>`;
+  }
+  document.getElementById('list').innerHTML = h + '</tbody></table>';
+}
+async function act(action, params){ await call(action, params); load(); }
+async function add(){
+  let payload={};
+  try{ payload = JSON.parse(document.getElementById('a_payload').value||'{}'); }
+  catch(e){ alert('附带参数不是合法 JSON'); return; }
+  const r = await call('add', {
+    name: document.getElementById('a_name').value,
+    kind: document.getElementById('a_kind').value,
+    every: parseInt(document.getElementById('a_every').value||'60',10),
+    at: document.getElementById('a_at').value,
+    weekday: parseInt(document.getElementById('a_weekday').value||'0',10),
+    event: document.getElementById('a_event').value,
+    payload
+  });
+  if(r && r.error){ alert(r.error); return; }
+  document.getElementById('addbox').style.display='none';
+  load();
+}
+kindChanged();
+load();
+setInterval(load, 5000);
+</script>
+</body>
+</html>

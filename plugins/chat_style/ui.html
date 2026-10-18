@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>chat_style 插件</title>
+<style>
+  :root{
+    --bg:#0a0a0f;--surface:#111118;--paper:#16161f;--elevated:#1e1e28;--input:#14141b;
+    --ink:#f0f0f5;--ink2:#b8b8c8;--ink3:#8a8f9a;--ink4:#3a3f48;--ink5:#26262f;
+    --gold:#c9a96e;--gold-dim:#8a7350;--red:#b54a4a;--green:#4a9b6a;
+    --font-d:'Outfit','Noto Sans SC','PingFang SC',system-ui,sans-serif;
+    --font-m:'JetBrains Mono','Consolas',monospace;--radius:12px;
+    --shadow-sm:0 1px 2px rgba(0,0,0,0.35);--shadow-md:0 4px 14px rgba(0,0,0,0.45);
+    --shadow-gold:0 0 22px rgba(201,169,110,0.22);
+    --ease:180ms cubic-bezier(0.4,0,0.2,1);--ease-spring:280ms cubic-bezier(0.34,1.56,0.64,1);
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);font-family:var(--font-d);-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;text-rendering:optimizeLegibility}
+  body{background-image:radial-gradient(ellipse at 10% 0%, rgba(201,169,110,0.06), transparent 45%),radial-gradient(ellipse at 90% 100%, rgba(90,122,138,0.05), transparent 45%)}
+  ::selection{background:rgba(201,169,110,0.25);color:var(--ink)}
+  ::-webkit-scrollbar{width:7px;height:7px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:var(--ink5);border-radius:3px}::-webkit-scrollbar-thumb:hover{background:var(--ink3)}
+  .wrap{max-width:900px;margin:0 auto;padding:22px}
+  .panel{background:linear-gradient(180deg,var(--surface),var(--paper));border:1px solid var(--ink4);border-radius:var(--radius);padding:18px;margin-bottom:14px;position:relative;transition:border-color 200ms ease,box-shadow 200ms ease,transform 200ms ease}
+  .panel:hover{border-color:rgba(201,169,110,0.25);box-shadow:var(--shadow-md);transform:translateY(-1px)}
+  .panel-title{font-size:17px;font-weight:700;margin-bottom:12px}
+  .meta{font-size:12px;color:var(--ink3);margin-left:8px;font-weight:400}
+  .desc{color:var(--ink2);font-size:14px;line-height:1.7;margin-top:10px}
+  .grid{display:grid;gap:12px;margin-top:14px}
+  .grid-2{grid-template-columns:repeat(2,1fr)}
+  @media (max-width:860px){ .grid-2{grid-template-columns:1fr} }
+  .card{background:var(--elevated);border:1px solid var(--ink4);border-radius:var(--radius);padding:12px;transition:border-color 150ms ease,box-shadow 150ms ease}
+  .card:hover{border-color:rgba(201,169,110,0.25);box-shadow:var(--shadow-md)}
+  .card-label{font-size:12px;color:var(--ink3);margin-bottom:4px;font-weight:500}
+  .card-value{font-family:var(--font-m);font-size:14px;color:var(--ink)}
+  .back{display:inline-block;margin-top:14px;color:var(--gold);cursor:pointer;font-size:14px;transition:opacity 150ms ease}
+  .back:hover{opacity:0.85}
+  button{padding:6px 12px;border:1px solid var(--ink4);background:var(--elevated);color:var(--ink);border-radius:6px;cursor:pointer;font-size:13px;transition:all 150ms cubic-bezier(0.4,0,0.2,1);font-family:var(--font-d);font-weight:500}
+  button:hover{background:var(--paper);border-color:var(--gold);transform:translateY(-1px)}
+  button:active:not(:disabled){transform:scale(0.97)}
+  button.primary{background:linear-gradient(135deg, rgba(201,169,110,0.18), rgba(201,169,110,0.08));color:var(--gold);border-color:rgba(201,169,110,0.35);font-weight:600}
+  button.primary:hover{background:linear-gradient(135deg, rgba(201,169,110,0.28), rgba(201,169,110,0.14));border-color:rgba(201,169,110,0.5);box-shadow:var(--shadow-gold)}
+  input[type="text"],input[type="number"],textarea,select{padding:8px 10px;background:var(--input);color:var(--ink);border:1px solid var(--ink4);border-radius:6px;font-family:inherit;font-size:13px;width:100%;transition:all 200ms cubic-bezier(0.4,0,0.2,1)}
+  input[type="text"]:focus,input[type="number"]:focus,textarea:focus,select:focus{border-color:var(--gold);outline:none;box-shadow:0 0 0 3px rgba(201,169,110,0.12)}
+  textarea{min-height:80px;resize:vertical}
+  .muted{color:var(--ink3);font-size:12px;margin-top:4px}
+  .row{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
+  .tag{display:inline-block;background:var(--elevated);color:var(--gold);padding:2px 8px;border-radius:6px;margin:2px;font-size:12px;border:1px solid var(--ink4);transition:border-color 150ms ease}
+  .tag:hover{border-color:rgba(201,169,110,0.5)}
+  .section-title{font-size:14px;font-weight:700;margin:14px 0 6px;color:var(--ink)}
+  .empty{color:var(--ink3);font-size:13px;padding:8px 0}
+  button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-visible{outline:2px solid var(--gold);outline-offset:2px}
+  @keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+  .panel{animation:fadeIn 0.3s cubic-bezier(0.22,1,0.36,1)}
+
+  /* eggb-motion */
+  @media (prefers-reduced-motion: reduce){*,*::before,*::after{animation-duration:0.01ms !important;animation-iteration-count:1 !important;transition-duration:0.01ms !important;scroll-behavior:auto !important}}
+  .btn-ripple{position:absolute;border-radius:50%;background:rgba(201,169,110,0.3);transform:scale(0);pointer-events:none;animation:rippleAnim 550ms ease-out forwards}
+  @keyframes rippleAnim{to{transform:scale(3);opacity:0}}
+  .card,.panel,.stat-card,.tool-item,.list-item{transition:transform 160ms cubic-bezier(0.22,1,0.36,1),box-shadow 200ms ease,border-color 200ms ease}
+  .card:hover,.panel:hover,.stat-card:hover{transform:translateY(-2px);box-shadow:0 4px 14px rgba(0,0,0,0.45)}
+  .tool-item:hover,.list-item:hover{transform:translateX(2px)}
+  button{transition:all 160ms cubic-bezier(0.4,0,0.2,1)}
+  button:active:not(:disabled){transform:scale(0.96)}
+  .tab{transition:transform 160ms ease,background 160ms ease,color 160ms ease,border-color 160ms ease}
+  .tab:hover{transform:translateY(-1px)}
+  .tab.active{transform:scale(1.05)}
+  .toast{display:flex;align-items:center;gap:8px;overflow:hidden;position:relative}
+  .toast::before{content:attr(data-icon);width:18px;text-align:center;font-size:13px;line-height:1;flex-shrink:0}
+  .toast::after{content:'';position:absolute;left:0;bottom:0;height:2px;width:100%;transform:scaleX(0);transform-origin:left;animation:toastProgress 2s linear forwards}
+  .toast.success::after{background:#6ecf8e}
+  .toast.error::after{background:#ff8a80}
+  .toast.info::after{background:#c9a96e}
+  @keyframes toastProgress{to{transform:scaleX(1)}}
+  .toast.show{animation:toastIn 260ms cubic-bezier(0.34,1.56,0.64,1)}
+  @keyframes toastIn{from{opacity:0;transform:translateY(-14px) scale(0.92)}to{opacity:1;transform:translateY(0) scale(1)}}
+  .panel-title{position:relative}
+  .panel-title::after{content:'';position:absolute;bottom:-2px;left:0;width:34px;height:2px;background:linear-gradient(90deg,#c9a96e,transparent);border-radius:2px;transition:width 300ms cubic-bezier(0.22,1,0.36,1)}
+  .panel:hover .panel-title::after{width:60px}
+  
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="panel">
+      <div class="panel-title">聊天风格<span class="meta">chat_style v0.2.0</span></div>
+      <div class="desc">学习群友说话方式并注入风格提示。</div>
+    </div>
+    <div class="panel">
+      <div class="row">
+        <div>
+          <div class="section-title" style="margin:0">启用插件</div>
+          <div class="muted">学习群友说话方式并注入风格提示。</div>
+        </div>
+        <button id="toggleBtn" onclick="toggle()">加载中...</button>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="section-title">学习目标用户ID</div>
+      <div class="muted">输入要学习的用户ID，多个用逗号分隔。</div>
+      <input id="targets" type="text" placeholder="例如：u123, u456" />
+      <button style="margin-top:8px" onclick="saveTargets()">保存</button>
+      <div id="targetTags" style="margin-top:8px;"></div>
+    </div>
+    <div class="panel">
+      <div class="section-title">手动添加学习样本</div>
+      <div class="muted">粘贴该用户的历史发言，每行一条。</div>
+      <textarea id="samples" placeholder="今天开播了&#10;真的假的&#10;我先看一眼"></textarea>
+      <button style="margin-top:8px" onclick="addSamples()">添加样本</button>
+    </div>
+    <div class="panel">
+      <div class="section-title">从记忆自动学习</div>
+      <div class="muted">从 super_memory 的历史消息中自动提取该用户的说话风格。</div>
+      <input id="memoryUserId" type="text" placeholder="用户ID" />
+      <button style="margin-top:8px" onclick="learnFromMemory()">开始学习</button>
+      <div id="memoryStatus" class="muted" style="margin-top:6px;"></div>
+    </div>
+    <div class="panel">
+      <div class="section-title">已提取风格特征</div>
+      <div class="muted">基于历史样本自动提取，权重高的特征会优先使用。</div>
+      <div id="features" class="empty">加载中...</div>
+    </div>
+    <div class="back" onclick="window.parent.postMessage({type:'eggbloom:navigate',page:'plugins'},'*')">返回插件列表</div>
+  </div>
+  <script>
+  async function api(path, opts={}) {
+    const res = await fetch(path, Object.assign({headers: {'Content-Type':'application/json'}}, opts));
+    return res.json();
+  }
+  async function toggle() {
+    const data = await api('/api/plugins/action', {
+      method:'POST',
+      body: JSON.stringify({plugin_id:'chat_style', action:'toggle'})
+    });
+    if (data && data.enabled !== undefined) {
+      document.getElementById('toggleBtn').textContent = data.enabled ? '已启用' : '已禁用';
+    } else {
+      alert('切换失败');
+    }
+  }
+  async function saveTargets() {
+    const raw = document.getElementById('targets').value;
+    const list = raw.split(/,|，/).map(s=>s.trim()).filter(Boolean);
+    const data = await api('/api/plugins/action', {
+      method:'POST',
+      body: JSON.stringify({plugin_id:'chat_style', action:'config', params:{key:'learn_targets', value: list}})
+    });
+    if (data && data.ok === false) { alert('保存失败'); return; }
+    alert('已保存');
+    renderTargetTags();
+  }
+  async function addSamples() {
+    const raw = document.getElementById('samples').value;
+    const lines = raw.split(/\n+/).map(s=>s.trim()).filter(Boolean);
+    if (!lines.length) return;
+    const data = await api('/api/plugins/action', {
+      method:'POST',
+      body: JSON.stringify({plugin_id:'chat_style', action:'custom', params:{method:'learn_from_user', scope_id:'', user_id:'demo', messages: lines}})
+    });
+    if (data && data.ok === false) { alert('添加失败'); return; }
+    alert(`已添加 ${lines.length} 条样本`);
+    document.getElementById('samples').value = '';
+    loadFeatures();
+  }
+  async function learnFromMemory() {
+    const userId = document.getElementById('memoryUserId').value.trim();
+    if (!userId) { alert('请输入用户ID'); return; }
+    const status = document.getElementById('memoryStatus');
+    status.textContent = '学习中...';
+    const data = await api('/api/plugins/action', {
+      method:'POST',
+      body: JSON.stringify({plugin_id:'chat_style', action:'custom', params:{method:'learn_from_memory', scope_id:'', user_id: userId}})
+    });
+    status.textContent = data.count !== undefined ? `已完成，学习了 ${data.count} 条消息` : '学习完成';
+    loadFeatures();
+  }
+  async function loadFeatures() {
+    const data = await api('/api/plugins/action', {
+      method:'POST',
+      body: JSON.stringify({plugin_id:'chat_style', action:'get_features', params:{scope_id:'', user_id:''}})
+    });
+    const el = document.getElementById('features');
+    const feats = (data && data.features) || [];
+    if (!feats.length) {
+      el.innerHTML = '<div class="empty">暂无特征，请先添加样本或从记忆学习。</div>';
+      return;
+    }
+    el.innerHTML = feats.map(f => `<span class="tag"><strong>${f.feature_type}:</strong> ${f.value} (w:${Number(f.weight).toFixed(2)})</span>`).join('');
+  }
+  function renderTargetTags() {
+    const val = document.getElementById('targets').value;
+    const list = val.split(/,|，/).map(s=>s.trim()).filter(Boolean);
+    document.getElementById('targetTags').innerHTML = list.map(t => `<span class="tag">${t}</span>`).join('');
+  }
+  async function loadConfig() {
+    const data = await api('/api/plugins/action', {
+      method:'POST',
+      body: JSON.stringify({plugin_id:'chat_style', action:'get_config'})
+    });
+    const cfg = data && (data.config || data) ? (data.config || data) : {};
+    document.getElementById('toggleBtn').textContent = cfg.enabled ? '已启用' : '已禁用';
+    document.getElementById('targets').value = (cfg.learn_targets || []).join(', ');
+    renderTargetTags();
+  }
+  (async function init(){
+    await loadConfig();
+    loadFeatures();
+  })();
+  </script>
+<script>
+(function(){
+  if (window.__eggbMotion) return; window.__eggbMotion = true;
+  document.addEventListener('click', function(e){
+    var btn = e.target && e.target.closest ? e.target.closest('button, .btn, .tool-item') : null;
+    if(!btn || btn.disabled) return;
+    var rect = btn.getBoundingClientRect();
+    var size = Math.max(rect.width, rect.height) * 1.2;
+    var r = document.createElement('span');
+    r.className = 'btn-ripple';
+    r.style.width = r.style.height = size + 'px';
+    r.style.left = (e.clientX - rect.left - size/2) + 'px';
+    r.style.top = (e.clientY - rect.top - size/2) + 'px';
+    btn.appendChild(r);
+    setTimeout(function(){ r.remove(); }, 600);
+  });
+})();
+</script>
+</body>
+</html>
