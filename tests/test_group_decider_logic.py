@@ -1,8 +1,10 @@
 # -*- coding: utf-8 -*-
 """群聊决策重写（2026-10-10）端到端仿真。
 复现沙漏日志里的真实场景 + 全部新闸门，不发任何真实 AI 请求。"""
-import sys, time
-sys.path.insert(0, r"D:\git\EggBloom")
+import os
+import sys
+import time
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import plugins.group_chat_decider as G
 G._get_ai_client = lambda: None   # 确定性：走规则兜底路径，不发真实请求

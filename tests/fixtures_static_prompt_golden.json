@@ -1,11 +1,11 @@
 {
   "group": {
-    "len": 2349,
-    "sha256": "5f6211b0008d3ec663aa987c96a455406a57c2c811a86b95829cf07676983b59"
+    "len": 1715,
+    "sha256": "d10ad9a44d1e635b980c99f7bd19b4f5e7bfdda3b78fa795bb092edd744a0a93"
   },
   "private": {
-    "len": 1804,
-    "sha256": "e9e548754694c80142b62aec86d349ab48a070ab1ebd71e3ff5298b7aa7ba3f9"
+    "len": 1170,
+    "sha256": "5059dea1e8e5b336aacce6cbae4658b9d3b03f4b6a7c349ad12679f9e8097191"
   },
-  "note": "2026-10-13 刷新：诚实铁律新增第 3 条「不把失败说成成功」（工具返回 ❌/⚠️ 时不许嘴硬）—— golden 变化属预期。"
+  "note": "2026-10-18 重生成：钉死环境（假昵称/QQ/人格/de_ai 段，见 test_prompt_segments._pin_environment）——开发机与 CI 从此同值。"
 }

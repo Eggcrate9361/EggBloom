@@ -21,8 +21,44 @@ if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
 import bot_core  # noqa: E402
+import de_ai  # noqa: E402
 
 GOLDEN = os.path.join(_HERE, "fixtures_static_prompt_golden.json")
+
+# ── 环境钉死 ─────────────────────────────────────────────────────────
+# static_prompt 会拼进「你是谁」身份块（昵称/QQ）与人格文本，de_ai 段又依赖
+# 配置开关。这些在开发机（有真 bot_config.json）与 CI（什么都没有）上不同，
+# 黄金哈希必须建立在**钉死的假值**上，否则测试只在某台机器上能过。
+PINNED_NICK = "测试昵称"
+PINNED_QQ = "10000"
+PINNED_PERSONALITY = "固定人格文本：测试用，不含任何真实信息。"
+PINNED_DEAI = "【钉死的去AI味段】短句。别啰嗦。"
+
+
+def _pin_environment(case):
+    """把身份块 / 人格 / de_ai 段全部换成固定值；返回还原函数。"""
+    old = {
+        "nicks": bot_core._bot_nicknames,
+        "group_nick": bot_core.BOT_GROUP_NICK,
+        "qq": bot_core.BOT_QQ,
+        "load_p": bot_core.load_personality,
+        "deai": de_ai.de_ai_rule_block,
+    }
+    bot_core._bot_nicknames = lambda: [PINNED_NICK]
+    bot_core.BOT_GROUP_NICK = PINNED_NICK
+    bot_core.BOT_QQ = PINNED_QQ
+    bot_core.load_personality = lambda: PINNED_PERSONALITY
+    de_ai.de_ai_rule_block = lambda cfg=None: PINNED_DEAI
+
+    def restore():
+        bot_core._bot_nicknames = old["nicks"]
+        bot_core.BOT_GROUP_NICK = old["group_nick"]
+        bot_core.BOT_QQ = old["qq"]
+        bot_core.load_personality = old["load_p"]
+        de_ai.de_ai_rule_block = old["deai"]
+        bot_core._STATIC_PROMPT_CACHE.clear()
+    case.addCleanup(restore)
+    bot_core._STATIC_PROMPT_CACHE.clear()
 
 
 class TestPromptSegments(unittest.TestCase):
@@ -32,8 +68,9 @@ class TestPromptSegments(unittest.TestCase):
     def tearDown(self):
         bot_core._PROMPT_SEGMENTS[:] = self._snapshot
 
-    # ── 1. ★黄金哈希：迁移后输出逐字节不变 ──
+    # ── 1. ★黄金哈希：在钉死环境下逐字节不变 ──
     def test_golden_byte_identical(self):
+        _pin_environment(self)
         with io.open(GOLDEN, encoding="utf-8") as f:
             golden = json.load(f)
         for is_group, key in ((True, "group"), (False, "private")):
