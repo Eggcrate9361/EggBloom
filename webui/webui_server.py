@@ -2075,8 +2075,14 @@ class Handler(BaseHTTPRequestHandler):
                     webui_info = {"found": False, "host": "127.0.0.1", "port": int(_wp),
                                   "url": f"http://127.0.0.1:{int(_wp)}", "token": "",
                                   "source": "config"}
+            # 真实在线状态（2026-10-19）：`protocol_running` 只表示"有没有从本界面
+            # 点过启动"，外部启动的 NapCat/LLOneBot 不经过它 → 会误报"已停止"。
+            # 这里补一个真实探测结果，前端应优先用它。
+            _p_ok, _p_url = probe_protocol_online()
             self._send_json(200, {
                 "protocol_running": running,
+                "protocol_online": _p_ok,
+                "protocol_url": _p_url,
                 "protocol_driver": driver,
                 "drivers": drivers,
                 "api_port": cfg.get('protocol_api_port', 3000),

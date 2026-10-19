@@ -5975,6 +5975,9 @@ async function pageProtocol(el) {
     return;
   }
   const running = !!s.protocol_running;
+  /* 2026-10-19：真实性以「OneBot 是否可达」为准 —— running 只表示"本界面点过启动"，
+     外部启动的 NapCat/LLOneBot 不经过它，直接用会把在线误报成「已停止」。 */
+  const online = (s.protocol_online !== undefined) ? !!s.protocol_online : running;
   const curDrv = s.protocol_driver || 'napcat';
   const risks = s.risks || {};
   const drivers = (s.drivers && s.drivers.length) ? s.drivers : [curDrv];
@@ -5982,8 +5985,9 @@ async function pageProtocol(el) {
   el.innerHTML = ''
     + '<div class="hd"><span class="lab">连接状态</span><i class="rule"></i></div>'
     + '<div class="stats">'
-    +   '<div class="st"><div class="lab">协议层</div><div class="v">' + (running ? '运行中' : '已停止')
-    +     '</div><div class="c">' + esc(curDrv) + '</div></div>'
+    +   '<div class="st"><div class="lab">协议连接</div><div class="v">' + (online ? '在线' : '离线')
+    +     '</div><div class="c">' + esc(curDrv)
+    +     (online ? (running ? ' · 本界面启动' : ' · 外部驱动') : '') + '</div></div>'
     +   '<div class="st"><div class="lab">API 端口</div><div class="v mono">' + esc(fmtRaw(s.api_port))
     +     '</div><div class="c">驱动 HTTP 接口</div></div>'
     +   '<div class="st"><div class="lab">事件端口</div><div class="v mono">' + esc(fmtRaw(s.event_port))
