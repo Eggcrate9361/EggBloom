@@ -58,7 +58,7 @@ EggBloom 是一个 QQ 机器人桌面程序（Electron 壳 + Python 后端 + Web
   docs/           项目文档（见下方索引）
   webui/          webui_server.py + 前端页面
   protocols/      协议适配
-  nexsandglass/   本体记忆（沙漏）
+  sandglass_lite.py  本体记忆（沙漏：落沙 / 检索 / 按日期回忆 / 决策粒子）
   components/     桌面端组件
 
 ■ 插件只有两种形态（回答"插件怎么写"必先说清这一条）
@@ -158,7 +158,7 @@ ENGINEERING_MODE = """【工程模式】涉及本项目代码/配置/插件的�
 _PROJECT_KW = (
     # (a) 项目专名 / 组件
     "eggbloom", "插件", "plugin", "harness", "bot_core", "botcore",
-    "webui", "webui_server", "nexsandglass", "沙漏", "super_memory",
+    "webui", "webui_server", "sandglass_lite", "沙漏", "super_memory",
     "personality", "人格", "abl", "abi", "plubin", "manifest",
     "protocols", "napcat", "llonebot", "snowluma", "onebot",
     "qzone", "说说", "slang", "黑话", "词典", "记忆库", "neurobase",

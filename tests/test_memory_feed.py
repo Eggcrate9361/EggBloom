@@ -17,6 +17,13 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
+if HERE not in sys.path:
+    sys.path.insert(0, HERE)
+
+# ★ 沙漏路径隔离：本测试会调 memory_feed，记忆就绪时会真的写盘。
+#   不隔离 = 把探针写进生产沙漏（2026-10-19 实测踩到，多出 20 行污染）。
+from _sandbox import sandbox_neurobase  # noqa: E402
+sandbox_neurobase()
 
 PASS = 0
 FAIL = 0

@@ -23,7 +23,7 @@
   - tool_proc    : 持久 Python 会话与后台任务（py_run/job_*）+ 任务清单（todo_write）
   - agent_loop   : Agent 运行时内核（主程序 agent 能力：两入口共用）
   - agent_service: Agent 服务层（注入依赖 + 会话管理 + 群内双闸）
-  - agent_memory : Agent 本体记忆桥（nexsandglass + super_memory，不另起一套）
+  - agent_memory : Agent 本体记忆桥（sandglass_lite + super_memory，不另起一套）
   - agent_project: EggBloom 项目知识层（常驻速查 + 文档索引 + 铁律 + 工程模式）
   - bot_hook     : bot 主回复链薄接入点（时间分级 + 动态 tools + skill 元数据）
 

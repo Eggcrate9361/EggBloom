@@ -303,7 +303,7 @@ def build_system_prompt(is_group=True, extra="", with_memory=True, project_hint=
             p += "\n\n" + _gap
     except Exception:
         pass
-    # 本体记忆（NexSandglass 画像/阶段）—— 缓慢变化，仍在静态段。
+    # 本体记忆（沙漏条数/数据根）—— 缓慢变化，仍在静态段。
     # 动态部分（偏移/情绪）走 prefetch 进 user 同轮，见 run_chat。
     if with_memory and _CFG.get("memory", True):
         try:

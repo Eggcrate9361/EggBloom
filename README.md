@@ -96,7 +96,7 @@ python webui/webui_server.py
 - `harness/` — AI Agent 框架：流式事件总线 / agent 记忆 / MCP 工具
 - `protocols/` — 协议适配层，OneBot v11 事件 → bot_core
 - `plugins/` — 插件体系（群聊决策、记忆、情绪、人格、浏览器自动化等）
-- `nexsandglass/` — 沙漏记忆系统（分层记忆 / 画像 / 决策粒子）
+- `sandglass_lite.py` — 沙漏记忆引擎（落沙 / 原文检索 / 按日期回忆 / 决策粒子）
 
 ## 依赖的开源项目
 
@@ -106,7 +106,7 @@ python webui/webui_server.py
 | LiGGUF | 进程内 GGUF 推理引擎（记忆向量化 DLL） | [matrixsmaster/ligguf](https://github.com/matrixsmaster/ligguf) |
 | Playwright | 浏览器自动化（web_operator 插件） | [microsoft/playwright](https://github.com/microsoft/playwright) |
 | Electron | 桌面外壳 | [electron/electron](https://github.com/electron/electron) |
-| NexSandglass | 沙漏记忆系统（分层记忆 / 画像 / 决策粒子） | [lovevin1314-tech/NexSandglass-Agent-DedicatedMemory](https://github.com/lovevin1314-tech/NexSandglass-Agent-DedicatedMemory) |
+| NexSandglass | 沙漏记忆系统的**设计参考**（已不内嵌，独立实现于 `sandglass_lite.py`） | [lovevin1314-tech/NexSandglass-Agent-DedicatedMemory](https://github.com/lovevin1314-tech/NexSandglass-Agent-DedicatedMemory) |
 
 完整清单与许可归属见 [`THIRD_PARTY.md`](THIRD_PARTY.md)。
 

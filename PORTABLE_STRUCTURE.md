@@ -83,18 +83,18 @@ EggBloom Desktop（整个文件夹可整体复制）
 
 ---
 
-## NeuroBase 记忆库的位置（2026-09-27 起改为可移植）
+## 沙漏记忆库的位置（可移植）
 
-**NexSandglass（沙漏记忆）的全部数据现在也放在本目录内**：
+**沙漏记忆的全部数据放在本目录内**：
 
 ```
 resources\app\.neurobase\
-├── sandglass.txt              全量消息落沙
-├── sandglass.db / .idx        结构化消息 + 全文索引
-├── shadow_sand.db             影子灵魂
-├── decision_particles.txt     决策粒子（他做过的选择）
-├── emotion_vocab.json         情绪词表（静态配置）
-├── persona\                   画像（由 persona_l3 生成）
+├── sandglass.txt              全量消息落沙（权威源，每行 `时间 | 角色 | 正文`）
+├── sandglass.idx              倒排索引（token:行号）—— 检索主力
+├── shadow_sand.db             影子沙（信任分 / 实体 / 三元组，检索融合用）
+├── decision_particles.txt     决策粒子（A 还是 B 类选择）
+├── emotion_vocab.json         情绪词表
+├── persona\                   画像（由蒸馏链路生成）
 ├── scripts\                   vault 脚本
 └── archive\                   归档
 ```
@@ -102,7 +102,10 @@ resources\app\.neurobase\
 **复制 / 迁移时必须把这个目录一起带上** —— 它存的是机器人的长期记忆，
 丢了就是失忆。
 
-### 路径解析顺序（`nexsandglass\sandglass_paths.py`）
+> `sandglass.db`（上游时代的 FTS5 加速层）在自研实现下**已不再使用**。
+> 它可能仍残留在旧数据目录里，删除即可（不影响任何功能）。
+
+### 路径解析顺序（`sandglass_lite.py`）
 
 1. 环境变量 `NEXSANDBASE_HOME`（显式指定，最优先）
 2. 本目录旁的 `resources\app\.neurobase`（存在即用 —— **推荐的可移植布局**）
@@ -111,13 +114,22 @@ resources\app\.neurobase\
 
 > **历史数据**：2026-09-27 之前数据放在 `~\.neurobase`。已迁移到上面的可移植位置。
 >
-> ⚠️ **旧目录 `C:\Users\<用户>\.neurobase` 是一份旧快照**（其 sandglass.db 停在 08-10，
-> 比本目录少约 170 条、且缺 08-11 ~ 09-05 的记录）——
+> ⚠️ **旧目录 `C:\Users\<用户>\.neurobase` 是一份旧快照** ——
 > **千万不要拿它覆盖本目录**，那等于让机器人失忆一段时间。
-> 确认机器人运行正常后可整个删除；如果想保险，改名成 `.neurobase.bak-20260927` 留着。
+> 确认机器人运行正常后可整个删除；如果想保险，改名成 `.neurobase.bak-<日期>` 留着。
 
 ### 备份建议
 
 整个 `resources\app\` 拷一份就是完整备份（程序 + 配置 + 记忆都在里面）。
 如果只想备份记忆，单独拷 `resources\app\.neurobase\` 一个目录即可。
-也可以用内置命令导出记忆包：`python nexsandglass\sandglass_think.py export`（tar.gz）。
+
+### 索引重建（手工改动 sandglass.txt 后必做）
+
+```bash
+python -c "import sys; sys.path.insert(0,'resources/app'); import sandglass_lite as sl; print(sl.rebuild_index())"
+```
+
+**为什么必须做**：`sandglass.idx` 存的是**行号列表** —— 删除中间行会让后续行号
+全部错位，检索就会指向错误的记录。重建后会全量重扫文本，行号重新对齐。
+
+**替代做法**：直接删除 `sandglass.idx`，下次检索时会自动重建（首次略慢）。

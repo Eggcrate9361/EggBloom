@@ -11,6 +11,13 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
+if HERE not in sys.path:
+    sys.path.insert(0, HERE)
+
+# ★ 沙漏路径隔离（2026-10-19）：本测试跑 run_chat → sync_turn → memory_feed
+#   会真写生产沙漏（实测踩到：末尾多 2 行 "帮我搜一下天气"/"答案"）。
+from _sandbox import sandbox_neurobase  # noqa: E402
+sandbox_neurobase()
 
 from harness import tool_registry as tr, agent_service, agent_loop as al, bot_hook, session_log
 

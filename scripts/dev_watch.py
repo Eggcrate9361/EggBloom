@@ -7,7 +7,7 @@
     最容易误判的一类问题。本脚本把第二步也自动化。
 
 它做什么
-    1. 盯着运行时源码（顶层 *.py + plugins/protocols/harness/webui/nexsandglass/components/scripts 下的 *.py）
+    1. 盯着运行时源码（顶层 *.py + plugins/protocols/harness/webui/components/scripts 下的 *.py）
     2. 静默 debounce（默认 1.2s）后跑一遍 activate 的同步 + 校验
     3. 结束旧后端进程：
          · 若 EggBloom Desktop.exe 在跑 → 只杀后端，壳会在 3s 内自动拉起（不要自己 spawn，否则抢端口）
@@ -40,8 +40,9 @@ from pathlib import Path
 SRC_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 #: 需要重启才生效的源码目录（前端 html 不在内：它热重载）
+#  2026-10-19：nexsandglass 已移除（沙漏改走根目录 sandglass_lite.py，被顶层 *.py 覆盖）
 WATCH_DIRS = ("plugins", "protocols", "harness", "webui",
-              "nexsandglass", "components", "scripts")
+              "components", "scripts")
 WATCH_EXTS = {".py"}
 
 #: 运行时目录 / 缓存：变了也不该触发重启

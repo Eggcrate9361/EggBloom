@@ -22,6 +22,12 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
+if HERE not in sys.path:
+    sys.path.insert(0, HERE)
+
+# ★ 沙漏路径隔离（2026-10-19）：打桩失效时会真写盘 → 污染生产记忆
+from _sandbox import sandbox_neurobase  # noqa: E402
+sandbox_neurobase()
 
 PASS = 0
 FAIL = 0
@@ -44,12 +50,13 @@ def main():
     print("=" * 60)
 
     # ── 打桩：拦截真正写文件的 log_message，只记录调用 ──
-    # 先 import 桥（它会把 nexsandglass 加进 sys.path），再拿 log_message 所在模块
+    # 2026-10-19：桥的实现已切到自研 sandglass_lite（薄适配），
+    # 故打桩目标从 sandglass_log 改为 sandglass_lite。
     import sandglass_bridge as sb  # noqa: E402
-    import sandglass_log  # noqa: E402
+    import sandglass_lite  # noqa: E402
 
     written = []  # (sender, text)
-    sandglass_log.log_message = lambda text, sender="agent": (
+    sandglass_lite.log_message = lambda text, sender="agent": (
         written.append((sender, text)) or True)
 
     # 打开桥的闸门（绕过 provider 初始化）

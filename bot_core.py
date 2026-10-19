@@ -2379,10 +2379,10 @@ def try_send_meme(group_id, reply_text):
     cleaned, emotion = parse_meme_intent(reply_text)
     log(f"[表情] 解析结果: cleaned={cleaned[:30]}, emotion={emotion}")
     
-    # 如果既没有 [表情] 也没检测到情绪，尝试用 NexSandglass 上下文增强情绪检测
+    # 如果既没有 [表情] 也没检测到情绪，尝试用沙漏记忆上下文增强情绪检测
     if emotion is None and MEME_AUTO_DETECT_EMOTION:
         emotion = auto_detect_emotion(reply_text)
-        # 如果还是没检测到，用 NexSandglass 搜索相关记忆来推断情绪
+        # 如果还是没检测到，用沙漏搜索相关记忆来推断情绪
         if emotion is None:
             try:
                 from sandglass_bridge import search_memory
@@ -9260,7 +9260,7 @@ def main():
     log(f"Bot: {BOT_QQ} | 监听: {', '.join(TARGET_QQS)} | 群聊: {len(GROUP_IDS)}个")
     log("=" * 50)
 
-    # ── NexSandglass 记忆引擎（后台懒加载，不阻塞主流程） ──
+    # ── 沙漏记忆引擎（后台懒加载，不阻塞主流程） ──
     try:
         from sandglass_bridge import _ensure_init
         _ensure_init()
@@ -9537,7 +9537,7 @@ def main():
                    for _c in (_mcp_cached() or {}).values()
                    for t in (_c.get("tools") or [])
                    if isinstance(t, dict) and t.get("function", {}).get("name")],
-            # 记忆：走本体（nexsandglass + super_memory），开关随 config.memory_enable
+            # 记忆：走本体（sandglass_lite + super_memory），开关随 config.memory_enable
             memory=bool(_config.get("memory_enable", True)),
         )
         # 记忆桥自检（一行日志，方便排障"为什么 agent 不记得我"）

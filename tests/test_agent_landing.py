@@ -18,6 +18,13 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
+if HERE not in sys.path:
+    sys.path.insert(0, HERE)
+
+# ★ 沙漏路径隔离（2026-10-19）：本测试的 run_chat 会经 sync_turn → memory_feed
+#   真写沙漏（实测踩到：末尾多 4 行 "u"/"a"/"用户的原话"/"答案"）。
+from _sandbox import sandbox_neurobase  # noqa: E402
+sandbox_neurobase()
 
 from harness import agent_memory as am
 

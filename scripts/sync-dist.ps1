@@ -121,9 +121,11 @@ Write-Host ""
 $rootExts = @(".py", ".json", ".html", ".txt", ".md", ".toml", ".yaml", ".yml", ".png", ".js")
 
 # 整目录复制（docs 也带上：发行副本里能直接看到权威文档，不必回源码库翻）
-$dirItems = @("plugins", "protocols", "webui", "nexsandglass", "components", "memes", "docs", "harness", "skills",
+$dirItems = @("plugins", "protocols", "webui", "components", "memes", "docs", "harness", "skills",
               # README 的主视觉图在 assets/ 下；不同步的话包里的 README 就是一张破图
               "assets")
+# 注：nexsandglass/ 已于 2026-10-19 移除（沙漏改走自研 sandglass_lite.py，在根目录、
+#     由 $rootExts 的 .py 覆盖）。若将来从 git 历史恢复该目录，需把它加回本列表。
 
 # 排除的运行时数据（任意层级同名目录）
 $excludeDirs = @(

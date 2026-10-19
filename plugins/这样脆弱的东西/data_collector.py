@@ -13,10 +13,12 @@
   1. **区分「没有数据」和「没有这个源」**。sandglass.txt 根本不存在，
      之前静默返回 0 条，看起来像"这人没说话"，其实是文件缺失。
      现在每个源都会报状态，扫描时直接告诉用户缺什么、影响是什么。
-  2. **拒收污染源**。`nexsandglass/persona/persona.md` 是安装时附带的
+  2. **拒收污染源**。历史上 `nexsandglass/persona/persona.md` 是安装时附带的
      **Demo 示例画像**（文件里明确写着「仅供 Demo 参考」），
      把它当语料会把「AI 记忆系统用户 / Windows / Python 3.11+」这种
-     虚构设定蒸馏成被蒸馏者的人格。这类文件必须识别并剔除。
+     虚构设定蒸馏成被蒸馏者的人格。
+     2026-10-19：该目录已随上游移除，`_persona_paths()` 不再收它 ——
+     这类"随包附带的虚构设定"若再出现，仍需识别并剔除。
 
 输出统一为消息列表 + 结构化事实（facts），两者都能挂证据编号。
 """
@@ -64,20 +66,21 @@ def _group_decision_path():
 def _neurobase_candidates():
     """NeuroBase 数据根的候选列表（按优先级）。
 
-    排第一的是**程序自己的 `sandglass_paths._NB`** —— 那是这套系统的
-    单一真相来源，用户哪天改了路径，插件自动跟着走，不需要改一行代码。
+    排第一的是**记忆子系统自己的路径解析**（`sandglass_lite._NB`）—— 那是
+    这套系统的单一真相来源，用户哪天改了路径，插件自动跟着走，不需要改代码。
+    （2026-10-19：上游 `nexsandglass/` 已移除，改指自研 `sandglass_lite`。）
     后面依次是环境变量、插件配置、程序目录旁的 `.neurobase`（可移植布局）、
     以及默认的 `~/.neurobase`。
     """
     out = []
-    for d in (PROJECT, os.path.join(PROJECT, "nexsandglass")):
+    for d in (PROJECT,):
         if os.path.isdir(d) and d not in sys.path:
             sys.path.insert(0, d)
     try:
-        import sandglass_paths
-        nb = getattr(sandglass_paths, "_NB", "")
+        import sandglass_lite
+        nb = getattr(sandglass_lite, "_NB", "")
         if nb:
-            out.append(("程序 sandglass_paths", nb))
+            out.append(("程序 sandglass_lite", nb))
     except Exception:
         pass
 
@@ -127,14 +130,14 @@ def _sandglass_path():
 
     多扫几个位置是有意的 —— 万一用户把 NeuroBase 搬到了别处而插件配置没跟上，
     至少还能在新的可移植位置找到它，而不是安静地报 0 条。
+
+    2026-10-19：上游 `nexsandglass/` 目录已移除，故不再扫该目录下的沙漏副本
+    （历史上那是"程序目录旁"的另一份，实测两份数据不一致反而容易取错）。
     """
     hits = []
     for _, root in _neurobase_candidates():
         p = os.path.join(root, "sandglass.txt")
         if os.path.exists(p) and p not in hits:
-            hits.append(p)
-    for p in _db_candidates("nexsandglass/sandglass.txt", "sandglass.txt"):
-        if p not in hits:
             hits.append(p)
     return hits
 
@@ -152,11 +155,15 @@ def _decision_particles_path():
 
 
 def _persona_paths():
-    # 真实画像在 NeuroBase 下；程序目录里那份是随包附带的示例
+    """画像文件候选。
+
+    2026-10-19：上游 `nexsandglass/persona/persona.md` 已随目录移除。
+    那份是**随包附带的示例**（文件头自述"示例画像，仅供 Demo 参考"），
+    不是真实画像 —— 真实画像由系统生成在 NeuroBase 下。
+    移除后正好消除了"示例被当画像收进语料"的污染风险。
+    """
     cands = [os.path.join(root, "persona", "persona.md")
              for _, root in _neurobase_candidates()]
-    cands += _db_candidates("nexsandglass/persona/persona.md",
-                            "nexsandglass/persona.md", "persona.md")
     return [p for p in cands if os.path.exists(p)]
 
 

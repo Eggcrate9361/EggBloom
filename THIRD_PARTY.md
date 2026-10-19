@@ -10,21 +10,40 @@
 
 | 组件 | 用途 | 许可证 | 位置 | 状态 |
 |---|---|---|---|---|
-| **NexSandglass** | 沙漏记忆系统（分层记忆 / 画像 / 决策粒子） | **MIT**（`Copyright (c) 2026 NexSandglass`） | `nexsandglass/`（内嵌 v2.9.10） | ✅ 已声明（`nexsandglass/LICENSE`） |
 | Fusion Pixel Font 12px SC | 中文像素字体 | SIL OFL-1.1 | `webui/fonts/fusion-pixel-12px-sc.*` | ✅ 已署名 |
 | Press Start 2P | 显示体 | SIL OFL-1.1 | `webui/fonts/press-start-2p-latin-400.woff2` | ✅ 已署名 |
 | Silkscreen | 等宽/标注体 | SIL OFL-1.1 | `webui/fonts/silkscreen-latin-400.woff2` | ✅ 已署名 |
 | card-icons | UI 图标 | 自绘 / 自制 | `webui/card-icons/` | ✅ |
 | 表情包图库 | 动漫二创表情图 | **来源不明** | `memes/`（git 忽略） | 🚫 **不分发**：仅本机自用 |
 
-> NexSandglass 是独立上游项目，源码内嵌于本仓库 `nexsandglass/`（当前版本 v2.9.10）：
-> 上游仓库 <https://github.com/lovevin1314-tech/NexSandglass-Agent-DedicatedMemory>，
-> MIT 许可，版权行 `Copyright (c) 2026 NexSandglass`（`nexsandglass/LICENSE` 为该上游的原始许可文件）。
-> EggBloom 对其的使用方式是**内嵌集成 + 桥接层**（`sandglass_bridge.py`、`nexsandglass/memory_provider.py`），
-> 不改动其版权归属；该目录的代码著作权属于上游作者。
-> 若需同步上游更新（当前上游已至 V3.x），按上游仓库自身的发布说明进行。
+> **本仓库已不再内嵌任何第三方源码**（2026-10-19）。历史上曾内嵌 NexSandglass
+> 的完整代码树，现已移除，详见下方「设计参考」。
 
 字体版权与来源详见 `webui/fonts/README.txt`。
+
+## 设计参考（**不随仓库分发**）
+
+以下项目的**设计**被 EggBloom 借鉴，但源码不在本仓库内；相关能力由 EggBloom 自行实现。
+
+| 项目 | 借鉴内容 | 上游许可 | EggBloom 的实现 |
+|---|---|---|---|
+| **NexSandglass**<br><https://github.com/lovevin1314-tech/NexSandglass-Agent-DedicatedMemory> | 沙漏记忆系统的**数据格式与检索思路**：`sandglass.txt` 行格式（`ts \| role \| text`）、倒排索引 `sandglass.idx` 的 token:行号 结构、中文 2-gram + 英文 n-gram 分词规则、密度×信任融合评分公式 | MIT<br>`Copyright (c) 2026 NexSandglass` | `sandglass_lite.py`（仓库根，EggBloom 自研，**非**上游代码） |
+
+**NexSandglass 使用说明（务必如实理解）**
+
+- 2026-10-19 之前，本仓库内嵌其 **v2.9.10** 完整代码树（`nexsandglass/`，31 个模块约 7,500 行，
+  含上游 `LICENSE` 原文）。经审计，EggBloom 实际只用到其中 6 个模块、16 个符号
+  （落沙写入 / 原文检索 / 按日期回忆 / 决策粒子），其余（MCP Server、TTY Wrapper、
+  思维层、偏移率、情绪熵、画像、织布机等约 1,805 行）**从不触发**。
+- 现改为**自研薄实现** `sandglass_lite.py`：复刻上述四个真正被使用的能力，
+  **数据格式与上游完全兼容** —— 读写同一份 `~/.neurobase/sandglass.txt` / `sandglass.idx`，
+  既有数据无需迁移。
+- **它是参考设计后的独立实现，不是上游代码的复制**。其中还包含一项上游没有的修正：
+  **覆盖度闸**（上游英文 2~4 字符滑窗会产生大量碎片匹配，导致"无命中却返回无关记录"）。
+- 因此本仓库**不分发** NexSandglass 的任何源码，也不需要保留其 LICENSE 文件。
+  若需使用上游完整功能（如 MCP Server），请从其官方仓库获取。
+- 如需回退到上游实现，从 git 历史恢复 `nexsandglass/` 目录即可（该目录在
+  commit `4d2446c` 及其之前存在），并设置 `sandglass_bridge.py` 的 `_USE_LITE = False`。
 
 ## 随发行包分发（Standard / Full）
 
@@ -45,11 +64,14 @@
 
 NapCat / SnowLuma / LLOneBot / OneBot v11 实现、DeepSeek 等云端模型、Ollama / llama.cpp 等本地推理，均由使用者自行安装或配置，遵循各自许可。
 
-## 处置记录（2026-10-18）
+## 处置记录（2026-10-19）
 
 | 组件 | 结论 |
 |---|---|
-| NexSandglass | **独立上游项目** → 内嵌 v2.9.10 + 桥接（`sandglass_bridge.py`）。上游 MIT，版权行 `Copyright (c) 2026 NexSandglass`，保留上游 `LICENSE` 原文。来源：<https://github.com/lovevin1314-tech/NexSandglass-Agent-DedicatedMemory> |
+| **NexSandglass** | **源码已彻底移除**。自研 `sandglass_lite.py` 替代（数据格式兼容）。仅作**设计参考**署名，不再内嵌、不再分发其代码，故不需要保留其 LICENSE。来源：<https://github.com/lovevin1314-tech/NexSandglass-Agent-DedicatedMemory> |
 | LiGGUF | 上游 README 声明 MIT → `models/LICENSE-ligguf.txt` 随包分发 |
 | 表情包图库 | 283 张二创动漫图来源不明 → **不随任何包对外分发**（仓库里本就未跟踪） |
 | 字体 | Press Start 2P / Silkscreen / Fusion Pixel 均 OFL-1.1，署名见 `webui/fonts/README.txt` |
+
+> 上一轮记录（2026-10-18）：NexSandglass 曾是内嵌上游（v2.9.10 + 桥接层）。
+> 2026-10-19 经审计后改为自研薄实现，内嵌代码树已移除。

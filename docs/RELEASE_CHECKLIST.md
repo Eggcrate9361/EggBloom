@@ -10,7 +10,7 @@
 | # | 事项 | 现状 | 谁定 |
 |---|---|---|---|
 | 0.1 | **仓库地址 / 用户名** | `Eggcrate9361/EggBloom`（已替换 README / CONTRIBUTING / issue 模板） | ✅ |
-| 0.2 | **NexSandglass 的许可证** | **上游项目** [lovevin1314-tech/NexSandglass-Agent-DedicatedMemory](https://github.com/lovevin1314-tech/NexSandglass-Agent-DedicatedMemory)，MIT。已保留上游 `LICENSE` 原文（`Copyright (c) 2026 NexSandglass`），`THIRD_PARTY.md` 已按上游来源标注 | ✅ |
+| 0.2 | **NexSandglass 的处理** | **源码已彻底移除**（2026-10-19）。沙漏改由自研 `sandglass_lite.py` 实现，数据格式与上游兼容。上游仅作**设计参考**署名（`THIRD_PARTY.md`），不再内嵌分发 | ✅ |
 | 0.3 | **LiGGUF DLL 的再分发许可** | README 明写 MIT；已补 `models/LICENSE-ligguf.txt`（随 zip 分发） | ✅ |
 | 0.4 | 表情包 / 图标来源 | 混合，部分不明 | 抽查后决定 |
 
@@ -20,9 +20,12 @@
 
 ### 1.1 许可证冲突
 
-- [x] **NexSandglass**：上游已确认 → <https://github.com/lovevin1314-tech/NexSandglass-Agent-DedicatedMemory>。
-  MIT 许可（`Copyright (c) 2026 NexSandglass`），与 Apache/MIT 兼容 → 可继续内嵌分发。
-  已保留上游 `LICENSE` 原文，`THIRD_PARTY.md` 标注来源与内嵌版本（v2.9.10）。
+- [x] **NexSandglass**：上游已确认 → <https://github.com/lovevin1314-tech/NexSandglass-Agent-DedicatedMemory>
+  （MIT，`Copyright (c) 2026 NexSandglass`）。**处置结论：移除内嵌源码**。
+  审计显示原内嵌的 31 个模块（约 7,500 行）中，EggBloom 只用到 6 模块 16 符号；
+  现由自研 `sandglass_lite.py` 复刻这四项能力（落沙 / 原文检索 / 按日期回忆 / 决策粒子），
+  **数据格式完全兼容**（同一份 `sandglass.txt` / `sandglass.idx`）。
+  仓库不再分发上游任何源码 → 无需保留其 LICENSE；`THIRD_PARTY.md` 按「设计参考」署名。
 - [x] **LiGGUF**：README 末尾声明 MIT；已在 `models/` 放 `LICENSE-ligguf.txt`，随包分发。
 - [ ] `LICENSE` 年份/署名确认：当前 `MIT / Copyright (c) 2026 EggBloom Team`。
 

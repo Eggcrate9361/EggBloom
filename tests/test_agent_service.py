@@ -11,6 +11,14 @@ import tempfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, ROOT)
+if HERE not in sys.path:
+    sys.path.insert(0, HERE)
+
+# ★ 沙漏路径隔离（2026-10-19）：本测试的 run_chat 走 sync_turn → memory_feed，
+#   记忆就绪时会**真写生产沙漏**（实测踩到：末尾多 10 行探针）。
+#   在 import agent_service 之前设好 NEXSANDBASE_HOME。
+from _sandbox import sandbox_neurobase  # noqa: E402
+sandbox_neurobase()
 
 from harness import agent_service as svc  # noqa: E402
 from harness import session_log as slog  # noqa: E402

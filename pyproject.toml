@@ -1,6 +1,6 @@
 [project]
 name = "EggBloom-Desktop"
-version = "1.5.5"
+version = "1.5.6"
 description = "EggBloom Desktop — 桌面陪伴型 AI (OneBot/QQ) 全端:聊天核心 + 记忆 + 人格 + WebUI + 插件系统"
 requires-python = ">=3.13,<3.14"
 dependencies = [
@@ -72,8 +72,6 @@ select = ["F"]
 # TODO(P1): 清理 webui_server.py 的 F821 豁免
 "webui/webui_server.py" = ["F401", "F841", "F811", "F821"]
 "components/*.py" = ["F401", "F841", "F811"]
-# TODO(P1): 清理 nexsandglass 的 F821 豁免（外部依赖，低优先级）
-"nexsandglass/*.py" = ["F401", "F841", "F811", "F821"]
 # 存量未用变量/重复 key(无害),人工后续清理;保留 F821 等潜在 bug 级
 "animator.py" = ["F841"]
 "design_system.py" = ["F601"]
@@ -114,7 +112,6 @@ include = [
 exclude = [
     "bot_core.py",
     "webui/",
-    "nexsandglass/",
     "components/",
     "memes/",
     "**/__pycache__",

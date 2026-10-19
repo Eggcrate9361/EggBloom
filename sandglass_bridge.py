@@ -1,6 +1,17 @@
 # -*- coding: utf-8 -*-
 """
-NexSandglass 桥接层 — 连接 NexSandglass 记忆引擎与 EggBloom
+沙漏记忆桥接层 — 连接 EggBloom 与沙漏记忆引擎
+
+**实现为 EggBloom 自研 `sandglass_lite`**（2026-10-19）：此前依赖 `nexsandglass/`
+（上游 NexSandglass 项目，MIT）的全量内嵌，审计确认只用到 6 模块 16 符号，
+其余（MCP Server / TTY / 思维层 / 偏移率 / 情绪熵 / 画像 / 织布机）从不触发。
+现已**彻底移除上游目录**，由 `sandglass_lite.py`（仓库根）提供全部能力：
+  ① 落沙写入   ② 原文检索（倒排 + 密度×信任融合分）   ③ 按日期回忆 + 决策粒子
+
+**数据完全兼容**：读写 `~/.neurobase/sandglass.txt` / `sandglass.idx`，
+格式与上游一致 —— 既有 4080 行数据无需迁移。
+若需回退上游，`pip install nexsandglass` 或从 git 历史恢复 `nexsandglass/` 目录，
+再把 `_USE_LITE` 置 False。
 
 非阻塞初始化：后台线程懒加载，不卡主流程。
 增强记忆注入：搜索相关上下文 + 人物画像 + 最近对话摘要。
@@ -15,10 +26,13 @@ import threading
 from collections import defaultdict
 from datetime import datetime, timedelta
 
-# NexSandglass 模块路径
-_NEXDIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "nexsandglass")
-if _NEXDIR not in sys.path:
-    sys.path.insert(0, _NEXDIR)
+# ── 实现后端：自研 sandglass_lite（唯一实现）──
+# 2026-10-19：上游 nexsandglass/ 已彻底移除，本开关仅作语义标记保留。
+_USE_LITE = True
+
+_ROOT = os.path.dirname(os.path.abspath(__file__))
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
 
 _initialized = False
 _init_attempted = False
@@ -84,15 +98,66 @@ def _try_init():
     global _provider, _initialized, _init_attempted
     _init_attempted = True
     try:
-        os.environ.setdefault("SANDGLASS_HOME",
-            os.path.join(os.path.dirname(os.path.abspath(__file__)), "nexsandglass", "data"))
-        from memory_provider import NexSandglassProvider
-        _provider = NexSandglassProvider()
-        _provider.initialize()
+        import sandglass_lite as _sl
+        _sl.validate()                      # 建目录（幂等）
+        os.environ.setdefault("NEXSANDBASE_HOME", _sl._NB)
+        # 瘦 provider：只保留 bridge 真正用到的两个方法（元信息层 + 动态信号）
+        _provider = _LiteProvider(_sl)
         _initialized = True
-        _log("[Sandglass] 记忆系统初始化完成")
+        _log(f"[Sandglass] 记忆系统初始化完成（自研 sandglass_lite，数据根 {_sl._NB}）")
     except Exception as e:
         _log(f"[Sandglass] 初始化失败: {e}")
+
+
+class _LiteProvider:
+    """轻量 provider —— 只提供 bridge 真正用到的两个方法。
+
+    （原上游 `NexSandglassProvider` 有 516 行，含偏移率/情绪熵/画像等思层；
+     2026-10-19 用户确认那些对群聊自然度无可证明贡献，随薄适配一并去掉。）
+    """
+
+    def __init__(self, core):
+        self._core = core
+
+    def initialize(self):
+        self._core.validate()
+
+    def shutdown(self):
+        pass
+
+    def is_available(self):
+        return self._core.available()
+
+    def system_prompt_block(self):
+        """元信息层：沙漏总量 + 数据根。
+
+        ⚠ 上游此处的【你在往哪走】+ 偏移率 + 阶段已按用户决定（2026-10-19）**去掉**
+        —— 那是思层输出，对群聊自然度无可证明贡献，且需要整条 sandglass_think（1518 行）。
+        """
+        try:
+            n = self._core.count()
+            return f"沙漏: {n} 条"
+        except Exception:
+            return ""
+
+    def prefetch(self, query=""):
+        """每轮动态信号。原上游给"偏移 + 情绪 + 场景"，现只给最近几条的压缩提示。
+
+        放 user 同轮（见 agent_memory.prefetch 的注释）：这些值每轮都变，
+        塞进 system 会让前缀缓存每轮失效。
+        """
+        try:
+            rows = self._core.recent(3)
+            if not rows:
+                return ""
+            lines = []
+            for _ln, ts, text in rows:
+                t = str(text).strip().replace("\n", " ")
+                if t:
+                    lines.append(f"- {t[:40]}")
+            return "\n".join(lines[-3:])
+        except Exception:
+            return ""
 
 
 def _log(msg):
@@ -136,11 +201,11 @@ def is_available():
 
 
 def log_user_message(text, group_id="", sender="", sender_nick="", timestamp=None):
-    """落沙：用户消息写入 NexSandglass（含完整上下文）"""
+    """落沙：用户消息写入沙漏（含完整上下文）"""
     if not _enabled or not is_available():
         return
     try:
-        from sandglass_log import log_message
+        from sandglass_lite import log_message
         ts = timestamp or ""
         parts = []
         if group_id:
@@ -183,7 +248,7 @@ _LAST_USER_LOG: tuple = ("", 0.0)
 
 
 def log_bot_reply(text, group_id=""):
-    """落沙：Bot 回复写入 NexSandglass。
+    """落沙：Bot 回复写入沙漏。
 
     2026-10-10 格式收敛：
       · role 用 "agent"，**不再用 "assistant"** —— recall_by_date 按
@@ -195,7 +260,7 @@ def log_bot_reply(text, group_id=""):
     if not _enabled or not is_available():
         return
     try:
-        from sandglass_log import log_message
+        from sandglass_lite import log_message
         log_message(text, "agent")
     except Exception:
         pass
@@ -206,10 +271,10 @@ def extract_decision_particles(text):
     if not _enabled or not is_available():
         return
     try:
-        from decision_particles import log as dp_log
+        from sandglass_lite import log_particle
         m = re.search(r'(.{2,20})还是(.{2,20})', text)
         if m:
-            dp_log(f'{m.group(1).strip()}还是{m.group(2).strip()}', m.group(2).strip())
+            log_particle(f'{m.group(1).strip()}还是{m.group(2).strip()}', m.group(2).strip())
     except Exception:
         pass
 
@@ -268,7 +333,7 @@ def _collect_results(message, limit=3, scored=False, scope=None):
     if not keywords:
         return []
     if scored:
-        from sandglass_vault import search_scored
+        from sandglass_lite import search_scored
         by_ln = {}
         for kw in keywords[:3]:
             for ln, ts, text, score in search_scored(kw, limit=limit):
@@ -278,7 +343,7 @@ def _collect_results(message, limit=3, scored=False, scope=None):
                 if ln not in by_ln or score > by_ln[ln][0]:
                     by_ln[ln] = (score, t)
         return sorted(by_ln.values(), key=lambda x: -x[0])
-    from sandglass_vault import search
+    from sandglass_lite import search
     all_results = []
     for kw in keywords[:3]:
         results = search(kw, limit=limit)
@@ -332,18 +397,17 @@ def search_scored_context(message, limit=5, scope=None):
 # **把 month 丢掉了**（只有 legacy 兜底才用）→ 按日期取数根本不通。
 # 但沙漏是"每行一条、行首就是时间戳"的纯文本 → 直接扫文件按日期取，最稳。
 def _vault_file():
-    """沙漏数据文件。**必须用记忆子系统自己的路径解析**（sandglass_paths._NB，
-    规则是"程序目录旁优先、主目录回退"）—— 不要自己猜目录：
-    实测本机同时存在两份且数据不一致（程序目录旁 1686 行 / 主目录 2622 行），
-    取错那份就会"记忆问不出来"。"""
+    """沙漏数据文件。**必须用记忆子系统自己的路径解析**（sandglass_lite._NB，
+    规则是"环境变量 > 程序目录旁 > 主目录"）—— 不要自己猜目录：
+    实测本机同时存在两份且数据不一致，取错那份就会"记忆问不出来"。"""
     try:
-        from sandglass_paths import _NB
-        p = os.path.join(_NB, "sandglass.txt")
+        import sandglass_lite as _sl
+        p = os.path.join(_sl._NB, "sandglass.txt")
         if os.path.isfile(p):
             return p
     except Exception:
         pass
-    for c in (os.path.join(os.path.dirname(os.path.abspath(__file__)), ".neurobase", "sandglass.txt"),
+    for c in (os.path.join(_ROOT, ".neurobase", "sandglass.txt"),
               os.path.join(os.path.expanduser("~"), ".neurobase", "sandglass.txt")):
         if os.path.isfile(c):
             return c
@@ -415,7 +479,7 @@ def recall_history_block(message="", limit=3, width=140, min_score=0.0):
     但一直没接到 prompt 组装链上 —— **零 LLM 成本的真实历史召回**。
 
     与 `get_memory_prompt_block(light=False)` 的区别：
-      · 本函数**不带**人物画像与 NexSandglass 元信息，只做「相关历史」一小段，
+      · 本函数**不带**人物画像与沙漏元信息，只做「相关历史」一小段，
         专供群聊路径按需取用（群聊此前完全没有历史召回）；
       · 私聊仍走 light 模式（语义检索已由 super_memory 向量 top-K 承担），
         避免同一份历史以两种来源重复注入。
@@ -466,7 +530,7 @@ def recall_history_block(message="", limit=3, width=140, min_score=0.0):
 def memory_feed(msg, scope="group"):
     """统一记忆分发入口 —— 一条消息只解析一次，四个记忆模块各自只取关心的字段。
 
-    背景（1.5 任务 2.3）：nexsandglass / ego.super_memory / self_learning /
+    背景（1.5 任务 2.3）：sandglass_lite / ego.super_memory / self_learning /
     这样脆弱的东西 四个模块存的东西确实不同，但此前同一条消息会被 bot_core
     里四条独立路径各自解析一遍（重复 resolve_qq_nick、重复 extract_decision_particles、
     重复 sync_conversation）。收益是性能与可维护性，不合并存储。
@@ -501,7 +565,7 @@ def memory_feed(msg, scope="group"):
 
     out = {"sandglass": False, "super_memory": False, "self_learning": False, "distill": False}
 
-    # ── 1. NexSandglass：用户行落沙 + 决策粒子（回复侧调用跳过，见 user_pre_logged）──
+    # ── 1. 沙漏：用户行落沙 + 决策粒子（回复侧调用跳过，见 user_pre_logged）──
     if text and not user_pre_logged:
         try:
             if _enabled and is_available():
@@ -552,7 +616,7 @@ def get_memory_prompt_block(message="", light=False, skip_search=False):
     四层结构：
     1. 人物画像（群内成员信息）
     2. 相关记忆（基于当前消息搜索）
-    3. NexSandglass 元信息（阶段/偏移）
+    3. 沙漏元信息（总量 / 数据根）
 
     light=True（T4）：只注入轻量元信息 system_prompt_block，跳过关键词全文搜索，
     用于私聊记忆统一召回层（语义检索已由 super_memory 向量 top-K 承担）。
@@ -600,11 +664,11 @@ def get_memory_prompt_block(message="", light=False, skip_search=False):
 
 
 def search_memory(query, limit=5):
-    """搜索 NexSandglass 记忆"""
+    """搜索沙漏记忆"""
     if not _enabled or not is_available():
         return ""
     try:
-        from sandglass_vault import search
+        from sandglass_lite import search
         results = search(query, limit=limit)
         if results:
             lines = []
@@ -631,17 +695,21 @@ def search_memory(query, limit=5):
 
 
 def get_status():
-    """获取 NexSandglass 运行状态"""
+    """获取沙漏运行状态。
+
+    ⚠ `stage` / `offset` 两个字段已置空（2026-10-19 用户决定）：它们来自思层
+    （sandglass_think 的偏移率 + 阶段），对群聊自然度无可证明贡献，
+    随薄适配一起去掉。保留键名以免下游 KeyError（agent_memory.status 读 stage）。
+    """
     if not is_available():
         return {"status": "unavailable"}
     try:
-        from sandglass_vault import count
-        from sandglass_think import comprehensive_offset, _current_stage
+        from sandglass_lite import count
         return {
             "status": "active",
             "messages": count(),
-            "stage": _current_stage(),
-            "offset": comprehensive_offset(),
+            "stage": "",
+            "offset": {},
         }
     except Exception as e:
         return {"status": "error", "error": str(e)}

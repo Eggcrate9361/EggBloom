@@ -13,8 +13,10 @@
 
 **依赖方向（重要）**：
   本模块**不 import bot_core**，只依赖仓库根上的 ``sandglass_bridge`` 与
-  ``nexsandglass``。这两个是**本体**（不是插件），任何 agent 入口（主程序页 /
-  群内 / 未来 CLI）都应共享同一份记忆。
+  ``sandglass_lite``（2026-10-19 起，薄适配自研实现）。这两个是**本体**（不是插件），
+  任何 agent 入口（主程序页 / 群内 / 未来 CLI）都应共享同一份记忆。
+  （``sandglass_lite`` 在仓库根，import 前需 sandglass_bridge 先注入 sys.path —— 
+   本模块所有调用都经由 ``_ready_bridge()``，已保证顺序。）
 
 **降级策略（DSH A10：绝不向主循环抛异常）**：
   sandglass 未初始化 / 导入失败 / 任何内部异常 → 本模块一律返回空串或空列表，
@@ -229,7 +231,7 @@ def system_snapshot(max_chars=1200):
             cut = block[:max_chars].rfind("\n\n")
             block = block[:cut] if cut > max_chars * 0.3 else block[:max_chars]
             block += "\n（本体记忆较长，已截断；需要细节用 sandglass_search 工具检索。）"
-        return "\n\n【本体记忆（NexSandglass + super_memory）】\n" + block
+        return "\n\n【本体记忆（沙漏 + super_memory）】\n" + block
     except Exception as e:
         _log(f"[agent-mem] system_snapshot 失败（已降级为空）: {e}")
         return ""
@@ -318,7 +320,7 @@ SANDBOX_SEARCH_SCHEMA = {
     "function": {
         "name": "sandglass_search",
         "description": (
-            "检索本体长期记忆（NexSandglass 沙漏）。当你需要回忆「以前聊过什么」"
+            "检索本体长期记忆（沙漏）。当你需要回忆「以前聊过什么」"
             "「主人对此的态度」「某个人的偏好」时调用。返回按相关度排序的记忆条目。"
         ),
         "parameters": {
@@ -387,7 +389,7 @@ def _tool_search(args):
         b = _ready_bridge()
         if b is None or not b.is_available():
             return "（本体记忆当前不可用，无法检索）"
-        from sandglass_vault import search  # sys.path 由 sandglass_bridge 注入
+        from sandglass_lite import search   # 薄适配实现（数据与上游同源）
         rows = search(q, limit=limit) or []
         if not rows:
             return f"没有检索到与「{q}」相关的记忆。"
@@ -409,7 +411,7 @@ def _tool_recent(args):
         b = _ready_bridge()
         if b is None or not b.is_available():
             return "（本体记忆当前不可用）"
-        from sandglass_vault import recent
+        from sandglass_lite import recent
         rows = recent(n) or []
         if not rows:
             return "本体记忆里还没有记录。"

@@ -40,8 +40,9 @@ DEFAULT_DIST = r"E:\EggBloom水星\EggBloom Desktop-new"
 
 # 这些顶层项由 sync-dist.ps1 负责（与脚本的 $dirItems 保持一致 + 根目录文件）
 ROOT_FILES = ["bot_core.py", "webui_server.py"]
-DIR_ITEMS = ["plugins", "protocols", "webui", "nexsandglass", "components",
+DIR_ITEMS = ["plugins", "protocols", "webui", "components",
              "memes", "docs", "harness", "skills"]
+# 注：nexsandglass/ 已于 2026-10-19 移除（沙漏改走自研 sandglass_lite.py）。
 
 # 运行时会写入的数据文件/目录：两边本来就该不一样，**不算同步失败**。
 # 判定依据是"这些是程序自己产生的状态，不是源码"。
