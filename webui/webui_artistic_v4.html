@@ -5439,6 +5439,9 @@ const upText = (s) => {
 
 async function pageBot(el) {
   el.innerHTML = '<div class="empty">读取中…</div>';
+  /* 2026-10-19：进页面先清旧定时器（重进/切页会重复调用本函数） */
+  if (window.__botTick) { clearInterval(window.__botTick); window.__botTick = null; }
+  if (window.__botSync) { clearInterval(window.__botSync); window.__botSync = null; }
   let r;
   try { r = await API('/bot/status'); }
   catch (e) { el.innerHTML = '<div class="errbox">读取 /api/bot/status 失败：' + esc(e.message) + '</div>'; return; }
@@ -5510,6 +5513,35 @@ async function pageBot(el) {
       })
       .catch((e2) => say(false, e2.message));
   });
+
+  /* ── 运行时长计时器（2026-10-19 修「计时不能刷新」）─────────────────
+     此前 pageBot 只在进入页面时 get 一次 /api/bot/status，把 uptime 算成
+     一个**常量**塞进 innerHTML → 数字永远停在页面加载那一刻（用户报"还是停止的"，
+     截图 6 分 57 秒一直不动，而服务端 uptime 早已 7 分 29 秒）。
+     现在：① 每 1s 本地递增走字（不发请求）；② 每 10s 与服务端对齐一次，
+     顺便感知"Bot 被停掉"并整页重绘（按钮的禁用态也要跟着变）。 */
+  if (running) {
+    const numEl = el.querySelector('.bh-num');
+    let base = Number(d.uptime) || 0;
+    let t0 = Date.now();
+    window.__botTick = setInterval(() => {
+      if (!document.body.contains(el)) {
+        clearInterval(window.__botTick); window.__botTick = null; return;
+      }
+      if (numEl) numEl.textContent = upText(base + Math.floor((Date.now() - t0) / 1000));
+    }, 1000);
+    window.__botSync = setInterval(async () => {
+      if (!document.body.contains(el)) {
+        clearInterval(window.__botSync); window.__botSync = null; return;
+      }
+      try {
+        const rr = await API('/bot/status');
+        const dd = (rr && rr.data) || {};
+        if (dd.bot_running) { base = Number(dd.uptime) || 0; t0 = Date.now(); }
+        else { pageBot(el); }          // 已停止 → 整页重绘（含按钮态）
+      } catch (e) { /* 网络抖动忽略，下次对齐 */ }
+    }, 10000);
+  }
 }
 
 /* ═════════════ Token 页（零图表：只给读数）═════════════
