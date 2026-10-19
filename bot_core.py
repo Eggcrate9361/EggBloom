@@ -8265,6 +8265,62 @@ def _norm_nick(s) -> str:
     return s.lower()
 
 
+def _bot_self_names() -> set:
+    """Bot **自己的全部称呼**（QQ 号 + 配置昵称 + 各群真实群名片）。
+
+    ★ 为什么需要（2026-10-19 线上实证）：
+      同一个 QQ 账号在不同群可以挂**不同群名片**。实测本机：
+        · 群 200000002 名片 = 「蛋」
+        · 群 200000001 名片 = 空（回退全局昵称「占位名片A」）
+      而旧逻辑只认 `bot_group_nick` **一个值**（= 占位名片A）。
+      于是用户在 200000001 说「@蛋」时，`_is_at_others` 判成"@别人" →
+      整条消息被跳过（日志实证：`跳过定向他人的消息: [占位名片B] @蛋`）。
+      同一个人换个群的叫法就不认识自己了 —— 这是身份识别缺陷，不是用户写错。
+
+    数据来源：`GROUP_MEMBERS[gid][BOT_QQ]` 在拉群成员列表时已按
+    `card or nickname` 写入（见 _fetch_group_members 附近），无需额外请求。
+
+    ⚠ 取舍：跨群别名会被当作"我"。若某群恰好有别人叫「蛋」，那条 @蛋 会误判成
+      在叫我。真出现这种冲突时，把该名片从群名片去掉、或改用 `bot_nicknames`
+      显式限定即可（显式列表永远优先且不受群名片影响）。
+    """
+    names: set = {str(BOT_QQ)}
+    try:
+        for n in _bot_nicknames():
+            if n:
+                names.add(str(n).strip())
+    except Exception:
+        pass
+    try:
+        for _gid, _members in (GROUP_MEMBERS or {}).items():
+            if not isinstance(_members, dict):
+                continue
+            _n = str(_members.get(str(BOT_QQ)) or "").strip()
+            if _n:
+                names.add(_n)
+    except Exception:
+        pass
+    names.discard("")
+    return names
+
+
+def _is_bot_self_name(name) -> bool:
+    """这个 @ 名字是不是指 Bot 自己（含各群名片 / 全局昵称 / QQ 号）。"""
+    n = str(name or "").strip()
+    if not n:
+        return False
+    if n in _bot_self_names():
+        return True
+    # 归一化再比一次：全角/大小写/@ 差异（「ＡＡＡ」vs「AAA」）
+    nn = _norm_nick(n)
+    if not nn:
+        return False
+    for cand in _bot_self_names():
+        if _norm_nick(cand) == nn:
+            return True
+    return False
+
+
 def _bot_nicknames() -> List[str]:
     """Bot 的全部称呼（**可配多个**，配置中心「Bot 昵称」一行一个）。
 
@@ -8421,26 +8477,28 @@ def _is_at_others(text: str) -> bool:
         m = re.match(r'^@(\S+)', text)
         if m:
             at_name = m.group(1)
-            if at_name != BOT_QQ and at_name != BOT_GROUP_NICK:
+            # ★ 2026-10-19：认 Bot 的**全部**称呼（含别的群的群名片），
+            #   不能只比 bot_group_nick 一个值 —— 否则换个群的叫法就把自己当别人。
+            if not _is_bot_self_name(at_name):
                 return True
     # 句末 @ 他人
     end_at = re.search(r'@(\S{1,15})$', text)
     if end_at:
         at_name = end_at.group(1)
-        if at_name != BOT_QQ and at_name != BOT_GROUP_NICK:
+        if not _is_bot_self_name(at_name):
             return True
     # 句中 @ 他人
     all_ats = re.findall(r'@(\S{1,15})', text)
-    _bot_names = {str(BOT_QQ), str(BOT_GROUP_NICK)} | {_norm_nick(n) for n in _bot_nicknames()}
+    _bot_names = {_norm_nick(n) for n in _bot_self_names() if str(n).strip()}
     for at_name in all_ats:
         # ★ 只要有一个 @ 指的是我，这条就是冲我说的（哪怕句中还 @ 了别人）——
         #   "你不要和 @占位群友C 说话" 是在命令我，不是群友互聊，不能当"定向他人"跳过。
         #   （2026-10-14：extract_text 开始保留 @昵称 后，旧逻辑会把这种
         #   "@我 且 @别人" 的句子误判成定向他人而整条吞掉。）
-        if at_name == BOT_QQ or at_name == BOT_GROUP_NICK or _norm_nick(at_name) in _bot_names:
+        if _is_bot_self_name(at_name) or _norm_nick(at_name) in _bot_names:
             return False
     for at_name in all_ats:
-        if at_name == BOT_QQ or at_name == BOT_GROUP_NICK:
+        if _is_bot_self_name(at_name):
             continue
         return True
     # 句首叫已知人名
@@ -8454,7 +8512,7 @@ def _is_at_others(text: str) -> bool:
     return False
 
 
-def _display_name(sender) -> str:
+def _display_name(sender, group_id="") -> str:
     """把 QQ 号变成模型能读懂的说话人标签（2026-10-13 "乱扣帽子"修复）。
 
     线上实证（22:30 群[20001]）：合并窗口里别人说的话被标成**裸 QQ 号**
@@ -8462,13 +8520,27 @@ def _display_name(sender) -> str:
     把 另一个AI机器人 说的"当段子听"算到了 示例用户 头上（"你自己说全是段子的"）。
     规则：① 我自己 → "我(Bot)"（自己的话绝不能被当成别人——cfd2682 把自己
     登记进近期缓存后，回抓上下文里会出现自己的消息，标昵称会让模型以为
-    是另一个人在说话）② 昵称缓存有 → 昵称 ③ 都没有 → 裸号（最后兜底，
-    至少不编造名字）。"""
+    是另一个人在说话）② **本群名片** ③ 全局昵称 ④ 都没有 → 裸号（最后兜底，
+    至少不编造名字）。
+
+    ★ 2026-10-19 补第 ②：**群名片优先**。
+      QQ 的 `nickname` 是**全局**昵称，`card` 才是**本群名片** —— 同一个人在不同
+      群可以挂不同名片。此前只走 `resolve_qq_nick`（内部 `get_stranger_info`
+      只回全局昵称，不含群维度），于是 A 群的名字被带进 B 群：用户实测本群
+      叫「e蛋」，日志和对话里却是别群昵称「占位名片B」。
+      这不只是显示问题 —— 模型会照着这个错名字判断"这句话是不是在叫我"。
+      `GROUP_MEMBERS[gid][uid]` 在群消息入口用 `sender.card` 实时刷新（见群聊分支）。
+    """
     s = str(sender or "")
     if not s:
         return "群友"
     if s == str(BOT_QQ):
         return "我(Bot)"
+    if group_id:
+        _g = GROUP_MEMBERS.get(str(group_id)) or {}
+        _card = str(_g.get(s) or "").strip()
+        if _card:
+            return _card
     return resolve_qq_nick(s) or s
 
 
@@ -9635,7 +9707,12 @@ def main():
                     display = card if card else nick
                     if not display or display.isdigit():
                         continue
-                    QQ_NICK_CACHE[uid] = display
+                    # ★ 2026-10-19：**全局缓存只存全局昵称，不存群名片**。
+                    #   此前写的是 display（card 优先）→ 某群的群名片被塞进全局
+                    #   QQ_NICK_CACHE，于是别的群/私聊里也用这个名字
+                    #   （用户实测：本群叫「e蛋」，却显示成别群昵称「占位名片B」）。
+                    #   群维度显示走 GROUP_MEMBERS[gid][uid]（下一行），各行其道。
+                    QQ_NICK_CACHE[uid] = nick or display
                     if gid not in GROUP_MEMBERS:
                         GROUP_MEMBERS[gid] = {}
                     GROUP_MEMBERS[gid][uid] = display
@@ -9906,6 +9983,21 @@ def main():
                     msg_uid = str(msg.get("user_id", ""))
                     if sender == BOT_QQ or msg_uid == BOT_QQ or msg.get("post_type") == "message_sent":
                         continue
+                    # ★ 群名片缓存（2026-10-19）：群消息的 sender.card 是**本群专用**
+                    #   显示名，而 QQ_NICK_CACHE / get_stranger_info 只有全局昵称。
+                    #   不在这里落一份，_display_name 就只能拿到别群也在用的全局昵称
+                    #   → 同一个人在不同群被叫成同一个名字（用户实测「e蛋」vs「占位名片B」）。
+                    #   每条群消息都刷新，保证改名/换名片后立刻跟上。
+                    try:
+                        _snd_obj = msg.get("sender") or {}
+                        if isinstance(_snd_obj, dict):
+                            _snd_card = str(_snd_obj.get("card") or "").strip()
+                            _snd_nick2 = str(_snd_obj.get("nickname") or "").strip()
+                            _snd_disp = _snd_card or _snd_nick2
+                            if sender and _snd_disp:
+                                GROUP_MEMBERS.setdefault(str(group_id), {})[sender] = _snd_disp
+                    except Exception:
+                        pass
                     # 群限制：该群自动回复已关闭（webui 群管理页）或不在白名单 → 完全静默
                     if not _group_allowed(group_id):
                         _notice_group_blocked(group_id, _group_block_reason(group_id))
@@ -9958,7 +10050,7 @@ def main():
                                         elif qdata.get("raw_message") and str(qdata["raw_message"]).strip():
                                             quoted_text = str(qdata["raw_message"]).strip()[:500]
                                         if quoted_sender:
-                                            quoted_sender_nick = resolve_qq_nick(quoted_sender) or quoted_sender
+                                            quoted_sender_nick = _display_name(quoted_sender, group_id)
                                             log(f"群[{group_id}] 引用消息: [{quoted_sender_nick}({quoted_sender})] {quoted_text[:60]}")
                                     else:
                                         log(f"群[{group_id}] 引用消息 get_msg 失败(retcode={resp.get('retcode')}): {resp.get('msg','')[:80]}")
@@ -9976,7 +10068,7 @@ def main():
                                         if str(mid) == str(reply_id):
                                             quoted_text = tx[:500]
                                             quoted_sender = s
-                                            quoted_sender_nick = resolve_qq_nick(s) or s
+                                            quoted_sender_nick = _display_name(s, group_id)
                                             # 缓存条目里带着这条消息的图片路径（若有）
                                             for _ip in (entry[4] if len(entry) > 4 else []):
                                                 if _ip and _ip not in _quoted_img_paths:
@@ -9995,7 +10087,7 @@ def main():
                                         if "[转发消息]" in tx or "[转发]" in tx:
                                             quoted_text = tx[:500]
                                             quoted_sender = s
-                                            quoted_sender_nick = resolve_qq_nick(s) or s
+                                            quoted_sender_nick = _display_name(s, group_id)
                                             log(f"群[{group_id}] 引用消息(转发缓存命中): [{quoted_sender_nick}] {quoted_text[:60]}")
                                             break
                                 if not quoted_text:
@@ -10135,17 +10227,17 @@ def main():
                             if at_qq == BOT_QQ or at_qq == str(BOT_QQ):
                                 is_at_bot = True
                                 break
-                            # 也检查昵称匹配（先查缓存，再查配置）
-                            bot_nick = QQ_NICK_CACHE.get(BOT_QQ) or _config.get("bot_group_nick", "")
-                            if bot_nick and at_qq == bot_nick:
+                            # ★ 2026-10-19：认 Bot 的**全部**称呼 ——
+                            #   QQ_NICK_CACHE / bot_group_nick 只有一个值，而同一个账号
+                            #   在不同群可以有不同群名片（实测：群 200000002=「蛋」、
+                            #   群 200000001=「占位名片A」）。只认一个 → 换个群的
+                            #   叫法就当成在叫别人，@ 了也不理。
+                            if _is_bot_self_name(at_qq) or _is_bot_self_name(at_nick):
                                 is_at_bot = True
                                 break
                             # 昵称匹配：当 at_qq 为空时（@昵称），用 displayName 匹配
                             if not at_qq and at_nick:
-                                if bot_nick and bot_nick in at_nick:
-                                    is_at_bot = True
-                                    break
-                                if any(n and n in at_nick for n in _bot_nicknames()):
+                                if any(n and n in at_nick for n in _bot_self_names()):
                                     is_at_bot = True
                                     break
                     
@@ -10153,14 +10245,17 @@ def main():
                     has_xiao_a = _is_group_trigger(text)
                     # 检查文本是否含 Bot 昵称（仅在配置开启时）
                     has_bot_nick = False
+                    _self_names = [n for n in _bot_self_names() if str(n).strip()]
                     if _config.get("group_trigger_include_bot_nick", True):
-                        has_bot_nick = BOT_GROUP_NICK and BOT_GROUP_NICK in text
+                        has_bot_nick = any(n in text for n in _self_names)
                     # 文本中 @Bot QQ 检测（如 @10000）
                     if f"@{BOT_QQ}" in text:
                         is_at_bot = True
-                    # 文本中 @Bot 昵称检测（仅在配置开启时）
-                    if _config.get("group_trigger_include_bot_nick", True) and BOT_GROUP_NICK and f"@{BOT_GROUP_NICK}" in text:
-                        is_at_bot = True
+                    # 文本中 @Bot 昵称检测（仅在配置开启时）——
+                    # ★ 2026-10-19：遍历**全部**称呼（含各群群名片），不再只比 bot_group_nick
+                    if _config.get("group_trigger_include_bot_nick", True):
+                        if any(f"@{n}" in text for n in _self_names):
+                            is_at_bot = True
                     # 文本中 @ 某人（句首/句末，纯文本 @，非 QQ at 段）
                     # 目的是让消息进入缓冲区，由 process_buffered_message 过滤
                     has_text_at = False
@@ -10284,7 +10379,7 @@ def main():
                                 #   旧版这里直接 f"[{sender}]"，模型对不上号只能猜说话人
                                 #   → 22:30 线上把 A 说的话扣到 B 头上（"乱扣帽子"）。
                                 if sender != buffer["sender"]:
-                                    buffer["text"] += f"\n[{_display_name(sender)}] {text}"
+                                    buffer["text"] += f"\n[{_display_name(sender, group_id)}] {text}"
                                 else:
                                     buffer["text"] += f"\n{text}"
                                 buffer["time"] = current_time
@@ -10344,11 +10439,11 @@ def main():
                                 continue  # 跳过当前这条消息本身
                             # 纯图片消息（text 为空）也必须算上下文：它的"内容"在图片里
                             if not (tx or "").strip() and _e_imgs:
-                                line = f"[{_display_name(s)}] [图片]"
+                                line = f"[{_display_name(s, group_id)}] [图片]"
                             else:
                                 if is_meaningless_message(tx):
                                     continue
-                                line = f"[{_display_name(s)}] {tx}"
+                                line = f"[{_display_name(s, group_id)}] {tx}"
                             if grabbed_chars + len(line) > GROUP_REPLY_MAX_LENGTH:
                                 break  # 超X字停止
                             grabbed_texts.append(line)
@@ -10363,7 +10458,7 @@ def main():
                                 + (f" +{len(grabbed_images)}图" if grabbed_images else ""))
                     
                     # （说话人标签统一走 _display_name：昵称/我(Bot)/裸号兜底）
-                    buffer_text = "\n".join(grabbed_texts) + ("\n" if grabbed_texts else "") + f"[{_display_name(sender)}] {text}"
+                    buffer_text = "\n".join(grabbed_texts) + ("\n" if grabbed_texts else "") + f"[{_display_name(sender, group_id)}] {text}"
                     # ★ 记住"本轮要回的那条"的 message_id：回复时可以带上**引用**，
                     #   QQ 里就能像 qq-bridge 那样指着某条话说（它用 qq_reply/replyToMessageId）。
                     try:
