@@ -5525,13 +5525,14 @@ async function pageBot(el) {
     let base = Number(d.uptime) || 0;
     let t0 = Date.now();
     window.__botTick = setInterval(() => {
-      if (!document.body.contains(el)) {
+      /* 切页时容器可能仍留在 body 里（只换 innerHTML）→ 用页面特有元素判定 */
+      if (!document.body.contains(el) || !el.querySelector('.bh-num')) {
         clearInterval(window.__botTick); window.__botTick = null; return;
       }
       if (numEl) numEl.textContent = upText(base + Math.floor((Date.now() - t0) / 1000));
     }, 1000);
     window.__botSync = setInterval(async () => {
-      if (!document.body.contains(el)) {
+      if (!document.body.contains(el) || !el.querySelector('.bh-num')) {
         clearInterval(window.__botSync); window.__botSync = null; return;
       }
       try {
