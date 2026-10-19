@@ -8343,16 +8343,27 @@ def _is_ai_bot_sender(group_id, uid) -> bool:
 
     判据（任一命中即排除）：
       ① `self_learn_ignore_qqs` 显式列出该 QQ；
-      ② `self_learn_exclude_ai_names` 开着，且该群名片/全局昵称命中 AI 关键词。
+      ② `self_learn_exclude_ai_names` 开着，且**全局昵称**命中 AI 关键词。
 
-    为什么必须排：实测群里另一个 bot 的 205 条消息（占 37%）被当成"群友表达
-    风格"学进 personality.txt，EggBloom 于是开始用另一个 AI 的语气说话 ——
+    ★ 只看**全局昵称**，不看群名片（2026-10-19 用户纠正）。
+      实测同一个群里：
+        · uid 10000004  全局昵称 `另一个AI机器人`、群名片空   → 真·AI 机器人
+        · uid 10000005  全局昵称 `Texas`、群名片 `另一个AI机器人` → **真人**（扮的）
+      群名片是**每个群可以随便改的 cosplay**，拿它判 AI 会把真人误杀；
+      全局昵称才是账号自己的名字，机器人的昵称通常就是模型名。
+
+    另设 `self_learn_allow_qqs` 白名单：即使昵称像 AI 也照学（人工兜底）。
+
+    为什么必须排：实测群里那个 bot 的 107 条消息被当成"群友表达风格"学进
+    personality.txt，EggBloom 于是开始用另一个 AI 的语气说话 ——
     用户反复反馈的"越来越像机器人"，这是最直接的来源。
     """
     s = str(uid or "").strip()
     if not s:
         return False
     try:
+        if s in {str(x) for x in (_config.get("self_learn_allow_qqs") or [])}:
+            return False          # 人工白名单优先：明确是真人就照学
         if s in {str(x) for x in (_config.get("self_learn_ignore_qqs") or [])}:
             return True
     except Exception:
@@ -8360,13 +8371,10 @@ def _is_ai_bot_sender(group_id, uid) -> bool:
     if not _config.get("self_learn_exclude_ai_names", True):
         return False
     try:
-        _names = [
-            str((GROUP_MEMBERS.get(str(group_id)) or {}).get(s) or ""),   # 本群名片
-            str(resolve_qq_nick(s) or ""),                                # 全局昵称
-        ]
-        for n in _names:
-            if n and _AI_BOT_NAME_RE.search(n):
-                return True
+        # 只取全局昵称（GROUP_MEMBERS 里存的是 card or nick，含群名片，不能用）
+        nom = str(resolve_qq_nick(s) or "").strip()
+        if nom and _AI_BOT_NAME_RE.search(nom):
+            return True
     except Exception:
         pass
     return False

@@ -752,26 +752,68 @@ class SelfLearningEngine:
         self.collector._last_learn_time[str(group_id)] = time.time()
         
         # 5. 生成人格更新（仅在表达模式足够丰富时）
-        top_expr = []
+        #
+        # ★ 2026-10-19「严格化」：写入人格前必须**重复出现过**。
+        #   此前 SQL 只按 quality/count 排序、**没有 count 下限** → 一次性的
+        #   发言也会被写进 personality.txt。实测被污染的 5 条"群表达风格"
+        #   全是 count=1 的一次性句子（而且来自群里另一个 AI 机器人）。
+        #   真实群习惯一定会重复；AI 的漂亮话常常只出现一次。
+        #   门槛由 self_learn_min_count 控制（默认 2）。用户原话：
+        #   "可是有的 ai 昵称就像真人啊，能不能自学习严格呢" —— 这就是那道闸。
         try:
-            conn = get_db()
-            cur = conn.execute(
-                "SELECT scene, expression, quality FROM expressions WHERE group_id=? ORDER BY quality DESC, count DESC LIMIT 5",
-                (str(group_id),)
-            )
-            top_expr = [(r[0], r[1], r[2]) for r in cur.fetchall()]
-            conn.close()
+            # self_learning 不持有 bot_core 的 _config，自己读一次（带异常兜底）
+            from config import load_config as _load_cfg
+            _cfg = _load_cfg() or {}
         except Exception:
-            pass
-        
+            _cfg = {}
+        try:
+            _min_cnt = int(_cfg.get("self_learn_min_count", 2) or 2)
+        except (TypeError, ValueError):
+            _min_cnt = 2
+        top_expr = self._select_promotable_expressions(group_id, _min_cnt)
+
         if len(top_expr) >= 3:
             update = self.persona.generate_update(group_id, top_expr, candidates)
             if update:
                 self.persona.apply_update(update, group_id)
+        else:
+            sl_log(f"群[{group_id}] 表达样本不足（需≥3 条重复≥{_min_cnt} 次的表达，"
+                   f"实际 {len(top_expr)} 条）→ 本次不写人格")
         
         elapsed = time.time() - start
         sl_log(f"群[{group_id}] 学习完成 ({elapsed:.1f}s)")
-    
+
+    @staticmethod
+    def _select_promotable_expressions(group_id, min_count=2, limit=5):
+        """挑出**够格写进人格**的表达：同一句至少被 `min_count` 次独立发言验证过。
+
+        抽成静态方法是为了可测 —— `_do_learn` 整条链路要真实网络/LLM，测不动。
+
+        ★ 2026-10-19 严格化的核心：旧 SQL 没有 count 下限，**一次性的句子也会
+          被写进 personality.txt**。实测被污染的 5 条"群表达风格"全是 count=1，
+          且全部来自群里另一个 AI 机器人（用户："有的 AI 昵称就像真人啊，
+          能不能自学习严格呢"）。
+          真实群习惯一定会重复；AI 的漂亮话常常只出现一次 —— 这就是那道闸。
+        """
+        try:
+            m = int(min_count)
+        except (TypeError, ValueError):
+            m = 2
+        rows = []
+        try:
+            conn = get_db()
+            cur = conn.execute(
+                "SELECT scene, expression, quality FROM expressions "
+                "WHERE group_id=? AND count>=? "
+                "ORDER BY quality DESC, count DESC LIMIT ?",
+                (str(group_id), m, int(limit)),
+            )
+            rows = [(r[0], r[1], r[2]) for r in cur.fetchall()]
+            conn.close()
+        except Exception:
+            rows = []
+        return rows
+
     def get_context_for_llm(self, group_id, user_id=None):
         """获取所有学习上下文，注入 LLM prompt"""
         parts = []

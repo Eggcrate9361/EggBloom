@@ -337,8 +337,16 @@ DEFAULT_CONFIG = {
     #  这是"越来越像机器人"的直接来源。
     #  ① 显式黑名单：填 QQ 号，绝不学习
     "self_learn_ignore_qqs": [],
-    #  ② 自动识别：名片/昵称命中 AI 关键词（deepseek/gpt/claude/bot/机器人…）就跳过
+    #  ② 人工白名单：即使昵称像 AI 也照学（真人故意起个 AI 名的情况）
+    "self_learn_allow_qqs": [],
+    #  ③ 自动识别：**只看全局昵称**（不看群名片 —— 名片是可以随便改的 cosplay，
+    #     实测有人把名片改成「另一个AI机器人」但其实是真人，拿名片判会误杀）
     "self_learn_exclude_ai_names": True,
+    #  ④ **严格化核心：表达必须在群里重复出现过，才准写进人格**
+    #     实测被污染的 5 条"群表达风格"全是 count=1 的一次性句子。
+    #     真实群习惯一定重复；AI 的漂亮话常常只出现一次。
+    #     值=2 表示"至少被两次独立发言验证过"。调高更保守（3 更严）。
+    "self_learn_min_count": 2,
     "private_memory_enable": True,
     "slang_injector_enable": True,
     "nsfw_enabled": True,

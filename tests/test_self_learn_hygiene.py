@@ -83,25 +83,28 @@ def reset():
 
 # ══════════════ 1. 排除其他 AI 机器人 ══════════════
 def test_ai_bot_filter():
-    print("\n[1] _is_ai_bot_sender 排除另一个 AI 机器人")
+    print("\n[1] _is_ai_bot_sender 只看**全局昵称**判 AI")
     reset()
     bot_core.GROUP_MEMBERS[GID] = {
-        "10000004": "另一个AI机器人",        # 实测：真实群名片
-        "10000005": "另一个AI机器人",        # 实测：另一个人挂着同名名片
+        "10000004": "另一个AI机器人",        # 昵称=AI，名片空 → 真·AI 机器人
+        "10000005": "另一个AI机器人",        # 名片=AI，但昵称是 Texas → **真人扮的**
         "10000003": "占位昵称",           # 真人
         "10000002": "占位名片B",               # 用户本人
     }
     bot_core.QQ_NICK_CACHE.update({
-        "10000004": "另一个AI机器人", "10000005": "Texas",
+        "10000004": "另一个AI机器人",        # 全局昵称就是模型名
+        "10000005": "Texas",                # 全局昵称是本人名
         "10000003": "占位昵称", "10000002": "占位名片B",
     })
     bot_core._config["self_learn_exclude_ai_names"] = True
     bot_core._config["self_learn_ignore_qqs"] = []
+    bot_core._config["self_learn_allow_qqs"] = []
 
-    check("另一个AI机器人（昵称）→ 跳过",
+    check("另一个AI机器人（全局昵称）→ 跳过",
           bot_core._is_ai_bot_sender(GID, "10000004") is True)
-    check("★ 名片同名的 Texas → 跳过（靠 card 才认得出）",
-          bot_core._is_ai_bot_sender(GID, "10000005") is True)
+    # ★ 2026-10-19 用户纠正：名片像 AI 但昵称是人名的，是**真人 cosplay**，必须照学
+    check("★ Texas（名片 另一个AI机器人）→ 照学，不能误杀真人",
+          bot_core._is_ai_bot_sender(GID, "10000005") is False)
     check("真人 → 学习", bot_core._is_ai_bot_sender(GID, "10000003") is False)
     check("用户本人 → 学习", bot_core._is_ai_bot_sender(GID, "10000002") is False)
 
@@ -113,13 +116,28 @@ def test_ai_bot_filter():
     check("★ 显式黑名单生效（不受自动识别开关影响）",
           bot_core._is_ai_bot_sender(GID, "10000004") is True)
 
-    # 常见 AI 名应该都能认出来
+    # 人工白名单优先于自动识别（真人起了个 AI 名）
+    reset()
+    bot_core._config["self_learn_exclude_ai_names"] = True
+    bot_core._config["self_learn_allow_qqs"] = ["10000004"]
+    check("★ 白名单覆盖自动识别（明确是真人就照学）",
+          bot_core._is_ai_bot_sender(GID, "10000004") is False)
+
+    # 常见 AI 名应该都能认出来（走全局昵称）
     reset()
     bot_core._config["self_learn_exclude_ai_names"] = True
     for uid, name in [("1", "ChatGPT"), ("2", "Claude"), ("3", "小助手"),
                       ("4", "机器人小冰"), ("5", "GPT-4o"), ("6", "Kimi")]:
-        bot_core.GROUP_MEMBERS[GID] = {uid: name}
+        bot_core.QQ_NICK_CACHE[uid] = name
         check(f"识别「{name}」", bot_core._is_ai_bot_sender(GID, uid) is True)
+
+    # 反向：名片里带 AI 字样但昵称正常 → 不排除
+    reset()
+    bot_core._config["self_learn_exclude_ai_names"] = True
+    bot_core.GROUP_MEMBERS[GID] = {"777": "GPT-4 本体"}
+    bot_core.QQ_NICK_CACHE["777"] = "老王"
+    check("★ 仅名片像 AI 不排除（昵称才是身份）",
+          bot_core._is_ai_bot_sender(GID, "777") is False)
 
 
 # ══════════════ 2. 剥离内部标注 ══════════════
@@ -181,10 +199,64 @@ def test_scene_boundary():
     check("同一句只收一条", len(r) == 1, r)
 
 
+# ══════════════ 5. 重复门槛：一次性的句子不准进人格 ══════════════
+def test_promotion_gate():
+    print("\n[5] 只有重复≥2 次的表达才准写进人格（严格化的核心）")
+    import sqlite3          # noqa: F401
+    import tempfile
+    import self_learning as slmod
+
+    orig = slmod.DB_PATH
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            slmod.DB_PATH = os.path.join(td, "t.db")
+            conn = slmod.get_db()
+            now = 1.0
+            rows = [
+                # 事故里那 5 条：全是 count=1 的一次性 AI 发言
+                ("g", "问候", "你这早上好从中午喊到下午，一天喊三回", 0.6, 1),
+                ("g", "问候", "这猫笑得比早上好还瘆人", 0.6, 1),
+                ("g", "拒绝", "关不了，我够不着你的电脑", 0.6, 1),
+                # 真正被重复验证过的群习惯
+                ("g", "拒绝", "不了，算了", 0.66, 3),
+                ("g", "赞同", "确实是这样", 0.64, 2),
+                # 别的群，不该串进来
+                ("g2", "赞同", "老哥稳", 0.9, 9),
+            ]
+            for gid, scene, expr, q, cnt in rows:
+                conn.execute(
+                    "INSERT INTO expressions (group_id, scene, expression, quality, count, "
+                    "created_at, last_seen) VALUES (?,?,?,?,?,?,?)",
+                    (gid, scene, expr, q, cnt, now, now))
+            conn.commit()
+            conn.close()
+
+            got = slmod.SelfLearningEngine._select_promotable_expressions("g", 2)
+            exprs = [r[1] for r in got]
+            check("★ count=1 的一次性句子全部被拦",
+                  all("早上好从中午" not in e and "比早上好还瘆人" not in e
+                      and "够不着你的电脑" not in e for e in exprs), exprs)
+            check("重复≥2 的被保留", "不了，算了" in exprs and "确实是这样" in exprs, exprs)
+            check("只取本群（不串群）", "老哥稳" not in exprs, exprs)
+            check("结果 ≤ limit", len(exprs) <= 5, len(exprs))
+
+            # 门槛可调：调到 3 就只剩 count=3 那条
+            got3 = slmod.SelfLearningEngine._select_promotable_expressions("g", 3)
+            check("门槛调到 3 → 只剩重复 3 次的",
+                  [r[1] for r in got3] == ["不了，算了"], got3)
+
+            # 非法 min_count 兜底成 2
+            got_bad = slmod.SelfLearningEngine._select_promotable_expressions("g", "abc")
+            check("非法 min_count 兜底为 2", len(got_bad) == 2, got_bad)
+    finally:
+        slmod.DB_PATH = orig
+
+
 def main():
     test_ai_bot_filter()
     test_strip_annotation()
     test_scene_boundary()
+    test_promotion_gate()
     reset()
     bot_core.GROUP_MEMBERS.clear()
     bot_core.GROUP_MEMBERS.update(_ORIG_MEMBERS)
