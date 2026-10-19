@@ -10467,6 +10467,17 @@ def main():
                         _reply_mid = 0
                     _merged_n = len([x for x in (grabbed_texts or []) if str(x).strip()])
                     has_context = len(grabbed_texts) > 0
+                    # ★ 2026-10-19 修「每群消息必抛 NameError」：
+                    #   下面两处（buffer 的 quote_me、建立会话的 if）原来都引用
+                    #   `quote_forces`，但**这个变量在本函数里从没定义过**
+                    #   （只在 process_buffered_message 里定义，是另一个作用域）。
+                    #   自 1.5.5 首发即存在 —— 日志实证：
+                    #       NameError: name 'quote_forces' is not defined
+                    #   它在 buffer 建好之后抛出 → 异常跳过 `continue` 与建立会话那段，
+                    #   于是"被@/叫名字/引用 → 立即建立会话"从来没生效过，
+                    #   且每条群消息都白打一次堆栈。
+                    #   正确定义：**引用的原主是 Bot 自己**才算"引用我必回"。
+                    _quote_me = bool(has_quote) and str(quoted_sender or "") == str(BOT_QQ)
                     # 图片：本条消息的 + 回抓到的（去重保序）
                     buffer_images = []
                     for _ip in (list(_img_paths or []) + grabbed_images):
@@ -10487,6 +10498,9 @@ def main():
                             "has_xiao_a": has_xiao_a,
                             "has_bot_nick": has_bot_nick,
                             "has_quote": has_quote,
+                            "quote_me": _quote_me,      # ★ 2026-10-19：此前从未写入，
+                                                        #   导致 process_buffered_message
+                                                        #   的 buffer.get("quote_me") 恒 False
                             "has_text_at": has_text_at,
                             "in_session": in_session,
                             "has_context": has_context,
@@ -10497,7 +10511,7 @@ def main():
                     log(f"群[{group_id}] 新建缓冲区 delay={delay}s in_session={in_session} back_grab={len(grabbed_texts)}")
                     
                     # 被 @ 或叫「小a」或含 Bot 昵称或引用 → 立即建立会话，让缓冲窗口内的后续消息能被合并
-                    if is_at_bot or has_xiao_a or has_bot_nick or quote_forces:
+                    if is_at_bot or has_xiao_a or has_bot_nick or _quote_me:
                         GROUP_SESSION[group_id] = {
                             "remaining": _config.get("group_session_max_replies", 20),
                             "last_msg_time": time.time()
