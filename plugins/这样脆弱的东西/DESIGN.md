@@ -12,6 +12,24 @@
 > **v2.3** 找到落沙：路径与格式全错导致核心语料一直"安静地返回 0 条"，
 > 实测语料从 36 条涨到 291 条、跨度从 11 天涨到 2.6 个月（§18）
 
+> ### ⚠ 2026-10-19 变更说明（阅读本文前必看）
+>
+> **上游 `nexsandglass/` 目录已从仓库彻底移除**，改为自研 `sandglass_lite.py`
+> （仓库根目录，数据格式完全兼容）。本文写作于 2026-09-27，当时该目录尚在，
+> 因此文中凡出现 `nexsandglass/`、`sandglass_paths.py`、`persona_l3`、
+> `sandglass_mcp.py` 等字样，**均为历史设计记录**，对应能力现状如下：
+>
+> | 文中说法 | 现状 |
+> |---|---|
+> | `nexsandglass/sandglass.txt` | 数据在 `~/.neurobase/sandglass.txt`（不变） |
+> | `sandglass_paths.py` 定路径 | 改由 `sandglass_lite.py` 的 `_NB` 解析（规则不变） |
+> | `persona_l3` 四层扫描 | **已不存在**（随上游移除；本插件不依赖它） |
+> | `sandglass_mcp.py`（MCP Server） | **已不存在**（如需请从上游仓库自行获取） |
+> | `nexsandglass/persona/persona.md` 污染源 | 该文件已删除，风险随之消失 |
+>
+> 本文的**方法论部分（蒸馏管线、Persona-File 格式、伦理协议）不受影响**，
+> 仍然有效。
+
 ---
 
 ## 目录
@@ -82,7 +100,7 @@ EggBloom Desktop 是一个 QQ AI 智能助手，基于 OneBot v11 协议，Pytho
 | 系统 | 定位 | 核心文件 |
 |------|------|----------|
 | **EGO 插件** (`plugins/ego/`) | QQ 对话面的人格+记忆 | personality_engine / super_memory / chat_style / mood_engine / slang_learner |
-| **NeuroBase NexSandglass** (`nexsandglass/`) | 深层人格蒸馏+决策粒子 | sandglass.txt 落沙 → persona_l3 四层扫描 → shadow_sand 影子灵魂 → weave 因果图 |
+| **沙漏记忆** (`sandglass_lite.py`) | 深层记忆 + 决策粒子 | sandglass.txt 落沙 → 原文检索（倒排 + 密度×信任） → 按日期回忆 → 决策粒子 |
 
 ### 2.3 可用的数据源
 
@@ -102,7 +120,8 @@ EggBloom Desktop 是一个 QQ AI 智能助手，基于 OneBot v11 协议，Pytho
 
 现有系统**不是**人格蒸馏：
 - EGO personality_engine → Bot **自己**的人格，不是蒸馏别人
-- NexSandglass persona_l3 → 从**主人**消息蒸馏画像，不能蒸馏任意人
+- ~~NexSandglass persona_l3 → 从**主人**消息蒸馏画像，不能蒸馏任意人~~
+  （2026-10-19 注：`persona_l3` 已随上游移除，该能力现不存在）
 - 缺少：任意第三人的人格蒸馏能力 + 数据量分级 + 图灵测试验证
 
 ### 2.5 插件 ABI v1
@@ -795,7 +814,7 @@ Ponytail 是**写代码的编程规范**，不是插件功能。
 | 原则 | 应用 |
 |------|------|
 | YAGNI | 不写当前不需要的功能 |
-| 复用 | 直接 import EGO/nexsandglass 的函数，不重复造轮子 |
+| 复用 | 直接 import EGO 的函数，不重复造轮子（沙漏侧走 `sandglass_lite`） |
 | 标准库 | 只用 json/sqlite3/re/os/time，不引入第三方依赖 |
 | 原生 | 用 EggBloom 的 ctx.ai_chat / ctx.get_state / ctx.emit |
 | 一行搞定 | 能用一行解决的不写三行 |
@@ -842,7 +861,7 @@ Ponytail 是**写代码的编程规范**，不是插件功能。
 这样脆弱的东西（新）
   ├── 复用 ← chat_style._extract_features（特征提取算法）
   ├── 复用 ← group_chat_decider 话题/情绪检测
-  ├── 复用 ← persona_l3 四层扫描模板
+  └── 不复用 persona_l3（2026-10-19：该模块已随上游移除）
 ```
 
 ### 11.3 输出注入
@@ -858,7 +877,7 @@ Ponytail 是**写代码的编程规范**，不是插件功能。
 | 系统 | 定位 | 人格蒸馏插件的关系 |
 |------|------|------------------|
 | EGO personality_engine | Bot 自己的人格 | 独立，不冲突 |
-| NexSandglass persona_l3 | 主人画像蒸馏 | 复用其四层扫描模板 |
+| ~~NexSandglass persona_l3~~ | 主人画像蒸馏 | ~~复用其四层扫描模板~~（2026-10-19：该模块已随上游移除，不再复用） |
 | chat_style | 说话风格学习 | 复用其特征提取算法 |
 | group_chat_decider | 群聊决策 | 复用其话题/情绪检测 |
 
@@ -1208,11 +1227,13 @@ v2：`sections.py` 是 12 个 section 的唯一真相，等级 → section 集�
 | `group_chat_decider.group_profiles` | 群活跃时段/话题/回复密度 | 环境层 |
 | `group_chat_decider.conversation_chains` | 对话链参与记录 | 关系层的互动结构 |
 
-**同时必须识别污染源**：`nexsandglass/persona/persona.md` 是随包附带的
+**同时必须识别污染源**：历史上 `nexsandglass/persona/persona.md` 是随包附带的
 **Demo 示例画像**（文件里写着「仅供 Demo 参考」），内容是
 「AI 记忆系统用户 / Windows / Python 3.11+」这类虚构设定。
-把它当语料会把这些设定蒸馏成被蒸馏者的人格。现在会检测并剔除，
-并在扫描结果里明确告知"我剔除了什么、为什么"。
+把它当语料会把这些设定蒸馏成被蒸馏者的人格。
+2026-10-19 该目录已随上游移除，该文件不存在了；`data_collector._persona_paths()`
+也不再把它列为候选。**但原则仍然有效**：任何"随包附带的虚构设定"若再出现，
+都必须识别并剔除，并在扫描结果里明确告知"我剔除了什么、为什么"。
 
 「平台事实」与「发言」严格分开计数：
 `stats.unique` 只算发言（否则等级判定会虚高），`stats.fact_count` 单独统计。
@@ -1382,8 +1403,9 @@ confidence=0` —— 这不是结论，只是把"不知道"写成了条目，四
 
 ### 18.1 位置错了
 
-DESIGN 从 v1 起就把 `sandglass.txt` 列为核心数据源，路径写的是
-`nexsandglass/sandglass.txt`（程序目录）。实际位置由 `sandglass_paths.py` 定义：
+DESIGN 从 v1 起就把 `sandglass.txt` 列为核心数据源，路径**曾**写的是
+`nexsandglass/sandglass.txt`（程序目录，错）。实际位置由路径解析规则定义
+（2026-10-19 起由 `sandglass_lite.py` 的 `_NB` 承担，规则与上游 `sandglass_paths.py` 一致）：
 
 ```python
 _NB = os.environ.get("NEXSANDBASE_HOME") or os.path.join(os.path.expanduser("~"), ".neurobase")
@@ -1466,9 +1488,10 @@ LLM 未参与时，统计来源的条目只能动自己人，绝不覆盖模型�
 
 `~/.neurobase` 不是随手写的，是**有意为之**：
 
-- `nexsandglass/sandglass_mcp.py` 是一个 **MCP Server**（「任何 MCP 兼容 Agent
-  可直接调用」），NeuroBase 本身是**独立系统**（自有版本号 2.9.9、自有 vault 概念），
-  不是 EggBloom 的从属模块。
+- 历史上 `nexsandglass/sandglass_mcp.py` 是一个 **MCP Server**（「任何 MCP 兼容 Agent
+  可直接调用」），NeuroBase 本身是**独立系统**（自有版本号、自有 vault 概念），
+  不是 EggBloom 的从属模块。**2026-10-19 起该目录已移除**，MCP Server 不再随包分发
+  （需要的话从上游仓库自行获取）；但"数据放用户级目录"这个决定**依然成立**。
 - 放在用户级目录有三个实际好处：换掉整个 app 目录（升级/重装）不会丢记忆；
   多个前端（Electron 界面 / MCP 客户端 / 别的 Agent）共享同一份记忆；
   备份就是拷一个目录。
