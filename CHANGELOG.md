@@ -14,6 +14,15 @@
   含一项上游没有的修正：**覆盖度闸** —— 上游英文 2~4 字符滑窗会产生大量碎片匹配，
   导致"检索无命中却返回无关记录"（实测搜不存在的词返回 3 条无关内容）。
 - `tests/_sandbox.py`：测试用沙漏路径隔离（缺陷修复见下）。
+- **重名群友识别**：人物画像新增 `groups` 维度（记录每个 QQ 出现在哪些群），
+  同群有两个不同 QQ 用同一显示名时，画像里会陈述「本群有同名：小明（2 人）」。
+  只陈述事实、不带任何"应当如何称呼"的指令 —— 真实的人遇到同名只会知道有两个人，
+  必要时自然问一句「哪个小明」，不需要机器式规则。
+- **群聊人物画像注入**：此前群聊路径**完全没有画像**（只有私聊走
+  `get_memory_prompt_block`），Bot 在群里不知道谁是谁。现补上 `build_people_block`。
+- **Bot 跨群自知**：`log_bot_reply` 写入时补 `[群:gid]` 标记，使 Bot 能检索到
+  自己在各群说过的话（此前 agent 行无归属，被作用域过滤全部排除）。
+  检索仍严格按群隔离 —— 有自知，但不把 A 群内容带到 B 群。
 - `scripts/dev_watch.py`：改 `.py` 自动同步 → 重启后端 → 等 WebUI 就绪（支持 `--dry-run`）。
 - `persona_tag.py`：按配置/派生标签给特定发送者追加一句语气提示（默认关闭）。
 - 应用图标：`scripts/make_icons.py` 按 v4 色板代码生成像素沙漏图标（`icon.png` / `icon.ico` / `tray-icon.png`），窗口与托盘开始使用。
@@ -40,6 +49,31 @@
 
 ### 修复
 
+- **「越来越像机器人」的根因：长期人格里存满了对话碎片**（严重）。
+  `super_memory.extract_facts` 曾有一条过宽正则 `([^，。！？\s]+?)是(.+?)` ——
+  **任何含「是」的短句都被抽成「偏好」**，实测把 `这：啥`、`你的谁呢`、`在叫我`、
+  `我这：战略性休息` 这类碎片当人格存了 75 条（其中 72 条是垃圾）。
+  这些经 `get_prompt_block` **每轮**注入 prompt（`【长期人格】user_preferences`）→
+  模型被无意义碎片带偏，回复明显机器化。
+  处置：① 删掉那条宽泛正则；② 新增 `_is_meaningful_fact` 质量闸（拦空泛主语、
+  疑问尾缀、括号残片）；③ 同内容去重；④ 历史库清理 75 → 3 条（备份在
+  `D:\workbuddy_tmp\super_memory_backup\`）。
+- **`prefetch` 每轮注入原始消息碎片**（2026-10-19 引入后自行修正）。
+  薄适配时曾把「偏移+情绪」改写成「最近 3 条原始消息」，实测含测试数据与
+  `[Bot回复]` 旧格式垃圾，且它是**每轮**注入（放 user 同轮保前缀缓存）→
+  严重干扰对话连贯。现改为自研情绪风向：只看对方发言、跳过旧格式、
+  **无信号返回空**（零 token 成本）。
+- **「协议开关」显示未启用，但协议其实在线**。该卡片读的是 `protocol_enabled`
+  配置标记，而它**只在「切换协议驱动」时**才被写成 True，点「启动协议层」不写它 →
+  用户明明启动了 NapCat 却永远显示未启用。现改为**真实探测** OneBot
+  `/get_status`（3s 缓存），字段 `protocol_online` / `protocol_url`，
+  卡片文案改为「协议连接 · 在线/离线」。
+- **群聊记忆降级路径跨群泄漏**。`bot_core` 的群聊主路径抛异常时会降级到
+  `recall_history_block`，而该函数与其内部检索**都不传 scope** → 跨群/私聊记忆
+  会被注入本群 prompt（与 2026-10-11 修过的"私聊泄漏"同类，当时只修了主路径）。
+  现 `_search_context_for_message` / `recall_history_block` /
+  `get_memory_prompt_block` 全部支持并透传 `scope`，群聊降级调用点传
+  `("group", group_id)`；补 3 个测试覆盖。
 - **测试污染生产记忆**（严重）：6 个测试（`test_memory_feed` / `test_sandglass_dedup` /
   `test_memory_stage_a` / `test_agent_service` / `test_agent_landing` / `test_agent_integration`）
   **没有沙漏路径隔离** —— 记忆系统就绪时会真写 `~/.neurobase/sandglass.txt`。

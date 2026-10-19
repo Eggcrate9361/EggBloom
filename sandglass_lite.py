@@ -674,11 +674,29 @@ _MOOD_WORDS = {
 
 
 def _detect_mood(text: str) -> str:
+    """单情绪词命中 → 情绪名（旧接口，保留兼容）。"""
+    return detect_mood(text)[0]
+
+
+def detect_mood(text: str) -> tuple:
+    """情绪判定 → (情绪名, 命中词数)。
+
+    返回命中数是为了让调用方能区分「真的平稳」与「压根没信号」——
+    bridge 的 prefetch 据此决定要不要注入（无信号 = 零 token 成本）。
+
+    多情绪共存时按 `_MOOD_WORDS` 的声明顺序取首个命中的（确定性）。
+    命中数 = 全部情绪词的出现次数总和。
+    """
     t = text or ""
+    hits = 0
+    first = ""
     for mood, words in _MOOD_WORDS.items():
-        if any(w in t for w in words):
-            return mood
-    return "neutral"
+        n = sum(t.count(w) for w in words)
+        if n:
+            hits += n
+            if not first:
+                first = mood
+    return (first or "neutral"), hits
 
 
 # ══════════════════════════════════════════════════════════════

@@ -7857,6 +7857,17 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
     # 私聊不走这里：私聊已有 super_memory 向量 top-K（语义），再有界召回同一份历史
     # 会变成两处重复注入（同 2.2 的教训）。
     if group_id:
+        # ── 群内人物画像（2026-10-19 新增）──
+        #   此前**群聊完全没有画像注入**（只有私聊走 get_memory_prompt_block），
+        #   于是 Bot 在群里不知道谁是谁，更不知道本群有没有重名的人。
+        #   只用 build_people_block()：画像是准静态信息，不含检索层与元信息噪音。
+        try:
+            from sandglass_bridge import build_people_block as _bpb
+            _ppl = _bpb(str(group_id)) or ""
+            if _ppl.strip():
+                dynamic_parts.append(_ppl.strip())
+        except Exception:
+            pass
         try:
             from harness import memory_context as _mc
             # 注意区分不了"过阈零条"（正常，什么都不注）与"源挂了"——旧函数没有
@@ -7869,7 +7880,9 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
         except Exception:
             try:
                 from sandglass_bridge import recall_history_block
-                _recall = recall_history_block(user_msg)
+                # ★ scope 必须传（2026-10-19 修）：降级出口此前不过滤作用域，
+                #   主路径一旦抛异常就会把跨群/私聊记忆注进本群 prompt。
+                _recall = recall_history_block(user_msg, scope=("group", str(group_id)))
                 if _recall:
                     dynamic_parts.append(_recall)
             except Exception:

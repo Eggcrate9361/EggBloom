@@ -97,7 +97,8 @@ GROUP_MEMBERS = {"ok": True, "group_id": "123456", "bot_qq": "10001", "members":
     {"user_id": "20002", "nickname": "同学甲", "card": "", "role": "owner", "title": "", "is_bot": False},
 ]}
 BOT_STATUS = {"data": {"bot_running": True, "pid": 12345, "uptime": 3725,
-                       "qq_path": r"E:\QQ\QQ.exe", "protocol_enabled": True}}
+                       "qq_path": r"E:\QQ\QQ.exe", "protocol_enabled": True,
+                       "protocol_online": True, "protocol_url": "http://127.0.0.1:3000"}}
 TOKENS = {"snapshot": {
     "group": {"requests": 120, "input_tokens": 400000, "output_tokens": 30000,
               "total_tokens": 430000, "cache_hit_tokens": 350000,
@@ -420,7 +421,7 @@ with sync_playwright() as pw:
     ck("★ PID 原样显示（不被千分位）", "12345" in bt and "12,345" not in bt, bt[:200])
     ck("★ 运行时长人性化（3725s → 1 时 2 分）", "1 时 2 分" in bt, bt[:200])
     ck("QQ 路径", "QQ.exe" in bt)
-    ck("协议开关＝已启用", "已启用" in bt)
+    ck("协议连接＝在线（2026-10-19 改读真实探测）", "在线" in bt)
     ck("运行中时「启动」按钮应为禁用",
        pg.eval_on_selector("#bStart", "e => e.disabled") is True)
     pg.click("#bStop")

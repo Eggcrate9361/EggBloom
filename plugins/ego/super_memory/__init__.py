@@ -231,6 +231,64 @@ def _vec_sim(a, b):
         return 0.0
 
 
+# ── 事实质量闸（2026-10-19）───────────────────────────────────────────
+# 背景：`extract_facts` 的正则曾把对话碎片当人格存下来，导致 prompt 里出现
+#   `user_preferences: 这：啥` / `你的谁呢` / `在叫我` / `群聊图片内容】（不：原图`
+# 这类垃圾，每轮注入 → 模型被无意义碎片带偏，明显"人机感"。
+#
+# 主修复是删掉那条过于宽泛的 `X是Y` 正则；本闸是**二次拦截**，
+# 只拦明显不是事实的形态，刻意**不做语义判断**（无 LLM、零成本）。
+
+#: 空泛词 —— 单独出现时不构成事实（问句/代词/语气词）
+_VAGUE_WORDS = {
+    "这", "那", "啥", "谁", "什么", "怎么", "为什么", "哪", "哪个", "哪儿",
+    "你", "我", "他", "她", "它", "您", "我们", "你们", "他们",
+    "这个", "那个", "这些", "那些", "这样", "那样",
+    "在", "是", "的", "了", "吧", "呢", "吗", "啊",
+}
+
+#: 疑问/揣测尾缀 —— 事实陈述不该以这些收尾
+_QUESTION_TAILS = ("呢", "吗", "么", "？", "?", "呗", "嘛")
+
+
+def _is_meaningful_fact(content: str) -> bool:
+    """判断抽取结果是否够格当"事实"存下来。够格 → True。
+
+    拦四类（都是实测见过的垃圾形态）：
+      1. 过短/空泛：`这：啥`、`在叫我`、单字宾语
+      2. 疑问句碎片：`你的谁呢`、`我叫什么`
+      3. 括号残片：`群聊图片内容】（不：原图`（引用块/表情块被截断）
+      4. `X：Y` 里主语是空泛代词：`这：啥`
+    """
+    c = (content or "").strip()
+    if not c:
+        return False
+    # 必须含实义字符（中文/字母/数字）
+    if not re.search(r"[\u4e00-\u9fffA-Za-z0-9]", c):
+        return False
+    # 1. 过短（`在叫我`=3、`这：啥`=3 全拦；保留 `学生`/`老师` 这类 ≥2 的身份）
+    if len(c) < 2:
+        return False
+    # 2. 整条就是空泛词
+    if c in _VAGUE_WORDS:
+        return False
+    # 3. 疑问尾缀
+    if c.endswith(_QUESTION_TAILS):
+        return False
+    # 4. 括号残片
+    if any(ch in c for ch in "【】（）[]{}"):
+        return False
+    # 5. `X：Y` —— 主语不能空泛、不能单字
+    if "：" in c:
+        subj, _, obj = c.partition("：")
+        subj, obj = subj.strip(), obj.strip()
+        if subj in _VAGUE_WORDS or len(subj) < 2:
+            return False
+        if not obj or obj in _VAGUE_WORDS:
+            return False
+    return True
+
+
 class SuperMemory:
     def __init__(self):
         self.config: Dict[str, Any] = _load_json(CONFIG_PATH, {})
@@ -378,18 +436,37 @@ class SuperMemory:
         return "short"
 
     def extract_facts(self, scope_id: str, user_id: str, text: str) -> List[Dict[str, str]]:
+        """从消息中抽取结构化事实。
+
+        ⚠ 2026-10-19 修：此前第 4 条正则 `([^，。！？\\s]+?)是(.+?)` **过于宽泛** ——
+        任何含「是」的短句都会被抽成「偏好」，实测把对话碎片当人格存了下来：
+            「这是啥」     → 偏好「这：啥」
+            「你是谁呢」   → 偏好「你的谁呢」
+            「是在叫我」   → 偏好「在叫我」
+        这些垃圾经 `get_prompt_block` 每轮注入 prompt（`【长期人格】user_preferences`）
+        → 模型看到一堆无意义碎片 → 明显「人机感」。用户 2026-10-19 反馈
+        「越来越像机器人」的根因之一。
+
+        处置：① **删掉**那条宽泛正则（保留「我的X是Y」这种带明确主语的）；
+              ② 加 `_is_meaningful_fact` 质量闸做二次拦截；
+              ③ 主语/宾语长度下限提高，避免单字碎片。
+        """
         facts: List[Dict[str, str]] = []
         text = text.strip()
         if not text or len(text) > 200:
             return facts
+        seen_content: set = set()      # 同内容去重（多条正则会命中同一句）
 
         patterns = [
             (r"我是(.+?)(?=[，。！？\s]|$)", "身份", lambda m: m.group(1).strip()),
             (r"我叫(.+?)(?=[，。！？\s]|$)", "身份", lambda m: m.group(1).strip()),
-            (r"我的([^，。！？\s]+?)是(.+?)(?=[，。！？\s]|$)", "偏好", lambda m: f"{m.group(1)}：{m.group(2)}"),
-            (r"([^，。！？\s]+?)是(.+?)(?=[，。！？\s]|$)", "偏好", lambda m: f"{m.group(1)}：{m.group(2)}"),
+            (r"我的([^，。！？\s]{2,10}?)是(.+?)(?=[，。！？\s]|$)",
+             "偏好", lambda m: f"{m.group(1)}：{m.group(2)}"),
+            # ★ 原 `([^，。！？\s]+?)是(.+?)` 已删除：无主语约束 → 抽取对话碎片。
+            #   要重新引入必须带明确的偏好主语（如"我更喜欢/我觉得…是"），不能裸匹配。
             (r"我喜欢(.+?)(?=[，。！？\s]|$)", "偏好", lambda m: f"喜欢：{m.group(1)}"),
             (r"我不喜欢(.+?)(?=[，。！？\s]|$)", "偏好", lambda m: f"不喜欢：{m.group(1)}"),
+            (r"我讨厌(.+?)(?=[，。！？\s]|$)", "偏好", lambda m: f"讨厌：{m.group(1)}"),
             (r"我在(.+?)(?=[，。！？\s]|$)", "位置", lambda m: m.group(1).strip()),
             (r"我的生日是(.+?)(?=[，。！？\s]|$)", "重要日期", lambda m: f"生日：{m.group(1)}"),
             (r"今天(.+?)了", "事件", lambda m: f"事件：{m.group(1)}"),
@@ -401,8 +478,12 @@ class SuperMemory:
             for m in matches:
                 try:
                     content = extractor(m)
-                    if content and len(content) < 50:
-                        facts.append({"category": category, "content": content})
+                    if content and len(content) < 50 and _is_meaningful_fact(content):
+                        # 去重：多条正则会命中同一句（如「我的生日是X」同时命中
+                        # 「我的X是Y」与「我的生日是Y」）→ 同内容只留第一条
+                        if content not in seen_content:
+                            seen_content.add(content)
+                            facts.append({"category": category, "content": content})
                 except Exception:
                     continue
 

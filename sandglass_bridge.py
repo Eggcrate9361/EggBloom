@@ -51,9 +51,15 @@ _enabled = True
 #   "看起来有人写"的字段误导后续开发，不如删干净。特征若要回归，从
 #   super_memory 检索或 LLM 定期提炼重新设计，别复用这个空壳。
 _PEOPLE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "people.json")
-_people_map = defaultdict(lambda: {"name": "", "last_seen": 0})
+# 画像结构：{uid: {"name", "last_seen", "groups": [gid, ...]}}
+#   groups（2026-10-19 新增）：该 QQ **出现在哪些群**。用途是回答
+#   「群里有没有两个不同的人叫同一个名字」—— 没有群维度就无从判断重名。
+#   互斥关系：同一 QQ 若出现在多个群是正常的（同一个人加了几个群）；
+#   异常的是**同一个群里有多个不同 QQ 用同一个显示名**。
+_people_map = defaultdict(lambda: {"name": "", "last_seen": 0, "groups": []})
 _people_save_ts = 0.0
 _PEOPLE_SAVE_INTERVAL = 10.0     # 落盘节流（秒）：避免每条消息都写盘
+_PEOPLE_GROUPS_MAX = 30          # 每人最多记多少个群（防画像无限膨胀）
 
 
 def _load_people():
@@ -68,9 +74,13 @@ def _load_people():
         for uid, info in data.items():
             if not isinstance(info, dict):
                 continue
+            gs = info.get("groups")
+            if not isinstance(gs, list):
+                gs = []                      # 旧格式（无 groups 字段）→ 空列表，向后兼容
             _people_map[str(uid)] = {
                 "name": str(info.get("name") or ""),
                 "last_seen": info.get("last_seen") or 0,
+                "groups": [str(g) for g in gs if str(g).strip()][:_PEOPLE_GROUPS_MAX],
             }
         _log(f"[Sandglass] 人物画像已载入 {len(_people_map)} 人")
     except Exception as e:
@@ -141,21 +151,42 @@ class _LiteProvider:
             return ""
 
     def prefetch(self, query=""):
-        """每轮动态信号。原上游给"偏移 + 情绪 + 场景"，现只给最近几条的压缩提示。
+        """每轮动态信号：**最近对话的情绪风向**（放 user 同轮）。
 
-        放 user 同轮（见 agent_memory.prefetch 的注释）：这些值每轮都变，
-        塞进 system 会让前缀缓存每轮失效。
+        放 user 同轮的理由（见 agent_memory.prefetch 注释）：这个值每轮都变，
+        塞进 system 会让前缀缓存每轮失效（DeepSeek 按前缀匹配计费）。
+
+        ⚠ 2026-10-19 修正 —— 本方法曾一度返回「最近 3 条原始消息」，
+        那是**严重退化**：每轮把无关碎片（含测试数据、"对方：xxx" 裸文本）
+        塞进 user 消息，干扰对话连贯性。已改回**语义信号**。
+
+        上游原本给「偏移方向 + 情绪熵」（需整条 sandglass_think 1518 行）。
+        这里用自研轻量版：只用 `sandglass_lite` 的情绪词表对**最近若干条
+        对方发言**做一次粗情绪判定 —— 零 LLM、零额外依赖。
+
+        返回 "" 表示无信号（零 token 成本）。
         """
         try:
-            rows = self._core.recent(3)
+            rows = self._core.recent(12)          # 多取几条，够判情绪风向
             if not rows:
                 return ""
-            lines = []
-            for _ln, ts, text in rows:
+            # 只看"对方"的话（agent 行是 Bot 自己说的，不参与情绪风向）
+            peer = []
+            for _ln, _ts, text in rows:
                 t = str(text).strip().replace("\n", " ")
-                if t:
-                    lines.append(f"- {t[:40]}")
-            return "\n".join(lines[-3:])
+                if not t:
+                    continue
+                # 跳过旧的 [Bot回复] 与测试残渣格式
+                if t.startswith("[Bot回复]"):
+                    continue
+                peer.append(t)
+            if not peer:
+                return ""
+            mood, hits = self._core.detect_mood(" ".join(peer[-8:]))
+            # 情绪平稳且无词命中 → 不注入（零成本，避免每轮都说"情绪平稳"）
+            if mood == "neutral" and hits == 0:
+                return ""
+            return f"## 最近风向\n对方情绪: {mood}（近 {len(peer)} 条中有 {hits} 处情绪词）"
         except Exception:
             return ""
 
@@ -238,6 +269,15 @@ def log_user_message(text, group_id="", sender="", sender_nick="", timestamp=Non
             if sender_nick:
                 p["name"] = sender_nick
             p["last_seen"] = time.time()
+            # 记录群归属（2026-10-19）：重名检测需要知道"谁在哪个群出现过"。
+            # 不记录就没法回答「本群里是不是有两个同名的人」。
+            if group_id:
+                gs = p.setdefault("groups", [])
+                gid_s = str(group_id)
+                if gid_s not in gs:
+                    if len(gs) >= _PEOPLE_GROUPS_MAX:
+                        gs.pop(0)             # FIFO 淘汰最旧的群
+                    gs.append(gid_s)
             _save_people()
     except Exception:
         pass
@@ -248,20 +288,38 @@ _LAST_USER_LOG: tuple = ("", 0.0)
 
 
 def log_bot_reply(text, group_id=""):
-    """落沙：Bot 回复写入沙漏。
+    """落沙：Bot 回复写入沙漏（**带群归属标记**）。
 
-    2026-10-10 格式收敛：
-      · role 用 "agent"，**不再用 "assistant"** —— recall_by_date 按
-        `agent=我 / 其它=对方` 判说话人，"assistant" 会把 Bot 自己的话
-        当成对方；蒸馏侧 _SG_AGENT 同时认 agent/assistant/bot，无下游依赖这个旧标签。
-      · 正文不再叠 "[Bot回复] [群xxx]" 前缀 —— 行首时间戳+role 已是分隔，
-        群归属信息对用户行有、对 Bot 行价值低，且双格式正是污染源头之一。
+    格式演进：
+      · 2026-10-10「格式收敛」：role 用 "agent"（不再用 "assistant"，
+        因为 recall_by_date 按 `agent=我 / 其它=对方` 判说话人）；
+        正文不叠 "[Bot回复] [群xxx]" 前缀 —— 那次是为了修**重复写入**
+        （同一条消息被记 2~3 遍），去掉前缀减少了双格式来源。
+      · **2026-10-19 加回群标记（用户明确要求）**：Bot 要能知道"我在哪个群说过什么"。
+        此前 agent 行无归属 → `_scope_match("group", gid)` 把它们全部排除
+        → Bot 看不到自己（任何群，包括本群）的历史发言。
+
+    为什么这次不会重蹈重复写入：
+      · 调用点只有 `memory_feed` 一处（回复侧），**每次回复只落一行**；
+      · 标记写在 role 之后、正文之前，格式与用户行同构：
+            `2026-10-19 10:00:00 | agent | [群:123] 正文`
+        用户行是 `[群:123] [昵称(uid)] 正文` —— 两者都由 `_scope_match` 的
+        `[群:{key}]` 子串判据识别，无需改匹配逻辑。
+      · 不再叠 "[Bot回复]" 前缀（那是旧格式，本轮反而**顺手清理**）——
+        检索侧会跳过带该前缀的旧行，避免历史垃圾干扰。
     """
     if not _enabled or not is_available():
         return
     try:
         from sandglass_lite import log_message
-        log_message(text, "agent")
+        t = str(text or "").strip()
+        if not t:
+            return
+        # 兼容仍有 "[Bot回复]" 前缀的旧调用（去掉，统一成新格式）
+        if t.startswith("[Bot回复]"):
+            t = t[len("[Bot回复]"):].strip()
+        line_text = f"[群:{group_id}] {t}" if group_id else t
+        log_message(line_text, "agent")
     except Exception:
         pass
 
@@ -279,19 +337,97 @@ def extract_decision_particles(text):
         pass
 
 
-def _build_people_context():
-    """构建人物画像上下文
+def detect_name_clashes(group_id=""):
+    """检测同群重名 —— 返回 {name: [uid, uid, ...]}（只含真冲突的，≥2 个不同 QQ）。
 
-    （P2-2 拍板：traits 字段已删 —— 从无写入方的死字段。画像只输出名字。）"""
-    lines = []
-    for uid, info in _people_map.items():
-        name = info.get("name", "")
-        if not name:
-            continue
-        lines.append(f"  {name}")
-    if lines:
-        return "人物: " + "; ".join(lines[:5])
-    return ""
+    为什么需要：身份识别全程按 QQ 号（唯一），**重名不会串号**；
+    但 Bot 主动**称呼**某人时用的是显示名 —— 若同群有两个不同的人叫同一个名字，
+    它以为在叫 A，实际群里还有 B 也叫这个名，就会产生指代歧义。
+
+    group_id 为空 → 不限定群（全画像范围内找同名）；给了则只看出现在该群的人。
+    """
+    try:
+        groups_of = {}      # name -> [uid, ...]
+        for uid, info in _people_map.items():
+            name = str(info.get("name") or "").strip()
+            if not name:
+                continue
+            if group_id:
+                gs = info.get("groups") or []
+                if str(group_id) not in gs:
+                    continue
+            groups_of.setdefault(name, []).append(str(uid))
+        return {n: uids for n, uids in groups_of.items() if len(uids) >= 2}
+    except Exception:
+        return {}
+
+
+def _short_uid(uid) -> str:
+    """QQ 号尾 4 位。**仅供内部去重/诊断，不写进 prompt**（见下方重名处理）。"""
+    s = str(uid or "")
+    return s[-4:] if len(s) >= 4 else s
+
+
+def _build_people_context(group_id=""):
+    """构建人物画像上下文。
+
+    （P2-2 拍板：traits 字段已删 —— 从无写入方的死字段。）
+
+    2026-10-19 增强（重名检测）：
+      · 传 group_id → 只列**出现在该群**的人（此前是全局混列，会把别的群的人
+        也写进本群画像）；
+      · 同群有重名 → **只陈述事实**（「本群有 2 个『小明』」），
+        **不下指令**。
+
+    ★ 为什么重名只报事实、不给「用尾号区分」这种话（2026-10-19 用户反馈）：
+      原先写的是「他们不是同一人，称呼时请用尾号区分」—— 用户评价
+      **「这么处理是不是太蠢了，真的像人机了，我只是要能识别出来，并且知道」**。
+      有道理：把 `小明(9001)` 塞进 prompt 会让模型学会这种机器式称呼
+      （"小明9001你好"），反而更假。真实的人遇到同名，只会**知道有两个人**，
+      必要时自然问一句「哪个小明」。
+      所以这里只给事实，让模型按人话处理；模型本来就从当前消息的发送者
+      拿到 QQ 号，「是谁」不依赖这份名单。
+    """
+    try:
+        clashes = detect_name_clashes(group_id) if group_id else {}
+        names = []
+        for uid, info in _people_map.items():
+            name = str(info.get("name") or "").strip()
+            if not name:
+                continue
+            if group_id:
+                gs = info.get("groups") or []
+                if str(group_id) not in gs:
+                    continue
+            names.append(name)
+        if not names:
+            return ""
+        out = "人物: " + "、".join(names[:8])
+        if clashes:
+            # 只补一句客观说明：谁重名、几个人。不加任何"应该怎么称呼"的指令。
+            detail = "、".join(f"{n}（{len(u)} 人）" for n, u in list(clashes.items())[:3])
+            out += f"\n本群有同名：{detail}"
+        return out
+    except Exception:
+        return ""
+
+
+def build_people_block(group_id=""):
+    """公开的「群内人物」注入块（含重名标注）。无内容 → ""（零 token 成本）。
+
+    与 `get_memory_prompt_block` 的区别：本函数**只出画像一层**，
+    不带沙漏元信息、日期召回、检索层 —— 供群聊路径按需取用
+    （群聊此前完全没有画像注入，见 bot_core 的调用点注释）。
+    """
+    try:
+        if not _enabled:
+            return ""
+        people = _build_people_context(group_id)
+        if not people:
+            return ""
+        return f"【群内人物】\n{people}"
+    except Exception:
+        return ""
 
 
 def _scope_match(text, scope):
@@ -357,13 +493,19 @@ def _collect_results(message, limit=3, scored=False, scope=None):
     return sorted(all_results, key=lambda x: -x[0])[:limit]
 
 
-def _search_context_for_message(message, limit=3):
-    """搜索与当前消息相关的记忆上下文"""
+def _search_context_for_message(message, limit=3, scope=None):
+    """搜索与当前消息相关的记忆上下文。
+
+    scope：会话作用域过滤（见 `_scope_match`）。**降级路径也必须传** ——
+    2026-10-19 修：此函数此前不收 scope，导致群聊主路径
+    （`harness.memory_context.build_block`）抛异常降级到 `recall_history_block` 时，
+    跨群 / 私聊记忆会被注入群聊 prompt（与 2026-10-11 修过的"私聊泄漏"同类）。
+    """
     if not _enabled or not is_available():
         return ""
 
     try:
-        ranked = _collect_results(message, limit=limit, scored=False)
+        ranked = _collect_results(message, limit=limit, scored=False, scope=scope)
         if not ranked:
             return ""
         # 取最相关的几条
@@ -471,7 +613,7 @@ def recall_by_date(message, limit=12):
     return "\n\n".join(out)
 
 
-def recall_history_block(message="", limit=3, width=140, min_score=0.0):
+def recall_history_block(message="", limit=3, width=140, min_score=0.0, scope=None):
     """T7 批一 ★0：FTS5 历史召回（有界、只读、命中才产出）。
 
     手册《明日方舟》之外的调研结论里，这一项被标为「投入产出比最高的借鉴点」：
@@ -484,19 +626,24 @@ def recall_history_block(message="", limit=3, width=140, min_score=0.0):
       · 私聊仍走 light 模式（语义检索已由 super_memory 向量 top-K 承担），
         避免同一份历史以两种来源重复注入。
 
-    成本边界：最多 limit 条、每条截断 width 字符；无命中 / 未启用 / FTS 降级
+    成本边界：最多 limit 条、每条截断 width 字符；无命中 / 未启用 / 降级
     （`_search_context_for_message` 内部已 try/except 返回 ""）→ 返回 ""，零 token 成本。
 
     min_score>0（2.0 阶段A 阈值闸）：改走真融合分检索（search_scored_context），
     只注入 score≥min_score 的条目并按分数降序、行尾标注 `(0.xx)`；低于阈值一律不注。
-    默认 0 = 旧行为逐字节不变（旧调用点与单测不受影响）。
+    默认 0 = 旧行为（旧调用点与单测不受影响）。
+
+    **scope（2026-10-19 修）**：会话作用域过滤（`("group", gid)` / `("private", uid)`）。
+    本函数是群聊主路径的**降级出口**，此前两个分支都不传 scope → 一旦主路径
+    （`harness.memory_context.build_block`）抛异常降级到这里，跨群/私聊记忆就会被
+    注入群聊 prompt。现两个分支都透传。默认 `None` = 不过滤（保持旧调用方行为）。
     """
     if not _enabled or not is_available():
         return ""
     lines = []
     if min_score > 0:
         try:
-            ranked = search_scored_context(message, limit=limit * 2)
+            ranked = search_scored_context(message, limit=limit * 2, scope=scope)
         except Exception:
             return ""
         for score, text in ranked:
@@ -511,7 +658,7 @@ def recall_history_block(message="", limit=3, width=140, min_score=0.0):
             return ""
     else:
         try:
-            ctx = _search_context_for_message(message, limit=limit)
+            ctx = _search_context_for_message(message, limit=limit, scope=scope)
         except Exception:
             return ""
         if not ctx:
@@ -610,7 +757,8 @@ def memory_feed(msg, scope="group"):
     return out
 
 
-def get_memory_prompt_block(message="", light=False, skip_search=False):
+def get_memory_prompt_block(message="", light=False, skip_search=False,
+                            scope=None, group_id=""):
     """获取增强版记忆注入上下文
 
     四层结构：
@@ -623,20 +771,28 @@ def get_memory_prompt_block(message="", light=False, skip_search=False):
     skip_search=True（2.0 阶段C）：仅摘掉第二层「相关记忆」，其余层保留 ——
     私聊检索层已换 harness.memory_context builder（带分+阈值+预算），
     这里再搜一遍就是双注。agent 侧（harness/agent_memory）暂未接线，继续走旧层。
+
+    scope（2026-10-19）：第二层检索的作用域过滤（`("group", gid)` / `("private", uid)`）。
+    当前调用方多为私聊（light=True 会跳过第二层），故默认 None 保持旧行为；
+    群聊/agent 侧若要走此函数的第二层，**应显式传 scope** 以免跨会话记忆混入。
+
+    group_id（2026-10-19）：第一层**人物画像**的群限定（重名检测需要）。
+    与 scope 分开传是因为 scope 是 `(kind, key)` 元组，取群号要拆包、易错；
+    调用方本来就有裸 group_id，直接给更清晰。为空 = 不限定（列全部画像）。
     """
     if not _enabled or not is_available():
         return ""
 
     parts = []
 
-    # 第一层：人物画像
-    people = _build_people_context()
+    # 第一层：人物画像（传 group_id → 只列本群成员 + 标注重名）
+    people = _build_people_context(group_id)
     if people:
         parts.append(f"【群内人物】\n{people}")
 
     # 第二层：相关记忆搜索（light 模式跳过，省 token；builder 接线后 skip_search 也跳）
     if message and not light and not skip_search:
-        ctx = _search_context_for_message(message)
+        ctx = _search_context_for_message(message, scope=scope)
         if ctx:
             parts.append(f"【相关记忆】\n{ctx}")
 

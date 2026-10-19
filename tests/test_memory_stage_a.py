@@ -118,12 +118,12 @@ class TestBridgeThreshold(unittest.TestCase):
         sb = self.sb
         sb._enabled = True
         sb.is_available = lambda: True
-        sb.search_scored_context = lambda msg, limit=5: [
+        sb.search_scored_context = lambda msg, limit=5, scope=None: [
             (0.81, "高相关：露营装备清单"),
             (0.44, "中相关：上次说的帐篷"),
             (0.20, "低相关：半年前的旧账"),
         ]
-        sb._search_context_for_message = lambda msg, limit=3: "不该被调用"
+        sb._search_context_for_message = lambda msg, limit=3, scope=None: "不该被调用"
         out = sb.recall_history_block("露营", min_score=0.35)
         self.assertIn("露营装备清单 (0.81)", out)
         self.assertIn("上次说的帐篷 (0.44)", out)
@@ -133,7 +133,7 @@ class TestBridgeThreshold(unittest.TestCase):
         sb = self.sb
         sb._enabled = True
         sb.is_available = lambda: True
-        sb.search_scored_context = lambda msg, limit=5: [(0.1, "都不该进")]
+        sb.search_scored_context = lambda msg, limit=5, scope=None: [(0.1, "都不该进")]
         out = sb.recall_history_block("x", min_score=0.35)
         self.assertEqual(out, "")
 
@@ -141,8 +141,8 @@ class TestBridgeThreshold(unittest.TestCase):
         sb = self.sb
         sb._enabled = True
         sb.is_available = lambda: True
-        sb._search_context_for_message = lambda msg, limit=3: "  - 旧路径命中"
-        sb.search_scored_context = lambda msg, limit=5: (_ for _ in ()).throw(
+        sb._search_context_for_message = lambda msg, limit=3, scope=None: "  - 旧路径命中"
+        sb.search_scored_context = lambda msg, limit=5, scope=None: (_ for _ in ()).throw(
             AssertionError("默认路径不该走 scored"))
         out = sb.recall_history_block("任意")
         self.assertIn("旧路径命中", out)

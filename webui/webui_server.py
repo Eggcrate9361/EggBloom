@@ -3910,6 +3910,53 @@ def stop_bot():
             S.bot_running = False
         return {'success': True, 'output': 'Bot 已停止'}
 
+# ── 协议层在线探测（2026-10-19 修「协议开关显示未启用」）───────────────
+# 背景：前端那张卡片读 `protocol_enabled`（配置文件里的标记），而这个字段**只在
+# 「切换协议驱动」时**才被写成 True；点「启动协议层」不写它。
+# 于是用户明明启动了 NapCat（OneBot 3000 在线），界面却永远显示「未启用」。
+# 现改为**真实探测** OneBot API 是否可达 —— 这才是"协议有没有在工作"。
+_PROTO_PROBE = {"at": 0.0, "ok": False, "url": ""}
+
+
+def probe_protocol_online(timeout=0.4, ttl=3.0):
+    """协议层是否真的在线（OneBot /get_status 返回 online）。带 3s 缓存。
+
+    为什么缓存：`/api/bot/status` 被前端按秒轮询，探测虽快（本机 ~1ms），
+    但没必要每秒打三次。
+    为什么不用 `mgr._running`：那是"有没有从本界面点过启动"，外部启动的
+    NapCat 不经过它 —— 会误判成未启用。
+    """
+    now = time.time()
+    if now - _PROTO_PROBE["at"] < ttl:
+        return _PROTO_PROBE["ok"], _PROTO_PROBE["url"]
+    ok, url = False, ""
+    try:
+        cands = []
+        try:
+            ob = str((load_config() or {}).get("onebot_url") or "").strip()
+            if ob:
+                cands.append(ob.rstrip("/"))
+        except Exception:
+            pass
+        for p in (3000, 3001, 3002, 3003):
+            u = f"http://127.0.0.1:{p}"
+            if u not in cands:
+                cands.append(u)
+        for u in cands:
+            try:
+                with urllib.request.urlopen(u + "/get_status", timeout=timeout) as r:
+                    d = json.loads(r.read())
+                if (d.get("data") or {}).get("online"):
+                    ok, url = True, u
+                    break
+            except Exception:
+                continue
+    except Exception:
+        pass
+    _PROTO_PROBE.update({"at": now, "ok": ok, "url": url})
+    return ok, url
+
+
 def get_bot_status():
     alive = False
     pid = None
@@ -3917,6 +3964,7 @@ def get_bot_status():
         if _bot_process and _bot_process.poll() is None:
             alive = True
             pid = _bot_process.pid
+    proto_ok, proto_url = probe_protocol_online()
     with STATE_LOCK:
         return {
             'bot_running': alive if S.bot_running else False,
@@ -3924,6 +3972,9 @@ def get_bot_status():
             'uptime': int(time.time() - S.bot_start_time) if alive else 0,
             'qq_path': _get_qq_path(),
             'protocol_enabled': load_config().get('protocol_enabled', False),
+            # 真实在线状态（2026-10-19）：前端应优先用这个，而不是 protocol_enabled
+            'protocol_online': proto_ok,
+            'protocol_url': proto_url,
         }
 
 def load_plugin_state():
