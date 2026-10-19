@@ -8321,6 +8321,74 @@ def _is_bot_self_name(name) -> bool:
     return False
 
 
+# ── 自主学习语料卫生（2026-10-19）────────────────────────────────────
+# 背景：`personality.txt` 的【自主学习成果】段被两类垃圾填满 —
+#   ① 群里**另一个 AI 机器人**的发言（实测 另一个AI机器人：107+98 条 = 语料 37%）
+#      → EggBloom 模仿另一个 AI 的腔调，这是"越来越像机器人"的直接来源；
+#   ② bot 自己的**引用注记**（`[引用:xxx｜他在引用xxx，**不是在叫我**，别抢话]`）
+#      → 被当作"用户原话"采集，再被黑话挖掘成「当前」「别抢话」「引用」。
+# 这两个函数就是语料入口的闸门。
+
+#: 命中即判定"这是个 AI 机器人"的昵称/名片关键词
+_AI_BOT_NAME_RE = re.compile(
+    r"(deepseek|chatgpt|gpt[-\s]?\d|gpt[-\s]?[a-z]|claude|gemini|qwen|通义|kimi|"
+    r"文心|ernie|豆包|doubao|混元|hunyuan|llm|chatbot|\bbot\b|机器人|小助手|"
+    r"ai[-\s]?assistant|人工智能)",
+    re.IGNORECASE,
+)
+
+
+def _is_ai_bot_sender(group_id, uid) -> bool:
+    """这个发送者是不是"另一个 AI 机器人"—— 是则**不学习**它的发言。
+
+    判据（任一命中即排除）：
+      ① `self_learn_ignore_qqs` 显式列出该 QQ；
+      ② `self_learn_exclude_ai_names` 开着，且该群名片/全局昵称命中 AI 关键词。
+
+    为什么必须排：实测群里另一个 bot 的 205 条消息（占 37%）被当成"群友表达
+    风格"学进 personality.txt，EggBloom 于是开始用另一个 AI 的语气说话 ——
+    用户反复反馈的"越来越像机器人"，这是最直接的来源。
+    """
+    s = str(uid or "").strip()
+    if not s:
+        return False
+    try:
+        if s in {str(x) for x in (_config.get("self_learn_ignore_qqs") or [])}:
+            return True
+    except Exception:
+        pass
+    if not _config.get("self_learn_exclude_ai_names", True):
+        return False
+    try:
+        _names = [
+            str((GROUP_MEMBERS.get(str(group_id)) or {}).get(s) or ""),   # 本群名片
+            str(resolve_qq_nick(s) or ""),                                # 全局昵称
+        ]
+        for n in _names:
+            if n and _AI_BOT_NAME_RE.search(n):
+                return True
+    except Exception:
+        pass
+    return False
+
+
+def _strip_bot_annotation(text) -> str:
+    """剥离 bot 自己加的引用注记，只留**用户当前这句原话**。
+
+    入口 `text` 形如：
+        `[引用:张三｜他在引用张三，**不是在叫我**，别抢话] 他说的原文\\n[当前] 我这句`
+    要的是最后的「我这句」——前面那段是**程序生成的**，不是任何人的发言；
+    混进语料后会被当成"群黑话"（实测挖出「别抢话」「不是在叫我」「他在引用」）。
+
+    没有 `[当前] ` 标记时，退而剥掉开头的 `[引用:...]` 前缀。
+    """
+    t = str(text or "")
+    if "\n[当前] " in t:
+        return t.split("\n[当前] ", 1)[1].strip()
+    t = re.sub(r"^\[引用:[^\]]*\]\s*", "", t)
+    return t.strip()
+
+
 def _bot_nicknames() -> List[str]:
     """Bot 的全部称呼（**可配多个**，配置中心「Bot 昵称」一行一个）。
 
@@ -10154,8 +10222,19 @@ def main():
                         continue
                     
                     # 自主学习：收集消息
-                    if SELF_LEARN_OK and text:
-                        self_learn.collect_message(str(group_id), sender, text)
+                    # ★ 2026-10-19 两处修正（人格被污染的直接来源）：
+                    #   ① 群里跑着**另一个 AI 机器人**（实测 另一个AI机器人，
+                    #      uid 10000004 / 10000005），它的 107+98 条消息被
+                    #      当成"群友表达风格"学进 personality.txt（占语料 37%）
+                    #      → EggBloom 开始模仿另一个 AI 的腔调。
+                    #   ② `text` 此时已带上 bot 自己的引用注记
+                    #      （`[引用:xxx｜他在引用xxx，**不是在叫我**，别抢话] ...`），
+                    #      整段被当用户原话采集 → 后被挖成"黑话"（当前/别抢话/引用…）。
+                    #   所以：跳过 AI 机器人；只采集**用户当前这句原话**。
+                    if SELF_LEARN_OK and text and not _is_ai_bot_sender(group_id, sender):
+                        _learn_text = _strip_bot_annotation(text)
+                        if _learn_text:
+                            self_learn.collect_message(str(group_id), sender, _learn_text)
                     # ChatStyle 说话方式自动学习（越学越像人）
                     try:
                         if PLUGIN_OK:

@@ -236,26 +236,77 @@ class ExpressionLearner:
         pass
     
     def extract_expressions(self, messages):
-        """从消息列表中提取表达模式。messages: [(id, user_id, text), ...]"""
+        """从消息列表中提取表达模式。messages: [(id, user_id, text), ...]
+
+        ⚠ 2026-10-19 修：此前用**裸子串**判场景，等于给随机句子硬贴标签：
+            「关不了」          命中 拒绝 的 `不了`   → 存成"拒绝时常用"
+            「你不是要关机吗」  命中 反对 的 `不是`   → 存成"反对时常用"
+            「这猫笑得比早上好还瘆人」命中 问候 的 `早` → 存成"问候时常用"
+        结果 personality.txt 里 5 条"群表达风格"有 3 条标着"问候时该群常用"，
+        全是风马牛不相及的句子。
+
+        现在要求关键词出现在**句首或标点之后** —— 学的才是"这个群赞同/拒绝时
+        怎么开口"，而不是"这句话里恰好有这个字"。
+
+        另加三道过滤（都是实测见过的脏数据形态）：
+          · 含 `[` `]` `【】` `@` → 是引用注记/转发块，不是人话；
+          · 以问号结尾 → 那是提问，不是表达习惯；
+          · 去掉首尾 @ 与空白后不足 3 字。
+        """
         new_expressions = []
+        seen = set()
         for msg_id, user_id, text in messages:
-            if not text or len(text) < 3:
+            if not text:
                 continue
-            text_clean = text.strip()
+            text_clean = str(text).strip()
+            if len(text_clean) < 3:
+                continue
             # 只取较短的文本（长消息是叙述不是表达）
             if len(text_clean) > 30:
                 continue
-            # 匹配场景
+            # 引用注记/转发块：整段都是程序拼的，不是任何人的发言
+            if any(ch in text_clean for ch in "[]【】"):
+                continue
+            if text_clean.lstrip("@").strip() != text_clean:
+                continue
+            # 提问不是表达习惯
+            if text_clean.endswith(("？", "?")):
+                continue
+            # 匹配场景（关键词必须在句首或标点之后）
             for scene, keywords in self.SCENE_PATTERNS.items():
                 for kw in keywords:
-                    if kw in text_clean:
-                        new_expressions.append({
-                            "scene": scene,
-                            "expression": text_clean,
-                            "quality": 0.6,  # 初始质量
-                        })
+                    if self._starts_phrase(text_clean, kw):
+                        expr = text_clean.strip()
+                        if expr not in seen:
+                            seen.add(expr)
+                            new_expressions.append({
+                                "scene": scene,
+                                "expression": expr,
+                                "quality": 0.6,  # 初始质量
+                            })
                         break  # 一个表达只归入一个场景
         return new_expressions
+
+    #: 断句符 —— 关键词出现在这些字符之后，才算"句子的开头"
+    _BOUNDARY = set("，。！？；：、,.!?;: \t\n（(【[「『\"'“”‘’~～")
+
+    @classmethod
+    def _starts_phrase(cls, text: str, kw: str) -> bool:
+        """`kw` 是否出现在句首或某个断句符之后（而不是嵌在词中间）。
+
+        例（关键词 `不了`，场景"拒绝"）：
+            「关不了」          → False（`不` 前面是"关"，嵌在词里）
+            「不了，算了」      → True（句首）
+            「行吧，不了」      → True（逗号之后）
+        """
+        if not kw:
+            return False
+        i = text.find(kw)
+        while i >= 0:
+            if i == 0 or text[i - 1] in cls._BOUNDARY:
+                return True
+            i = text.find(kw, i + 1)
+        return False
     
     def save_expressions(self, group_id, expressions):
         """保存表达模式到数据库"""

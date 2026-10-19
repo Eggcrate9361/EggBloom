@@ -316,17 +316,29 @@ DEFAULT_CONFIG = {
 
     # 功能开关
     "image_cache_enable": True,
-    # 图片进对话的方式（2026-10-12）：
-    #   native   = 直接把图作为 image_url 交给主模型（默认；主模型带视觉时最优）
-    #              —— 上游若拒图（400/不支持），主链会自动改用视觉描述重试一次
+    # 图片进对话的方式（2026-10-12；2026-10-19 改默认）：
+    #   native   = 直接把图作为 image_url 交给主模型
+    #              ⚠ 实测（经 sensenova 中转）：图片请求连续两次 HTTP 429
+    #              （TPM/RPM 超限），模型随后自称"看不到图"；纯文本主模型更读不了。
     #   describe = 先用免费车道（free_llm）把图转成文字描述再注入 prompt
+    #              —— 对**任何**主模型都成立。实测 `describe_image()` 能准确认出
+    #              歌词截图并说出歌名，故改为默认。
     #   off      = 不处理（老行为：群聊里图片只剩一坨 CQ 链接）
-    "image_reply_mode": "native",
+    "image_reply_mode": "describe",
     # 群聊回复要不要带**引用**（像 qq-bridge 那样指着某条话说）
     #   off=不引用  auto=只在"对象明确"时引用（合并了多条历史/消息本身带引用）  always=每条都引用
     "group_quote_mode": "auto",
     "reply_vision_max_images": 3,
     "self_learning_enable": True,
+    # ── 自主学习：排除"其他 AI 机器人"的发言（2026-10-19 线上实证）──
+    #  群里跑着另一个 bot（实测 uid 10000004 / 10000005，名片都叫
+    #  「另一个AI机器人」），它的 107+98 条消息被当成"群友表达风格"学进了
+    #  personality.txt，占学习语料 37% —— EggBloom 开始模仿另一个 AI 的腔调，
+    #  这是"越来越像机器人"的直接来源。
+    #  ① 显式黑名单：填 QQ 号，绝不学习
+    "self_learn_ignore_qqs": [],
+    #  ② 自动识别：名片/昵称命中 AI 关键词（deepseek/gpt/claude/bot/机器人…）就跳过
+    "self_learn_exclude_ai_names": True,
     "private_memory_enable": True,
     "slang_injector_enable": True,
     "nsfw_enabled": True,
