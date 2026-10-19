@@ -27,7 +27,7 @@
 
 | 项目 | 借鉴内容 | 上游许可 | EggBloom 的实现 |
 |---|---|---|---|
-| **NexSandglass**<br><https://github.com/lovevin1314-tech/NexSandglass-Agent-DedicatedMemory> | 沙漏记忆系统的**数据格式与检索思路**：`sandglass.txt` 行格式（`ts \| role \| text`）、倒排索引 `sandglass.idx` 的 token:行号 结构、中文 2-gram + 英文 n-gram 分词规则、密度×信任融合评分公式 | MIT<br>`Copyright (c) 2026 NexSandglass` | `sandglass_lite.py`（仓库根，EggBloom 自研，**非**上游代码） |
+| **NexSandglass**<br><https://github.com/lovevin1314-tech/NexSandglass-Agent-DedicatedMemory> | 沙漏记忆系统的**数据格式与检索思路**：`sandglass.txt` 行格式（`ts \| role \| text`）、倒排索引 `sandglass.idx` 的 token:行号 结构、中文 2-gram + 英文 n-gram 分词规则、密度×信任融合评分公式 | MIT<br>`Copyright (c) 2026 NexSandglass` | `sandglass_lite.py`（仓库根）—— **复刻上述四个被使用的能力**，属重新实现，**非原创设计**；上游源码已不在本仓库 |
 
 **NexSandglass 使用说明（务必如实理解）**
 

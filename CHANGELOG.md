@@ -9,7 +9,10 @@
 
 ### 新增
 
-- **`sandglass_lite.py`**：沙漏记忆引擎自研实现（落沙写入 / 原文检索 / 按日期回忆 / 决策粒子）。
+- **`sandglass_lite.py`**：沙漏记忆引擎的实现替换（落沙写入 / 原文检索 / 按日期回忆 / 决策粒子）。
+  ⚠ **不是原创设计** —— 复刻的是上游 NexSandglass 的**数据格式与检索思路**
+  （`sandglass.txt` 行格式、`sandglass.idx` 倒排结构、中文 2-gram + 英文 n-gram 分词、
+  密度×信任融合评分），见 `THIRD_PARTY.md`「设计参考」。
   替代原先内嵌的上游 `nexsandglass/`，**数据格式完全兼容**（同一份 `sandglass.txt` / `sandglass.idx`）。
   含一项上游没有的修正：**覆盖度闸** —— 上游英文 2~4 字符滑窗会产生大量碎片匹配，
   导致"检索无命中却返回无关记录"（实测搜不存在的词返回 3 条无关内容）。
@@ -31,7 +34,8 @@
 
 - **移除内嵌的 `nexsandglass/`（上游 NexSandglass 源码树，31 个模块约 7,500 行）**。
   审计确认 EggBloom 实际只用到 6 模块 16 符号，其余（MCP Server / TTY Wrapper / 思维层 /
-  偏移率 / 情绪熵 / 画像 / 织布机，约 1,805 行）从不触发 → 改由 `sandglass_lite.py` 自研实现。
+  偏移率 / 情绪熵 / 画像 / 织布机，约 1,805 行）从不触发 → 改由 `sandglass_lite.py`
+  复刻这四个被使用的能力（**非原创设计**，借鉴自上游，见 `THIRD_PARTY.md`）。
   随之更新：`README.md` 架构图、`THIRD_PARTY.md`（改列「设计参考」）、
   `PORTABLE_STRUCTURE.md`、`docs/RELEASE_CHECKLIST.md`、`scripts/sync-dist.ps1`、
   `scripts/activate.py`、`scripts/dev_watch.py`、`pyproject.toml`、`harness/agent_project.py`。
