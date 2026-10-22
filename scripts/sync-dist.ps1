@@ -154,6 +154,11 @@ $excludeFiles = @(
     # ★ 单文件版是 scripts/embed_fonts.py 的产物（1.2MB，git 忽略）——
     #   不进发行包，用户按需自己生成。
     "webui_v4_standalone.html",
+    # ★ README 本地预览产物（render_readme.py 生成，.gitignore 忽略）。
+    #   2026-10-22 发现：$rootExts 含 .html/.png，这两个每次都被同步进暂存树，
+    #   然后被 pack_all.py 的 stale 审计判成「暂存树有、源码库没有」→ **拒绝出包**。
+    #   它们是本机看 README 效果的中间物，不该进包。
+    "README_preview.html", "README_preview_full.png",
     # ★ webui_artistic_v3.html **不再排除**（2026-10-18 修）。
     #   此前按"文件名"排除（robocopy /XF 对任意层级同名文件生效），结果
     #   webui\ 下的 v3 也同步不过去 → 暂存树里一直躺着 8 月 16 日那份，
