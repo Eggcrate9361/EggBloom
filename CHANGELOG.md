@@ -3,6 +3,25 @@
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 `package.json` 的 `version`（唯一真相源）。
 
+## [Unreleased]
+
+### 修复
+
+- **日志色彩分级在桌面版从未生效**：分级只在 `sys.stdout.isatty()` 为真时才上色，
+  而桌面版用 `pythonw` 拉后端、stdout 是管道，`isatty()` 恒 False。
+  另外 WebUI 日志页读的是磁盘日志（按设计就是纯文本），前端又取 `l.msg` 取不到，
+  退化成 `JSON.stringify(l)`，于是整页显示 `{"time":"...","text":"..."}` 且级别恒为 INFO。
+  改法：分级规则抽到 `log_levels.py` 单一来源，终端与 WebUI 共用；接口每条补 `level`；
+  前端按 `text` 兜底并给五级配色（err/warn/ai/send/sys/info），正文只在 err/warn/ai 上着色。
+- **`stdio` 的 stdout 管道没人读，会把后端写死**：`main.js` 用
+  `stdio: ['ignore','pipe','pipe']` 但从不消费 `server.stdout`，后端每行都 `print()`，
+  管道（Windows 约 64KB）写满后 `print` 阻塞，而它排在写 `qq_bot.log` 之前，
+  日志会一起停。实测 `pythonw` + 未消费管道写 20000 行即挂住。改为 `'ignore'`。
+- **分级关键词早就匹配不到真实日志**：老规则写 `[Plugin]`（带右括号），
+  真实行是 `[Plugin:proactive_talk]`，所以子系统这一档实际从未命中。
+  改为按行首标签名匹配，并补上 `事件`/`表情`/`调试`/`群管理` 等实际前缀。
+  另加反向词（`已恢复`/`重连成功`）避免「恢复」被染成红色。
+
 ## [1.5.7] - 2026-10-22
 
 ### 修复

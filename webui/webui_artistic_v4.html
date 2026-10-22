@@ -33,6 +33,9 @@
   --ink:#f0eeea; --ink2:#b4b1ab; --ink3:#84817b; --ink4:#5a5852;
   --accent:#c9a96e; --accent-dim:#8a7350;
   --ok:#6f9e78; --warn:#d0a45c; --err:#b05a52;
+  /* 日志分级额外两级：--ai 模型输出、--sys 子系统。取中间调，
+     深色/浅色两套 palette 下都能读，因此不随 palette 覆盖 */
+  --ai:#6f93a8; --sys:#9b87b8;
   --f-d:var(--f-px0);   /* 像素化：全部字体变量收敛到同一像素栈（v4 字体决策） */
   --f-u:var(--f-px0);
   --f-m:var(--f-px0);
@@ -280,8 +283,17 @@ input,select,textarea{font:inherit;color:inherit}
 .log .no{color:var(--ink4);text-align:right;padding-right:var(--s2);border-right:1px solid var(--line)}
 .log .ts{color:var(--ink4);padding-left:var(--s3)}
 .log .lv{padding-left:var(--s3);color:var(--ink3)}
-.log .lv.ok{color:var(--ok)}.log .lv.warn{color:var(--warn)}.log .lv.err{color:var(--err)}
+.log .lv.ok,.log .lv.send{color:var(--ok)}
+.log .lv.warn{color:var(--warn)}
+.log .lv.err{color:var(--err)}
+.log .lv.ai{color:var(--ai)}
+.log .lv.sys{color:var(--sys)}
+.log .lv.info{color:var(--ink4)}
 .log .tx{padding-left:var(--s3);color:var(--ink2);white-space:pre-wrap;word-break:break-word}
+/* 正文只在「需要抬头看」的级别上着色；info 保持中性，否则整页花掉 */
+.log .tx.lv-err{color:var(--err)}
+.log .tx.lv-warn{color:var(--warn)}
+.log .tx.lv-ai{color:var(--ink)}
 
 /* ── 定高滚动框 + 「回到最新」圆钮（日志 / 对话 / 终端输出共用）──────────
    用户：内容不能把页面无限撑下去，要固定高、里面自己滚；往上翻的时候
@@ -6352,6 +6364,34 @@ async function pageProtocol(el) {
     } catch (e) { say(false, e.message); }
   };
 
+  /* 日志分级兜底：只在后端没给 level 时用（磁盘旧行、字符串行）。
+     规则与 log_levels.py 一致：错误词 → 注意词 → AI 词 → 行首标签。
+     改这里必须同步改 log_levels.py，否则终端和界面会给出两种判级。 */
+  const LV_LABEL = { err: 'ERR', warn: 'WARN', ai: 'AI', send: 'SEND', sys: 'SYS', info: 'INFO' };
+  const LOG_RULES = [
+    ['err', ['CRASH', '未捕获异常', '失败', '异常', '错误', 'ERROR', 'Error', 'error', 'Traceback']],
+    ['warn', ['警告', '跳过', '冷却', '超时', '限流', '重试', '未匹配']],
+    ['ai', ['AI 回复', 'AI (', 'AI失败', 'AI 重试', 'AI 不重试']],
+  ];
+  const LOG_TAGS = {
+    '发送': 'send', '发图': 'send',
+    'Plugin': 'sys', 'Sandglass': 'sys', '事件': 'sys', '表情': 'sys',
+    '表情包回敬': 'sys', '画图': 'sys', '搜索': 'sys', '私聊': 'sys', '群': 'sys', '群管理': 'sys',
+    'scope': 'sys', '状态': 'sys', 'harness': 'sys', 'Agent': 'sys',
+    '转发': 'sys', '文件': 'sys', '出站审计': 'sys', '输出预算': 'sys', '调试': 'sys',
+  };
+  const LOG_CALM = ['已恢复', '恢复正常', '重连成功', '已自动重启'];
+  const classifyLog = (text) => {
+    const s = String(text || '');
+    if (LOG_CALM.some((k) => s.includes(k))) return 'info';
+    for (const [lv, keys] of LOG_RULES) {
+      if (keys.some((k) => s.includes(k))) return lv;
+    }
+    const m = s.replace(/^\[[0-9:]{5,8}\]\s*/, '').match(/^\[([^\]\s:]{1,20})[\]\s:]/);
+    if (m && LOG_TAGS[m[1]]) return LOG_TAGS[m[1]];
+    return 'info';
+  };
+
   const drawLogs = (logs) => {
     const box = $('pLog');
     if (!box) return;
@@ -6361,13 +6401,19 @@ async function pageProtocol(el) {
     pBox.rewrite(logs.map((l, i) => {
       const isObj = l && typeof l === 'object';
       const ts = isObj ? (l.time || l.ts || '') : '';
-      const lv = (isObj ? (l.level || l.lv || 'info') : 'info').toLowerCase();
-      const msg = isObj ? (l.msg || l.message || JSON.stringify(l)) : String(l);
+      /* 后端已在 _collect_logs 里补了 level（规则见 log_levels.py），
+         这里只做兜底：万一拿到的是别的来源（字符串行），就地判一次。
+         判级规则必须和后端一致，改一边要改另一边。 */
+      const raw = isObj ? (l.text || l.msg || l.message || '') : String(l);
+      const lv = (isObj ? (l.level || l.lv || '') : '').toLowerCase()
+        || classifyLog(raw);
+      /* 老代码取 l.msg 取不到就 JSON.stringify(l)，于是整行显示成
+         {"time":"12:00:00","text":"..."}。改成按 text 兜底。 */
+      const msg = raw || JSON.stringify(l);
       return '<div class="ln"><span class="no">' + (i + 1) + '</span>'
         + '<span class="ts">' + esc(ts) + '</span>'
-        + '<span class="lv ' + (/err/.test(lv) ? 'err' : /warn/.test(lv) ? 'warn' : 'ok') + '">'
-        + esc(lv.toUpperCase()) + '</span>'
-        + '<span class="tx">' + esc(msg) + '</span></div>';
+        + '<span class="lv ' + lv + '">' + esc(LV_LABEL[lv] || lv.toUpperCase()) + '</span>'
+        + '<span class="tx lv-' + lv + '">' + esc(msg) + '</span></div>';
     }).join(''));
     pvTerminalOnce(box);
   };

@@ -230,7 +230,13 @@ app.whenReady().then(async () => {
   function startServer() {
     killOldProcesses();
     const appDir = path.join(__dirname, '..');
-    server = spawn(chosenPython, [serverPath], { cwd: appDir, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, detached: true });
+    /* stdout 必须是 'ignore'，不能是 'pipe'。
+       原因：后端的 log() 每行都 print()，而这里从来没人读 server.stdout。
+       Node 不读 → 管道缓冲区（Windows 约 64KB）写满 → print() 阻塞 →
+       后端主线程卡死（print 在写 qq_bot.log 之前，日志也会一起停）。
+       实测：pythonw + 未消费的 stdout 管道，写 20000 行即挂住。
+       后端日志落 qq_bot.log，界面看 WebUI 日志页，不靠这个管道。 */
+    server = spawn(chosenPython, [serverPath], { cwd: appDir, stdio: ['ignore', 'ignore', 'pipe'], windowsHide: true, detached: true });
     server.stderr.on('data', (b) => logLine('STDERR: ' + b.toString()));
     server.on('exit', (code, signal) => {
       logLine(`webui_server 退出 code=${code} signal=${signal} isQuitting=${isQuitting}`);

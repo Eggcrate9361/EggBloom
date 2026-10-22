@@ -61,6 +61,7 @@ if PROJECT is None:
 sys.path.insert(0, str(PROJECT))
 # 统一配置层：读程序目录 bot_config.json(优先) + AppData(补缺) + env + 凭据管理器
 from config import load_config as load_config  # noqa: E402
+import log_levels  # noqa: E402  # 与终端着色同一套分级规则
 
 
 # 静态文件服务允许的扩展名（杜绝 .log/.py/.db/.env 等敏感文件被静态读出）
@@ -1056,16 +1057,24 @@ def get_expressions():
 # Chat Logs
 def _collect_logs(limit=200):
     """优先返回内存协议日志；为空时回退到磁盘日志文件，保证 bot 非 webui 启动时也有数据可看。
-    若用户主动清空过（_LOG_CLEARED=True 且内存仍空），保持为空，不回退到磁盘。"""
+    若用户主动清空过（_LOG_CLEARED=True 且内存仍空），保持为空，不回退到磁盘。
+
+    每条都补一个 `level` 字段（err/warn/ai/send/sys/info），供前端做色彩分级。
+    规则来自 log_levels.py，与终端着色同源。"""
     global _LOG_CLEARED
     with PROTO_LOG_LOCK:
         proto = list(PROTO_LOG)
         cleared = _LOG_CLEARED
     if proto:
-        return proto[-max(1, min(limit, PROTO_LOG_MAX)):]
-    if cleared:
-        return []
-    return get_chat_logs(limit)
+        out = [dict(e) for e in proto[-max(1, min(limit, PROTO_LOG_MAX)):]]
+    elif cleared:
+        out = []
+    else:
+        out = get_chat_logs(limit)
+    for e in out:
+        if isinstance(e, dict) and "level" not in e:
+            e["level"] = log_levels.classify(e.get("text") or e.get("msg") or "")
+    return out
 
 def get_chat_logs(limit=200):
     logs = []

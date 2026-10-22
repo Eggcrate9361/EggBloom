@@ -279,6 +279,7 @@ _APPDATA_ENV = os.path.join(_APPDATA_DIR, ".env")
 
 # load_config 统一走 config.py（程序目录优先 + AppData 补缺 + env + 凭据管理器）
 from config import load_config  # noqa: E402
+import log_levels  # noqa: E402  # 日志分级规则的唯一来源，WebUI 那边也读它
 _config = load_config()
 
 # ── 表情包发送冷却 ──
@@ -1523,22 +1524,18 @@ def log(msg):
 # 原则：
 #   · **终端有色、文件无色**。ANSI 转义写进 qq_bot.log 会让文件变成一串
 #     \033[91m，grep 和 diff 全废，所以颜色只加在 print 那一支。
-#   · 按**内容**判级，不改调用方。上千处 log() 调用不可能逐个传级别，
-#     用关键词匹配是最省事也不破坏兼容的办法。
+#   · 分级规则在 `log_levels.py`，WebUI 日志页读同一份，不要在这里另写一套。
+#   · **桌面版看不到颜色**：Electron 用 pythonw 拉后端，stdout 是管道不是 tty，
+#     isatty() 恒 False。想在界面里看颜色请去 WebUI 日志页（那边按同规则上色）。
 #   · Windows 终端默认不吃 VT 序列，先试着开；开不了就静默退回无色，
 #     不影响任何功能（颜色只是可读性，不是正确性）。
-_LOG_STYLES = (
-    # (关键词元组, ANSI 颜色码, 说明)
-    (("CRASH", "未捕获异常", "失败", "异常", "错误", "ERROR", "Error",
-      "error", "Traceback"), "91", "错误 · 红"),
-    (("警告", "跳过", "冷却", "超时", "限流", "重试", "未匹配"), "93",
-     "注意 · 黄"),
-    (("AI 回复", "AI (", "AI失败", "AI 重试", "AI 不重试"), "96",
-     "AI 输出 · 青"),
-    (("[发送]", "发送成功", "已发送"), "92", "发送 · 绿"),
-    (("[Sandglass]", "[Plugin]", "[事件]", "[表情]", "[画图]", "[搜索]",
-      "[私聊]", "[群["), "95", "子系统 · 紫"),
-)
+_ANSI_BY_LEVEL = {
+    "err": "91",    # 红
+    "warn": "93",   # 黄
+    "ai": "96",     # 青
+    "send": "92",   # 绿
+    "sys": "95",    # 紫
+}
 _ANSI_RESET = "\033[0m"
 _ANSI_TS = "\033[90m"          # 时间戳暗灰，不抢内容
 _COLOR_OK = None               # 延迟探测：None=未探测, True=可用, False=不可用
@@ -1579,11 +1576,7 @@ def _colorize(line: str) -> str:
             return line          # 重定向到文件/管道时不上色
     except Exception:
         return line
-    color = None
-    for keys, code, _desc in _LOG_STYLES:
-        if any(k in line for k in keys):
-            color = code
-            break
+    color = _ANSI_BY_LEVEL.get(log_levels.classify(line))
     if not color:
         return line
     # 时间戳单独暗化，内容按级别上色：一眼先看到"出了什么事"，再看时间
