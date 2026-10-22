@@ -49,7 +49,9 @@ python webui/webui_server.py
 
 1. Copy `bot_config.json.example` to `bot_config.json` (skippable — built-in defaults apply)
 2. Open the **Settings** page in the WebUI and click the **Setup wizard** button
-   in the top-right to fill in the LLM part in three steps
+   in the model settings area (it sits next to **Test connection** and
+   **Clear provider key**, in the middle-lower part of the page — you need to
+   scroll down, it is not visible on first screen) to fill in the LLM part in three steps
 
 | Step | Fields | Notes |
 |---|---|---|
