@@ -64,7 +64,9 @@ git clone https://github.com/Eggcrate9361/EggBloom.git
 cd EggBloom && pip install -e . && python webui/webui_server.py
 ```
 
-首次运行把 `bot_config.json.example` 复制成 `bot_config.json`，填 `bot_qq` 和 `onebot_url`。API Key 在设置页填，存进 Windows 凭据管理器，不落盘。
+首次运行做两件事：把 `bot_config.json.example` 复制成 `bot_config.json`，然后打开 WebUI
+点「配置」页右上角的**配置向导**按钮，三步填好 LLM。API Key 存进 Windows 凭据管理器，不落盘。
+QQ 号和协议地址在「协议」页单独填，不在向导里。
 
 ## 📦 分发包
 

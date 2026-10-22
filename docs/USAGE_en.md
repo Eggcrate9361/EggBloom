@@ -45,19 +45,24 @@ python webui/webui_server.py
 
 ## 4. First-run setup
 
-The wizard asks for six fields:
+**There is no auto-opening wizard.** On first run you do two things by hand:
 
-| Field | Notes |
-|---|---|
-| AI provider | DeepSeek / OpenAI / Ollama / others (14 presets) |
-| API URL | Change this when using a proxy or self-hosted endpoint |
-| API key | Stored in **Windows Credential Manager**, never written to disk in plaintext |
-| Model name | Determines the context window — see §6.4 |
-| QQ path | Optional; needed only to launch the QQ client |
-| Bot QQ number | The bot's own account |
+1. Copy `bot_config.json.example` to `bot_config.json` (skippable — built-in defaults apply)
+2. Open the **Settings** page in the WebUI and click the **Setup wizard** button
+   in the top-right to fill in the LLM part in three steps
 
-You can skip the wizard and fill these in later under **Settings**. Start the WS server on your
-protocol driver first, then paste its address into the **Protocol** page.
+| Step | Fields | Notes |
+|---|---|---|
+| 1 | AI provider | DeepSeek / OpenAI / Ollama / others (14 presets) |
+| 2 | API URL + key | Key goes to **Windows Credential Manager**, never plaintext on disk. Change the URL for a proxy or self-hosted endpoint |
+| 3 | Model name | Determines the context window — see §6.4. Connection can be tested right after |
+
+The QQ number and protocol address are **not in this wizard**. Fill them on the
+**Protocol** page: start the WS server on your protocol driver first, then paste its
+address in. The QQ path is optional and only needed to launch the QQ client from the console.
+
+The wizard can be reopened at any time from the same button, or skip it and fill
+each field directly on the Settings page.
 
 ## 5. The 15 console pages
 
