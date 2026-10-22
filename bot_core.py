@@ -1694,14 +1694,41 @@ def smart_send(text, target_qq=None):
     """AI 回复专用：按句子拆分逐条发送，模拟真人对话节奏"""
     if target_qq is None:
         target_qq = TARGET_QQS[0]
-    
+
     # 先按句子级标点（。！？!?\n）切分
     import re
-    sentences = re.split(r'[。！？!?\n]+', text)
-    sentences = [s.strip() for s in sentences if s.strip()]
+    # ★ 2026-10-22 修（用户反馈"私聊还是没有问号"）：
+    #   旧版 `re.split(r'[。！？!?\n]+', text)` 把标点当分隔符，split 之后
+    #   **标点丢失且不保留**。于是 de_ai._add_missing_question_marks 刚补上的
+    #   「你吃了吗？」，走到这里被切成「你吃了吗」发出去 —— 问号白补了。
+    #   单句时走 send_message(text) 发原文所以看不出来，多句才暴露。
+    #   改成 split 时**捕获**分隔符，让它归属前一句。
+    _parts = re.split(r'([。！？!?\n]+)', text)
+    sentences = []
+    _buf = ""
+    for _p in _parts:
+        if _p and re.fullmatch(r'[。！？!?\n]+', _p):
+            _buf += _p                       # 标点/换行归前一句
+        else:
+            if _buf.strip():
+                sentences.append(_buf.strip())
+            _buf = _p or ""
+    if _buf.strip():
+        sentences.append(_buf.strip())
     if not sentences:
         return send_message(text, target_qq)
-    
+
+    # ── 打字延迟（2026-10-22）──
+    #    句与句之间本来就有 0.3~1.0s 的节奏，但**第一句之前是 0**。
+    #    真人是"想一下 → 开始敲 → 敲完发"，这里补上"开始敲"的那段时间，
+    #    和下面的句间延迟接成一个完整的打字过程。按全文字数算，
+    #    约 6 字/秒（比真人略快，等太久反而像卡住）。
+    _cps = float(_config.get("reply_typing_speed", 6.0))
+    if _cps > 0:
+        _type_delay = min(4.0, len(text) / _cps)
+        if _type_delay > 0.3:
+            time.sleep(_type_delay)
+
     # 如果只有一句话 → 直接发
     if len(sentences) == 1:
         return send_message(text, target_qq)
@@ -1978,7 +2005,16 @@ def smart_send_group(group_id, text, reply_id: int = 0):
         return s
     
     effective_len = _count_meaningful_chars(text)
-    
+
+    # ── 打字延迟（2026-10-22，与 smart_send 同款）──
+    #    群聊原来也是"生成完立刻发"，第一句之前 0 等待。补上和句间节奏
+    #    （0.3~1.0s）相接的"开始敲"时间，让连发看起来是一个连续动作。
+    _cps = float(_config.get("reply_typing_speed", 6.0))
+    if _cps > 0:
+        _type_delay = min(4.0, effective_len / _cps)
+        if _type_delay > 0.3:
+            time.sleep(_type_delay)
+
     # 多人 @ 回复：按 @ 行分块，每个 @ 块（含后续非 @ 行）单独发送
     lines = [l.strip() for l in text.split('\n') if l.strip()]
     at_matches = [re.match(r'^@(?:.*?\((\d{5,})\)|(\d{5,}))\s+(.*)', l) for l in lines]
@@ -9803,6 +9839,24 @@ def process_buffered_message(group_id):
                     smart_send_group(group_id, draw_result)
                 return
 
+            # ── 反应延迟（2026-10-22 用户反馈"回复等待太快了"）──
+            #    人被打个招呼不会 0.5 秒就回：先看一眼消息长短、想一下怎么接。
+            #    原有四层节奏（消息缓冲 3~15s / 观察窗口 / 句间 0.3~1s / 私聊间隔 3s）
+            #    全是"攒消息"和"发出去之后"的，**生成之前是 0 秒** —— 这就是"太快"的根因。
+            #    这里补上"看到 → 想"的那段时间。只影响时序，不碰 prompt、不影响成本。
+            #    被 @ / 被戳时反而多等一点（被点名会愣一下），长消息也多等。
+            _react_base = float(_config.get("reply_reaction_delay", 1.6))
+            if _react_base > 0:
+                _extra = 0.0
+                if is_at_bot or has_xiao_a or has_bot_nick or has_quote:
+                    _extra += 0.8
+                if len(merged_text) > 50:
+                    _extra += 0.7
+                _react = _react_base + _extra + random.uniform(0, 0.6)
+                log(f"群[{group_id}] [反应延迟] {_react:.1f}s"
+                    + ("（被点名）" if _extra >= 0.8 else ""))
+                time.sleep(_react)
+
             reply = call_deepseek(merged_text_for_ai, images, group_id=group_id, is_group=True, personality_temperature=_ST.get("personality_temperature"), ego_inject_context=_ego_ctx, sender=sender)
 
         # 群聊联网搜索循环（共用函数，最多2轮；标记兜底剥离，绝不漏发）
@@ -10613,6 +10667,17 @@ def main():
                             _handle_poke_event(ev)
                         except Exception as e:
                             log(f"[事件] poke 处理异常: {e}")
+                    elif post_type == "notice":
+                        # ★ 2026-10-22 调试：用户报「群聊的戳一戳去哪了」，
+                        #   而 qq_bot.log 里**零条** poke 记录 —— 说明事件根本没
+                        #   走到上面那个分支。各驱动对 notice 的字段拼法不一致
+                        #   （有的 notice_type 直接是 "poke"、有的没有 sub_type），
+                        #   所以这里把**所有没匹配上的 notice** 原样打出来，
+                        #   看到真实格式再收窄匹配条件。看到即修，别留着常开。
+                        try:
+                            log(f"[事件] notice 未匹配: {json.dumps(ev, ensure_ascii=False)[:300]}")
+                        except Exception:
+                            log(f"[事件] notice 未匹配(不可序列化): {str(ev)[:200]}")
                     elif (post_type == "notice"
                           and ev.get("notice_type") in ("group_recall", "friend_recall")):
                         try:
@@ -11583,6 +11648,14 @@ def main():
                         text = text + "\n" + _pm_blk
                         log(f"私聊[{sender}] [图片理解] {min(len(images), 3)} 张 · {len(_pm_blk)} 字")
 
+                # ── 反应延迟（2026-10-22，与群聊同款）──
+                #    私聊原来也是"收到 → 生成 → 发出"，中间 0 等待。
+                #    一对一反而更像在盯着屏幕等回复，所以基数比群聊略低。
+                _p_react = float(_config.get("private_reply_reaction_delay", 1.2))
+                if _p_react > 0:
+                    _p_delay = _p_react + (0.5 if len(text) > 50 else 0) + random.uniform(0, 0.5)
+                    log(f"私聊[{sender[:6]}] [反应延迟] {_p_delay:.1f}s")
+                    time.sleep(_p_delay)
                 reply = call_deepseek(text, _pm_call_images, sender, private_memory_context=pm_ctx, personality_temperature=_ego_temp, ego_inject_context=_ego_ctx)
                 # 私聊联网搜索标记循环（与群聊共用函数；旧版私聊吐 [搜索:] 会原样漏发）
                 reply = _apply_search_tag_loop(reply, text, group_id=None,
