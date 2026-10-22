@@ -1,16 +1,16 @@
-# 贡献指南 / Contributing Guide
+# 贡献指南
 
-感谢你对 EggBloom Desktop 的关注与贡献！🎉
+EggBloom Desktop 目前由维护者单人开发，仓库不开放常规 PR。本文说明可以参与的途径与既有约定。
 
 ---
 
-## 📋 行为准则
+## 行为准则
 
 本项目遵循 [Contributor Covenant](https://www.contributor-covenant.org/version/2/1/code_of_conduct/) 行为准则。参与即表示同意遵守。
 
 ---
 
-## 🚀 如何贡献
+## 如何贡献
 
 ### 1. 报告 Bug
 
@@ -31,40 +31,38 @@
 ### 3. 提交代码 (Pull Request)
 
 #### 分支策略
-- `main`：稳定发布分支，**仅接受 Release PR**
-- `develop`：开发主线，**日常 PR 合并至此**
+
+只有 `main` 一条长期分支。仓库目前不接受常规 PR，改动由维护者直接提交。
+
+如果将来开放 PR，约定如下：
+- `main`：稳定发布分支，只接受 Release 相关提交
 - `feature/*`：功能分支
 - `fix/*`：修复分支
 - `hotfix/*`：紧急修复分支（基于 main）
 
 #### PR 流程
+
 1. Fork 仓库并创建特性分支：`git checkout -b feature/awesome-feature`
 2. 编写代码，**遵循现有代码风格**（见下文）
-3. 添加/更新测试（如适用）
+3. 添加测试（见「测试」节）
 4. 运行本地检查：
+
    ```bash
-   # 代码风格检查
    ruff check .
-   
-   # 类型检查（如配置了 pyright/mypy）
-   # pyright
-   
-   # 运行测试
-   python -m pytest tests/ -v
+   python tests/test_xxx.py
    ```
-5. 提交 PR 到 `develop` 分支
-6. 填写 PR 模板，关联相关 Issue
-7. 等待 Code Review，根据反馈修改
-8. 通过后由维护者合并
+
+5. 提交 PR，关联相关 Issue
+6. 等待 Code Review，根据反馈修改
 
 ---
 
-## 🎨 代码规范
+## 代码规范
 
 ### Python
 
 - **版本**：Python 3.13
-- **风格**：遵循 PEP 8，使用 `ruff` 统一格式化
+- **风格**：遵循 PEP 8。`ruff` 只开 `select = ["F"]`（Pyflakes 错误级），不是全量规则；行宽 120
 - **类型注解**：新增公共 API 必须加类型注解
 - **命名**：
   - 模块/包：`snake_case`
@@ -96,12 +94,14 @@ def calculate_tokens(messages: list[dict], model: str = "deepseek-chat") -> int:
     ...
 ```
 
-### JavaScript / HTML / CSS (WebUI)
+### WebUI（webui/webui_artistic_v4.html）
 
-- **无构建步骤**：单文件 SPA，原生 ES6 模块
-- **风格**：2 空格缩进，单引号，分号可选
-- **CSS**：使用 CSS 变量（`--color-*`），避免硬编码颜色
-- **命名**：BEM 规范（`.block__element--modifier`）
+- **单文件**：HTML + CSS + JS 全在一个文件里，约 540 KB，无构建步骤、无 `type="module"`
+- **新旧共存**：v3 与 v4 都在 `webui_server.py` 的映射表里，改 v4 不要动 v3
+- **CSS 变量**：全部颜色/字号走 `:root` 里的变量（`--bg` / `--ink` / `--line` / `--accent`），不要硬编码色值
+- **命名**：BEM（`.block__element--modifier`）
+- **字体**：像素硬边字体，按 12px 网格对齐
+- 改完必须用 `shoot_webui.py` 截图核对，不要只看代码
 
 ### Git Commit Message
 
@@ -138,28 +138,31 @@ Closes #123
 
 ---
 
-## 🧪 测试规范
+## 测试
 
-- 单元测试放在 `tests/` 目录，对应模块结构
-- 使用 `pytest` + `pytest-asyncio`
-- 测试命名：`test_<function>_<scenario>`
-- 覆盖率目标：核心模块 ≥ 80%
-- 集成测试标记：`@pytest.mark.integration`（需手动运行）
+测试是**独立脚本**，不是 pytest 用例。每个文件自带 `__main__`，直接跑：
 
 ```bash
-# 运行所有测试
-python -m pytest tests/ -v
-
-# 仅运行单元测试（排除集成测试）
-python -m pytest tests/ -v -m "not integration"
-
-# 生成覆盖率报告
-python -m pytest tests/ --cov=bot_core --cov=config --cov=protocols
+python tests/test_xxx.py
 ```
+
+退出码 0 为通过。全部跑一遍：
+
+```bash
+for f in tests/test_*.py; do python "$f" || echo "FAIL: $f"; done
+```
+
+- 新测试放在 `tests/`，单文件命名 `test_<模块>_<主题>.py`
+- 断言风格沿用现状：`check("描述", 条件)` 记计数，`main()` 末尾按 `FAIL` 返回退出码。不要混用 `assert`（只有 `test_plugin_bridge.py` 用了）
+- 失败的打印要说清「期望 vs 实际」
+- 依赖 GUI、网络、本机状态的测试不要进 CI
+- `tests/_sandbox.py` 提供隔离环境，会碰落盘状态的测试必须用
+
+CI 只跑 `.github/workflows/ci.yml` 里列出的那 8 个文件，其余靠手动。名单是**确认一个加一个**扩的，长期红的 CI 等于没有 CI。
 
 ---
 
-## 📦 依赖管理
+## 依赖管理
 
 - **生产依赖**：`pyproject.toml` 中 `dependencies` 列表，**必须固化精准版本号**
 - **开发依赖**：`[project.optional-dependencies] dev`
@@ -171,51 +174,53 @@ python -m pytest tests/ --cov=bot_core --cov=config --cov=protocols
 
 ---
 
-## 🔒 安全规范
+## 安全规范
 
 - **绝不提交敏感信息**：API Key、Token、密码、真实 QQ 号、群号
 - 配置文件使用 `.example` 模板，真实配置由 `.gitignore` 排除
 - API Key 存储：Windows 凭据管理器（`cred_store.py`），不落盘明文
-- 依赖扫描：定期运行 `pip-audit` 或 `safety check`
-- 报告安全漏洞：私信维护者或邮件 `security@eggbloom.example`（请勿公开 Issue）
+- 依赖扫描：定期手动跑 `pip-audit`（未纳入 dev 依赖，需自装）
+- 报告安全漏洞：走 GitHub 私密通道（仓库 → Security → Report a vulnerability），见 [SECURITY.md](SECURITY.md)。不要开公开 Issue
 
 ---
 
-## 📝 文档更新
+## 文档更新
 
 - 代码变更同步更新相关文档：
   - `README.md`：用户可见功能变更
   - `CHANGELOG.md`：每版本变更汇总（由维护者维护）
   - 函数/类 docstring：API 变更
   - `CONTRIBUTING.md`：流程/规范变更
-- 新增配置项必须在 `bot_config.json.example` 和 `.env.example` 中补充说明
+- 新增配置键必须同步 `bot_config.json.example`。这是最常漏的一步，漏了 example 就是死文件
+- 新增环境变量才动 `.env.example`（它只放 API Key / 端点 / 模型名这类，不放普通配置键）
 
 ---
 
-## 🏷 版本发布
+## 版本发布
 
-由维护者执行，流程：
+由维护者执行：
 
-1. `develop` → `main` 合并 PR（版本号遵循 SemVer）
-2. 打 Tag：`git tag -a v0.x.y -m "Release v0.x.y"`
-3. GitHub Actions 自动构建 Release（含标准版安装包、Lite 版源码包）
+1. 版本号遵循 SemVer
+2. 打 Tag：`git tag -a vX.Y.Z -m "Release vX.Y.Z"`
+3. 跑 `scripts/pack_all.py` 出包（Lite / Standard / Full，见 [docs/发布打包.md](docs/发布打包.md)）
 4. 更新 `CHANGELOG.md`
-5. 发布 GitHub Release
+5. 建 GitHub Release 并上传三个 zip 与 `SHA256SUMS.txt`
+
+CI（`.github/workflows/ci.yml`）只跑冒烟测试，不出包。
 
 ---
 
-## 💬 沟通渠道
+## 沟通渠道
 
-- **Issue Tracker**：Bug 报告、功能讨论、设计评审
-- **Discussions**：一般问答、经验分享、非结构化讨论
-- **PR Review**：代码级技术讨论
+- **Issue Tracker**：Bug 报告、功能讨论
+- **Security 私密通道**：安全漏洞，见 [SECURITY.md](SECURITY.md)
 
 ---
 
-## ❓ 常见问题
+## 常见问题
 
 **Q: 可以直接向 main 分支提 PR 吗？**
-A: 不可以，请向 `develop` 分支提交，`main` 仅接受 Release PR。
+A: 仓库目前不接受常规 PR，`main` 只走 Release 提交。发现问题请开 Issue。
 
 **Q: 我改了配置文件格式，需要注意什么？**
 A: 
@@ -225,20 +230,16 @@ A:
 
 **Q: 如何添加新的协议驱动？**
 A: 
-1. 在 `protocols/` 新建 `xxx_adapter.py`，继承 `OneBotStdAdapter`
-2. 在 `protocols/__init__.py` 注册
+1. 在 `protocols/` 新建 `xxx_adapter.py`，继承 `ProtocolAdapter`
+2. 文件末尾调 `registry.register("xxx", XxxAdapter)`，并在 `protocols/__init__.py` 里 import 该模块（import 即注册）
 3. 在 `config.py` 的 `DEFAULT_CONFIG["protocol_drivers"]` 添加默认配置
-4. 更新 `README.md` 协议驱动表格
+4. 更新 README 里支持驱动的型号列表
 
 **Q: 依赖版本冲突怎么办？**
 A: 优先降级/升级到兼容版本，实在冲突可考虑 `pip install --no-deps` 或 vendor 方式，但需在 PR 说明理由。
 
 ---
 
-## 🙏 致谢
+## 致谢
 
-所有贡献者的名字将出现在 Release Notes 中。感谢每一行代码、每一个 Issue、每一条建议！
-
----
-
-> **EggBloom Desktop** — 让 AI 陪伴更自然、更贴心、更安全。
+Issue 里报的问题若被采纳，会在 `CHANGELOG.md` 对应版本下记名。
