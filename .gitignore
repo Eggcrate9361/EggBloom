@@ -34,6 +34,13 @@ plugins/state/
 plugins/conversation_state/
 plugins/plugin_state.json
 
+# 本地真实配置：含 onebot_token / QQ 号 / 群号 / 模型地址。
+# 注意是精确名，不写成 *.json，`.example` 模板要照常入库。
+.env
+bot_config.json
+bot_config.json.bak
+bot_config.json.old
+
 # 嵌入模型与黑话词典：运行时资源，不进源码树（Lite 版由用户自行下载/生成）
 plugins/ego/super_memory/models/
 slang_dict.json
