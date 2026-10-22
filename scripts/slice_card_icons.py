@@ -2,7 +2,7 @@
 """把 GPT 生成的 5 格横排图样剪成单张透明 PNG，供螺旋卡片使用。
 
 用法：
-  python scripts/slice_card_icons.py [--check]
+  python scripts/slice_card_icons.py --src 图1.png 图2.png 图3.png [--check]
 
 - 自动检测 5 个图样的包围盒（按列投影分组，不依赖等分网格）
 - 亮度反相映射做去背（米白底 → alpha 0，线条保留原色）
@@ -13,10 +13,12 @@ import sys, glob, os
 from PIL import Image
 
 # 三张生图 → 页序号映射（按图样内容识别：圆环/接线/均衡器/散点/取景框 = 01-05 …）
+# 输入是你自己生成的三张 5 格横排原图，用 --src 传入（见 main）。
+# 这里的 None 只是占位，实际路径由命令行覆盖。
 SRC = [
-    (r"C:/Users/Administrator/.workbuddy/clipboard-images/*f9ee9e33*", [1, 2, 3, 4, 5]),
-    (r"C:/Users/Administrator/.workbuddy/clipboard-images/*23d79577*", [6, 7, 8, 9, 10]),
-    (r"C:/Users/Administrator/.workbuddy/clipboard-images/*3076d111*", [11, 12, 13, 14, 15]),
+    (None, [1, 2, 3, 4, 5]),
+    (None, [6, 7, 8, 9, 10]),
+    (None, [11, 12, 13, 14, 15]),
 ]
 OUT_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "webui", "card-icons")
 CANVAS = 512
@@ -118,6 +120,20 @@ def slice_one(img, box, out_path):
 
 def main():
     check = "--check" in sys.argv
+    # 三个原图路径用 --src a.png b.png c.png 传入（顺序 = 生成时那三张）
+    srcs = []
+    if "--src" in sys.argv:
+        i = sys.argv.index("--src") + 1
+        while i < len(sys.argv) and not sys.argv[i].startswith("--"):
+            srcs.append(sys.argv[i]); i += 1
+    if len(srcs) == 3:
+        for k in range(3):
+            SRC[k] = (srcs[k], SRC[k][1])
+    else:
+        print("用法：python scripts/slice_card_icons.py --src 图1.png 图2.png 图3.png [--check]")
+        print("     三张图各含 5 个横排图样，依次对应 01-05 / 06-10 / 11-15")
+        return
+
     os.makedirs(OUT_DIR, exist_ok=True)
     for pattern, ids in SRC:
         files = glob.glob(pattern)

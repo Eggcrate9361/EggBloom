@@ -20,7 +20,7 @@ ROOT = os.path.dirname(HERE)
 V4 = os.path.join(ROOT, "webui", "webui_artistic_v4.html")
 
 NODE_CANDIDATES = [
-    r"C:\Users\Administrator\.workbuddy\binaries\node\versions\22.22.2-6\node.exe",
+    os.environ.get("NODE_EXE", ""),   # 需要指定时自己设，例如 WorkBuddy 自带的 node
     "node",
 ]
 

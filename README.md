@@ -88,10 +88,6 @@ QQ 号和协议地址在「协议」页单独填，不在向导里。
 
 截图由 `shoot_webui.py` 生成（Playwright 驱动真实 WebUI，见仓库根目录）。
 
-## 社区
-
-> 交流群：待补
-
 ## 许可
 
 MIT，见 [LICENSE](LICENSE)。安全问题走 [SECURITY.md](SECURITY.md)。

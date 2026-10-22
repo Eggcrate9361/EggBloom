@@ -243,7 +243,7 @@ class TestHalfwidthPunctuation(unittest.TestCase):
 class TestTimeContradiction(unittest.TestCase):
     """自己回复里的时段词跟当前钟点矛盾 → 删掉（2026-10-22 真机反馈）。
 
-    QQ 群 829854136 的真实三轮（用户原话："他自己说大清早，后面似乎是没
+    真机群聊的真实三轮（用户原话："他自己说大清早，后面似乎是没
     识别出自己的消息，反驳自己"）：
 
       13:37:49  我：睡什么睡 / 现在一点半，你才刚要躺下啊     ← 正确

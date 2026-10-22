@@ -101,19 +101,19 @@ class TestCapabilityBlock(unittest.TestCase):
         而群聊规则明令"不许出现 QQ 号" —— 模型可能把号码复述到群里。
         """
         bot_core.resolve_qq_nick = lambda q: ""       # 全部解析失败
-        bot_core._config["target_qqs"] = ["2872362241", "3150007406"]
+        bot_core._config["target_qqs"] = ["10000001", "10000002"]
         b = self._blk(is_group=True, sender="20002")
-        self.assertIsNone(re.search(r"2872362241|3150007406", b),
+        self.assertIsNone(re.search(r"10000001|10000002", b),
                           f"解析失败也不许泄漏 QQ 号：{b}")
         self.assertIn("主人", b, "仍要告诉模型'有主人这回事'，只是不给号码")
 
     def test_partial_admin_nick_resolution(self):
         """部分解析成功：已解析的给昵称，未解析的不给号码。"""
         bot_core.resolve_qq_nick = lambda q: {"10001": "主人甲"}.get(str(q), "")
-        bot_core._config["target_qqs"] = ["10001", "3150007406"]
+        bot_core._config["target_qqs"] = ["10001", "10000002"]
         b = self._blk(is_group=True, sender="20002")
         self.assertIn("主人甲", b)
-        self.assertNotIn("3150007406", b)
+        self.assertNotIn("10000002", b)
 
     def test_sender_is_admin_branch(self):
         b = self._blk(is_group=True, sender="10001")

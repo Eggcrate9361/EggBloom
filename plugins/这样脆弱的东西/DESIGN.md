@@ -1412,8 +1412,8 @@ _NB = os.environ.get("NEXSANDBASE_HOME") or os.path.join(os.path.expanduser("~")
 _SANDGLASS = os.path.join(_NB, "sandglass.txt")
 ```
 
-也就是 **`C:\Users\Administrator\.neurobase\sandglass.txt`，272 KB / 4080 行**，
-跨度 2026-06-18 ~ 09-05。目录里还有 `sandglass.db`(520KB)、`shadow_sand.db`、
+也就是 `<用户目录>\.neurobase\sandglass.txt`（本机实测图，为 272 KB / 4080 行，
+跨度约三个月）。目录里还有 `sandglass.db`、`shadow_sand.db`、
 `decision_particles.txt`、`emotion_vocab.json`。
 
 同理 `persona.md` 的真实位置也在 `~/.neurobase/persona/`（该目录是空的），

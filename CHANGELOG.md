@@ -35,7 +35,7 @@
   判据 `if r and r is not False`。被 `test_tool_result_protocol` 抓到。
 - **管理员的裸 QQ 号会进 prompt**：`_capability_block()` 里 `_admin_names.append(_nm or _q)`，
   而 `resolve_qq_nick` 是异步的，冷启动第一次必然返回 None → prompt 里直接出现
-  `2872362241、3150007406`，而群聊规则明令「回复里不要出现任何 QQ 号」，
+  管理员的真实号码，而群聊规则明令「回复里不要出现任何 QQ 号」，
   模型完全可能复述到群里。改成解析失败只报数量不给号码。
 - **`agent_group_enable` 是个看不见的开关**：这个键**只存在于代码里**，
   `bot_config.json.example` 和 WebUI 里一个字都没有 —— 用户永远无法打开它，
