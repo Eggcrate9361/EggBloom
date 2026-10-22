@@ -88,6 +88,9 @@
     "ban_rule_of_three": true,
     "ban_filler": true,
     "ban_sycophancy": true,
+    "ban_fabrication": true,
+    "fix_question_marks": true,
+    "fix_time_conflict": true,
     "max_sentence_len": 0
   },
   "private_reply_interval": 3,

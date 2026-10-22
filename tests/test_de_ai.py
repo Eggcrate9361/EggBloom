@@ -92,6 +92,86 @@ class TestQuestionMarks(unittest.TestCase):
         self.assertEqual(self.f("图呢  "), "图呢？")
 
 
+class TestQuestionMarksCoverage(unittest.TestCase):
+    """问号补全的第二轮：补齐常见句式，同时收回「呢/啊」结尾的误判。
+
+    第一版只覆盖「吗/么/啥/谁/咋/什么」这类**整词结尾**，实测 52 条常见问句
+    只补上 30 条。用户反馈「私聊问句没问号」，逐条分类后发现两类问题：
+      · 漏：`吃了没`（没结尾）、`行不`（不结尾）、`谁说的`（疑问词在句首但行尾是普通字）
+      · 误：`嘴占着呢` / `我连你啥人都没摸清呢` 被硬加问号 —— 加了反而读不通
+
+    误补比漏补更糟：漏补只是少一个标点，误补是**把陈述改成疑问**，语义都变了。
+    所以这一版的原则是「先把误补收干净，再按句式收紧地补」。
+    """
+
+    def setUp(self):
+        self.f = de_ai._add_missing_question_marks
+
+    # ── 1. 「没 / 不」结尾的正反问 ──
+    def test_mei_and_bu_tails(self):
+        """「吃了没 / 行不」是正反问，中文里极常见，第一版全漏。"""
+        add = ["吃了没", "睡了没", "有事没", "好了没", "到了没", "写完没",
+               "行不", "来不", "去不", "成不"]
+        for s in add:
+            with self.subTest(s=s):
+                self.assertEqual(self.f(s), s + "？")
+
+    # ── 2. 疑问词在句首 / 句中 ──
+    def test_question_word_leading(self):
+        """「谁说的 / 哪去了 / 你怎么知道」—— 疑问词不在行尾但是问句。"""
+        add = ["谁说的", "谁告诉你的", "哪来的", "哪去了", "你哪去了",
+               "怎么搞的", "啥时候走", "你怎么知道", "这是谁干的",
+               "你为啥不早说"]
+        for s in add:
+            with self.subTest(s=s):
+                self.assertEqual(self.f(s), s + "？")
+
+    # ── 3. 误补必须收干净（比漏补更严重）──
+    def test_ne_statements_not_questioned(self):
+        """「呢」结尾的陈述句不许加问号 —— 第一版有 9/12 被误补。
+
+        这些都是实测里模型真实说过的句子，加了问号就读不通：
+        「嘴占着呢？」「我连你啥人都没摸清呢？」
+        """
+        keep = ["嘴占着呢", "我连你啥人都没摸清呢", "正琢磨中午吃啥呢",
+                "我知道呢", "他说呢", "看呢", "在路上呢", "还早呢",
+                "在呢", "忙着呢"]
+        for s in keep:
+            with self.subTest(s=s):
+                self.assertEqual(self.f(s), s, f"陈述句被误加了问号：{s}")
+
+    def test_a_statements_not_questioned(self):
+        """「啊」结尾的陈述句也不加：`没忙啊` `刚在吃饭啊` 是回答不是提问。"""
+        keep = ["没忙啊", "没事啊", "刚在吃饭啊", "不知道啊", "没看见啊",
+                "我也无聊啊", "算了吧", "好吧"]
+        for s in keep:
+            with self.subTest(s=s):
+                self.assertEqual(self.f(s), s)
+
+    # ── 4. 原有行为不能被改坏 ──
+    def test_first_round_still_passes(self):
+        """第一版锁住的用例必须继续成立（这次是收窄，不是推翻）。"""
+        add = {"啥啊": "啥啊？", "图呢": "图呢？", "饭呢": "饭呢？",
+               "谁": "谁？", "你在干啥": "你在干啥？", "你咋了": "你咋了？"}
+        for src, want in add.items():
+            with self.subTest(src=src):
+                self.assertEqual(self.f(src), want)
+
+    def test_x_shenme_x_is_negation_not_question(self):
+        """「X什么X」是否定祈使，不是疑问（2026-10-22 发现的第三类误补）。
+
+        真机句子 `睡什么睡，下午一点四十` 被 `_QM_ANYWHERE` 的「什么」误命中，
+        补成了问号 —— 但它的意思是"别睡了"，是祈使不是发问。
+        同类：`看什么看` `哭什么哭` `急什么急` `笑什么笑`。
+        """
+        keep = ["睡什么睡", "看什么看", "哭什么哭", "急什么急", "笑什么笑",
+                "睡什么睡，下午一点四十", "这有什么好笑的",
+                "没什么好说的"]
+        for s in keep:
+            with self.subTest(s=s):
+                self.assertEqual(self.f(s), s)
+
+
 class TestPostProcessIntegration(unittest.TestCase):
     """补问号要接在整条后处理链最后，且不与既有清理打架。"""
 
@@ -158,6 +238,69 @@ class TestHalfwidthPunctuation(unittest.TestCase):
     def test_mixed_line_converts_only_punct(self):
         # 含汉字的行整行转，英文单词保留
         self.assertEqual(self._pp("这 code 有问题?"), "这 code 有问题？")
+
+
+class TestTimeContradiction(unittest.TestCase):
+    """自己回复里的时段词跟当前钟点矛盾 → 删掉（2026-10-22 真机反馈）。
+
+    QQ 群 829854136 的真实三轮（用户原话："他自己说大清早，后面似乎是没
+    识别出自己的消息，反驳自己"）：
+
+      13:37:49  我：睡什么睡 / 现在一点半，你才刚要躺下啊     ← 正确
+      13:39:42  我：你他妈才傻逼，**大清早**不干正事跑来找骂   ← 凭空"大清早"
+      13:40:14  我：还有，**现在下午一点四十，谁大清早**      ← 公开打自己脸
+
+    注意这不是时间注入失败（13:37 它自己说了"一点半"），是模型骂人时
+    顺着语感把"大清早"当语气词写出来，然后又自己发现不对。
+    已有 `time_ctx.mismatch_note()` 管"对方说的时段"，这里是它的镜像。
+    """
+
+    def _pp(self, text, *, hour=13):
+        # 构造一个固定 13:xx 的时间戳（用本地时区当天的 13:30）
+        import datetime
+        d = datetime.datetime.now().replace(hour=hour, minute=30,
+                                            second=0, microsecond=0)
+        ts = d.timestamp()
+        return de_ai._strip_time_contradictions(text, ts=ts)
+
+    def test_real_world_line(self):
+        """真机原句：整句"自我纠正"要删掉。"""
+        src = "可爱个屁\n这是骂你，你给我正经挨着\n还有，现在下午一点四十，谁大清早"
+        want = "可爱个屁\n这是骂你，你给我正经挨着"
+        self.assertEqual(self._pp(src), want)
+
+    def test_wrong_period_word_removed(self):
+        """句中错误的时段词只删词不删句 —— 剩下的部分仍然通顺。"""
+        out = self._pp("你他妈才傻逼，大清早不干正事跑来找骂")
+        self.assertNotIn("大清早", out)
+        self.assertIn("傻逼", out)          # 骂人的部分要留住
+        self.assertIn("不干正事", out)
+
+    def test_correct_period_kept(self):
+        """正确的时间感一个字都不能动（13:37 那句"现在一点半"）。"""
+        keep = [
+            "现在一点半，你才刚要躺下啊",
+            "睡什么睡，下午一点四十",       # 「下午」在 13 点是合法的
+            "中午吃了吗",
+        ]
+        for s in keep:
+            with self.subTest(s=s):
+                self.assertEqual(self._pp(s), s)
+
+    def test_night_words_allowed_at_night(self):
+        """小时数不同，判定也就不同 —— 半夜说"大晚上"是对的。"""
+        self.assertEqual(self._pp("大晚上不睡觉", hour=23), "大晚上不睡觉")
+        self.assertNotIn("大晚上", self._pp("大晚上不睡觉", hour=13))
+
+    def test_all_removed_falls_back_to_original(self):
+        """全都删空 → 回退原文，绝不发空消息。"""
+        src = "大清早"
+        self.assertEqual(self._pp(src), src)
+
+    def test_no_period_word_untouched(self):
+        for s in ["你才是乐子", "图呢？", ""]:
+            with self.subTest(s=s):
+                self.assertEqual(self._pp(s), s)
 
 
 if __name__ == "__main__":
