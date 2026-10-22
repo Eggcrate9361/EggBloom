@@ -45,13 +45,16 @@ python webui/webui_server.py
 
 ## 4. First-run setup
 
-**There is no auto-opening wizard.** On first run you do two things by hand:
+**There is no auto-opening wizard.** On first run you do not edit any file. Open the
+**Settings** page in the WebUI and click the **Setup wizard** button
+in the model settings area (it sits next to **Test connection** and
+**Clear provider key**, in the middle-lower part of the page; you need to
+scroll down, it is not visible on first screen) to fill in the LLM part in three steps.
+Saving writes `bot_config.json` for you.
 
-1. Copy `bot_config.json.example` to `bot_config.json` (skippable — built-in defaults apply)
-2. Open the **Settings** page in the WebUI and click the **Setup wizard** button
-   in the model settings area (it sits next to **Test connection** and
-   **Clear provider key**, in the middle-lower part of the page — you need to
-   scroll down, it is not visible on first screen) to fill in the LLM part in three steps
+> `bot_config.json.example` is a key reference, not a template to copy. It contains
+> placeholders such as `YOUR_BOT_QQ`; copying it makes those strings real config values.
+> The app starts fine without it, using built-in defaults.
 
 | Step | Fields | Notes |
 |---|---|---|
