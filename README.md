@@ -57,9 +57,9 @@ QQ 号和协议地址在「协议」页单独填，不在向导里。
 
 | 包 | 体积 | 内容 |
 | --- | --- | --- |
-| Lite | 4 MB | 本体，没素材 |
-| Standard | 214 MB | 带 20 个梗 |
-| Full | 705 MB | 全量素材（暂不发布） |
+| Lite | 5.3 MB | 本体，没素材 |
+| Standard | 215 MB | 带 20 个梗 |
+| Full | 706 MB | 全量素材（暂不发布） |
 
 下载：[GitHub Releases](https://github.com/Eggcrate9361/EggBloom/releases)
 

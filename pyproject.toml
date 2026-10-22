@@ -1,6 +1,6 @@
 [project]
 name = "EggBloom-Desktop"
-version = "1.5.6"
+version = "1.5.7"
 description = "EggBloom Desktop — 桌面陪伴型 AI (OneBot/QQ) 全端:聊天核心 + 记忆 + 人格 + WebUI + 插件系统"
 requires-python = ">=3.13,<3.14"
 dependencies = [
