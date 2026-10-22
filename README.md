@@ -1,7 +1,7 @@
 <table bgcolor="#16130F" width="100%" cellpadding="0" cellspacing="0" border="0">
 <tr><td align="center" style="padding:40px 16px 36px 16px">
 
-<img src="assets/readme-hero.png" width="720" alt="EGGBLOOM"><br><br>
+<img src="assets/readme-hero.png" width="840" alt="EGGBLOOM"><br><br>
 
 <span style="color:#F0EEEA;font-size:15px">一个跑在 QQ 群里的 AI，尽量别像个 AI。</span>
 
