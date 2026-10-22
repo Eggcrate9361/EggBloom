@@ -208,8 +208,6 @@ DEFAULT_CONFIG = {
     "ai_top_p": 0.9,
     "ai_frequency_penalty": 0.0,
     "ai_presence_penalty": 0.0,
-    "ai_system_prompt_override": "",
-    "ai_stop_sequences": [],
 
     # 去AI味
     "de_ai": {
@@ -226,7 +224,6 @@ DEFAULT_CONFIG = {
 
     # 会话管理
     "private_reply_interval": 3,
-    "private_reply_cooldown": 0,
 
     # 群聊行为
     "group_msg_buffer_window": 3,

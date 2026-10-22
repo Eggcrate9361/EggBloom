@@ -164,10 +164,30 @@ def before_reply(message="", group_id="", context=None, **kwargs):
 
 
 def after_reply(message="", group_id="", reply="", context=None, **kwargs):
+    """聚合 after_reply：各子模块**副作用都跑**，但人格改写要能传给主流程。
+
+    ★ 2026-10-21 修复：原实现把每个子模块的返回值全部丢弃（只 `try: _sub(...)`），
+    而 personality_engine.after_reply 恰恰是靠 **返回值**
+    `{"action":"override","reply":...}` 来交付「删掉违禁句式 / 超长截断」的。
+    返回值一丢，post_process 的效果就永远到不了发送端 ——
+    人格文件里那堆「不说作为AI/不说总的来说」全靠它兜底，等于全空转。
+    现在：副作用照旧全部执行，同时收集 override 并按 EGO 内固定优先级取第一个非空。
+    """
+    override = None
+    # ctx 必须在所有 try 之外定义：原实现里它写在第一个 try 内部，
+    # 一旦该分支抛异常（哪怕只是 dict(context) 失败），后面三个分支全都会
+    # NameError，而外层的 except 会把它当成"子模块出错"静默吞掉 ——
+    # 症状是"记忆/节奏/情绪三个模块同时失效"，很难追到根因。
+    ctx = dict(context or {})
+    ctx.setdefault("group_id", group_id)
     try:
-        ctx = dict(context or {})
-        ctx.setdefault("group_id", group_id)
-        _personality_after_reply(message=message, group_id=group_id, reply=reply, context=ctx, **kwargs)
+        _r = _personality_after_reply(message=message, group_id=group_id,
+                                      reply=reply, context=ctx, **kwargs)
+        if isinstance(_r, dict) and _r.get("action") == "override":
+            _new = _r.get("reply")
+            # 空串是"抑制发送"的合法语义（typed 钩子同款契约），要原样透出
+            if _new is not None and _new != reply:
+                override = _new
     except Exception as e:
         print(f"[EGO] after_reply personality error: {e}")
     try:
@@ -182,6 +202,10 @@ def after_reply(message="", group_id="", reply="", context=None, **kwargs):
         _mood_after_reply(message=message, group_id=group_id, reply=reply, context=ctx, **kwargs)
     except Exception as e:
         print(f"[EGO] after_reply mood error: {e}")
+
+    if override is not None and override != reply:
+        return {"action": "override", "reply": override}
+    return None
 
 
 # ------------------------------------------------------------------

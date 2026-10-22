@@ -19,7 +19,13 @@ v4 是**新建**的前端，不是改旧文件。所以"页面能渲染"不等�
    `file:///D:/api/...`，Playwright 的 route 匹配不到，mock 不生效（踩过）。
 """
 import os
-import functools, base64, sys, http.server, io, json, re, socketserver, subprocess, sys, threading
+
+# 自动找到本机 ms-playwright 下的 chromium（pip 的 playwright 不带浏览器，
+# 浏览器是单独下载、版本号跟库绑定）。详见 tests/_pw_chrome.py。
+sys_ = __import__("sys")
+sys_.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _pw_chrome import resolve_chrome as _resolve_chrome  # noqa: E402
+import functools, base64, sys, http.server, io, json, re, socketserver, subprocess, tempfile, threading
 from pathlib import Path
 
 try:
@@ -28,8 +34,12 @@ except Exception as _e:
     print(f"[SKIP] 未安装 Playwright（{type(_e).__name__}）→ 跳过 v4 页面验证")
     sys.exit(0)
 
-WEBUI = Path(r"D:\git\EggBloom\webui")
-OUT = Path(r"D:\workbuddy_tmp")
+# ★ 2026-10-22：原来是写死的 `Path(r"D:\git\EggBloom\webui")` 和 `D:\workbuddy_tmp`。
+#   本机能跑，但换机器 / 换路径 / 上 CI 就必然失败 —— 测试要能跟着仓库走。
+#   WEBUI 由本文件位置反推；截图输出到系统临时目录（不污染仓库，也不要求 D 盘存在）。
+_HERE = Path(__file__).resolve().parent
+WEBUI = _HERE.parent / "webui"
+OUT = Path(tempfile.mkdtemp(prefix="egggbloom_v4shots_"))
 errors, checks = [], []
 
 
@@ -155,8 +165,21 @@ switch_calls = []
 PNG1X1 = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==")
 
+# 库装了 ≠ 浏览器在（Playwright 的浏览器单独下载、版本号跟库绑定）。
+# 先试真正起一个：起不来就整篇跳过并 exit 0 —— 本文件全部内容都依赖浏览器，
+# 缺环境不该让套件判红。CI 的 windows-latest 正是这种状态。
+try:
+    _probe = sync_playwright().start()
+    _probe_b = _probe.chromium.launch(executable_path=_resolve_chrome())
+    _probe_b.close()
+    _probe.stop()
+except Exception as _e:
+    print("SKIP: 起不了浏览器（%s）：%s" % (type(_e).__name__, str(_e)[:120]))
+    print("      需要 `playwright install chromium`，或设 PW_CHROME 指向本机 chromium")
+    sys.exit(0)
+
 with sync_playwright() as pw:
-    b = pw.chromium.launch(executable_path=os.environ.get("PW_CHROME") or None)  # 本机 chromium-1228
+    b = pw.chromium.launch(executable_path=_resolve_chrome())
     pg = b.new_page(viewport={"width": 1440, "height": 900})
     pg.on("pageerror", lambda e: errors.append("pageerror: " + str(e)[:240]))
     pg.on("console", lambda m: errors.append("console." + m.type + ": " + m.text[:200])
@@ -310,7 +333,14 @@ with sync_playwright() as pw:
     print("\n=== 协议页渲染 ===")
     txt = pg.inner_text(".panel")
     ck("标题是「协议」", "协议" in pg.inner_text("#ttl"), pg.inner_text("#ttl"))
-    ck("连接状态＝运行中", "运行中" in txt, txt[:200])
+    # ★ 2026-10-22 修正：文案由「运行中」改为「在线」。
+    #   2026-10-19 把连接判据从「本界面点过启动」改成「OneBot 是否可达」
+    #   （s.protocol_online 优先，缺失才回落 protocol_running）——
+    #   外部启动的 NapCat/LLOneBot 不经过本界面，旧判据会把在线误报成「已停止」。
+    #   文案跟着改成「在线/离线」正是为了不再暗示「只有本界面启动才算数」。
+    ck("连接状态＝在线", "在线" in txt, txt[:200])
+    ck("★ 在线来源标注（本界面启动 / 外部驱动）",
+       "本界面启动" in txt or "外部驱动" in txt, txt[:200])
     ck("★ API/事件端口", "3000" in txt and "3005" in txt)
     ck("★ QQ 路径", "QQ.exe" in txt)
     ck("★ 三个驱动都在", all(d in txt for d in ("napcat", "llonebot", "snowluma")))

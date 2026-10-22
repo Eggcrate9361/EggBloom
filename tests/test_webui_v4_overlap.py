@@ -20,6 +20,12 @@ canvas 与刻度尺浮在右侧）。这类构图最容易出的问题是**互�
 运行：python tests/test_webui_v4_overlap.py
 """
 import os
+
+# 自动找到本机 ms-playwright 下的 chromium（pip 的 playwright 不带浏览器，
+# 浏览器是单独下载、版本号跟库绑定）。详见 tests/_pw_chrome.py。
+sys_ = __import__("sys")
+sys_.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _pw_chrome import resolve_chrome as _resolve_chrome  # noqa: E402
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -70,6 +76,16 @@ def main():
         print("SKIP: 需要 playwright（pip install playwright && playwright install chromium）")
         return 0
 
+    # 库装了 ≠ 浏览器在。本文件全部内容都靠浏览器量遮挡，缺环境应跳过而非判红。
+    try:
+        _probe = sync_playwright().start()
+        _probe_b = _probe.chromium.launch(executable_path=_resolve_chrome())
+        _probe_b.close()
+        _probe.stop()
+    except Exception as e:
+        print("SKIP: 起不了浏览器（%s）：%s" % (type(e).__name__, str(e)[:120]))
+        return 0
+
     class Q(http.server.SimpleHTTPRequestHandler):
         def log_message(self, *a):
             pass
@@ -80,7 +96,7 @@ def main():
 
     fails, checks = [], 0
     with sync_playwright() as pw:
-        b = pw.chromium.launch(executable_path=os.environ.get("PW_CHROME") or None,
+        b = pw.chromium.launch(executable_path=_resolve_chrome(),
                                args=["--use-gl=angle", "--enable-webgl", "--ignore-gpu-blocklist"])  # 本机 chromium-1228
         pg = b.new_page(viewport={"width": 1440, "height": 900})
         pg.route("**/api/**", lambda r: r.fulfill(status=200, content_type="application/json",

@@ -50,24 +50,33 @@ def test_time_ctx():
     check("time: 首次给精粒度", f1 and "09:30" in f1, f1)
     check("time: 粗粒度含时段", "上午" in c1, c1)
 
-    # 同一天同一分钟 → 两段都不刷新
+    # ★ 2026-10-22 语义修复：parts() 必须**总是**返回文本。
+    #   旧断言是"同分钟返回空串"—— 那条约束建立在"prompt 会累积"的错误前提上，
+    #   实际每轮从头重建，返回空串 = 这一轮 prompt 里没有时间（"没有时间观念"的根因）。
     c2, f2 = tr_.parts(t + 5)
-    check("time: 同分钟不刷粗", c2 == "", repr(c2))
-    check("time: 同分钟不刷精", f2 == "", repr(f2))
+    check("time: 同分钟也照样给粗", "3月5日" in (c2 or ""), c2)
+    check("time: 同分钟也照样给精", "09:30" in (f2 or ""), f2)
 
-    # 同一天下一分钟 → 只有精粒度刷新
+    # 同一时段跨分钟：精粒度跟上，粗粒度保持（时段没变）
     c3, f3 = tr_.parts(t + 70)
-    check("time: 跨分钟不刷粗", c3 == "", repr(c3))
-    check("time: 跨分钟刷精", "09:31" in f3, f3)
+    check("time: 跨分钟精粒度更新", "09:31" in f3, f3)
+    check("time: 同时段粗粒度稳定", c3 == c1, repr(c3))
 
-    # 跨天 → 粗粒度刷新（精粒度被 need_precise 控制）
+    # ★ 时段变了必须刷新粗粒度（否则"上午"会挂到晚上，跟精确时间打架）
+    t_noon = time.mktime((2026, 3, 5, 12, 30, 0, 0, 0, -1))
+    c4, f4 = tr_.parts(t_noon)
+    check("time: 跨时段刷粗", "中午" in (c4 or ""), c4)
+    check("time: 跨时段不残留上午", "上午" not in (c4 or ""), c4)
+    check("time: 跨时段精粒度同步", "12:30" in f4, f4)
+
+    # 跨天 → 日期变
     t2 = t + 86400
-    c4, f4 = tr_.parts(t2)
-    check("time: 跨天刷粗", c4 and "3月6日" in c4, c4)
+    c5, f5 = tr_.parts(t2)
+    check("time: 跨天刷粗", c5 and "3月6日" in c5, c5)
 
-    # need_precise → 总是给
-    c5, f5 = tr_.parts(t2, need_precise=True)
-    check("time: need_precise 总给精", f5 != "", repr(f5))
+    # need_precise 向后兼容（现在行为与默认一致）
+    _c6, f6 = tr_.parts(t2, need_precise=True)
+    check("time: need_precise 兼容", "09:30" in f6, f6)
 
     # 时段边界
     n0, _ = time_ctx.period_of(time.mktime((2026, 1, 1, 0, 0, 0, 0, 0, -1)))
@@ -76,6 +85,74 @@ def test_time_ctx():
     check("time: 0点=凌晨", n0 == "凌晨", n0)
     check("time: 23点=深夜", n23 == "深夜", n23)
     check("time: 12点=中午", n12 == "中午", n12)
+
+
+def test_time_mismatch():
+    """时间前提核对：问候语与钟点矛盾时必须给出可执行提示。"""
+    def at(h, m=0):
+        return time.mktime((2026, 10, 22, h, m, 0, 0, 0, -1))
+
+    # ── 该报的矛盾 ──
+    for msg, ts, want in (
+        ("晚上好", at(10, 44), "上午"),
+        ("晚上好啊", at(9, 15), "上午"),
+        ("晚安", at(14, 0), "下午"),
+        ("早上好", at(21, 30), "晚上"),
+        ("早安！", at(23, 10), "深夜"),     # 23:10 时 period_of 判"深夜"，不是"晚上"
+        ("中午好", at(8, 0), "上午"),
+        ("下午好", at(9, 0), "上午"),
+    ):
+        note = time_ctx.mismatch_note(msg, ts=ts)
+        check(f"mismatch: 「{msg}」@{int((ts % 86400)//3600)}时 要指出",
+              bool(note) and want in note, note)
+        # 提示必须是**可执行**的，不能只说"对不上"
+        if note:
+            check(f"mismatch: 「{msg}」提示含时间", "：" in note and "别顺着答" in note, note[:60])
+
+    # ── 口语钟点：人不会说"这才23点吧" ──
+    for h, want in ((0, "十二点"), (9, "九点"), (10, "十点"), (11, "十一点"),
+                    (12, "十二点"), (13, "下午一点"), (17, "下午五点"),
+                    (20, "晚上八点"), (23, "晚上十一点")):
+        got = time_ctx._spoken_hour(h)
+        check(f"spoken: {h}点→{want}", got == want, got)
+
+    # ── 不该误报的（时段对得上 / 不是单纯问候）──
+    for msg, ts in (
+        ("晚上好", at(21, 0)),
+        ("晚上好", at(0, 30)),      # 凌晨说晚上好勉强算对（还没睡）
+        ("早上好", at(7, 0)),
+        ("早安", at(6, 30)),
+        ("中午好", at(11, 30)),
+        ("下午好", at(15, 0)),
+        ("晚安", at(23, 50)),
+        ("昨天他跟我说晚上好", at(10, 0)),   # 叙述，不是问候
+        ("晚上好各位，今天开会", at(10, 0)),  # 带内容，不判
+        ("", at(10, 0)),
+    ):
+        note = time_ctx.mismatch_note(msg, ts=ts)
+        check(f"mismatch: 「{msg}」不该报", note == "", repr(note))
+
+
+def test_time_injection_reaches_private_chat():
+    """源码级守卫：时间注入不得只在群聊分支里。
+
+    这是"没有时间观念"的直接成因 —— 10:44 私聊说「晚上好」，prompt 里
+    压根没有"现在几点"，模型只能顺着答。
+    """
+    import io as _io
+    import os as _os
+    _root = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+    with _io.open(_os.path.join(_root, "bot_core.py"), encoding="utf-8") as f:
+        src = f.read()
+    seg = src[src.find("def _call_deepseek_sync"):]
+    seg = seg[:seg.find("messages = _build_cached_messages")]
+    check("time: 私聊/群聊都走 time_parts", "time_parts(_time_key)" in seg, seg[:0])
+    check("time: 时间 key 区分私聊群聊",
+          'f"g_{group_id}" if (is_group and group_id) else f"p_{target_qq}"' in seg, "")
+    # 时间注入块必须在 `if is_group and group_id:` 之外（缩进 4 空格）
+    _line = [ln for ln in seg.splitlines() if "time_parts(_time_key)" in ln]
+    check("time: 注入块不在群聊内层",
+          bool(_line) and _line[0].startswith("        _coarse"), repr(_line))
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -346,12 +423,14 @@ def test_bot_hook():
     n7 = bot_hook.tool_names_for("普通消息", is_group=False, extra_groups=[tr.GROUP_WEB])
     check("hook: extra_groups 生效", "web_operate" in n7, n7)
 
-    # 时间分级
+    # 时间分级（★ 2026-10-22：parts() 现在**总是**返回文本，见 time_ctx 的语义修复）
     bot_hook.reset_time_cache()
     c1, f1 = bot_hook.time_parts("s1")
     c2, f2 = bot_hook.time_parts("s1")
     check("hook: 时间首次给粗", c1 != "", repr(c1))
-    check("hook: 时间二次不刷粗", c2 == "", repr(c2))
+    check("hook: 时间二次照样给粗", c2 != "" and "【现在】" in c2, repr(c2))
+    check("hook: 时间二次照样给精", f2 != "" and "【精确时间】" in f2, repr(f2))
+    check("hook: 同一时段粗粒度稳定", c1 == c2, repr((c1, c2)))
     check("hook: 精粒度块不含空", bot_hook.fine_tail_block("s1", force=True) != "")
 
     # skill block 不抛
@@ -531,7 +610,8 @@ def test_agent_loop_tools():
 
 
 def main():
-    for fn in (test_time_ctx, test_tool_registry, test_skill_loader,
+    for fn in (test_time_ctx, test_time_mismatch, test_time_injection_reaches_private_chat,
+               test_tool_registry, test_skill_loader,
                test_mcp_hub, test_bot_hook, test_agent_loop_tools):
         try:
             fn()

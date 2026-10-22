@@ -33,7 +33,11 @@ PLUGIN_MANIFEST = {
     "description": "主动消息引擎：私聊无人触发时按状态主动开口（拟人化，人设可配）",
     "dependencies": [],
     "priority": 90,
-    "default_enabled": False,
+    # 2026-10-21：用户明确要求启用。原本默认 False 是"不配就别乱开口"的保守设置，
+    # 现已配好 data/config.json（心跳 15 分钟、最小间隔 3 小时、
+    # 用户发言后 30 分钟内不打扰、1:00–7:00 静默、单次最多 4 个气泡）。
+    # 想关就改这里回 False，或在 WebUI 插件页关掉。
+    "default_enabled": True,
 }
 
 _DIR = os.path.dirname(os.path.abspath(__file__))
@@ -295,7 +299,8 @@ def _build_messages(cfg: dict, state: dict, target: str) -> list:
     sys_prompt += (
         "硬性要求：\n"
         f"- 每行一条消息，就是一个 QQ 气泡，总共不超过 {max_bubbles} 行\n"
-        "- 每行 5~25 字，口语短句，行尾不带句号\n"
+        "- 每行 5~25 字，口语短句。句末的句号可以省，但问句要带问号、重语气用感叹号，"
+        "别写成读不通的一串字\n"
         "- 不要列表、编号、引号、markdown\n"
         "- 禁止 AI 腔：「作为AI」「有什么可以帮你的」「建议你」「希望你能」一律不准出现\n"
         "- 可以损他、念叨他、分享刚想到的东西、接着之前的话茬、提醒他作息\n"
@@ -399,7 +404,31 @@ def _evaluate(cfg: dict, state: dict, force: bool = False) -> dict:
     if random.random() >= chance:
         return {"ok": False, "target": target, "blocked_by": f"概率闸门未通过（chance={chance}）"}
 
+    # ★ 2026-10-21：AI 不可用时要**先挡住**，不要放行到 _ai_text 再失败。
+    #   概率闸门在上、AI 检查在下，顺序有讲究：若先查 AI，等于每次心跳都去
+    #   探测一遍模型状态；放在概率之后，只有"本来就要开口"的那 35% 才付这个成本。
+    #   没有这道检查时，AI 未配好会表现为「心跳开口失败: AI 未产出可用消息」，
+    #   看起来像模型抽风，实际是根本没配。
+    if not _ai_ready():
+        return {"ok": False, "target": target, "blocked_by": "AI 未配置，暂不主动开口"}
+
     return {"ok": True, "target": target, "blocked_by": ""}
+
+
+def _ai_ready() -> bool:
+    """粗检 AI 是否可用。
+
+    注意 api_key 不一定在 bot_config.json 里 —— 它是 `config.load_config()`
+    从 Windows 凭据管理器 / .env 注入的，插件经 ctx.get_config 拿到的应已是合并后的值。
+    所以这里只做**明显不可用**的判定（连 url 都没有），其余一律放行，
+    让 _ai_text 自己去报真实错误 —— 宁可多试一次，也不要因为探测口径不对
+    把主动消息永久关死。
+    """
+    try:
+        url = str(_ctx.get_config("api_url", "") or "").strip() if _ctx else ""
+        return bool(url)
+    except Exception:
+        return True
 
 
 def _proactive_once(force: bool = False) -> dict:

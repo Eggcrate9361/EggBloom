@@ -1,7 +1,8 @@
 # 开源发布清单（GitHub）
 
 > 目标：别人 clone 下来能装、能跑、能看懂；出了问题知道去哪说。
-> 最后更新：2026-10-18（上一次是 2026-08-01，那份针对旧的 `app-src` 布局，已作废）
+> 最后更新：2026-10-21（上一次 2026-10-18；再上一次 2026-08-01，那份针对旧的 `app-src` 布局，已作废）
+> 版本号一律以 `package.json` 的 `version` 为准 —— 本文用 `<version>` 表示，不写死。
 
 ---
 
@@ -79,7 +80,7 @@ git push -u origin main
 ### 1.4 占位符
 
 - [x] `README.md`、`CONTRIBUTING.md`、`.github/ISSUE_TEMPLATE/config.yml` 已替换为 `Eggcrate9361`。
-- [x] `docs/` 里指向旧路径的说明已清；`docs/` 已从 21 项裁到 9 项（其余移入仓库外归档）。
+- [x] `docs/` 里指向旧路径的说明已清；`docs/` 已从 21 项裁到 6 项（其余移入仓库外归档）。
 
 ---
 
@@ -91,7 +92,7 @@ git push -u origin main
 - [x] `.github/PULL_REQUEST_TEMPLATE.md`
 - [x] `.gitattributes`（`.bat` 强制 CRLF，二进制不合并）
 - [x] `THIRD_PARTY.md`（第三方组件与许可）
-- [x] 版本号对齐：`package.json` 1.5.5 = `pyproject.toml` 1.5.5
+- [x] 版本号对齐：`package.json` = `pyproject.toml` = `<version>`（当前 1.5.7，`scripts/activate.py --check-only` 会校验）
 - [x] 字体署名：`webui/fonts/README.txt` 补 Fusion Pixel（OFL-1.1）
 - [ ] CI：`.github/workflows/ci.yml`
 - [ ] 已知失败测试：修掉，或在 CI 里显式排除并开 Issue 记录
@@ -101,29 +102,26 @@ git push -u origin main
 
 ## 3. 提交与打包
 
-### 3.1 当前未跟踪、需要提交的文件
+### 3.1 本次要提交的文件
 
-```
-.gitattributes
-.github/                     (CI + issue/PR 模板)
-CHANGELOG.md
-SECURITY.md
-THIRD_PARTY.md
-persona_tag.py
-scripts/dev_watch.py
-scripts/note_crypt.py
-tests/test_dev_watch.py
-tests/test_persona_tag.py
+不要照抄清单（每次都不一样的）。用命令现查，只提交你**确实改过**的东西：
+
+```bash
+git status --porcelain          # 未跟踪 + 已修改
+git diff --stat                 # 改了哪些行
+
+# 一个版本一次打包一次提交：先把「代码 + 文档」一次性收干净，再改版本号、再打包
 ```
 
-另有 54 个已跟踪文件被修改（隐私占位符、文档、测试断言、打包脚本等）。
+⚠ 提交前确认 `git status` 里没有 `bot_config.json`、`data/`、`logs/`、
+`conversation_state/`、`personality.txt`、`slang_*.json` 这类运行态文件。
 
 ### 3.2 顺序（不能反）
 
 ```bash
-# 1. 版本号（package.json）→ 2. commit → 3. 打包
+# 1. 版本号（package.json 与 pyproject.toml）→ 2. commit → 3. 打包
 git add -A
-git commit -m "chore(release): 1.5.5"
+git commit -m "chore(release): <version>"
 python scripts/pack_all.py            # Lite 走 git archive HEAD，不 commit 会缺文件
 ```
 
@@ -138,7 +136,7 @@ python scripts/pack_all.py            # Lite 走 git archive HEAD，不 commit �
 
 ### 3.4 Release
 
-- [ ] Tag：`v1.5.5`（与 `package.json` 一致）
+- [ ] Tag：`v<version>`（与 `package.json` 一致）
 - [ ] Release notes 直接取 `CHANGELOG.md` 对应段落
 - [ ] 只附 `EggBloom-Standard.zip` + `EggBloom-Lite.zip` + `SHA256SUMS.txt`
       （**Full 不对外分发**：内含 283 张二次创作动漫表情包，版权与内容都不适合上公开仓库）
@@ -176,16 +174,48 @@ python tests/test_dev_watch.py
 
 ## 6. 测试现状
 
-> 2026-10-18 全量跑 `tests/test_*.py`（68 个）：
+> **2026-10-22 全量跑 `tests/test_*.py`：77 个文件 / 451 个 `test_` 函数，全部通过。**
+> 不用按测试名逐个比对了 —— **现在可以直接看 exit code**（见下面"三条判据都修好了"）。
 
-- **65 个通过**
-- **3 个按环境跳过**（缺可选依赖，不报错）：
-  - `test_image_fetch` —— 需要 `requests`
-  - `test_meme_back` —— 需要 `Pillow`
-  - `test_webui_v4_overlap` —— 需要 `playwright` + chromium
-- CI 会装 `requests` + `Pillow`，所以前两个在 CI 里真跑；`playwright` 测试在 CI 里跳过。
+改之前是 68 通过 / 9 失败。那 9 个里**只有一个是真的 bug**：
 
-同轮修掉的过期断言：
+| 类别 | 文件 | 真因 |
+|---|---|---|
+| 环境缺失（4） | `test_webui_v4_{geometry,nav_sync,overlap,pages}` | Playwright 库装了但**浏览器找得到却没用上**：`import` 成功→跳过分支不触发→`launch()` 抛异常→rc=1 |
+| 断言过期（3） | `test_plugin_bridge` / `test_sandglass_dedup` / `test_webui_v4_pages` | 断言描述的是**已被有意改掉**的旧行为 |
+| **真 bug（1）** | `test_webui_v4_geometry` | `.stage.pending` 与全局布局类 `.pending` 撞名，导航预演时舞台被压到 **560px** |
+| 退出码误判（2） | `test_history_ledger` / `test_search_parsing` | 测试全过，但 `import bot_core` 留下的守护线程抢 stdout 锁 → 退出码 `0xC0000409` |
+
+### 三条判据都修好了
+
+1. **退出码可信了**。`tests/_quiet_exit.py` 在 `import bot_core` 之后停插件线程，
+   不再出现「测试全绿、退出码崩溃」。
+2. **不用人工比对 summary 了**。上一条修好后，exit code 就等价于"有没有弄坏东西"。
+3. **浏览器能找到**。`tests/_pw_chrome.py` 自动扫 `ms-playwright/chromium-*`（取版本最高），
+   也认 `PW_CHROME` 显式指定；**真起不来会跳过而不是判红**（CI 上就是这种状态）。
+
+### 三条过期断言改成了什么
+
+不是改字符串，是把断言换成**真正该守的不变量**：
+
+| 测试 | 旧断言 | 新断言 |
+|---|---|---|
+| `test_plugin_bridge` | 「旧式 `after_reply` 调用行原样存在」 | `after_reply` **一条单数 `execute_hook` 都不许有**，链式恰好 2 处 |
+| `test_sandglass_dedup` | Bot 行正文 `== "早上好"` | 带 `[群:123]` 归属标记、且不含旧格式 `[Bot回复]` |
+| `test_webui_v4_pages` | 「连接状态 = 运行中」 | 「在线」+ 标注来源（本界面启动 / 外部驱动） |
+
+`test_plugin_bridge` 那条最值得记：旧断言锁的其实是**一个 bug 的写法**。
+`execute_hook`（单数）是「首个非 None 即返回」，ego 返回 override 后，
+排在后面的 web_search 幻觉拦截永远跑不到，而且日志里看不出来。
+
+### 环境依赖说明（仍然成立）
+
+- `test_image_fetch` / `test_meme_back` 需要 `requests`、`Pillow`
+- 4 个 `test_webui_v4_*` 需要 Playwright **且真的能起浏览器**；起不来会 `SKIP` 并 exit 0
+- CI（`.github/workflows/ci.yml`）目前只跑 8 个 smoke —— 不是因为有红的，
+  而是 CI 上没有 `bot_config.json` / chromium / 插件运行态，扩容要逐个确认
+
+历史记录（2026-10-18 同轮修掉的过期断言）：
 
 - `test_scope_policy_text`：档位文本从 `dynamic_parts` 挪到 `stable_parts` 后，断言仍锁死旧名字。
 - `test_prompt_segments`：黄金哈希随「触发词默认值改为 `["小a"]`」更新（group 2306 → 2349 字符，private 不变）。

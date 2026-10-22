@@ -56,3 +56,6 @@ _fwU/
 # 编辑器/Agent 工作产物
 .qoder/
 .neurobase/
+
+# 测试运行时临时目录（test_meme_back 等会在此生成假图）
+tests/_meme_back_tmp/

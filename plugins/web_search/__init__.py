@@ -56,6 +56,20 @@ DEFAULT_SKIP_PATTERNS = [
     "不会吧", "离谱", "太强了", "学到了",
 ]
 
+# ★ 2026-10-21：强触发词 —— 命中即搜，**skip 表不得否决**。
+#   原来 `_needs_search` 先查 skip 再查 need，于是
+#   「今天天气怎么样啊哈哈哈」会被「哈哈」一票否决，明明在问天气却不搜。
+#   语气词是**语气**，不该压过**意图**。这里把"明确的查证意图"单列，
+#   让它们拥有比 skip 更高的优先级。
+DEFAULT_STRONG_SEARCH_KEYWORDS = [
+    "查一下", "搜一下", "帮我查", "帮忙查", "帮我搜",
+    "新闻", "热搜", "热点", "股价", "行情", "汇率",
+    "天气", "气温", "下雨吗", "会下雨", "台风",
+    "上映", "票房", "比分", "赛程",
+    "求证", "确认一下", "真的假的", "出处", "有链接吗",
+    "现在几点", "今天几号", "星期几",
+]
+
 # AI 不确定性/幻觉表达：命中则拦截，不发布
 DEFAULT_HALLUCINATION_PATTERNS = [
     "据我所知", "一般来说", "通常来说", "应该", "可能", "也许",
@@ -108,9 +122,20 @@ def _matches_any(text: str, keywords):
 
 
 def _needs_search(message: str) -> bool:
+    """判断这条消息是否该联网查证。
+
+    优先级（2026-10-21 调整）：
+      ① 强触发词命中 → 一定搜（意图明确，语气词不能否决它）
+      ② skip 词命中   → 一定不搜（纯闲聊）
+      ③ 普通触发词    → 搜
+    原来的实现是 ② 在 ①③ 之前，会漏掉「今天天气怎么样啊哈哈哈」这类
+    「真问题 + 语气词」的句子——查证需求被一个「哈哈」吃掉了。
+    """
     msg = (message or "").strip()
     if not msg or len(msg) < 2:
         return False
+    if _matches_any(msg, DEFAULT_STRONG_SEARCH_KEYWORDS):
+        return True
     if _matches_any(msg, DEFAULT_SKIP_PATTERNS):
         return False
     return _matches_any(msg, DEFAULT_NEED_SEARCH_KEYWORDS)

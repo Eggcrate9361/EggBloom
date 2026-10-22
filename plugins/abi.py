@@ -130,8 +130,14 @@ class PluginContext:
         except Exception:
             return False
 
-    # ── 共享 AI 客户端（由主程序注入，未注入返回 None）──
-    def ai_chat(self, messages: List[dict], tools: Optional[list] = None, max_tokens: int = 800):
+    # ── 共享 AI 客户端（由主程序注入）──
+    def ai_chat_raw(self, messages: List[dict], tools: Optional[list] = None,
+                    max_tokens: int = 800):
+        """原始返回，交给调用方自己解包。未注入或失败返回 None。
+
+        `AIClient.call()` 的形状是 `(content, tool_calls, usage)` 三元组。
+        需要 tool_calls / usage 的调用方用这个；只要正文用 `ai_chat()`。
+        """
         try:
             ac = self._manager._ai_client if self._manager else None
             if ac is None:
@@ -141,6 +147,37 @@ class PluginContext:
         except Exception as e:
             self.log(f"ai_chat 失败: {e}")
             return None
+
+    def ai_chat(self, messages: List[dict], tools: Optional[list] = None,
+                max_tokens: int = 800) -> str:
+        """调共享 AI 客户端，**只返回正文文本**；失败返回空串。
+
+        为什么在 ABI 层归一化（2026-10-22）：
+          `AIClient.call()` 返回的是三元组 `(content, tool_calls, usage)`，
+          而这里原来直接透传，等于把"猜返回形状"的活丢给了每个插件。
+          结果 proactive_talk 和 qzone 都按 `str` / `dict` 写解包，
+          tuple 一路落到最后的 `return ""` —— **模型明明生成了内容，被静默丢掉**。
+          症状是「插件装了但永远不产出」「AI 未产出可用消息」，
+          日志里没有异常、没有报错，纯靠单步调试才看得出来。
+
+          归一化放在这里，插件就不用各自兼容；需要完整结构的用 `ai_chat_raw()`。
+        """
+        r = self.ai_chat_raw(messages, tools=tools, max_tokens=max_tokens)
+        if r is None:
+            return ""
+        # 三元组 / 列表 → 取正文
+        if isinstance(r, (tuple, list)):
+            if not r:
+                return ""
+            head = r[0]
+            return str(head).strip() if head else ""
+        if isinstance(r, str):
+            return r.strip()
+        if isinstance(r, dict):
+            for k in ("content", "text", "reply"):
+                if r.get(k):
+                    return str(r[k]).strip()
+        return ""
 
     # ── HTTP：requests 优先，urllib 兜底 ──
     def http_get(self, url: str, timeout: float = 15, headers: Optional[dict] = None) -> Optional[dict]:

@@ -289,6 +289,18 @@ def _is_meaningful_fact(content: str) -> bool:
     return True
 
 
+def _affection_level(score: int) -> str:
+    """好感度 → 关系档（2026-10-21 调整阈值）。
+
+    旧阈值 <10 陌生 / <40 熟悉 / <80 好友，但新用户初始分就是 20（=「熟悉」），
+    陌生人档只在 10 分以下才够得着 —— 等于没有。现在：
+      · 初始分降到 10，并让「陌生」覆盖到 20：头几次说话都还算生。
+      · 20–50 熟悉（能嘟囔但仍客气）、50–80 好友（可以互怼）、80+ 死党（傲娇）。
+    """
+    s = int(score)
+    return "陌生" if s < 20 else "熟悉" if s < 50 else "好友" if s < 80 else "死党"
+
+
 class SuperMemory:
     def __init__(self):
         self.config: Dict[str, Any] = _load_json(CONFIG_PATH, {})
@@ -790,15 +802,53 @@ class SuperMemory:
 
     # ── 好感度 ──
 
+    # 计分词表（2026-10-21 重写）
+    #   旧表的问题：把「滚」「牛」「强」这种**单字/高频子串**当关键词，
+    #   实测误伤一大片 ——「滚雪球」「勉强可以」「蜗牛」「坚强」全被判成攻击/夸奖。
+    #   而且「垃圾废物」这类词在本群里是互怼日常语气，按 -15 计必然把好感度打到下限，
+    #   导致「高好感 = 傲娇」那一档永远触发不了。
+    #   现在改成：
+    #     ① 只有在**对着 Bot 说**且带明显指向时才算重击（含"你"或独占整句）
+    #     ② 单字词（牛/强/滚）移出词表，只留无歧义的多字词
+    #     ③ 正负幅度调小，让分数靠**互动次数**缓慢爬升，而不是一句话定生死
+    _AFF_POS = ("哈哈", "笑死", "好棒", "厉害", "谢谢", "爱了", "好人", "优秀",
+                "真棒", "不错", "贴贴", "可爱", "靠谱", "牛啊", "太强了", "谢谢你",
+                "辛苦了", "爱你", "可以的")
+    _AFF_NEG = ("垃圾", "废物", "傻逼", "sb", "脑残", "菜鸡", "没用", "恶心",
+                "去死", "滚吧", "闭嘴", "蠢货", "弱智")
+    # 只是语气、不是攻击 —— 出现这些时即使是「垃圾」也按玩笑处理
+    _AFF_JOKE = ("草", "笑死", "哈哈哈", "绷不住", "狗东西", "你妈的")
+
     def update_affection(self, scope_id: str, user_id: str, text: str):
         if not self.config.get("affection_enabled", True):
             return
-        positive = ["哈哈", "笑死", "好棒", "厉害", "谢谢", "爱了", "好人", "优秀", "nb", "真棒", "牛", "强", "不错", "贴贴"]
-        negative = ["垃圾", "废物", "傻逼", "sb", "脑残", "菜鸡", "没用", "恶心", "滚"]
-        if any(kw in text for kw in negative):
-            score = -15
-        elif any(kw in text for kw in positive):
-            score = 8
+        # 计分规则见类体上方的 _AFF_POS / _AFF_NEG / _AFF_JOKE 注释（2026-10-21 重写）。
+        t = str(text or "").lower()
+        # 玩笑信号：有自嘲/大笑/问号堆 → 整句降为"普通互动"，不当攻击
+        is_joke = any(k in t for k in self._AFF_JOKE)
+        has_neg = any(kw in t for kw in self._AFF_NEG)
+        has_pos = any(kw in t for kw in self._AFF_POS)
+        if has_neg and not is_joke:
+            # ★ 中文没有词边界，纯子串匹配必然误伤（「翻滚吧」含「滚吧」、
+            #   「背单词背到sb了」含「sb」）。所以负面词必须**真的在骂 Bot** 才算：
+            #     ⓐ 整句去掉标点空白后刚好等于那个词（"傻逼" 单独发）
+            #     ⓑ 或句子里有第二人称指向（你/尼/小a/bot）
+            #   两者都不满足 → 当成在说别的事，按普通互动 +1。
+            _bare = "".join(ch for ch in t if ch.isalnum())
+            # 群消息常带 "[昵称(QQ)] " 前缀，判定独占整句前先剥掉它
+            # 注意：isalnum() 会把 "[" 和 "]" 一起滤掉，所以必须用**原始文本**
+            # 判断有没有前缀，不能拿剥过符号的 _bare 判断（那样前缀永远剥不掉）。
+            _body = t
+            if t.lstrip().startswith("[") and "]" in t:
+                _body = t.split("]", 1)[-1]
+            _bare = "".join(ch for ch in _body if ch.isalnum())
+            _directed = any(p in _body for p in ("你", "尼", "小a", "bot"))
+            _exact = any(_bare == kw for kw in self._AFF_NEG)
+            score = -4 if (_directed or _exact) else 1
+        elif has_neg and is_joke:
+            score = 1
+        elif has_pos:
+            score = 4
         else:
             score = 1
         try:
@@ -810,13 +860,14 @@ class SuperMemory:
             )
             row = cur.fetchone()
             if row:
-                new_score = max(-50, min(100, row[0] + score))
+                new_score = max(0, min(100, row[0] + score))
                 conn.execute(
                     "UPDATE affection SET score=?, interactions=interactions+1, last_interaction=? WHERE scope_id=? AND user_id=?",
                     (new_score, now, str(scope_id), str(user_id)),
                 )
             else:
-                new_score = max(0, min(100, 20 + score))
+                # 新用户从 10 起（旧版 20 = 一开口就是"熟悉"，陌生人档形同虚设）
+                new_score = max(0, min(100, 10 + score))
                 conn.execute(
                     "INSERT INTO affection (scope_id, user_id, score, interactions, last_interaction) VALUES (?, ?, ?, 1, ?)",
                     (str(scope_id), str(user_id), new_score, now),
@@ -838,10 +889,26 @@ class SuperMemory:
             if not row:
                 return ""
             score, interactions, mood = row
-            level = "陌生" if score < 10 else "熟悉" if score < 40 else "好友" if score < 80 else "死党"
+            level = _affection_level(score)
             mood_map = {"neutral": "平静", "happy": "开心", "sad": "低落", "angry": "生气"}
             mood_text = mood_map.get(mood, mood)
-            return f"【用户关系】{user_id}：好感度 {score}，互动 {interactions} 次，{level}，当前情绪 {mood_text}。"
+            # ── 行为后果（2026-10-21）──
+            # 只报「好感度 95，死党」模型不知道该怎么用：它只会换个称谓继续当客服。
+            # 关系等级必须落到**具体口气**上：能不能抱怨、能不能开黄腔、要不要客气。
+            # 注意：这里给的是"许可范围"，不是"必须表现"，所以写的都是"可以"而不是"要"。
+            tone = {
+                # 关系浅：抱怨是真的，直白嫌烦，但事照样办
+                "陌生": "关系还浅。抱怨是真的、直白的（「又来」「烦不烦」），不要客气，但事必须办完再说。",
+                # 抱怨还在，加一点熟人的随便
+                "熟悉": "算脸熟了。抱怨照旧，但口气松下来了（「行吧行吧」「就这一次啊」）。",
+                # 抱怨变少，开始傲娇
+                "好友": "关系不错。抱怨明显变少，换成傲娇（「哼，就这一次」「求我啊」），别真嫌烦。",
+                # 全是傲娇/撒娇，基本不抱怨
+                "死党": "很熟了。基本不抱怨，全是傲娇和撒娇，或者干脆逗他一下。嘴上说不要，手比谁都快。",
+            }[level]
+            return (f"【用户关系】{user_id}：好感度 {score}，互动 {interactions} 次，"
+                    f"{level}，当前情绪 {mood_text}。\n"
+                    f"→ 对他来说你是这个关系档次，说话按这个来：{tone}")
         except Exception:
             return ""
 

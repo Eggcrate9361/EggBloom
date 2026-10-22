@@ -22,6 +22,13 @@ sys.path.insert(0, ROOT)
 
 import bot_core  # noqa: E402
 
+# 停掉 bot_core 带起来的守护线程：否则测试全过、退出码却是 0xC0000409
+# （解释器关闭时 daemon 线程还在写 stdout，抢锁失败 → 拖垮退出码）。
+# 详见 tests/_quiet_exit.py 开头的说明。
+sys.path.insert(0, HERE)
+from _quiet_exit import quiet_exit  # noqa: E402
+quiet_exit()
+
 PASS = 0
 FAIL = 0
 FAILURES = []
@@ -59,8 +66,8 @@ def main():
     for i in range(12):
         history.append({"role": "user", "content": f"[小明({i})] 第{i}个问题内容"})
         history.append({"role": "assistant", "content": f"第{i}个回答内容"})
-        # 模拟真实存储：只带最近 10 条（gh[-10:]）
-        window = history[-10:]
+        # 模拟真实存储：只带最近 16 条（gh[-16:]）
+        window = history[-16:]
         msgs = bot_core._build_cached_messages(window, key, "STATIC", [], "当前消息")
         check(f"轮{i}：static 恒为第一段", msgs[0]["content"] == "STATIC")
         s = _summary_of(msgs)
@@ -77,20 +84,22 @@ def main():
     check("★ 12 轮里摘要确实增长过（账本在收条目）", grew_at_least_once)
 
     print("\n=== ② 断代：历史整本换掉 → 重建且不重复入账 ===")
-    fresh = [{"role": "user", "content": f"[路人{i}] 全新话题{i}"} for i in range(6)]
+    fresh = [{"role": "user", "content": f"[路人{i}] 全新话题{i}"} for i in range(12)]
     msgs2 = bot_core._build_cached_messages(fresh, key, "STATIC", [], "新消息")
     s2 = _summary_of(msgs2)
     ledger2 = bot_core._HISTORY_SUMMARY_LINES.get(key, [])
     check("断代后账本行数 = 本次 old 条数（没有把旧账叠加进来）",
-          len(ledger2) == 2, str(len(ledger2)))
+          len(ledger2) == 4, str(len(ledger2)))
     check("断代后摘要含新内容", "全新话题" in s2, s2[:80])
 
-    print("\n=== ③ 最近 4 轮保持原文（不进摘要）===")
+    print("\n=== ③ 最近 4 轮（8 条）保持原文（不进摘要）===")
     last_msgs = msgs2[-6:-1]  # 摘要之后的若干条
     tail_user = msgs2[-1]["content"]
     check("当前消息在最后", tail_user == "新消息", repr(tail_user))
     recent_contents = [m.get("content") for m in msgs2 if m.get("role") != "system"]
-    check("窗口最后4条以原文出现", any("全新话题5" in str(c) for c in recent_contents),
+    check("窗口最后 8 条以原文出现（4 轮）",
+          any("全新话题11" in str(c) for c in recent_contents)
+          and any("全新话题4" in str(c) for c in recent_contents),
           str(recent_contents)[:120])
 
     print("\n=== ④ 短历史（≤4轮）不产生摘要块 ===")

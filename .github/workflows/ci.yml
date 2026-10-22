@@ -22,9 +22,13 @@ jobs:
           python -m pip install --upgrade pip
           pip install requests Pillow
 
-      # 只跑「纯逻辑、无 GUI、无网络」的测试。
-      # 完整套件里还有若干已知失败（见 docs/RELEASE_CHECKLIST.md §6），
-      # 修一个就往这里加一个 —— 不要让 CI 长期红着。
+      # 只跑「纯逻辑、无 GUI、无网络、无本机状态依赖」的测试。
+      # ★ 2026-10-22 更新：原来这里写着「完整套件里还有若干已知失败」——**已经不成立了**。
+      #   本地全量 77 个测试文件现在全部通过（此前 9 个红：4 个环境缺失、4 个断言过期、
+      #   1 个真 bug，另有 2 个退出码被守护线程拖垮）。失败原因查清后逐个修掉了。
+      #   但**扩容仍然谨慎**：本机有 bot_config.json、有 chromium、有 plugins 运行态，
+      #   CI 上没有这些。一次全加进去很可能红一批，而长期红的 CI 等于没有 CI。
+      #   所以策略仍是「确认一个加一个」—— 下面的名单只是还没扩，不是因为红的。
       - name: Run smoke tests
         shell: pwsh
         env:

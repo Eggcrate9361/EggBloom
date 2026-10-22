@@ -18,6 +18,7 @@ personality_engine 人格引擎插件 v0.2.0
 import json
 import os
 import random
+import re
 import time
 from typing import Any, Dict, List, Optional
 
@@ -304,11 +305,24 @@ class ConversationState:
         return "neutral"
 
     def to_prompt(self) -> str:
-        return (
-            f"当前对话状态：话题={self.current_topic}，模式={self.mode}，"
-            f"情绪={self.emotion}，连续追问={self.turn_count}，"
-            f"好感度={self.affection:.1f}"
-        )
+        """生成会话状态行。
+
+        ★ 2026-10-21 修复：原先这里固定输出 `好感度={self.affection:.1f}`，
+        但 `self.affection` 自 0.5 起**从来没有被任何代码改过**（update() 里
+        没有 affection 分支），所以它对每个用户永远是「好感度=0.5」——
+        一条恒定不变、还长得像动态数据的假情报。
+        真正的好感度在 super_memory 的 affection 表（0–100，含分档），
+        由 super_memory 自己以【用户关系】注入。两者同时进提示词时，
+        模型会看到「好感度=0.5」和「好感度 65，好友」两个互相打脸的结论。
+        所以这里**不再输出** affection —— 只报真正会被更新的那几项。
+        """
+        bits = [
+            f"话题={self.current_topic}",
+            f"模式={self.mode}",
+            f"情绪={self.emotion}",
+            f"连续追问={self.turn_count}",
+        ]
+        return "当前对话状态：" + "，".join(bits)
 
 
 def get_state(user_id: str = "default") -> ConversationState:
@@ -420,10 +434,18 @@ class ExampleRetriever:
         return examples
 
     def retrieve(self, message: str, state: ConversationState, top_k: int = 2) -> List[Dict[str, str]]:
+        """按场景名与消息的关键词重合度挑 few-shot 示例。
+
+        ★ 2026-10-21 修复：原实现把所有场景**无条件**塞进 candidates，
+        零分场景也会参与排序。top_k=2 时，只要示例库超过 2 个场景，
+        就必然会把「一个都没命中的场景」当成参考示例注入 —— 等于随机配货，
+        跟当前这句话毫无关系，反而污染人格。现在零分场景直接丢弃，
+        全都不命中就返回空（宁可不给示例，也不给错的示例）。
+        """
         if not self.examples:
             return []
-        candidates = []
         text = (message or "").lower()
+        candidates = []
         for scene, items in self.examples.items():
             score = 0
             lowered = scene.lower()
@@ -433,10 +455,14 @@ class ExampleRetriever:
             for kw in keywords:
                 if kw and kw in text:
                     score += 1
-            candidates.append((score, items))
+            if score <= 0:          # ← 没命中就别当示例
+                continue
+            candidates.append((score, scene, items))
+        if not candidates:
+            return []
         candidates.sort(key=lambda x: x[0], reverse=True)
         results: List[Dict[str, str]] = []
-        for _, items in candidates[:top_k]:
+        for _, _scene, items in candidates[:top_k]:
             results.extend(items[:3])
         return results[:top_k]
 
@@ -467,12 +493,62 @@ def get_dynamic_temperature(state: ConversationState) -> float:
 def post_process(reply: str, state: ConversationState) -> str:
     prohibited = load_prohibited_patterns()
     for pattern in prohibited:
-        if pattern and pattern in reply:
+        if not pattern or pattern not in reply:
+            continue
+        # ★ 2026-10-21：子串删除必须防误伤。
+        #   实测「不建议你这么做」被删成「不这么做」——语义直接反过来，
+        #   比原句更糟。所以只在 pattern **前面不是否定词**时才删。
+        #   （中文没有词边界，这里用否定前缀做最小可行的护栏。）
+        if pattern in _NEGATION_GUARDED:
+            reply = re.sub(r"(?<![不没别勿])" + re.escape(pattern), "", reply)
+        else:
             reply = reply.replace(pattern, "")
+    reply = _tidy_after_strip(reply)
     reply = reply.strip()
     if len(reply) > 240:
         reply = reply[:240].rstrip() + "…"
     return reply
+
+
+# 这些词前面可能挂否定词，删之前要看一眼（"不建议你" ≠ "建议你"）
+_NEGATION_GUARDED = frozenset({
+    "建议你", "希望对你有所帮助", "希望对你有帮助", "需要我帮你",
+})
+
+
+def _tidy_after_strip(text: str) -> str:
+    """删词之后收拾残局：去空行、清句首标点、并连标点。
+
+    删词留下的坑是「。 ，」这种**标点撞标点**：原句被切成
+    「作为AI」+「，我无法回答这个问题」+「。」，删掉词之后前一段空了，
+    后一段又自带逗号，拼起来就是「，这个问题。，多喝水。」。
+    所以清理要按**句**做，先切句、再逐句剥掉开头标点、最后重拼。
+    """
+    if not text:
+        return text
+    out_lines = []
+    for line in text.split("\n"):
+        s = line.strip()
+        if not s:
+            continue
+        # 先按句末标点切段，逐段剥掉行首标点
+        segs = re.split(r"(?<=[。！？!?])", s)
+        cleaned = []
+        for seg in segs:
+            seg = seg.strip()
+            seg = re.sub(r"^[，。、；：,.;:\s]+", "", seg)
+            if seg:
+                cleaned.append(seg)
+        s = "".join(cleaned)
+        # 撞在一起的标点合并：。， / ，。 / 。。 ……
+        s = re.sub(r"[，、；：,;:]+(?=[。！？!?])", "", s)
+        s = re.sub(r"(?<=[。！？!?])[，、；：,;:]+", "", s)
+        s = re.sub(r"([。！？])\1+", r"\1", s)
+        s = re.sub(r"[，]{2,}", "，", s)
+        s = s.strip()
+        if s:
+            out_lines.append(s)
+    return "\n".join(out_lines)
 
 
 def load_prohibited_patterns() -> List[str]:

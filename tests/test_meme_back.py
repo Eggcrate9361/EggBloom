@@ -101,12 +101,40 @@ def test_helpers():
     fake = _make_gif(os.path.join(TMP, "fake.jpg"))  # 内容是 GIF，扩展名是 .jpg
     check("扩展名骗人（GIF 内容存成 .jpg）仍认表情包", bot_core._all_memes([fake]))
 
-    check("@我 → 需要读图", bot_core._image_understanding_needed("哈哈", True, False))
-    check("引用我 → 需要读图", bot_core._image_understanding_needed("", False, True))
+    # ── 该不该读图（2026-10-22 收紧后语义）──
+    # 非表情包（照片/截图）场景：@我 / 引用我 → 读
+    check("@我 + 照片 → 需要读图",
+          bot_core._image_understanding_needed("哈哈", True, False, memes_only=False))
+    check("引用我 + 照片 → 需要读图",
+          bot_core._image_understanding_needed("", False, True, memes_only=False))
     check("话里在说图（这是啥）→ 需要读",
-          bot_core._image_understanding_needed("[小明] 这是啥"))
+          bot_core._image_understanding_needed("[小明] 这是啥", memes_only=False))
     check("话里没提图（你和他们去吃饭了吗）→ 不读",
-          not bot_core._image_understanding_needed("[小明] 你和他们去吃饭了吗"))
+          not bot_core._image_understanding_needed("[小明] 你和他们去吃饭了吗",
+                                                  memes_only=False))
+    # ★ 表情包场景：@我 本身**不再**构成读图理由（用户抱怨"什么都读"的正面案例）
+    check("@我 + 表情包 + 只说哈哈 → 不读",
+          not bot_core._image_understanding_needed("哈哈", True, False, memes_only=True))
+    check("@我 + 表情包 + 问图 → 读",
+          bot_core._image_understanding_needed("这啥图", True, False, memes_only=True))
+    # 旧正则把 这/那/看/里 当信号，导致这些闲聊句全被误判成"在说图"
+    for _t in ("那你呢", "这个好", "看不出", "里面有点意思", "这不行啊",
+               "那倒也是", "写字去了", "还有啥", "那你说咋办", "啥也没有"):
+        check(f"闲聊「{_t}」→ 不读（表情包）",
+              not bot_core._image_understanding_needed(_t, memes_only=True))
+        check(f"闲聊「{_t}」→ 不读（照片）",
+              not bot_core._image_understanding_needed(_t, memes_only=False))
+    # 真的在问图 → 必须读（表情包也要读）
+    for _t in ("这个图里写的啥", "图里是什么", "这张图什么意思", "表情包里那个是谁",
+               "截图里报错是啥", "画里那个人是谁", "上面写的什么字", "照片里是你吗",
+               "里面写的啥"):
+        check(f"问图「{_t}」→ 读（表情包）",
+              bot_core._image_understanding_needed(_t, memes_only=True))
+    # 纯图无文字：表情包不读（斗图不需要识别），照片/截图要读（发给我看的）
+    check("纯表情包无文字 → 不读",
+          not bot_core._image_understanding_needed("", memes_only=True))
+    check("纯照片无文字 → 读",
+          bot_core._image_understanding_needed("", memes_only=False))
 
 
 def _stub_env():

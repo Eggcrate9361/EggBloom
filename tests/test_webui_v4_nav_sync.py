@@ -15,6 +15,12 @@
 运行：python tests/test_webui_v4_nav_sync.py
 """
 import os
+
+# 自动找到本机 ms-playwright 下的 chromium（pip 的 playwright 不带浏览器，
+# 浏览器是单独下载、版本号跟库绑定）。详见 tests/_pw_chrome.py。
+sys_ = __import__("sys")
+sys_.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _pw_chrome import resolve_chrome as _resolve_chrome  # noqa: E402
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -36,6 +42,21 @@ except Exception as e:
     SKIP.append("未安装 Playwright（%s）" % type(e).__name__)
     sync_playwright = None
 
+# 库装了 ≠ 浏览器在。Playwright 的浏览器是**单独下载**的、版本号还跟库绑定，
+# 所以 import 成功完全可能 launch 失败（CI 的 windows-latest 就是这种状态）。
+# 这一段先试真正起一个浏览器：起不来就按本文件的设计意图**跳过几何检查**，
+# 但前面的静态检查（A 段）照跑 —— 不能让"环境缺浏览器"把整个套件判红。
+if sync_playwright:
+    try:
+        with sync_playwright() as _pw:
+            _b = _pw.chromium.launch(executable_path=_resolve_chrome())
+            _b.close()
+    except Exception as e:
+        SKIP.append("Playwright 起不了浏览器（%s）" % type(e).__name__)
+        # 说明：本文件没有 skip() 辅助，SKIP 列表在末尾会打印出来，
+        # 而且下面 `if sync_playwright:` 的整段会被跳过 —— 效果等同 skip。
+        sync_playwright = None
+
 # 页面 id 顺序（PAGES 数组）—— 用来把"内容标题"换算成页号
 NAMES = ["仪表盘", "协议", "群管理", "表情包", "生图", "群聊行为", "Token",
          "配置中心", "Bot", "日志", "通知", "控制台", "记忆", "插件", "Agent"]
@@ -52,7 +73,7 @@ PROBE = """() => {
 if sync_playwright:
     print("\n=== 导航↔页面 同步（时序）===")
     with sync_playwright() as pw:
-        b = pw.chromium.launch(executable_path=os.environ.get("PW_CHROME") or None)
+        b = pw.chromium.launch(executable_path=_resolve_chrome())
         pg = b.new_page(viewport={"width": 1440, "height": 900})
         pg.route("**/api/**", lambda r: r.abort())
         pg.goto("file:///" + V4.replace("\\", "/"), wait_until="load")

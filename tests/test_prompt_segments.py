@@ -82,9 +82,10 @@ class TestPromptSegments(unittest.TestCase):
             self.assertEqual(sha, golden[key]["sha256"], f"{key} 内容变了")
 
     # ── 2. 注册表本身 ──
-    def test_five_segments_registered_in_order(self):
+    def test_segments_registered_in_order(self):
         names = bot_core.prompt_segment_names()
-        self.assertEqual(names, ["回答多样性", "去AI味铁律", "表情包", "诚实铁律", "群聊规则"],
+        self.assertEqual(names, ["回答多样性", "去AI味铁律", "表情包", "诚实铁律",
+                                 "别怕不体面", "怎么接话", "群聊规则"],
                          f"段顺序变了：{names}")
 
     def test_scope_filtering(self):

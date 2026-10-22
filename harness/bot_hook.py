@@ -258,6 +258,14 @@ def fine_tail_block(session_key, *, force=False):
         return ""
 
 
+def mismatch_note(user_msg, session_key="__default__", *, ts=None):
+    """对方话里的时间前提跟钟点矛盾 → 返回可执行提示；否则 ""。"""
+    try:
+        return _tc.mismatch_note(user_msg, ts=ts)
+    except Exception:
+        return ""
+
+
 # ── Skill L1 元数据 ────────────────────────────────────────────────
 _SKILL_CACHE = {"text": None, "at": 0.0}
 

@@ -10,6 +10,11 @@ import os
 import threading
 import time
 
+try:
+    import model_caps as _caps
+except Exception:                                    # 极端裁剪环境下的兜底
+    _caps = None
+
 _LOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
 _STATS_FILE = os.path.join(_LOG_DIR, "token_stats.jsonl")
 
@@ -20,21 +25,59 @@ _STATS_FILE = os.path.join(_LOG_DIR, "token_stats.jsonl")
 #   · 锚点取**真实一次调用的实测值**（API 回的 prompt_tokens），是硬事实。
 # 不变量 A20：**是估算就必须明说** —— 拿不到实测时用字数启发式，并在记录里标
 # estimated=True，绝不把启发式当精确值呈现给用户。
-_CONTEXT_WINDOW = int(os.environ.get("EGGBLOOM_CTX_WINDOW", "65536"))  # 可按模型改
-PRESSURE_WARN = 0.60        # ≥60% 提示"该留意了"
-PRESSURE_HIGH = 0.85        # ≥85% 提示"该压缩/清理了"
+#
+# 2026-10-21 修正：分母不再写死 65536。
+#   实际模型（deepseek-v4-flash）窗口 1M，用 64k 当分母会让 prompt 在只占真实
+#   窗口 3.7% 时就报 60% warn、5.3% 时报 85% high —— 全程误报，预警彻底失效。
+#   现在分母统一问 model_caps（环境变量 EGGBLOOM_CTX_WINDOW 仍最优先）。
+_CONTEXT_WINDOW = _caps.context_window() if _caps else int(
+    os.environ.get("EGGBLOOM_CTX_WINDOW", "131072"))
+
+# ── 双轨阈值（2026-10-21）──────────────────────────────────────────────
+# 只按「占窗口百分比」报警在大窗口下没有意义：1M 窗口要 600k token 才 warn，
+# 那时单次调用成本早已不可接受。所以再加一条**绝对量**轨道，表达成本语义：
+#   · 窗口轨（ratio）：会不会撞上限 —— 85% 才算 high；
+#   · 成本轨（tokens）：这一轮有多贵 —— 32k 就该留意，128k 已经很贵。
+# 两轨取更严重的那一档。
+PRESSURE_WARN = 0.60        # ≥60% 窗口：该留意了
+PRESSURE_HIGH = 0.85        # ≥85% 窗口：该压缩/清理了
+COST_WARN_TOKENS = 32000    # ≥32k prompt：成本上已经不便宜
+COST_HIGH_TOKENS = 128000   # ≥128k prompt：单轮成本进入「该干预」区间
 _CHARS_PER_TOKEN = 1.6      # 中文启发式（仅估算用，不用于实测路径）
 
 _anchor_lock = threading.Lock()
-_anchors = {}   # scope_key -> {prompt_tokens, window, ratio, level, estimated, at, scene}
+_anchors = {}   # scope_key -> {prompt_tokens, window, ratio, level, drivers, estimated, at, scene}
 
 
-def _pressure_level(ratio: float) -> str:
+def _pressure(ratio: float, tokens: int = 0):
+    """返回 (level, drivers)。drivers 记录**所有**命中的轨道，便于排查是贵还是满。"""
+    drivers = []
     if ratio >= PRESSURE_HIGH:
-        return "high"
+        level = "high"
+    elif ratio >= PRESSURE_WARN:
+        level = "warn"
+    else:
+        level = "low"
     if ratio >= PRESSURE_WARN:
-        return "warn"
-    return "low"
+        drivers.append("window")
+
+    try:
+        tok = int(tokens or 0)
+    except (TypeError, ValueError):
+        tok = 0
+    if tok >= COST_HIGH_TOKENS:
+        level = "high"
+        drivers.append("cost")
+    elif tok >= COST_WARN_TOKENS:
+        if level == "low":
+            level = "warn"
+        drivers.append("cost")
+    return level, drivers
+
+
+def _pressure_level(ratio: float, tokens: int = 0) -> str:
+    """兼容旧调用点：只给 ratio 时行为与之前一致（纯窗口轨）。"""
+    return _pressure(ratio, tokens)[0]
 
 
 def note_context_anchor(scope_key, *, prompt_tokens=None, prompt_chars=None,
@@ -46,9 +89,12 @@ def note_context_anchor(scope_key, *, prompt_tokens=None, prompt_chars=None,
     返回本次锚点记录；参数不足或异常时返回 None（**绝不向调用方抛异常**）。
     """
     try:
-        w = int(window or 0) or _CONTEXT_WINDOW
+        w = int(window or 0)
         if w <= 0:
-            w = 65536
+            # 每次调用现问一次：换模型/改 EGGBLOOM_CTX_WINDOW 后不用重启模块
+            w = _caps.context_window() if _caps else _CONTEXT_WINDOW
+        if w <= 0:
+            w = 131072
         est = False
         tok = int(prompt_tokens or 0)
         if tok <= 0:
@@ -60,11 +106,14 @@ def note_context_anchor(scope_key, *, prompt_tokens=None, prompt_chars=None,
         if tok <= 0:
             return None
         ratio = round(tok / float(w), 4)
+        _lvl, _drivers = _pressure(ratio, tok)
         rec = {
             "prompt_tokens": tok,
             "window": w,
             "ratio": ratio,
-            "level": _pressure_level(ratio),
+            "level": _lvl,
+            "drivers": _drivers,       # 哪条轨道触发的：window / cost
+            "window_source": (_caps.resolve().get("source") if _caps else "env"),
             "estimated": est,          # ★ A20：估算就明说
             "at": time.strftime("%H:%M:%S"),
             "scene": str(scene or ""),
@@ -95,7 +144,8 @@ def context_pressure(scope_key=None, window=None):
                     if w > 0:
                         rec["window"] = w
                         rec["ratio"] = round(rec["prompt_tokens"] / float(w), 4)
-                        rec["level"] = _pressure_level(rec["ratio"])
+                        rec["level"], rec["drivers"] = _pressure(
+                            rec["ratio"], rec["prompt_tokens"])
                 return rec
             out = []
             for k, v in sorted(_anchors.items(), key=lambda kv: -kv[1].get("ratio", 0)):
@@ -105,7 +155,8 @@ def context_pressure(scope_key=None, window=None):
                     if w > 0:
                         rec["window"] = w
                         rec["ratio"] = round(rec["prompt_tokens"] / float(w), 4)
-                        rec["level"] = _pressure_level(rec["ratio"])
+                        rec["level"], rec["drivers"] = _pressure(
+                            rec["ratio"], rec["prompt_tokens"])
                 rec["scope"] = k
                 out.append(rec)
             return out

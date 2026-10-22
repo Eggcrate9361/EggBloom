@@ -120,6 +120,34 @@ input,select,textarea{font:inherit;color:inherit}
 .ni.lunge .bd{animation:lunge 520ms var(--ez-bold) both}
 @keyframes lunge{0%{transform:translateZ(0) translateX(0)}
   34%{transform:translateZ(46px) translateX(13px)}100%{transform:translateZ(var(--h,0px)) translateX(0)}}
+
+/* ═══ 待定态（滚轮转动螺旋、但还没进入某页）═══
+   导航只负责"转"和"我要进哪一页"，内容页在提交前不动：
+     · 正对块 + 虚框 + ↵ = 待定（还没进去）
+     · 右侧 panel 失焦    = "你还在浏览"
+   提交（点击板片 / 回车）后才切页并恢复。状态表达放在**结果侧**（panel 失焦），
+   导航侧只做一行提示，避免用户同时读两个地方。 */
+.stage{transition:opacity 240ms var(--ez),filter 240ms var(--ez)}
+/* ⚠️ 修饰类必须带 `.stage` 前缀，不能写成裸 `.pending`。
+   历史事故（2026-10-22 抓到）：这里原本是 `.stage.pending{...}`，
+   而下面「未迁移页容器」是**独立布局类** `.pending{max-width:560px;padding:...}`。
+   CSS 没有作用域 —— 那个全局 `.pending` 会命中**任何**带 pending 的元素，
+   包括 `.stage` 本身。于是每次导航预演（setPend → classList.toggle('pending')）
+   舞台都会被压到 560px 宽并吃到 s7 的内边距，正是"看着像渲染坏了"。
+   现在两侧彻底分家：舞台用 `.stage.pending`，容器用 `.pending`（已限定在
+   `.pending` 只出现在内容区），且全局那条改名为 `.page-todo` 不再叫 pending。 */
+.stage.pending{opacity:.62;filter:saturate(.72) brightness(.92)}
+.mech.pend .mblk.on .plate .face{border-style:dashed}
+.mech.pend .mblk.on .blk-tag b::after{content:'↵';margin-left:6px;color:var(--c10)}
+.mech.pend .mech-cap{color:var(--c10)}
+/* ═══ 关于"提交骨架"：试过，删了（2026-10-21）═══
+   原本的设想：切页时 panel 先挂上树、内容异步填，空壳期用骨架盖住。
+   实测 15 个页面逐个验（fetch 人为延迟 900ms，采样点 560ms）：
+     · 15/15 页在 await 之前就已同步画好"读取中…"（或等价的自家提示）；
+     · .panel.in 本身的 flipIn 420ms 也一直在，切页并不是"硬切"。
+   也就是说空壳期**根本不存在**，骨架永远不触发 —— 那是死代码，删掉。
+   真解决问题的是下面这条：提交瞬间直到内容落地之前，panel 保持失焦。 */
+
 .ni.wave .tx{animation:waveZ 560ms var(--ez) both}
 @keyframes waveZ{0%{color:var(--ink3)}28%{color:var(--accent)}100%{color:var(--ink3)}}
 /* ⚠️ 类名一度叫 `.pending`，与下面"未迁移页面容器"的 `.pending` **撞车** ——
@@ -418,12 +446,16 @@ input,select,textarea{font:inherit;color:inherit}
 .msg-ops .lnk:hover{color:var(--accent)}
 .msg-ops .lnk[data-armed="1"]{color:var(--c4)}
 
-.pending{max-width:560px;padding:var(--s7) 0}
-.pending h3{font-family:var(--f-d);font-size:var(--z5);font-weight:600;margin-bottom:var(--s3)}
-.pending p{color:var(--ink3);font-size:var(--z3);margin-bottom:var(--s3);line-height:1.7}
-.pending code{font-family:var(--f-m);font-size:var(--z2);color:var(--ink2);
+/* ── 未迁移页容器：**独立布局类**，必须与修饰类彻底分开命名 ──
+   原名为 `.pending`，与 `.stage.pending`（导航预演态）撞车：CSS 无作用域，
+   全局 `.pending` 会把 `.stage` 也压成 560px。改名为 `.page-todo`。
+   `test_webui_v4_geometry` 的 A 段静态检查锁的就是这条规则。 */
+.page-todo{max-width:560px;padding:var(--s7) 0}
+.page-todo h3{font-family:var(--f-d);font-size:var(--z5);font-weight:600;margin-bottom:var(--s3)}
+.page-todo p{color:var(--ink3);font-size:var(--z3);margin-bottom:var(--s3);line-height:1.7}
+.page-todo code{font-family:var(--f-m);font-size:var(--z2);color:var(--ink2);
   background:rgba(255,255,255,.045);padding:2px 6px}
-.pending ul{margin:var(--s3) 0 0 var(--s5);color:var(--ink3);font-size:var(--z3);line-height:1.9}
+.page-todo ul{margin:var(--s3) 0 0 var(--s5);color:var(--ink3);font-size:var(--z3);line-height:1.9}
 
 .empty{color:var(--ink4);font-size:var(--z3);padding:var(--s5) 0}
 /* ⚠️ 原名 `.err` —— 与 `.sig.err` / `.log .lv.err` 这些**修饰类**同名。
@@ -2580,9 +2612,21 @@ body.mech-open .rack .lb{animation:fadeMark 260ms linear 420ms forwards}
   72%{scale:.985;rotate:-2deg}
   100%{translate:0 0;scale:1;rotate:0deg}}
 
-.mech-cap{position:absolute;left:50%;bottom:-52px;transform:translateX(-50%);
-  font-family:var(--f-mono);font-size:9px;letter-spacing:.3em;
-  color:var(--c30-ink2);white-space:nowrap;opacity:0}
+/* ★ 2026-10-21：原来写的是 bottom:-52px。
+   `.mech-cap` 在 DOM 上是 `.mech-in` 的**兄弟**，定位包含块是 `.mech`（fixed,inset:0）
+   —— 也就是整个视口。bottom:-52 于是把它推到视口**外** 52px：
+   三种分辨率实测（1440×900 / 1920×1080 / 1280×800）全部不可见。
+   它是唯一的操作说明（滚轮/回车/ESC 怎么用），等于从来没人看到过。
+   现在贴着视口底 12px；上下留白靠 mech-in 与视口高度的差（最窄 1366×768 仍有 5px 间隙）。
+   ★ 颜色必须用 --deep-ink 而不是 --c30-ink：提示牌压在本层遮罩上
+   （color-mix(--deep 62%)），**四套配色的遮罩都是深色**，所以字必须是亮的。
+   实测对比度（逐像素采样，WCAG 相对亮度）：
+     用 --c30-ink   → a 骨白 2.69 / r 绯白 2.79  ← 浅色配色下不可读
+     用 --deep-ink  → 四套统一落在 7 以上（--deep-ink 本来就是"深底上的亮字"）。*/
+.mech-cap{position:absolute;left:50%;bottom:12px;transform:translateX(-50%);
+  font-family:var(--f-mono);font-size:10px;letter-spacing:.26em;
+  color:var(--deep-ink);white-space:nowrap;opacity:0;pointer-events:none;
+  text-shadow:0 1px 6px rgba(0,0,0,.5)}
 .mech.open .mech-cap{opacity:1;animation:capIn 200ms steps(4,end) 200ms both}
 @keyframes capIn{0%{opacity:0}100%{opacity:1}}
 @media (prefers-reduced-motion: reduce){
@@ -7600,6 +7644,11 @@ async function render(i) {
   else if (p.id === 'plugins') await pagePlugins(el);
   else if (p.id === 'agent') await pageAgent(el);
   else pagePending(el, p);
+  /* ★ 2026-10-21：内容真正落位才解除"提交中"的失焦。
+     放在 render 末尾（各 pageXxx 都 await 完）而不是 appendChild 之后：
+     面板先挂上树再异步填内容，挂在树上那一刻可能还是空壳，
+     此时恢复亮度等于给用户看一块空白 —— 比失焦更糟。 */
+  try { if (window.__pvPendLand) window.__pvPendLand(); } catch (e) {}
 }
 
 /* PV 艺术层：URL 参数切配色 ?palette=a|b|c */
@@ -7803,7 +7852,7 @@ function pvSignalBlip(root) {
             + '</span></span></div></div>';
     }
     html += '</div><i class="mech-redline"></i></div>'
-      + '<div class="mech-cap">滚轮 / ↑↓ 转动　·　点击板片直接跳　·　ESC 收起</div>';
+      + '<div class="mech-cap">滚轮 / ↑↓ 转动　·　↵ 进入　·　点击板片直接跳　·　ESC 收起</div>';
 
     var layer = document.createElement('div');
     layer.className = 'mech';
@@ -7813,6 +7862,46 @@ function pvSignalBlip(root) {
 
     var blocks = layer.querySelectorAll('.mblk');
     var helix = layer.querySelector('#pvHelix');
+    var _stageEl = document.querySelector('.stage');
+    /* ★ 待定态：螺旋转了、但内容页没切。视觉上必须和"已进入"分开，
+       否则用户会以为导航坏了（滚了半天右边没变）。 */
+    function setPend(on){
+      layer.classList.toggle('pend', !!on);
+      if (_stageEl) _stageEl.classList.toggle('pending', !!on);
+    }
+    function committedPage(){
+      try { if (typeof window.__pvPage === 'number') return window.__pvPage; } catch (e) {}
+      try { if (typeof navTo === 'number') return navTo; } catch (e) {}
+      return 0;
+    }
+    /* ★ 2026-10-21 提交三段式（浏览 → 提交 → 落地）：
+       提交那一刻内容还是旧的，go() 要 180ms 前摇 + 420ms 翻页才换上来。
+       若在提交瞬间就把失焦撤掉，用户会看到"我进了 02、屏幕还是 01"——
+       这正是原本要解决的"导航与内容不符"，只是换了个位置犯。
+       所以：提交瞬间 **保持** 失焦（pendHold），等 render() 把新面板挂上去
+       那一刻再撤（pendLand）。另有 1.2s 兜底，防止 go() 早退（同页）漏撤。 */
+    var pendHold = false, pendT = 0;
+    function pendOff(){
+      pendHold = false;
+      if (pendT) { clearTimeout(pendT); pendT = 0; }
+      setPend(false);
+    }
+    function pendArm(){
+      pendHold = true;
+      setPend(true);
+      if (pendT) clearTimeout(pendT);
+      pendT = setTimeout(pendOff, 1200);
+    }
+    /* render() 挂上新面板时调用：内容已到位，恢复亮度 */
+    window.__pvPendLand = pendOff;
+    /* ★ 提交 = 切页（+ 可选收起）。已是目标页就不必装待定，直接撤掉，
+       否则 Enter 停在当前页会换来 1.2s 无故变暗。 */
+    function commit(pg, thenHide){
+      var was = committedPage();
+      if (typeof go === 'function') go(pg);
+      if (pg !== was) pendArm(); else pendOff();
+      if (thenHide) hide();
+    }
     var spinAcc = 0;   /* 连续旋转累计角：环绕（14↔0）时不再回卷一整圈 */
     function place(i, keepSpin){
       cur = i;
@@ -7881,20 +7970,27 @@ function pvSignalBlip(root) {
         if (bp) bp.textContent = pg.name || '';
       }
     }
-    function turn(d){
+    function turn(d, doCommit){
       d = d > 0 ? 1 : -1;
-      /* 无限循环：到头不挡，绕回另一头（12 页来回）*/
+      /* 无限循环：到头不挡，绕回另一头（15 页来回）*/
       var n = ((cur + d * PER) % N + N) % N;
       if (navigator.vibrate) { try { navigator.vibrate(6); } catch (e) {} }
       place(n, true);
-      if (typeof go === 'function') go(n % PAGES_N);
+      /* ★ 2026-10-21：转动 ≠ 切页。
+         滚轮/拖拽/方向键只转螺旋（保留棘轮手感），内容页在**提交**时才换：
+         否则滚过 15 页就要渲染 15 次内容，且"内容一直闪"比"手感"更劝退。 */
+      if (doCommit) commit(n % PAGES_N, false);
+      else setPend((n % PAGES_N) !== committedPage() || pendHold);
       return true;
     }
     function show(){
       open = true;
+      window.__pvMechOpen = true;
       /* ★ 同步到当前页：热区可能在用户停留期间切过页（局部 __pvPage 会过期）*/
       try { if (typeof window.__pvPage === 'number') cur = window.__pvPage; } catch (e) {}
       place(cur);
+      /* 展开即"已对齐当前页"，无待定；除非上一笔提交还在等内容落地 */
+      if (!pendHold) setPend(false);
       layer.classList.add('open');
       layer.setAttribute('aria-hidden', 'false');
       /* 让收起的解构标记先"画出来"，再接力交给展开层 */
@@ -7902,8 +7998,12 @@ function pvSignalBlip(root) {
     }
     function hide(){
       open = false;
+      window.__pvMechOpen = false;
       layer.classList.remove('open');
       layer.setAttribute('aria-hidden', 'true');
+      /* 收起 = 放弃待定。但"提交后等内容落地"那段 pendHold 必须留着 ——
+         面板此刻正在后台翻页，撤了失焦就又会露出旧内容。 */
+      if (!pendHold) setPend(false);
       try { document.body.classList.remove('mech-open'); } catch (e) {}
     }
     window.__pvMechToggle = function () { open ? hide() : show(); };
@@ -7980,34 +8080,51 @@ function pvSignalBlip(root) {
       turn(d);
     }, {passive: false});
     /* 拖拽 */
-    var dy = null, acc = 0;
+    /* ★ 2026-10-21：pointerdown 里**不能**无条件 setPointerCapture。
+       指针捕获会把后续 pointer 事件全重定向到 layer，于是 pointerup 的 target
+       也是 layer，浏览器据此把 click 的 target 定成 layer 本身 ——
+       下面 click 里的 `e.target.closest('.mblk')` 恒为 null，
+       **所有点击都掉进 hide() 分支**，"点板片直接跳"其实从未生效（实测：点击只收起）。
+       改法：等到真开始拖（位移过阈值）才捕获；纯点击不捕获，target 保真。
+       拖动结束后 250ms 内抑制一次 click，避免拖完顺带触发提交。 */
+    var dy = null, acc = 0, dragged = false, muteClick = 0;
     layer.addEventListener('pointerdown', function (e){
-      dy = e.clientY; acc = 0;
-      try { layer.setPointerCapture(e.pointerId); } catch (x) {}
+      dy = e.clientY; acc = 0; dragged = false;
     });
     layer.addEventListener('pointermove', function (e){
       if (dy === null) return;
       acc += e.clientY - dy; dy = e.clientY;
-      if (Math.abs(acc) >= 40) { var d = acc > 0 ? 1 : -1; acc = 0; turn(d); }
+      if (Math.abs(acc) < 40) return;
+      if (!dragged) {                       /* 第一次越过阈值：现在才抓指针 */
+        dragged = true;
+        try { layer.setPointerCapture(e.pointerId); } catch (x) {}
+      }
+      var d = acc > 0 ? 1 : -1; acc = 0; turn(d);
     });
-    layer.addEventListener('pointerup', function (){ dy = null; });
-    layer.addEventListener('pointercancel', function (){ dy = null; });
+    layer.addEventListener('pointerup', function (){
+      dy = null;
+      if (dragged) { muteClick = Date.now() + 250; dragged = false; }
+    });
+    layer.addEventListener('pointercancel', function (){ dy = null; dragged = false; });
     /* 点块 = 直接跳；点空白 = 收起 */
     /* ★ 鼠标选中（用户："不是只靠滚轮，鼠标选中也很重要"）
        点任意块 → 转到正前并选中；点当前块或空白 → 收起；悬停 220ms 即预选。 */
     layer.addEventListener('click', function (e){
+      if (Date.now() < muteClick) return;    /* 拖拽尾巴：不当作点击 */
       var b = e.target.closest('.mblk');
       if (b) {
         var i = +b.getAttribute('data-i');
-        if (i === cur) { hide(); return; }        /* 点当前块 = 收起 */
-        cur = i;
-        place(i);
-        if (navigator.vibrate) { try { navigator.vibrate(6); } catch (e) {} }
-        if (typeof go === 'function') go(i % PAGES_N);
-        /* ★ 交互定稿是「点击 = 切页 + 收起」—— 此前实现漏了收起：
-           螺旋一直开着挡住内容，切页的短暂窗口期被看成"导航和内容不符"。
-           收起后内容直接可见，错配感消失。 */
-        hide();
+        /* ★ 2026-10-21：点正前块 = 提交，不再是"收起放弃"。
+           此前 i===cur 就走 hide()：用户转了 3 格、点正前方那一片（最自然的确认动作）
+           结果只是把导航关掉、什么都没进 —— 与"点击板片直接跳"的说明牌直接矛盾。
+           只有当它**已经是当前页**（没有待进目标）时，收起才是合理语义。 */
+        if (i !== cur) {
+          cur = i;
+          place(i);
+          if (navigator.vibrate) { try { navigator.vibrate(6); } catch (e) {} }
+        }
+        /* 点击 = 切页 + 收起。收起仍保留失焦（pendArm），等 render() 落地后才亮回来。 */
+        commit(i % PAGES_N, true);
         return;
       }
       hide();
@@ -8031,7 +8148,12 @@ function pvSignalBlip(root) {
     document.addEventListener('keydown', function (e){
       if (!open) return;
       if (e.key === 'Escape') { hide(); }
-      else if (e.key === 'Enter') { hide(); }
+      else if (e.key === 'Enter') {
+        /* ★ 2026-10-21：Enter = 提交（进入正对的那一页）。
+           此前 Enter 只会收起 —— 转了半天空转，等于"选了不算"。 */
+        e.preventDefault();
+        commit(cur % PAGES_N, true);
+      }
       else if (e.key === 'ArrowDown' || e.key === 'ArrowRight' || e.key === 'PageDown') {
         e.preventDefault();
         hoverLock = Date.now() + 560;
@@ -8415,6 +8537,11 @@ function go(i, catchUp) {
 }
 
 document.addEventListener('keydown', (e) => {
+  /* ★ 2026-10-21：机械导航展开时，方向键归它（转动），这里必须让位。
+     否则同一次按键双份生效：归航转一格「不提交」+ 这里 go(navTo±1)「切了内容」
+     —— 用户看到的就是"方向键把内容页偷偷换了一页"，与待定态语义直接冲突。
+     两个监听器都挂在 document 上，stopPropagation 拦不住同级，只能靠状态位。 */
+  if (window.__pvMechOpen) return;
   const tg = e.target, isField = tg && (tg.tagName === 'INPUT' || tg.tagName === 'TEXTAREA' || tg.tagName === 'SELECT');
   if (isField) {
     /* 用户反馈：控制台页要点一下别处方向键才切页 —— 因为焦点在输入框里。

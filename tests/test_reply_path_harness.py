@@ -119,12 +119,22 @@ def test_group_allowlist_still_binds():
 
 
 def test_time_injection_graded():
-    """时间分级注入：粗粒度反复调用只给一次；精粒度受分钟控制。"""
+    """时间分级注入：粗粒度按「日+时段」缓存复用，精粒度受分钟控制。
+
+    语义变更（v1.5.6）：旧实现「没变化就返回空串」，本意是省 token，但
+    每条消息的 prompt 都是重新拼的（不是累加），空串等于「这轮没有时间」，
+    于是绝大多数轮次模型看不到钟点。现在改成：
+      · 粗粒度**总是**返回，且同一「日+时段」内文本逐字节不变（可进缓存前缀）；
+      · 精粒度**总是**返回，但同一分钟内文本不变（避免秒级抖动）。
+    所以这里锁的是「稳定」而不是「只给一次」。
+    """
     bot_hook.reset_time_cache()
     c1, f1 = bot_hook.time_parts("g_test")
     c2, f2 = bot_hook.time_parts("g_test")
-    check("回复链: 粗粒度只注入一次", c1 != "" and c2 == "", repr((c1, c2)))
+    check("回复链: 粗粒度每轮都给", c1 != "" and c2 != "", repr((c1, c2)))
+    check("回复链: 粗粒度同段内逐字节稳定", c1 == c2, repr((c1, c2)))
     check("回复链: 精粒度带分钟", f1 != "" and ":" in f1, f1)
+    check("回复链: 精粒度同分钟内稳定", f1 == f2, repr((f1, f2)))
     check("回复链: 粗粒度含日期", "年" in c1 and "月" in c1, c1)
     # force 精粒度
     check("回复链: force 精粒度总给", bot_hook.fine_tail_block("g_test", force=True) != "")

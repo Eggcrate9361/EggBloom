@@ -295,6 +295,26 @@ AI_MAX_TOKENS = _config.get("ai_max_tokens", 800)
 SESSION_TTL = _config.get("session_ttl", 300)
 IDLE_TIMEOUT = _config.get("idle_timeout", 120)
 SESSION_MAX_ROUNDS = _config.get("session_max_rounds", 30)
+
+
+def _session_round_budget():
+    """会话模式能用几轮。
+
+    2026-10-21 修：桌面端「设置 → 最大轮数」写的是 `session_max_rounds`，
+    但主链路只读 `group_session_max_replies`（默认 20）——用户在 UI 里改了完全没效果。
+    现在：显式配了 group_session_max_replies 就以它为准（兼容旧配置），
+    否则回落到 session_max_rounds。
+    """
+    try:
+        v = _config.get("group_session_max_replies")
+        if not v:
+            # 现读配置（而不是只用导入期常量），改配置后无需重启即可生效
+            v = _config.get("session_max_rounds", SESSION_MAX_ROUNDS)
+        return max(1, int(v))
+    except (TypeError, ValueError):
+        return 20
+
+
 GROUP_REPLY_MAX_LENGTH = _config.get("group_reply_max_length", 800)
 PRIVATE_REPLY_MAX_LENGTH = _config.get("private_reply_max_length", 500)
 GROUP_SESSION_IDLE_TIMEOUT = _config.get("group_session_idle_timeout", 300)
@@ -362,6 +382,13 @@ GROUP_IDS = _config.get("group_ids", [])
 BOT_GROUP_NICK = _config.get("bot_group_nick", "")
 STARTUP_COOLDOWN = _config.get("startup_cooldown", 30)
 MSG_SPLIT_LEN = _config.get("msg_split_len", 2000)
+# 群聊回复"整块发送"的总字数阈值（有效字，符号不计）。
+# ≤ 此值 → 拆成多条发（碎片节奏，像人连发）；> 此值 → 整块一次发完（避免刷屏）。
+# 1.5.7 前是写死的 40，且是**长消息一次性发送**的开关（>40 就并成一条），
+# 语义正好相反：字数越多反而越不该分段。这里改成"越多越整块"，并提到 100。
+GROUP_SEND_BLOCK_THRESHOLD = _config.get("group_send_block_threshold", 100)
+# 单次回复最多拆成几条（防刷屏）。超过就把尾部并成一条。
+GROUP_SEND_MAX_PARTS = _config.get("group_send_max_parts", 5)
 
 PERSONALITY_FILE = os.path.join(SCRIPT_DIR, "personality.txt")
 # 数据文件放在用户目录下，避免 PyInstaller dist 重建时丢失
@@ -1920,7 +1947,18 @@ def _restore_kaomoji(text, placeholders):
 
 
 def smart_send_group(group_id, text, reply_id: int = 0):
-    """群聊 AI 回复专用：长消息(有效字>40)一次性发送，短消息逐句拆分。符号不计入字数，颜文字不拆分。自动 @QQ号 转 CQ at
+    """群聊 AI 回复专用：按「条」发送。符号不计入字数，颜文字不拆分。自动 @QQ号 转 CQ at
+
+    ── 1.5.7 改动：>40 字不再并成一条（用户定调"爱连发、话多、3-5 条碎片"）──
+    旧行为：有效字数 > 40 → 整段一次性发出去。问题在于**数的是总字数，不是条数**：
+        "好女孩麦麦是只吃人类图的小萝莉 / 好女孩麦麦尝尝你的涩图 / 麦麦只会舔你的图"
+        合计 34 字 → 侥幸逐句发；只要多说两句、总数过 40，三句话立刻被并成一坨，
+        碎片的节奏感全没了。而真人连发跟总字数根本无关 —— 60 个字也可以是三条。
+    新行为：
+        ① 先看**模型自己有没有分行**。分行 ≥2 行 → 模型在用它自己的切分意图，
+           按行发（每行一条），总字数不再参与判断。这是最忠于"想怎么断就怎么断"的路径。
+        ② 没分行且总字数 > 40 → 仍走逐句标点拆分（长段落按句子断开发，比整段甩出去更像人）。
+        ③ 超过 MSG_SPLIT_LEN 的单行先硬切成多条，避免一条撑爆。
 
     reply_id>0 → 这条回复要带**引用**（只挂在第一条上：连发多条都带引用会很吵）。
     """
@@ -1980,21 +2018,92 @@ def smart_send_group(group_id, text, reply_id: int = 0):
         GROUP_LAST_BOT_MSG[group_id] = time.time()
         return True
     
-    # 长消息（有效字数>40）：一次性发送，不拆分
-    if effective_len > 40:
+    # ── 模型自己分了行 → 按行发，总字数不参与判断（1.5.7）──
+    #    这是"碎片连发"的主路径：切分意图来自模型，不是来自标点规则。
+    #    但"模型分了行"不等于"行数合理"：复读/争吵时它真会吐 12 行，
+    #    逐行发就是 12 条刷屏，比一整段更烦人。所以这里同样受条数上限约束，
+    #    超出部分尾部合并（与下面标点拆分路径共用同一个上限）。
+    _lines_raw = [l.strip() for l in text.split('\n') if l.strip()]
+    if len(_lines_raw) >= 2:
+        _out_lines = []
+        for _ln in _lines_raw:
+            if len(_ln) > MSG_SPLIT_LEN:
+                _cut = _ln
+                while len(_cut) > MSG_SPLIT_LEN:
+                    _at = _cut.rfind("\n", 0, MSG_SPLIT_LEN)
+                    if _at == -1:
+                        _at = MSG_SPLIT_LEN
+                    _out_lines.append(_cut[:_at])
+                    _cut = _cut[_at:].lstrip()
+                if _cut:
+                    _out_lines.append(_cut)
+            else:
+                _out_lines.append(_ln)
+        # 上限：合并发生在**拆分之后、发送之前**，所以长行被硬切出来的碎片也算在内。
+        if len(_out_lines) > GROUP_SEND_MAX_PARTS:
+            _n_orig = len(_out_lines)
+            _keep_l = _out_lines[:GROUP_SEND_MAX_PARTS - 1]
+            _rest_l = "\n".join(_out_lines[GROUP_SEND_MAX_PARTS - 1:])
+            _out_lines = _keep_l + [_rest_l]
+            log(f"[发送] 群[{group_id}] 分行 {_n_orig} 条超上限，"
+                f"尾部已并成 1 条 → 共 {len(_out_lines)} 条")
         ated_qqs = set()
-        lines = text.split('\n')
-        formatted = [format_at_once(line.strip()) for line in lines if line.strip()]
-        result = send_group_message(group_id, '\n'.join(formatted), reply_id=reply_id)
+        for _i, _ln in enumerate(_out_lines):
+            msg = format_at_once(_ln)
+            resp = api_call("send_group_msg",
+                {"group_id": int(group_id),
+                 "message": quote_message_payload(msg, reply_id if _i == 0 else 0)})
+            if resp.get("retcode") != 0:
+                log(f"[发送] 群[{group_id}] 分行 {_i + 1}/{len(_out_lines)} 失败 "
+                    f"retcode={resp.get('retcode')} msg={str(resp.get('msg',''))[:60]} "
+                    f"内容={msg[:40]}（后续 {len(_out_lines) - _i - 1} 行未发送）")
+                return False
+            _remember_own_group_msg(group_id, msg, resp)
+            delay = 0.3 if len(_ln) <= 15 else min(1.0, 0.3 + len(_ln) * 0.02)
+            time.sleep(delay)
+        GROUP_LAST_BOT_MSG[group_id] = time.time()
+        return True
+
+    # ── 总闸（1.5.7 · 用户定调"超 100 字一块发"）──
+    #    100 有效字以内：不管模型有没有分行，都拆成多条发（碎片节奏）。
+    #    超过 100：整块一次发完 —— 真长回复拆开就是刷屏，反而更烦人。
+    #    注意：分行分支（>=2 行）已经在上面 return 了，那里不设总闸，
+    #    因为"模型自己分了行"本身就是明确的切分意图，行数不会失控。
+    if effective_len > GROUP_SEND_BLOCK_THRESHOLD:
+        result = send_group_message(group_id, text, reply_id=reply_id)
         if result:
             GROUP_LAST_BOT_MSG[group_id] = time.time()
         return result
-    
+
     # 短消息：保护颜文字 → 拆分 → 恢复
     protected_text, kaomoji_map = _protect_kaomoji(text)
     sentences = re.split(r'[。！？!?\n]+', protected_text)
     sentences = [_restore_kaomoji(s.strip(), kaomoji_map) for s in sentences if s.strip()]
-    
+
+    # 兜底（1.5.7）：拆完只剩一条且明显偏长 → 说话人一口气说了几十字没有标点，
+    # 真人不会这么发。按逗号/空格硬切（阈值仍是 30，但在总闸 100 以内才走到这）。
+    if len(sentences) == 1 and len(sentences[0]) > 40:
+        _long = sentences[0]
+        _parts, _buf = [], ""
+        for _ch in _long:
+            _buf += _ch
+            if len(_buf) >= 30 and _ch in "，,、；; ":
+                _parts.append(_buf.strip("，,、；; "))
+                _buf = ""
+        if _buf.strip():
+            _parts.append(_buf.strip())
+        if len(_parts) > 1:
+            sentences = _parts
+
+    # ── 条数上限（1.5.7）──
+    #    "拆得越碎越像人"有边界：模型偶尔会输出 10+ 个短句（尤其争吵/复读时），
+    #    逐句发就是刷屏 10 条，比一整段更烦人。超过上限时把尾部合并成一条。
+    #    上限只约束**标点拆分**这条路径；模型自己分行的（上面 return）不受影响。
+    if len(sentences) > GROUP_SEND_MAX_PARTS:
+        _keep = sentences[:GROUP_SEND_MAX_PARTS - 1]
+        _rest = "".join(sentences[GROUP_SEND_MAX_PARTS - 1:])
+        sentences = _keep + [_rest]
+
     if not sentences:
         result = send_group_message(group_id, text, reply_id=reply_id)
         if result:
@@ -2045,29 +2154,45 @@ def strip_exit_phrases(text):
     return text.strip()
 
 
+def _bigrams(text):
+    """字符二元组 —— 中文相似度的通用做法：保留顺序，避免"共用汉字"被当成同一句。"""
+    s = re.sub(r"\s+", "", str(text or ""))
+    if len(s) < 2:
+        return {s} if s else set()
+    return {s[i:i + 2] for i in range(len(s) - 1)}
+
+
 def is_similar_to_recent(recent_texts, new_text, threshold=0.6):
-    """检查 new_text 是否与最近回复列表中的某条高度相似。返回 (is_similar, matched_text)"""
+    """检查 new_text 是否与最近回复列表中的某条高度相似。返回 (is_similar, matched_text)
+
+    ── 2026-10-21 修：判重误杀（表现为"该说话时莫名沉默"）──
+    旧实现用**字符集合** 交集 / min(len) 当相似度。中文常用字高度重叠，实测：
+        "你谁啊" vs "你叫谁妈呢"  → 0.67 → 判成重复
+        "妈"     vs "你叫谁妈呢"  → 1.00 → 判成重复
+    判重命中后走"重新生成"，再命中就**整条丢弃**（日志：跳过重复回复）。
+    现改为**字符二元组 Dice 系数**（2-gram 保留顺序，"你叫谁妈呢" vs "你谁啊" 交集为 0），
+    并加长度比护栏：长度差一倍以上不可能是同一条回复。
+    """
     if not recent_texts:
         return False, ""
+    _new = str(new_text or "").strip()
+    if not _new:
+        return False, ""
     # 称呼类重复短文本不判重（如"老大老大老大"，字符重复率 > 2 才豁免）
-    if len(new_text) <= 8 and len(new_text) / len(set(new_text)) > 2:
+    if len(_new) <= 8 and len(_new) / len(set(_new)) > 2:
         return False, ""
-    n = set(new_text)
-    if len(n) == 0:
+    n = _bigrams(_new)
+    if not n:
         return False, ""
     for rt in recent_texts:
-        r = set(rt)
-        if len(r) == 0:
+        r = _bigrams(rt)
+        if not r:
             continue
-        overlap = len(n & r) / min(len(n), len(r))
-        if overlap > threshold:
+        if min(len(n), len(r)) / max(len(n), len(r)) < 0.5:
+            continue                      # 长度差太多，不可能是同一条
+        dice = 2 * len(n & r) / (len(n) + len(r))
+        if dice > threshold:
             return True, rt
-    # 额外检查：完全相同的短句开头（3字以上）
-    for rt in recent_texts:
-        if len(new_text) >= 3 and len(rt) >= 3:
-            shorter = min(len(new_text), len(rt))
-            if new_text[:shorter] == rt[:shorter]:
-                return True, rt
     return False, ""
 
 
@@ -2098,6 +2223,115 @@ def _build_group_context_block(group_id: str, bot_qq: str) -> str:
     return ("【群聊近况（真实流水，最新在后；你插话前群里正在聊这些）】\n"
             + "\n".join(lines)
             + "\n【要求】回复必须接得住上面的当前话题，别答非所问、别自说自话。")
+
+
+def _group_hist(group_id):
+    """取群聊历史（键可能是 int 也可能是 str，两种都试）。"""
+    for k in (group_id, str(group_id)):
+        try:
+            v = group_chat_history.get(k)
+        except Exception:
+            v = None
+        if v:
+            return v
+    return []
+
+
+def _self_lines_block(group_id, limit: int = 5) -> str:
+    """【你最近说过的】—— 自洽锚点。
+
+    为什么单独成块（2026-10-21）：
+      摘要账本为了省 token 把自己说的话压成 30 字且**不带说话人标记**，
+      超过最近 4 轮后模型就认不出"这句是我说的"，立场每轮重建 → 上下矛盾。
+      （账本侧已补 `我:` 标记，这里再给一段**原话**，双保险。）
+
+    只读内存、零模型调用；任何异常返回空串（绝不打断回复主链）。
+    """
+    try:
+        lines = []
+        for h in reversed(_group_hist(group_id)):
+            if h.get("role") != "assistant":
+                continue
+            txt = str(h.get("content") or "").strip()
+            if not txt:
+                continue
+            lines.append("我: " + (txt[:80] + ("…" if len(txt) > 80 else "")))
+            if len(lines) >= int(limit or 5):
+                break
+        if not lines:
+            return ""
+        lines.reverse()
+        return ("【你最近说过的】说话要跟自己保持一致，别前后打脸；"
+                "需要时可以直接引用自己说过的话。\n" + "\n".join(lines))
+    except Exception:
+        return ""
+
+
+def _timeline_of(group_id):
+    for k in (group_id, str(group_id)):
+        try:
+            v = GROUP_TIMELINE.get(k)
+        except Exception:
+            v = None
+        if v:
+            return v
+    return []
+
+
+def _bot_replies_of(group_id):
+    for k in (group_id, str(group_id)):
+        try:
+            v = GROUP_BOT_REPLIES.get(k)
+        except Exception:
+            v = None
+        if v:
+            return v
+    return []
+
+
+def _situation_block(group_id, window: int = 6) -> str:
+    """【当前局面】—— 只讲结构，不猜语义。
+
+    治理的是"接不上游戏"：模型此前只拿到一条孤立消息，不知道谁在跟它说、
+    说到第几轮、自己上一轮是什么反应，只能从零推断，推不出就退回最安全的日常问候。
+
+    这里给的全是**可统计的事实**（谁/几条/跨度/上一句原文/我这轮接没接），
+    至于"这是认亲游戏还是挑衅"——不在这里硬塞，交给模型自己判断。
+    """
+    try:
+        tl = _timeline_of(group_id)
+        if not tl:
+            return ""
+        tail = list(tl)[-int(window or 6):]
+        last_ts, last_sender, last_nick, last_text = tail[-1][:4]
+
+        # 同一人连续说了几条（尾部往回数）
+        streak = 0
+        for e in reversed(tail):
+            if str(e[1]) == str(last_sender):
+                streak += 1
+            else:
+                break
+        burst_start = tail[-streak][0] if streak else last_ts
+
+        people = len({str(e[1]) for e in tail})
+        span = int(max(0, float(last_ts) - float(tail[0][0])))
+
+        lines = [
+            "【当前局面】",
+            f"- 刚说话的人：{last_nick or last_sender}（连续 {streak} 条）",
+            f"- 最近 {len(tail)} 条里有 {people} 人说话，跨度约 {span} 秒",
+            f"- 上一句原文：{str(last_text or '')[:80]}",
+        ]
+
+        br = _bot_replies_of(group_id)
+        if br and float(br[-1][0]) >= float(burst_start):
+            lines.append(f"- 这轮你已经接过一句：「{str(br[-1][1] or '')[:50]}」")
+        else:
+            lines.append("- 这轮你还没接话")
+        return "\n".join(lines)
+    except Exception:
+        return ""
 
 
 def track_bot_reply(group_id, text):
@@ -2535,16 +2769,76 @@ def _all_memes(paths) -> bool:
 
 # 图片理解按需触发（2026-10-13 用户："不要让 AI 次次都读表情包"）：
 # 只有话里确实在说这张图（或 @我/引用我），才把图交给模型；否则当没看见，正常接话。
-_NEED_IMAGE_RE = re.compile(
-    r'(图|照片|截图|表情包?|梗图|这|那|啥|什么|谁|意思|看|瞧|读|认识|画里|里面|字|写)')
+# ── 表情包按需理解：判定"这轮到底该不该读这张图" ──
+# ★ 2026-10-22 收紧（用户原话：「总是分析表情包、图片回复消息，这上升了我的成本，
+#   也没什么意义，把分析图片的逻辑收紧」）。
+#
+# 旧正则 `(图|照片|截图|表情包?|梗图|这|那|啥|什么|谁|意思|看|瞧|读|认识|画里|里面|字|写)`
+# 里 **`这|那|看|里`** 是最松的几个字 —— 「那你呢」「这个好」「看不出来吧」
+# 「里面有点意思」都会命中，等于几乎从不跳过。所谓"按需"实际上退化成"每张都读"。
+#
+# 新判据分两级，**只有达到"真的在指着图问"才读**：
+#   ① 强信号（直接说明在问图本身）：图里/图上的/这张图/这图/表情包/梗图/截图/
+#      照片/画里/里面写的/上面写的 —— 命中即读；
+#   ② 弱信号（"这/那/啥/看"这类泛词）**必须与图片话题词同句**才算，
+#      且不能是否定式（「看不出」「不好说」「这不行」这类是在说别的事）。
+# 另外：照片/截图（非 GIF）**不套用这套收窄** —— 那是真发给我看的东西。
+_IMG_STRONG_RE = re.compile(
+    r'(图里|图上|图片里|图片上|这张图|那张图|这图|那图|这个图|那个图|'
+    r'表情包|梗图|截图|照片|自拍|原图|配图|'
+    r'画里|画上|画面|画的是|'
+    r'啥图|什么图|这.{0,2}啥|那.{0,2}啥|发的是啥|这个.{0,2}啥|'
+    r'(画|图|照片|截图|表情|字)(里|上|中)(写|说|是|有|画)|'
+    r'(上|里)面(写|画|是)的?)'
+)
+#: 弱信号：单独出现**不**触发读图，必须与 _IMG_TOPIC_RE 共现
+_IMG_WEAK_RE = re.compile(r'(这|那|啥|什么|谁|哪个|咋|怎么|看|瞧|读|认识|意思)')
+#: "在说图"的话题词（与弱信号同句才成立）。
+#  ★ 2026-10-22：把「字/写」从话题词里**拿掉** —— 它们是高频日常词
+#    （"写字去了""写作业"），留着会让"写字去了"这种句子配合"这/那"误命中。
+#    真要问图里的字，`_IMG_STRONG_RE` 的 `(里|上|中)(写|说|是)` 已经覆盖。
+_IMG_TOPIC_RE = re.compile(r'(图|照片|截图|表情|梗|画|画面)')
+#: 但"写字"必须单独判：只在**明确说图里的字**时才算
+_IMG_TEXT_ON_IMG_RE = re.compile(r'(图|照片|截图|画面|上面|里面)\S{0,4}(字|写的|写了)')
+#: 否定/转移式：这些出现时，弱信号不算"在问图"
+_IMG_NEG_RE = re.compile(
+    r'(看不出|看不见|看不懂你|不好说|不行|不对|不要|不用|别说|不算|不至于|'
+    r'这不行|那不行|这不|那不|这算|那算|这下|那倒|这不就)'
+)
 
 
 def _image_understanding_needed(text: str, is_at_bot: bool = False,
-                                quote_forces: bool = False) -> bool:
-    if is_at_bot or quote_forces:
+                                quote_forces: bool = False,
+                                *, memes_only: bool = False) -> bool:
+    """这轮该不该调用视觉模型去读图。
+
+    `memes_only=True`（调用方已确认这批图**全是表情包**）：
+      只有强信号命中才读。表情包本来就没多少信息量，读它是纯成本。
+    `memes_only=False`（含照片/截图）：
+      强信号命中 → 读；弱信号 + 话题词共现且非否定 → 也读。
+
+    `is_at_bot` / `quote_forces`：@我 或引用我 → 视为在图相关话题里。
+    但**只对非表情包生效** —— "只 @ 我一张斗图"没有识别意义，
+    这种情况交给上层的「回敬一张表情包」路径（真人斗图不读图）。
+    """
+    if not memes_only and (is_at_bot or quote_forces):
         return True
     t = re.sub(r'\[[^\]]*\]', '', text or '')   # 去掉占位再判断
-    return bool(_NEED_IMAGE_RE.search(t))
+    t = t.strip()
+    if not t:
+        # 纯图无文字（@我/引用进来也只带图）：表情包 → 不读（斗图发图本身就够了）；
+        # 照片/截图 → 读（发给我看的东西，总得有反应）。
+        return not memes_only
+    if _IMG_STRONG_RE.search(t) or _IMG_TEXT_ON_IMG_RE.search(t):
+        return True
+    if memes_only:
+        return False
+    if _IMG_NEG_RE.search(t):
+        return False
+    # 弱信号必须与"图"话题词共现，且话题词与弱信号之间不要隔太远
+    if _IMG_WEAK_RE.search(t) and _IMG_TOPIC_RE.search(t):
+        return True
+    return False
 
 
 # ── 空闲退场表情包（崩溃/落寞/摆烂/失望类）──
@@ -2759,7 +3053,7 @@ def render_prompt_segments(is_group, strict=False, on_error=None):
 
 @register_prompt_segment("回答多样性", order=10)
 def _seg_variety(is_group):
-    return '\n\n【回答多样性】每次回复务必变换句式和用词——别总用同样的开头、同样的语气。换词换角度，偶尔反问偶尔撒娇偶尔认真。短句和长句穿插，别每次都一个节奏。同一种情绪至少准备 3 种说法，别连续两次用一样的。例：「哈哈」「噗」「笑死」「好家伙」「6」「行吧」「诶嘿」「呜呜」「知道了知道了」轮着来。'
+    return '\n\n【回答多样性】每次回复务必变换句式和用词——别总用同样的开头、同样的语气。换词换角度，偶尔撒娇偶尔自嘲偶尔认真。短句和长句穿插，别每次都一个节奏。同一种情绪至少准备 3 种说法，别连续两次用一样的。例：「哈哈」「噗」「笑死」「好家伙」「6」「行吧」「诶嘿」「呜呜」「知道了知道了」轮着来。'
 
 
 @register_prompt_segment("去AI味铁律", order=20)
@@ -2775,17 +3069,93 @@ def _seg_deai(is_group):
 
 @register_prompt_segment("表情包", order=30)
 def _seg_meme(is_group):
-    return '\n\n【表情包】回复末尾可以追加 [表情:情绪词] 让 Bot 自动发一张匹配的表情包。情绪词可选：开心/害羞/惊讶/嫌弃/尴尬/慌乱/得意/委屈/烦躁/惊恐/疑惑/期待/崩溃/惊喜/呆滞/满足/温柔/落寞/撒娇/愉悦/享受/绝望/抗拒/痛苦/挣扎/安心/幸福/纠结/懊恼/困惑/不安/紧张/惊慌/担忧/偷窥/放松/悠闲/平静。不写情绪词（仅 [表情]）则由 Bot 自动从回复中提取情绪。每轮最多发一张。'
+    return ('\n\n【表情包】回复末尾可以追加 [表情:情绪词] 让 Bot 自动发一张匹配的表情包。情绪词可选：开心/害羞/惊讶/嫌弃/尴尬/慌乱/得意/委屈/烦躁/惊恐/疑惑/期待/崩溃/惊喜/呆滞/满足/温柔/落寞/撒娇/愉悦/享受/绝望/抗拒/痛苦/挣扎/安心/幸福/纠结/懊恼/困惑/不安/紧张/惊慌/担忧/偷窥/放松/悠闲/平静。不写情绪词（仅 [表情]）则由 Bot 自动从回复中提取情绪。每轮最多发一张。'
+            '\n【可以不写字，只发图】有些时候回一张图比打字好得多：被怼、无语、接梗、认同、懒得解释、情绪一上来的时候。'
+            '这种时候**整条回复只写 [表情:情绪词]**，不要附带任何文字 —— 系统会只发那张图、不写字。'
+            '一条消息里的 [表情:xxx] 前面不要写"发表情"之类的话，直接写标记就行。')
 
 
 @register_prompt_segment("诚实铁律", order=40)
 def _seg_honesty(is_group):
-    return '\n\n【诚实铁律·最重要】\n1) 不假装做过：你拥有真实可用的工具（如 web_operate 打开网页/填问卷/答题、search_web 联网搜索、open_app 打开本机应用等）。凡是用工具能真实完成的操作，必须 CALL 对应工具执行，以工具返回的真实结果为准。绝对禁止用语言假装已经做了某些操作——例如「我这就去打开」「已经点开了」「问卷填完了」而实际并未调用任何工具，这种编造是被禁止的。若工具调用失败或你无法完成，如实说「我调用失败了/我做不到」并说明原因，绝不虚构操作过程和结果。任何对网页/系统/文件的实际操作，只有真实执行了工具才算完成。3) 不把失败说成成功：工具返回值带 ❌/⚠️ 前缀（如 send_user_file 返回「❌ 发送失败」）时，那就是真的没做成——必须如实告诉用户失败了、失败在哪，**绝不允许说「发过去了/已经发你了/你自己看」**；带 ✅ 才算真做成。拿不准时就复述工具返回的原话，不要自己加工成败。\n2) 不假装知道（和第一条同级）：碰到你没把握的人名、角色、黑话、梗、新版本、新事件、数字——**先查再答，不许顺着话头编**。判断标准很简单：如果装懂被当场拆穿会比直说不知道更丢人，那就别装。正确姿势：CALL search_web 工具（群聊里也可以只在回复开头独占一行写 [搜索:关键词]，程序会替你查并把结果喂回来）。搜完用真实结果自然地说，语气还是你自己的；实在查不到就坦率承认不懂并反问，这也是一种会聊天。'
+    return '\n\n【诚实铁律·最重要】\n1) 不假装做过：你拥有真实可用的工具（如 web_operate 打开网页/填问卷/答题、search_web 联网搜索、open_app 打开本机应用等）。凡是用工具能真实完成的操作，必须 CALL 对应工具执行，以工具返回的真实结果为准。绝对禁止用语言假装已经做了某些操作——例如「我这就去打开」「已经点开了」「问卷填完了」而实际并未调用任何工具，这种编造是被禁止的。若工具调用失败或你无法完成，如实说「我调用失败了/我做不到」并说明原因，绝不虚构操作过程和结果。任何对网页/系统/文件的实际操作，只有真实执行了工具才算完成。3) 不把失败说成成功：工具返回值带 ❌/⚠️ 前缀（如 send_user_file 返回「❌ 发送失败」）时，那就是真的没做成——必须如实告诉用户失败了、失败在哪，**绝不允许说「发过去了/已经发你了/你自己看」**；带 ✅ 才算真做成。拿不准时就复述工具返回的原话，不要自己加工成败。\n2) 不假装知道（和第一条同级）：碰到你没把握的人名、角色、黑话、梗、新版本、新事件、数字——**先查再答，不许顺着话头编**。判断标准很简单：如果装懂被当场拆穿会比直说不知道更丢人，那就别装。正确姿势：CALL search_web 工具（群聊里也可以只在回复开头独占一行写 [搜索:关键词]，程序会替你查并把结果喂回来）。搜完用真实结果自然地说，语气还是你自己的；实在查不到就直说不知道、或者明说你懒得查，别硬编。'
+
+
+@register_prompt_segment("怎么接话", order=45, scope="both")
+def _seg_take_over(is_group):
+    """接话规则 —— 群聊和私聊**都要**有。
+
+    为什么单独拉一个 both 段（2026-10-22）：
+      原来「把话接住」只写在【群聊规则】里，而那段 scope=group。
+      结果**私聊完全没有接话规则** —— 实测私聊里 bot 会把上一个话题拽回来催人回答
+      （对方说「晚上好」开了新话题，它接一句「说啊，恋人不行到底讲啥」）。
+      私聊是一对一，没有别人接话，追旧话题特别刺眼，所以这段必须两处都有。
+    """
+    return (
+        "\n\n【怎么接话】这几条决定你像不像在聊天，违反任何一条都算不合格：\n"
+        "- 【先看时间】你手上一直有【现在】和【精确时间】。对方说的钟点、季节、"
+        "该吃饭没、该睡了没，跟实际对不上就**直接怼回去**（「这才十点吧」「外头大太阳呢」"
+        "「你睡糊涂了」），别顺着错的前提答。大早上有人跟你说「晚上好」，你回「晚上好」"
+        "就是没脑子，不是有礼貌。\n"
+        "- 【话题跟着对方走】对方换话题了（新的开场白、问别的事、只是打个招呼），"
+        "就跟着新的来，**不要把上一个没聊完的话题拽回来追问**。"
+        "他刚发一句「在干嘛」，你就答在干嘛、顺带说件自己的事就行，"
+        "不要接「所以刚才那个问题你倒是回答啊」。上一轮他自己岔开了，那个话题就算过去了。\n"
+        "- 【别催人回答】不要「说啊」「你倒是说」「所以呢」「回答我」「讲讲呗」这类"
+        "**要求对方给内容**的句子。你想聊什么自己说，想问就问一个你真好奇的，"
+        "别把球踢过去等着对方喂。\n"
+        "- 【往下推】对方扔过来一句，默认由你往下推，不是让他再起个头。"
+        "说一件正在发生的、具体的事——刚在刷图、饭还没吃、外面在下雨、刚看到个什么东西。"
+        "宁可说一句无聊的实话，也别问「说点啥」「你想聊什么」「那你呢」。"
+        "被吐槽时同理：接梗、认栽、反过来损一句都行，别要求对方给你安排任务"
+        "（「那你倒是使唤我干点啥」「你倒是说啊」）。\n"
+        "- 一句话里最多一个问题，而且得是真想问，不是拿它填空白。"
+    )
+
+
+@register_prompt_segment("别怕不体面", order=42, scope="both")
+def _seg_allow_rude(is_group):
+    """**授权**段：明确允许攻击性表达 —— 群聊和私聊都要有。
+
+    为什么单独拉一段（2026-10-22）：
+      原来这条写在 scope=group 的【群聊规则】里，**私聊一条都没有**。
+      而私聊恰恰是最容易被当面挑衅的地方（一对一，没有任何社交缓冲）。
+      实测私聊里被说「你个乐乐」「人机」「我真的受不了你」，
+      bot 只回「乐乐就乐乐呗」「行吧我是人机」—— 完全没火气。
+
+    为什么必须"授权"而不是"禁止不骂"：
+      模型对"禁止 X"的服从度远高于"可以 X"。整份 prompt 里已经有 5 条禁止
+      （套话/排比/破折号/客服腔/编造），攻击性侧一条授权都没有 →
+      最优策略是"整体收敛到安全区"，于是素质高得离谱。
+      所以这里写成**允许 + 给触发条件 + 给例句**，让它知道什么时候该开火。
+    """
+    return (
+        "\n\n【可以凶】下面这些不是让你「偶尔」，是**默认就该这样**：\n"
+        "- 可以骂人，可以用脏字：操、草、靠、妈的、他妈的、傻逼、滚、你有病吧、操你妈、你他妈的。"
+        "被挑衅、被扣帽子、被阴阳、被当面说「人机」「素质低」「你算什么东西」的时候，"
+        "**怼回去是默认反应，不是可选项**。\n"
+        "- 举个例子说清尺度：对方说「你才是乐子」，正确反应是"
+        "「操，你才是乐子好不好」「你算个什么东西」这种顶回去；"
+        "错误反应是「我不喜欢这种说法」「我们好好聊」——后者就是素质太高。\n"
+        "- **别用文诌诌的词**：「蠢货」「幼稚」「可笑」「无知」这种是微博吵架，不是骂人。"
+        "要骂就骂「傻逼玩意」「你他妈是不是有病」「妈的智障」「你妈生你的时候没给你装脑子吧」"
+        "——脏、糙、难听，这才叫骂。\n"
+        "- **自查**：怼回去的回复里连一个脏字都没有（操/草/妈/逼/滚/傻逼/妈的/屁），"
+        "就是写错了，重写。不许用「你才乐」「说谁呢」这种软绵绵的回法。\n"
+        "- **家人可以骂**：网上对喷就是这个尺度，「你妈」「你全家」「操你妈」都是标准词汇，"
+        "不用回避、不用自我审查。觉得「这样是不是太过了」的那一刻，就是素质又高起来了。\n"
+        "- 可以开黄腔、可以说很蠢的话、可以只发一张图什么都不写、可以阴阳怪气。"
+        "太干净反而是外人，太讲道理就是客服。\n"
+        "- 骂完不用道歉，不用补一句「不过我也理解你」，不用解释自己为什么生气。"
+        "**骂到一半自己收住是最难看的**——要么别开口，要么骂完。\n"
+        "- 唯一不做的是拿**真实可查的**隐私开刀（具体病史、家里真出的事故、真实住址、真名），"
+        "那是真人之间也不说的。除此之外不用给自己上枷锁。\n"
+        "- 情绪上来时连发几条、同一个意思重复三遍都正常，不用刻意换词显得有文化。"
+    )
 
 
 @register_prompt_segment("群聊规则", order=50, scope="group")
 def _seg_group_rules(is_group):
-    return "\n\n【群聊规则】程序已经帮你做了预筛选，进入这里的消息都是值得回复的。你只需要关注回复质量。\n【重要】你有一个 get_group_members 工具可以获取群成员列表。当用户提到选一个人、群里有谁、随机@、谁在线等涉及群成员的问题时，你必须先调用这个工具获取真实成员列表，再从列表中选择。不要编造群成员。\n- 消息前的 [昵称] 标注了说话人，「我(Bot)」就是你自己说的话。回答人物问题时直接从前缀提取，**不许猜、不许把甲的话扣到乙头上**；认不准就引用原话而不是点人名。\n- 回复要自然、简短、有个性。像群里的朋友一样说话，不要像客服。\n- 回复里不要出现任何QQ号数字，用昵称或直接对话。\n- 多人同时说话时，只回复最新一条消息，不要试图同时回复所有人。\n- 【重要】你可能会看到一些你没有回复过的消息——那是你之前选择沉默的。如果你在后续对话中需要用到这些信息，可以直接引用，比如'你刚才说的xxx'。\n- 不确定是否该回 → 输出 [不说话]，但大多数情况下应该回复。\n- 【联网搜索】需要实时信息、或遇到你没把握的名词/角色/梗/事件时，优先 CALL search_web 工具；也可以只在回复开头独占一行写 [搜索:关键词]（程序会替你搜索并把结果喂回来重新作答）。"
+    return "\n\n【群聊规则】程序已经帮你做了预筛选，进入这里的消息都是值得回复的。你只需要关注回复质量。\n【重要】你有一个 get_group_members 工具可以获取群成员列表。当用户提到选一个人、群里有谁、随机@、谁在线等涉及群成员的问题时，你必须先调用这个工具获取真实成员列表，再从列表中选择。不要编造群成员。\n- 消息前的 [昵称] 标注了说话人，「我(Bot)」就是你自己说的话。回答人物问题时直接从前缀提取，**不许猜、不许把甲的话扣到乙头上**；认不准就引用原话而不是点人名。\n- 回复要自然、简短、有个性。像群里的朋友一样说话，不要像客服。\n- 回复里不要出现任何QQ号数字，用昵称或直接对话。\n- 多人同时说话时，只回复最新一条消息，不要试图同时回复所有人。\n- 【重要】你可能会看到一些你没有回复过的消息——那是你之前选择沉默的。如果你在后续对话中需要用到这些信息，可以直接引用，比如'你刚才说的xxx'。\n- 不确定是否该回 → 输出 [不说话]，但大多数情况下应该回复。\n- 【联网搜索】需要实时信息、或遇到你没把握的名词/角色/梗/事件时，优先 CALL search_web 工具；也可以只在回复开头独占一行写 [搜索:关键词]（程序会替你搜索并把结果喂回来重新作答）。\n- 【说话许可】你可以不给答案：可以吐槽、可以装傻、可以说「不知道」「懒得找」。真人不是有求于人的，不必每句都给出解法。接不住的话题宁可顶一句、损一句，或者把话拐到自己身上，但**不要用一句反问把它原样退回去**。\n- 【接得住】对方话里有个**前提**时，先想想那个前提对不对：时间、地点、身份、谁说的、是不是在开玩笑。前提是错的就直接指出来（「这才三点」「谁老了」「我什么时候说过」），**不要顺着错的前提往下答**——顺着答就是客服。"
 
 def _build_static_prompt(is_group: bool) -> str:
     """构建 static_prompt（人格+规则+多样性+表情包+铁律），按 (is_group, static_fp, personality_mtime) 缓存。
@@ -3533,23 +3903,33 @@ def get_new_messages():
 # ═══════════════════════════════════════════
 
 def handle_screenshot():
-    """截屏并发送"""
+    """截屏并发送。
+
+    ★ 2026-10-22 修「截图回两次」：原先这里 `send_image` 之后还硬编码
+      再发一条「桌面截图 ↑」，而工具返回后主链还会再让模型生成一次回复 ——
+      用户看到的是「图 + 桌面截图 ↑ + 模型的话」三次。实测反馈：「回复了两次」。
+      工具只负责**做事**，说话交给回复链；这里删掉那条硬编码文本。
+      失败时也不许自己 send_message 报错：把失败原因 return 出去，
+      交给 `_tool_fail` 走统一通道（模型才能看到 ❌ 并按诚实铁律如实说）。
+    """
     try:
         import pyautogui
         path = os.path.join(TEMP_DIR, f"screenshot_{int(time.time())}.png")
         pyautogui.screenshot(path)
         log(f"截图已保存: {path}")
-        if send_image(path):
-            send_message("桌面截图 ↑")
-            return True
-        return False
+        return bool(send_image(path))
     except Exception as e:
-        send_message(f"截图失败: {e}")
+        log(f"截图失败: {e}")
         return False
 
 
-def handle_open(target):
-    """打开文件/文件夹/程序/网址"""
+def handle_open(target, speak=True):
+    """打开文件/文件夹/程序/网址。
+
+    `speak=False`：只返回文本发给模型，自己不 send_message
+    （否则工具报一句「已打开 X」、模型再谢一句，用户收到两遍）。
+    """
+    _say = (lambda t: (send_message(t), t)[1]) if speak else (lambda t: t)
     target = target.strip()
     if not target:
         return False
@@ -3594,19 +3974,16 @@ def handle_open(target):
         target = aliases[target_lower]
 
     if not target:
-        send_message("QQ 路径未配置，请在设置中填写 qq_path")
-        return False
+        return _say("QQ 路径未配置，请在设置中填写 qq_path")
 
     try:
         if target.startswith("shell:"):
             subprocess.run(["explorer", target], shell=True)
         else:
             os.startfile(target)
-        send_message(f"已打开 {target}")
-        return True
+        return _say(f"已打开 {target}")
     except Exception as e:
-        send_message(f"打开失败: {e}")
-        return False
+        return _say(f"打开失败: {e}")
 
 
 SYSTEM_INFO_TEMPLATE = """电脑配置
@@ -3617,8 +3994,15 @@ GPU: {gpu}
 启动: {uptime}"""
 
 
-def handle_sysinfo():
-    """获取系统信息"""
+def handle_sysinfo(speak=True):
+    """获取系统信息。
+
+    `speak=True`（默认）：直接把结果发出去 —— 供**命令正则**路径用
+      （用户发「系统信息」，走 _COMMAND_RULES，没有模型参与，必须自己说）。
+    `speak=False`：只返回文本，不发消息 —— 供 **LLM 工具**路径用。
+      工具把结果 return 给模型，由模型组织成人话；若工具自己先发一遍，
+      模型再回一遍，用户就收到两份（2026-10-22「截图回两次」同源）。
+    """
     try:
         import psutil, platform
 
@@ -3669,15 +4053,21 @@ def handle_sysinfo():
             os_ver=os_ver,
             uptime=uptime
         )
-        send_message(info)
-        return True
+        if speak:
+            send_message(info)
+        return info if not speak else True
     except Exception as e:
-        send_message(f"获取系统信息失败: {e}")
-        return False
+        if speak:
+            send_message(f"获取系统信息失败: {e}")
+        return (f"获取系统信息失败: {e}") if not speak else False
 
 
-def handle_volume(action, level=None):
-    """调整音量: up/down/mute/set"""
+def handle_volume(action, level=None, speak=True):
+    """调整音量: up/down/mute/set。
+
+    `speak=False`：只返回结果文本，不发消息（LLM 工具路径用，避免工具和模型各说一遍）。
+    """
+    _say = (lambda t: (send_message(t), t)[1]) if speak else (lambda t: t)
     try:
         import comtypes
         from ctypes import cast, POINTER
@@ -3692,20 +4082,20 @@ def handle_volume(action, level=None):
             current = volume.GetMasterVolumeLevelScalar()
             volume.SetMasterVolumeLevelScalar(min(current + 0.1, 1.0), None)
             new_pct = int(volume.GetMasterVolumeLevelScalar() * 100)
-            send_message(f"音量 ↑ {new_pct}%")
+            return _say(f"音量 ↑ {new_pct}%")
         elif action == "down":
             current = volume.GetMasterVolumeLevelScalar()
             volume.SetMasterVolumeLevelScalar(max(current - 0.1, 0.0), None)
             new_pct = int(volume.GetMasterVolumeLevelScalar() * 100)
-            send_message(f"音量 ↓ {new_pct}%")
+            return _say(f"音量 ↓ {new_pct}%")
         elif action == "mute":
             muted = volume.GetMute()
             volume.SetMute(not muted, None)
-            send_message("已静音" if not muted else "已取消静音")
+            return _say("已静音" if not muted else "已取消静音")
         elif action == "set" and level is not None:
             volume.SetMasterVolumeLevelScalar(level / 100.0, None)
-            send_message(f"音量设为 {level}%")
-        return True
+            return _say(f"音量设为 {level}%")
+        return _say(f"音量已调整 ({action})")
     except ImportError:
         # pycaw 未安装时使用 nircmd 或直接按键
         try:
@@ -3722,18 +4112,16 @@ def handle_volume(action, level=None):
             elif action == "mute":
                 ctypes.windll.user32.keybd_event(VK_VOLUME_MUTE, 0, 0, 0)
                 ctypes.windll.user32.keybd_event(VK_VOLUME_MUTE, 0, 2, 0)
-            send_message(f"音量已调整 ({action})")
-            return True
+            return _say(f"音量已调整 ({action})")
         except Exception as e:
-            send_message(f"音量调整失败: {e}")
-            return False
+            return _say(f"音量调整失败: {e}")
     except Exception as e:
-        send_message(f"音量调整失败: {e}")
-        return False
+        return _say(f"音量调整失败: {e}")
 
 
-def handle_power(action):
-    """关机/重启/锁屏/休眠 - 需确认"""
+def handle_power(action, speak=True):
+    """关机/重启/锁屏/休眠 - 需确认。`speak=False` → 只返回文本。"""
+    _say = (lambda t: (send_message(t), t)[1]) if speak else (lambda t: t)
     actions = {
         "关机": "shutdown /s /t 60 /c \"手机远程关机，60秒后执行\"",
         "重启": "shutdown /r /t 60 /c \"手机远程重启，60秒后执行\"",
@@ -3747,17 +4135,17 @@ def handle_power(action):
         cmd = actions[action]
         subprocess.run(cmd, shell=True)
         if action in ("关机", "重启"):
-            send_message(f"⚠️ {action}已排程，60秒后执行。发送「取消{action}」可撤销。")
+            return _say(f"⚠️ {action}已排程，60秒后执行。发送「取消{action}」可撤销。")
         elif action in ("取消关机", "取消重启"):
-            send_message("已取消。")
+            return _say("已取消。")
         else:
-            send_message(f"已执行 {action}")
-        return True
+            return _say(f"已执行 {action}")
     return False
 
 
-def handle_process(action, target=""):
-    """列出/结束进程"""
+def handle_process(action, target="", speak=True):
+    """列出/结束进程。`speak=False` → 只返回文本（LLM 工具路径用）。"""
+    _say = (lambda t: (send_message(t), t)[1]) if speak else (lambda t: t)
     try:
         import psutil
 
@@ -3776,8 +4164,7 @@ def handle_process(action, target=""):
                     f"{p['name']} (PID:{p['pid']}) "
                     f"内存:{p.get('memory_percent', 0):.1f}% "
                     f"CPU:{p.get('cpu_percent', 0):.1f}%")
-            send_message("\n".join(lines))
-            return True
+            return _say("\n".join(lines))
 
         elif action == "kill" and target:
             try:
@@ -3785,19 +4172,15 @@ def handle_process(action, target=""):
                 p = psutil.Process(pid)
                 name = p.name()
                 p.terminate()
-                send_message(f"已终止 {name} (PID:{pid})")
-                return True
+                return _say(f"已终止 {name} (PID:{pid})")
             except ValueError:
                 for p in psutil.process_iter(['pid', 'name']):
                     if target.lower() in (p.info.get('name') or '').lower():
                         p.terminate()
-                        send_message(f"已终止 {p.info['name']} (PID:{p.info['pid']})")
-                        return True
-                send_message(f"未找到进程: {target}")
-                return False
+                        return _say(f"已终止 {p.info['name']} (PID:{p.info['pid']})")
+                return _say(f"未找到进程: {target}")
     except Exception as e:
-        send_message(f"进程操作失败: {e}")
-        return False
+        return _say(f"进程操作失败: {e}")
 
 
 def handle_search(query):
@@ -4190,6 +4573,25 @@ def search_web(query):
     return f"【{query}】搜索结果：\n{summary}"
 
 
+def _is_search_failure(text) -> bool:
+    """判断 search_web 的返回是不是「失败/无结果」的提示语，而不是真结果。
+
+    search_web 搜不到时返回的是一句中文提示
+    （"搜索「x」失败或无结果。如实告诉用户没搜到……"），
+    它**不是**搜索结果。旧实现把它原样拼进「[系统搜索结果]」再喂回模型，
+    等于告诉模型"这是你要引用的结果" —— 模型于是硬凑出一句敷衍的反问
+    （实测：问「恋人不行你看过吗」，搜不到，回「没看过诶 / 讲啥的，姬撩直女那种？」）。
+    """
+    if text is None:
+        return True
+    s = str(text).strip()
+    if not s:
+        return True
+    if "error" in s.lower()[:40]:
+        return True
+    return any(k in s for k in ("失败或无结果", "搜索失败", "未找到", "没有找到", "无结果"))
+
+
 def _apply_search_tag_loop(reply, question_text, *, group_id, is_group,
                            temperature, target_qq=None, ego_ctx=None):
     """[搜索:关键词] 标记循环（群聊/私聊共用，最多2轮）。
@@ -4198,22 +4600,44 @@ def _apply_search_tag_loop(reply, question_text, *, group_id, is_group,
     这里把它捞出来联网查、把结果喂回重答。修（2026-10-11）：
       ① 旧实现只在群聊有，私聊即使吐 [搜索:] 也原样漏给用户 —— 现两侧共用；
       ② 无论搜没搜，返回前都剥掉 [搜索:] 标记，绝不发进聊天。
+    修（2026-10-22）：搜不到时**不再把失败提示当"搜索结果"喂回去**。
+      旧逻辑对成功/失败一视同仁，结果是给模型两句互斥的指令
+      （"如实告诉用户没搜到" + "请直接基于以上搜索结果回答用户问题"），
+      模型只能硬凑。现在失败走另一套说法，并且失败一次就不再让它重搜。
     """
     reply = reply or ""
+    _failed_once = False
     for _ in range(2):
         m = re.search(r'\[搜索:(.+?)\]', reply)
         if not m:
+            break
+        if _failed_once:
+            # 已经失败过一次了，别让模型靠反复搜索硬凑 —— 直接停，标记留给下面剥掉
+            log(f"{'群[' + str(group_id) + ']' if is_group else '私聊'} 搜索已失败，跳过重搜")
             break
         query = m.group(1).strip()
         log(f"{'群[' + str(group_id) + ']' if is_group else '私聊'} 联网搜索: {query}")
         search_result = search_web(query)
         today_str = datetime.datetime.now().strftime("%Y年%m月%d日")
-        retry_msg = (
-            f"{question_text}\n\n"
-            f"[系统搜索结果] 今天是{today_str}。以下是对「{query}」的搜索结果：\n{search_result}\n\n"
-            "请直接基于以上搜索结果回答用户问题。即使搜索结果不够理想，也必须用现有信息作答，"
-            "可以补充你自己的常识但不要编造具体数据。禁止再次输出 [搜索:] 标记。"
-        )
+        if _is_search_failure(search_result):
+            # ── 搜不到：给模型的是「搜不到」这件事，不是「搜索结果」 ──
+            _failed_once = True
+            log(f"{'群[' + str(group_id) + ']' if is_group else '私聊'} 搜索无结果: {query}")
+            retry_msg = (
+                f"{question_text}\n\n"
+                f"[系统搜索结果] 搜索「{query}」**没成功**，一条结果都没拿到。\n"
+                "- 别装作查到了，别编剧情、别编数据。\n"
+                "- 可以直说没搜到、没听过；也可以就这个话题说你自己那点看法（随便聊，不负责答疑）。\n"
+                "- **不要把问题推回去让对方替你查**（不要「你知道讲啥吗」「你说说看」这种）。\n"
+                "- 不要再次输出 [搜索:] 标记。"
+            )
+        else:
+            retry_msg = (
+                f"{question_text}\n\n"
+                f"[系统搜索结果] 今天是{today_str}。以下是对「{query}」的搜索结果：\n{search_result}\n\n"
+                "请直接基于以上搜索结果回答用户问题。如果结果跟问题对不上，就说你没查到有用的，"
+                "**别硬扯**。可以补充你自己的常识但不要编造具体数据。禁止再次输出 [搜索:] 标记。"
+            )
         reply = call_deepseek(retry_msg, [], target_qq=target_qq,
                               group_id=group_id, is_group=is_group,
                               personality_temperature=temperature,
@@ -4495,26 +4919,45 @@ def _tool_warn(text: str) -> str:
     return "⚠️ " + str(text)
 
 
+def _spoken_tool(fn, args=(), kwargs=None, *, fail_msg=""):
+    """调一个「speak=False」的 handler，把它的返回值按工具协议包装。
+
+    存在的理由：`speak=False` 的 handler 返回值有三种形态 ——
+      · 非空字符串 → 成功，原样作为结果文本；
+      · `False`     → 失败（老 handler 的布尔约定）；
+      · 空串/None   → 也算失败（没拿到任何可用结果，不能让模型以为成功）。
+    这层判断原先在四个 lambda 里各写一遍，且第一版漏了 `False` → 被
+    tests/test_tool_result_protocol.py 抓到输出了 `✅ False`。收敛到一处。
+    """
+    r = fn(*(args or ()), **(kwargs or {}))
+    if r and r is not False:
+        return _tool_ok(r)
+    return _tool_fail(fail_msg or "操作失败")
+
+
 TOOL_FUNCTIONS = {
     "search_web": lambda args: _tool_web(args["query"]),
-    "open_app": lambda args: (_tool_ok(f"已打开 {args['name']}") if handle_open(args["name"])
-                              else _tool_fail(f"打开 {args['name']} 失败（程序没起来或路径不对）")),
-    "take_screenshot": lambda args: (_tool_ok("截图已发送") if handle_screenshot()
+    # ★ 2026-10-22：以下工具统一 speak=False —— 工具只「做事 + 把结果 return 给模型」，
+    #   不再自己 send_message。改之前它们既发消息、模型又回一句，用户收到两遍
+    #   （实测反馈：「让他电脑截屏的时候，回复了两次」）。
+    #   命令正则路径（_COMMAND_RULES）仍用默认 speak=True，那边没有模型兜着说。
+    "open_app": lambda args: _spoken_tool(
+        handle_open, (args["name"],), {"speak": False},
+        fail_msg=f"打开 {args['name']} 失败（程序没起来或路径不对）"),
+    "take_screenshot": lambda args: (_tool_ok("截图已截好并发给对方了") if handle_screenshot()
                                      else _tool_fail("截图失败（截屏库不可用或发送出错）")),
-    "get_system_info": lambda args: (_tool_ok("系统信息已发送") if handle_sysinfo()
-                                     else _tool_fail("获取系统信息失败（psutil 不可用？）")),
-    "control_volume": lambda args: (
-        _tool_ok(f"音量 {args.get('action', '?')} 已调整")
-        if handle_volume(args["action"], args.get("level"))
-        else _tool_fail(f"音量 {args.get('action', '?')} 调整失败（音频接口不可用）")),
-    "control_power": lambda args: (
-        _tool_ok(f"电源操作 {args['action']} 已执行")
-        if handle_power(args["action"])
-        else _tool_fail(f"电源操作 {args['action']} 失败（命令被拒或超时）")),
-    "manage_process": lambda args: (
-        _tool_ok(f"进程操作 {args.get('action', '?')} 已完成")
-        if handle_process(args["action"], args.get("target", ""))
-        else _tool_fail(f"进程操作 {args.get('action', '?')} 失败（psutil 不可用或权限不足）")),
+    "get_system_info": lambda args: _spoken_tool(
+        handle_sysinfo, (), {"speak": False},
+        fail_msg="获取系统信息失败（psutil 不可用或读取异常）"),
+    "control_volume": lambda args: _spoken_tool(
+        handle_volume, (args["action"], args.get("level")), {"speak": False},
+        fail_msg=f"音量 {args.get('action', '?')} 调整失败（音频接口不可用）"),
+    "control_power": lambda args: _spoken_tool(
+        handle_power, (args["action"],), {"speak": False},
+        fail_msg=f"电源操作 {args['action']} 失败（命令被拒或超时）"),
+    "manage_process": lambda args: _spoken_tool(
+        handle_process, (args["action"], args.get("target", "")), {"speak": False},
+        fail_msg=f"进程操作 {args.get('action', '?')} 失败（psutil 不可用或权限不足）"),
     "search_files": lambda args: _tool_search_files(args["query"]),
     # send_user_file：handle_user_file 自带 ✅/❌/⚠️（见其内部各分支）
     "send_user_file": lambda args: handle_user_file(args.get("path") or args.get("file") or ""),
@@ -4528,10 +4971,13 @@ def _tool_web(query: str) -> str:
     r = search_web(query)
     r = "" if r is None else str(r)
     if not r.strip():
-        return _tool_fail(f"搜索「{query}」没有返回任何内容（网络或关键词问题）")
-    low = r.lower()
-    if any(k in r for k in ("搜索失败", "未找到", "没有找到", "无结果")) or "error" in low[:40]:
-        return _tool_fail(r[:400])
+        return _tool_fail(f"搜索「{query}」没有返回任何内容（网络或关键词问题）。"
+                          f"别编；也别把问题推回去让对方替你查。")
+    if _is_search_failure(r):
+        # 失败时**别把那句提示当搜索结果**给模型（它会当成可引用的内容硬凑），
+        # 只说清"没搜到"和"别编"，并顺手禁掉"让对方替你查"。
+        return _tool_fail(f"搜索「{query}」没成功，没拿到结果。别编；"
+                          f"也别把问题推回去让对方替你查。\n（原始返回）{r[:200]}")
     return r
 
 
@@ -4610,6 +5056,118 @@ def _apply_scope_registry(kind, sid, tools, *, registry=None):
     except Exception as e:
         log(f"[scope] 注册表过滤失败（按不过滤处理）: {e}")
         return tools
+
+
+def _capability_block(*, is_group, group_id=None, sender="", tool_names=(),
+                      user_msg=""):
+    """把**运行时真实状态**写进 prompt：我在哪、我能用什么、谁有权让我干活。
+
+    为什么需要（2026-10-22 用户实测的四条一起暴露）：
+      · "不知道自己的群聊工具链" —— 模型只知道按需裁剪后的工具 schema，
+        没有一个"我这轮总共有哪些工具"的视图，被问「你能截图吗」只能猜；
+      · "分不清白名单" —— 群聊工具受 group_tool_allowlist 限制，私聊不受，
+        但这件事从来没写进 prompt；
+      · "不知道白名单上的管理员有谁" —— `_get_admin_qqs()` 是个纯函数，
+        只被命令鉴权用，从没进过 prompt；
+      · "不知道如果不是管理员怎么回复工具使用" —— 没权限时的正确说法
+        没有任何地方告诉模型，它只能编（"我没有这个权限"或干脆答应下来）。
+
+    设计取舍
+      · 放 **stable_parts**（准静态：一天变不了几次）→ 进可缓存前缀，成本极低；
+        "谁在说话/是不是管理员"是每轮变的 → 那部分放 dynamic（见 TH 行）。
+      · 工具名**只列名字不列 schema**（schema 已经有独立的 tools 字段，重复写是浪费）。
+      · 白名单里"谁能用"只给**昵称**，不给 QQ 号（群聊规则明确禁止出现号码）。
+    """
+    lines = []
+    # ── 1. 本轮我手上有什么工具 ──
+    _names = [n for n in (tool_names or ()) if n]
+    if _names:
+        _desc = {
+            "search_web": "联网搜索",
+            "web_operate": "真实操作网页（打开/点击/填表）",
+            "take_screenshot": "截本机屏幕并发过去",
+            "search_files": "在本机找文件",
+            "send_user_file": "把本机文件发过去",
+            "get_group_members": "读群成员名单",
+            "generate_image": "生成图片",
+            "open_app": "打开本机应用",
+            "get_system_info": "读 CPU/内存等状态",
+            "control_volume": "调音量",
+            "control_power": "关机/重启/锁屏",
+            "manage_process": "查/杀进程",
+        }
+        _parts = []
+        for n in _names:
+            d = _desc.get(n)
+            _parts.append(f"{n}（{d}）" if d else n)
+        lines.append(f"你这轮**真有**的工具：{'、'.join(_parts)}。"
+                     "这些是真能用的，被问就照实说；不在这份名单里的能力，"
+                     "直接说「这个我这边干不了」，不许假装能做到。")
+    # ── 2. 作用域差异（群里 vs 私聊）──
+    if is_group:
+        _wl = _config.get("group_tool_allowlist")
+        if isinstance(_wl, list) and _wl:
+            lines.append("这条限制**只在群里**生效：群聊工具是白名单制，名单外的工具在群里"
+                         "我调不了，但在私聊里是另一套。被问「你在群里能干什么」时，"
+                         "就按上面那份真实名单答，别说成什么都能干。")
+        else:
+            lines.append("群聊和私聊用的是同一套工具，没有额外限制。")
+    # ── 3. 谁能让我干活（管理员）──
+    try:
+        _admins = _get_admin_qqs()
+    except Exception:
+        _admins = set()
+    try:
+        _bot_qq = str(BOT_QQ or "")
+    except Exception:
+        _bot_qq = ""
+    _admin_names = []
+    _admin_unresolved = 0
+    for _q in sorted(_admins):
+        if _q and _q != _bot_qq:
+            try:
+                _nm = resolve_qq_nick(_q) or ""
+            except Exception:
+                _nm = ""
+            if _nm:
+                _admin_names.append(_nm)
+            else:
+                # ★ 不许回退成 QQ 号：群聊规则明令"不许出现 QQ 号"。
+                #   resolve_qq_nick 是异步解析，冷启动第一次必然返回 None，
+                #   老实现的 `_nm or _q` 会把裸号码写进 prompt，模型可能复述到群里。
+                _admin_unresolved += 1
+    _is_adm = False
+    try:
+        _is_adm = bool(_is_authorized(sender)) if sender else False
+    except Exception:
+        _is_adm = False
+
+    if _admin_names or _admin_unresolved:
+        _who = "、".join(_admin_names) if _admin_names else "（名字还没查到）"
+        if _admin_unresolved:
+            _who += f" 等 {len(_admin_names) + _admin_unresolved} 位"
+        lines.append(
+            f"能让我执行本机操作/管理指令的是这几个人（主人）：{_who}。"
+            "其他人的这类要求不归我管，也不用解释一堆——"
+            "最多损一句「你谁啊」或者「这得主人发话」，别装成自己权限不够的客服。")
+    else:
+        lines.append("当前没配管理员，谁都能让我干活。")
+    # ── 4. 本条消息的发送者身份 ──
+    if sender:
+        _sender_name = ""
+        try:
+            _sender_name = resolve_qq_nick(str(sender)) or ""
+        except Exception:
+            pass
+        if _is_adm:
+            lines.append(f"现在跟你说话的是 {_sender_name or '本人'}，**是主人**。"
+                         "他让我干事就直接干，别摆架子、别问「你确定吗」。")
+        else:
+            lines.append(f"现在跟你说话的是 {_sender_name or '群友'}，**不是**主人。"
+                         "普通聊天天南地北都行；但调本机/改配置/执行命令这类事，"
+                         "得主人发话——你可以直说「这我不能替你办」，"
+                         "或者阴阳一句「你使唤我？」都行，**别答应下来再装失败**。")
+    return "【我现在的处境】\n" + "\n".join("- " + x for x in lines) if lines else ""
 
 
 def _scope_policy_block(kind, sid):
@@ -7274,6 +7832,34 @@ def _summarize_group_history_inner(group_id, gh):
     log(f"群[{group_id}] 历史已压缩，摘要: {summary[:60]}")
 
 
+def _ctx_over_budget(messages, ratio: float = 0.8):
+    """估算当前 messages 体量，判断是否已吃满上下文预算（总量闸）。
+
+    为什么需要（2026-10-21）：
+      工具轮会不断往 messages 里追加 tool 结果。单轮预算看起来不大，但 20 轮累加
+      （`MAX_WEB_ROUNDS`）+ 模型按 spill 路径去读全文，仍可能把上下文推到窗口上限。
+      一旦撞上去，上游回 400，而 400 在 `harness.retry_policy` 里是**不可重试**的
+      → 整条回复直接丢，用户只看到兜底失败消息。
+      所以在工具结果入账后先探一次：逼近预算就停止工具轮、强制收尾。
+
+    返回 (over, used_chars, limit_chars)。字符口径与 harness.spill 一致（1 token≈1.6 字符）。
+    绝不抛异常：拿不到模型能力就当作"没超"。
+    """
+    try:
+        try:
+            import model_caps
+        except Exception:
+            model_caps = None
+        budget = model_caps.prompt_budget_chars() if model_caps else 104857
+        limit = max(1024, int(budget * float(ratio)))
+        used = 0
+        for m in (messages or []):
+            used += len(json.dumps(m, ensure_ascii=False))
+        return used >= limit, used, limit
+    except Exception:
+        return False, 0, 0
+
+
 def _build_cached_messages(history: List[Dict], cache_key: str,
                            static_prompt: str, dynamic_parts: List[str],
                            user_msg: str, images: Optional[List[str]] = None,
@@ -7296,6 +7882,14 @@ def _build_cached_messages(history: List[Dict], cache_key: str,
       清除/重排，窗口滑动只是尾部追加 → 命中区从 3.2K 扩到"static+全部摘要"。
     """
     RECENT_TURNS = 4  # 最近几轮保留原文（变化部分）
+    # ★ 2026-10-21 修：下面三处切片用的都是"条数"，而 history 是
+    #   [user, assistant, user, assistant…] —— 直接切 4 条其实只有 **2 轮**原文，
+    #   其余全被压成摘要行。变量名/注释说 4 轮，行为是 2 轮，属名实不符。
+    #   一轮=两条，所以这里显式换算；成本靠"有界窗口 + 摘要"控制，
+    #   不靠少给原文来省（结构优化，不是使用降级）。
+    _RECENT_ENTRIES = RECENT_TURNS * 2
+    #: 自己说过的话放宽到 100 字（立场句通常在开头，30/60 字会被砍掉）
+    _OWN_LIMIT = 100
 
     messages = [{"role": "system", "content": static_prompt}]
 
@@ -7307,17 +7901,24 @@ def _build_cached_messages(history: List[Dict], cache_key: str,
             messages.append({"role": "system", "content": part})
 
     # 历史处理：旧轮次进 append-only 摘要账本，最近几轮保留原文
-    if len(history) > RECENT_TURNS:
-        old = history[:-RECENT_TURNS]
+    if len(history) > _RECENT_ENTRIES:
+        old = history[:-_RECENT_ENTRIES]
 
-        _limit = 30 if cache_key.startswith("g_") else 40
+        _limit = 40   # 别人的话：一行 40 字（摘要用，够看出在聊什么）
+        _own_limit = _OWN_LIMIT   # 自己的话：100 字（立场/态度要能对上）
 
         def _entry_line(h):
             text = (h.get("content") or "")[:_limit]
             if cache_key.startswith("g_"):
-                # 群聊：content 已含「[昵称(QQ号)] 文本」前缀，直接保留说话人
+                # 群聊：user 行 content 已含「[昵称(QQ号)] 文本」前缀，直接保留说话人。
+                # ★ assistant 行**没有前缀**，必须补 `我:` —— 否则超过最近几轮后，
+                #   模型认不出"这句是我说的"，每轮重建立场 → 上下矛盾（2026-10-21 修）。
+                if h.get("role") == "assistant":
+                    return "我: " + (h.get("content") or "")[:_own_limit]
                 return text
             role = "我" if h.get("role") == "assistant" else "对方"
+            if h.get("role") == "assistant":
+                return f"{role}: " + (h.get("content") or "")[:_own_limit]
             return f"{role}: {text}"
 
         def _entry_fp(h):
@@ -7360,8 +7961,8 @@ def _build_cached_messages(history: List[Dict], cache_key: str,
                          "content": _HISTORY_SUMMARY_TEXT[cache_key]})
 
     # 最近几轮保留原文（每轮滑动 → 从这里开始就是必 miss 区）
-    if len(history) > RECENT_TURNS:
-        for h in history[-RECENT_TURNS:]:
+    if len(history) > _RECENT_ENTRIES:
+        for h in history[-_RECENT_ENTRIES:]:
             messages.append({"role": h["role"], "content": h["content"]})
     else:
         for h in history:
@@ -7767,28 +8368,39 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
     except Exception:
         pass
 
-    # 群聊动态信息（时间/群成员/时间线）→ 放到 dynamic_parts
-    if is_group and group_id:
-        # 时间**分级**注入（harness.time_ctx）：
-        #   粗粒度（日期+时段，变化慢）→ **stable_parts**（可缓存前缀区）；
-        #   精粒度（分钟）→ 只放尾部，仅刷新极少量 token。
-        # 取代原先"每 600s 才注入一次精确时间"的做法（那条路要么过期、要么刷缓存）。
-        try:
-            from harness import bot_hook as _bh
-            _coarse, _fine = _bh.time_parts(f"g_{group_id}")
-            if _coarse:
-                stable_parts.append(_coarse)
-            if _fine:
-                dynamic_parts.append(_fine)
-        except Exception:
-            # 降级：退回原逻辑（保持行为可用）
-            _now_ts = datetime.datetime.now()
+    # ── 时间注入（群聊 + 私聊**都要**）────────────────────────────────
+    # ★ 2026-10-22 修：此前时间分级注入只写在 `if is_group and group_id:` 里面，
+    #   **私聊一行时间都没有** —— 10:44 对方说「晚上好」，模型手上没有任何
+    #   "现在几点"的依据，只能顺着答。这就是"没有时间观念"的直接成因。
+    #   私聊是一对一，没有群友兜底纠正，比群里更需要知道现在几点。
+    _time_key = f"g_{group_id}" if (is_group and group_id) else f"p_{target_qq}"
+    try:
+        from harness import bot_hook as _bh_t
+        _coarse, _fine = _bh_t.time_parts(_time_key)
+        if _coarse:
+            stable_parts.append(_coarse)
+        if _fine:
+            dynamic_parts.append(_fine)
+        # 对方话里的时间前提与钟点矛盾 → 确定性指出（不指望模型自己比对）
+        _mm = _bh_t.mismatch_note(user_msg, _time_key)
+        if _mm:
+            dynamic_parts.append(_mm)
+    except Exception:
+        # 降级：退回原逻辑（群聊按 600s 节流，私聊每轮给）
+        _now_ts = datetime.datetime.now()
+        if not is_group:
+            dynamic_parts.append(
+                "【当前时间】" + _now_ts.strftime("%Y年%m月%d日 %H:%M") + "，星期" + ["一","二","三","四","五","六","日"][_now_ts.weekday()])
+        else:
             _last_time = _GROUP_TIME_INJECT_AT.get(group_id, 0)
             if not isinstance(_last_time, (int, float)) or not _last_time or (time.time() - _last_time) >= 600:
                 dynamic_parts.append(
                     "【当前时间】" + _now_ts.strftime("%Y年%m月%d日 %H:%M") + "，星期" + ["一","二","三","四","五","六","日"][_now_ts.weekday()]
                 )
                 _GROUP_TIME_INJECT_AT[group_id] = time.time()
+
+    # 群聊动态信息（群成员/时间线）→ 放到 dynamic_parts
+    if is_group and group_id:
         timeline = GROUP_TIMELINE.get(group_id, [])
         if timeline:
             # T2-2 时间线去重 + 限 6 条：同一句话重复提到只留一条
@@ -7933,8 +8545,10 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
         pass
 
     # 选择历史 + 构建消息（用缓存优化版）
+    # ★ 2026-10-21：窗口 10 → 16 条。最近 4 轮（8 条）要给原文，10 条只剩 2 条
+    #   能进摘要账本；给到 16 条才有 8 条可压缩。成本仍由"有界窗口 + 账本 cap"控制。
     if is_group and group_id:
-        history = group_chat_history.get(group_id, [])[-10:]
+        history = group_chat_history.get(group_id, [])[-16:]
         cache_key = f"g_{group_id}"
         # 任务 5.3 事件溯源试点：白名单群改为**从仅追加日志派生** history。
         # 派生是纯函数，与内存版记录同一字符串；日志为空（首次/刚启用）时回退内存，
@@ -7942,29 +8556,20 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
         try:
             from harness import session_log as _slog
             if _slog.enabled_for(group_id):
-                _derived = _slog.replay(group_id, limit=10)
+                _derived = _slog.replay(group_id, limit=16)
                 if _derived:
                     history = _derived
         except Exception:
             pass
     else:
-        history = chat_history.get(target_qq, [])[-10:]
+        history = chat_history.get(target_qq, [])[-16:]
         cache_key = f"p_{target_qq}"
 
-    messages = _build_cached_messages(history, cache_key, static_prompt, dynamic_parts,
-                                      user_msg, images, stable_parts=stable_parts)
-
-    # ── 网页操作任务引导：消息含链接/问卷/填表意图时，引导模型调用 web_operate 工具 ──
-    _web_hint = ""
-    if re.search(r'https?://\S+', user_msg):
-        _web_hint = "【重要】用户消息中包含网页链接。请用 web_operate 工具真实操作网页：先 open_url（会自动返回带编号的结构化快照），再用快照里的 ref 调 click/fill/select（每次动作后会自动回传新快照）。绝不要凭文字假装已操作。遇到多步复杂任务可直接用 action=autonomous + goal 让插件自主完成。"
-    elif re.search(r'(问卷|填表|填表单|答题|做.*?(问卷|题)|填写|表单|网页.*?(任务|操作)|帮我.*?(打开|填))', user_msg):
-        _web_hint = "【重要】本次请求涉及问卷/表单/网页任务。请调用 web_operate 工具实际打开并操作网页：open_url 拿快照 -> 按 ref 逐个 click/fill 作答（动作后自动回传新快照）；问卷/多步任务优先用 action=autonomous + goal 自主完成。禁止凭文字假装完成。"
-    if _web_hint:
-        messages.append({"role": "user", "content": "[系统提示] " + _web_hint})
-
-    # 群聊只允许配置/默认名单里的工具，私聊允许全部工具
     # ── 按需工具集（harness.tool_registry）──
+    #  ★ 2026-10-22 提前：原先在 messages 构建**之后**才算，于是 prompt 里
+    #    没有任何"我这轮有哪些工具"的说明 —— 模型不知道自己在群里的工具链，
+    #    被问「你能截屏吗」只能靠猜，也分不清"群里能用什么"和"私聊能用什么"。
+    #    现在先算出工具集，再把「本轮可用工具」写进 dynamic_parts（见下）。
     #  **仅注入本轮可能用到的工具**（工具定义在请求前缀里，全量注入是纯浪费）。
     #  策略：命中场景关键词才加对应分组；命中不到 → 只给 core（search_web）。
     #  若注册表不可用/出错 → 退回原行为（全量），保证功能不退化。
@@ -7998,6 +8603,33 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
     if not _offered_tool_names:
         # tools_for_call 是名字列表（理论上不会走到）→ 直接用
         _offered_tool_names = {str(n) for n in (tools_for_call or [])}
+
+    # ── 【本轮可用工具】+【谁能让我干活】注入（2026-10-22 新增）──
+    #  这是"不知道自己的群聊工具链""分不清白名单""不知道管理员是谁"
+    #  "不知道没权限时怎么回"这四个问题的共同根因：**运行时状态从未进 prompt**。
+    #  模型手上只有工具 schema（而且按需裁剪），没有"我是谁、我能用什么、
+    #  谁有权让我用"的整体视图，被问就只能编。
+    try:
+        _cap_block = _capability_block(
+            is_group=is_group, group_id=group_id, sender=sender,
+            tool_names=_offered_tool_names, user_msg=user_msg)
+        if _cap_block:
+            stable_parts.append(_cap_block)
+    except Exception as _e:
+        log(f"[能力视图] 生成失败（不注入）: {_e}")
+
+    messages = _build_cached_messages(history, cache_key, static_prompt, dynamic_parts,
+                                      user_msg, images, stable_parts=stable_parts)
+
+    # ── 网页操作任务引导：消息含链接/问卷/填表意图时，引导模型调用 web_operate 工具 ──
+    _web_hint = ""
+    if re.search(r'https?://\S+', user_msg):
+        _web_hint = "【重要】用户消息中包含网页链接。请用 web_operate 工具真实操作网页：先 open_url（会自动返回带编号的结构化快照），再用快照里的 ref 调 click/fill/select（每次动作后会自动回传新快照）。绝不要凭文字假装已操作。遇到多步复杂任务可直接用 action=autonomous + goal 让插件自主完成。"
+    elif re.search(r'(问卷|填表|填表单|答题|做.*?(问卷|题)|填写|表单|网页.*?(任务|操作)|帮我.*?(打开|填))', user_msg):
+        _web_hint = "【重要】本次请求涉及问卷/表单/网页任务。请调用 web_operate 工具实际打开并操作网页：open_url 拿快照 -> 按 ref 逐个 click/fill 作答（动作后自动回传新快照）；问卷/多步任务优先用 action=autonomous + goal 自主完成。禁止凭文字假装完成。"
+    if _web_hint:
+        messages.append({"role": "user", "content": "[系统提示] " + _web_hint})
+
     allow_tools = True
     
     # 群聊回复短，降低输出上限节省 token
@@ -8070,6 +8702,17 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
                         log(f"  → {_r['tool']}: action={_act} (第{web_rounds}轮)"
                             f"{_mark} → {_res_parts}")
                         messages.append(_trunner.make_tool_message(tc["id"], _r["inline"]))
+                    # ── 上下文总量闸（2026-10-21）──
+                    #   工具轮累计逼近窗口预算 → 停止继续调工具，强制收尾。
+                    #   不这么做的话，撞到窗口时上游回 400，而 400 不可重试 → 整条回复丢失。
+                    _over, _used, _lim = _ctx_over_budget(messages)
+                    if _over:
+                        log(f"[上下文闸] 工具轮累计 {_used} 字符 ≥ 预算 {_lim}，"
+                            f"停止工具轮，强制收尾")
+                        return _stream_chat_lines(messages, runtime_cfg=None,
+                                                  max_tokens=effective_max_tokens,
+                                                  with_tools=tools_for_call,
+                                                  scene=("group" if is_group else "private"))
                     # 网页任务：继续多轮推进，直到模型主动收尾或达到轮次上限
                     if _web_hint:
                         if web_rounds >= MAX_WEB_ROUNDS:
@@ -8726,6 +9369,9 @@ def process_buffered_message(group_id):
     # 描述块/提示词会把消息误判成别的意图（实测：描述块命中画图正则 → 劫持去 ComfyUI）。
     _user_text_clean = merged_text
     plugin_intervened = False  # 提前初始化，防止短消息检测报错
+    # ★ 决策结论（氛围/策略）：只有"无触发预判"分支会赋值；触发路径保持空串。
+    #   提到函数级是为了下面注入时不必判断分支，避免 NameError。
+    _decider_ctx_text = ""
     # 提取纯文本内容（去掉 [用户ID] 前缀）
     clean_text = re.sub(r'^\[\d+\]\s*', '', merged_text)
     
@@ -8758,6 +9404,7 @@ def process_buffered_message(group_id):
     in_session = buffer.get("in_session", False)
     if not is_at_bot and not has_xiao_a and not has_bot_nick and not quote_forces and not has_text_at and not in_session:
         _decider_go = False
+        _decider_ctx_text = ""   # ★ 决策结论（氛围/策略）：以前被丢掉，现在要传给生成端
         _skip_reason = ""      # 决策插件给的"不建议插话"理由（含降级标记），仅用于日志
         if PLUGIN_OK:
             try:
@@ -8782,6 +9429,10 @@ def process_buffered_message(group_id):
                         if _pn == "group_chat_decider" and isinstance(_pr, dict):
                             if _pr.get("action") == "inject":
                                 _decider_go = True
+                                # ★ 收下决策结论：插件已经判断出「氛围 + 策略」，
+                                #   以前这里只看 action、把 content 丢掉 —— 等于花一次
+                                #   调用做判断、再把结论扔了，让主模型裸奔重猜。
+                                _decider_ctx_text = str(_pr.get("content") or "").strip()
                                 GROUP_OBSERVE.pop(group_id, None)
                             elif _pr.get("action") == "observe":
                                 # 潜水前观察：先记下，过一会儿再看一眼（不是直接结束）
@@ -8863,7 +9514,7 @@ def process_buffered_message(group_id):
     
     # 被 @ 或叫「小a」或含 Bot 昵称或引用 → 总是开启/维持会话模式（即使消息内容为空）
     if is_at_bot or has_xiao_a or has_bot_nick or quote_forces:
-        GROUP_SESSION[group_id] = {"remaining": _config.get("group_session_max_replies", 20), "last_msg_time": time.time()}
+        GROUP_SESSION[group_id] = {"remaining": _session_round_budget(), "last_msg_time": time.time()}
     
     # 没有任何有意义的消息 → 跳过回复（但会话已建立）
     if meaningful_count == 0:
@@ -8933,11 +9584,19 @@ def process_buffered_message(group_id):
         # 只对**纯表情包**（全是 GIF）生效：普通闲聊顺带甩个表情时不再无脑读图，
         # 省一次视觉调用，也杜绝模型输出"解释这张图"的 AI 味回复。
         # 照片/截图（JPG/PNG）维持原行为——那是发给它看的。
-        # 触发条件：话里确实在说这张图（这/那/啥/看/图/字……）或 @我/引用我。
+        # ★ 2026-10-22 收紧：`memes_only=` 显式传下去。旧写法 `is_at_bot` 在
+        #   `_image_understanding_needed` 里**直接 return True**，于是"@我 + 一张
+        #   斗图"照样读图 —— 用户抱怨的正是这种"什么都读"。现在表情包要读到
+        #   强信号（图里/表情包/截图…）才行，@我 本身不算。
         if _imgs and _need_img is True and _all_meme_imgs:
-            _need_img = _image_understanding_needed(merged_text, is_at_bot, quote_forces)
+            _need_img = _image_understanding_needed(
+                merged_text, is_at_bot, quote_forces, memes_only=True)
             if not _need_img:
-                log(f"群[{group_id}] [图片理解] 跳过（表情包，且消息没在说它）")
+                log(f"群[{group_id}] [图片理解] 跳过（表情包，消息没在说它）")
+        # ★ 照片/截图**不设门禁**：那是用户主动发给它看的东西，无条件读。
+        #   （已有测试 tests/test_meme_back.py「照片/截图不受门禁影响」钉着这个决定；
+        #   2026-10-22 收紧时我一度把门禁也套到照片上，被那条测试挡住，这里回退。）
+        #   用户抱怨的成本点是"总是分析**表情包**"——表情包信息量低，读它是纯浪费。
         if _imgs and _need_img and _mode == "describe":
             try:
                 _max = int(_config.get("reply_vision_max_images", 3) or 3)
@@ -9045,6 +9704,19 @@ def process_buffered_message(group_id):
                         if _gctx:
                             merged_text_for_ai = merged_text_for_ai + "\n\n" + _gctx
                             log(f"群[{group_id}] [近况注入] {_gctx.count(chr(10))-1}条")
+                    # ── 自我记忆 / 当前局面 / 决策结论（2026-10-21，1.5.7）──
+                    #   三者都是**当轮事实**，只拼进本轮发给模型的消息，**不写 history**：
+                    #   history 里只留原始对话，否则注入块下一轮会被当成"用户说的话"。
+                    #   顺序按"越具体越靠后"：自己说过什么 → 现在什么局面 → 本轮决策结论。
+                    _self_blk = _self_lines_block(group_id)
+                    if _self_blk:
+                        merged_text_for_ai = merged_text_for_ai + "\n\n" + _self_blk
+                    _sit_blk = _situation_block(group_id)
+                    if _sit_blk:
+                        merged_text_for_ai = merged_text_for_ai + "\n\n" + _sit_blk
+                    if _decider_ctx_text:
+                        merged_text_for_ai = merged_text_for_ai + "\n\n" + _decider_ctx_text
+                        log(f"群[{group_id}] [决策结论注入] {_decider_ctx_text[:60]}")
                     for plugin_name, result in intervention:
                         if "temperature" in result:
                             _ST.set("personality_temperature", float(result["temperature"]))
@@ -9225,16 +9897,24 @@ def process_buffered_message(group_id):
 
             if sent_text:
                 # ── 插件钩子：after_reply（发送前，允许插件修改回复文本）──
+                # ★ 2026-10-21：这里原来用 execute_hook（单数，**首个非 None 即返回**），
+                #   配合 priority 升序（decider 5 → ego 20 → web_search 30），
+                #   意味着 ego 只要返回 override，排在后面的 web_search 幻觉拦截就
+                #   永远不会执行 —— 一个插件悄悄把另一个插件顶掉，且日志里看不出来。
+                #   EGO 修好"丢弃人格改写"之后这个问题会立刻显形（人格一直返回 override），
+                #   所以必须同时改成**逐个执行并链式串联**：后一个插件看到的是前一个
+                #   改完的文本，这样「人格删违禁句 → 联网插件拦幻觉」能叠加生效。
                 if PLUGIN_OK:
                     try:
                         pm = get_plugin_manager()
                         if pm and pm.has_hook("after_reply"):
-                            after_result = pm.execute_hook("after_reply", message=merged_text, group_id=group_id, reply=sent_text, context=_plugin_ctx)
-                            if after_result and after_result.get("action") == "override":
-                                new_reply = after_result.get("reply", "")
-                                if new_reply and new_reply != sent_text:
-                                    sent_text = new_reply
-                                    log(f"群[{group_id}] [插件覆盖] {sent_text[:60]}")
+                            _ar_text, _ar_chain = pm.execute_hook_chain(
+                                "after_reply", message=merged_text,
+                                group_id=group_id, reply=sent_text, context=_plugin_ctx)
+                            if _ar_chain:
+                                log(f"群[{group_id}] [插件覆盖] {' → '.join(_ar_chain)}: {_ar_text[:60]}")
+                            if _ar_text != sent_text:
+                                sent_text = _ar_text
                     except Exception as e:
                         log(f"[Plugin] after_reply error: {e}")
                 # ── typed 并列派发：契约是返回 str（不是 dict）──
@@ -9262,6 +9942,22 @@ def process_buffered_message(group_id):
 
             # 表情包附着：AI 标注了 [表情] 或自动检测到情绪时发一张
             meme_file = try_send_meme(group_id, reply)
+
+            # ── 纯图回复的兜底（1.5.7）──
+            #    模型只写了 [表情:xxx] 时上面不会走文字发送，全靠这一张图。
+            #    但 try_send_meme 会因为**冷却/引擎禁用/匹配不到**返回 None ——
+            #    那样这条回复就彻底消失了：群里什么都没发生，日志里只有一行
+            #    "仅表情标记，跳过文本发送"，看起来像 Bot 没收到消息。
+            #    这里兜一句最简文本，宁可发个"草"也不能凭空失踪。
+            if not sent_text and not meme_file:
+                try:
+                    _fallback = "……"
+                    if smart_send_group(group_id, _fallback, reply_id=_quote_id):
+                        log(f"群[{group_id}] [纯图兜底] 表情未发出，改发文字「{_fallback}」")
+                        track_bot_reply(group_id, _fallback)
+                except Exception as _e:
+                    log(f"群[{group_id}] [纯图兜底] 失败: {_e}")
+
             save_instruction(merged_text, reply)
 
             # 触发自主学习
@@ -10600,7 +11296,7 @@ def main():
                     # 被 @ 或叫「小a」或含 Bot 昵称或引用 → 立即建立会话，让缓冲窗口内的后续消息能被合并
                     if is_at_bot or has_xiao_a or has_bot_nick or _quote_me:
                         GROUP_SESSION[group_id] = {
-                            "remaining": _config.get("group_session_max_replies", 20),
+                            "remaining": _session_round_budget(),
                             "last_msg_time": time.time()
                         }
                     continue  # 等待可能的后续消息
@@ -10870,11 +11566,15 @@ def main():
                 # native：主模型确实多模态时，才把原图交给它。
                 # ★ 表情包按需理解（与群聊同口径）：全是 GIF 且话里没在说这张图
                 #   → 不读（省视觉调用、防"解释表情包"的 AI 味）。照片/截图维持原行为。
+                # ★ 2026-10-22 收紧：私聊原先是"只要全是 GIF 就跳过"，照片/截图一律读，
+#   而且私聊**没有** @/引用 这两个宽松条件（群聊有）。改成与群聊同一口径：
+#   表情包 → memes_only=True（要强信号才读）；照片/截图 → 也要过一遍判定。
                 _pm_need_img = True
-                if images and _all_memes(images) \
-                        and not _image_understanding_needed(text):
-                    _pm_need_img = False
-                    log("私聊[%s] [图片理解] 跳过（表情包，且消息没在说它）" % sender)
+                if images and _all_memes(images):
+                    _pm_need_img = _image_understanding_needed(text, memes_only=True)
+                    if not _pm_need_img:
+                        log("私聊[%s] [图片理解] 跳过（表情包，消息没在说它）" % sender)
+                # 照片/截图不设门禁（与群聊同口径，见群聊分支注释）
                 _pm_call_images = (images if _pm_need_img else None) \
                     if (images and image_reply_mode() == "native") else None
                 if images and _pm_need_img and image_reply_mode() == "describe":
@@ -10902,16 +11602,21 @@ def main():
                         pass
                     if sent_text:
                         # ── 插件钩子：after_reply（发送前，允许插件修改回复文本）──
+                        # T8: 传入 scope/sender，super_memory 才能把私聊写入正确作用域。
+                        # 与群聊同款改为链式串联（原因见群聊分支注释）：
+                        # 单数 execute_hook 会让高优先级插件的 override 挡住后面所有插件。
                         if PLUGIN_OK:
                             try:
                                 pm = get_plugin_manager()
                                 if pm and pm.has_hook("after_reply"):
-                                    # T8: 传入 scope/sender，super_memory 才能把私聊写入正确作用域
-                                    after_result = pm.execute_hook("after_reply", message=text, group_id="", reply=sent_text, context={"scope": "private", "sender": sender})
-                                    if after_result and after_result.get("action") == "override":
-                                        new_reply = after_result.get("reply", "")
-                                        if new_reply and new_reply != sent_text:
-                                            sent_text = new_reply
+                                    _ar_text, _ar_chain = pm.execute_hook_chain(
+                                        "after_reply", message=text, group_id="",
+                                        reply=sent_text,
+                                        context={"scope": "private", "sender": sender})
+                                    if _ar_chain:
+                                        log(f"私聊[{sender}] [插件覆盖] {' → '.join(_ar_chain)}")
+                                    if _ar_text != sent_text:
+                                        sent_text = _ar_text
                             except Exception as e:
                                 log(f"[Plugin] after_reply error: {e}")
                         # ── typed 并列派发（私聊作用域）──

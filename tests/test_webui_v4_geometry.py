@@ -26,6 +26,12 @@ v4 的动效是"框架级"的：游标要在条目之间滑行、条目要按高
 """
 import io
 import os
+
+# 自动找到本机 ms-playwright 下的 chromium（pip 的 playwright 不带浏览器，
+# 浏览器是单独下载、版本号跟库绑定）。详见 tests/_pw_chrome.py。
+sys_ = __import__("sys")
+sys_.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _pw_chrome import resolve_chrome as _resolve_chrome  # noqa: E402
 import re
 import sys
 
@@ -92,10 +98,23 @@ except Exception as e:
     skip(f"未安装 Playwright（{type(e).__name__}）→ 跳过几何检查")
     sync_playwright = None
 
+# 库装了 ≠ 浏览器在。Playwright 的浏览器是**单独下载**的、版本号还跟库绑定，
+# 所以 import 成功完全可能 launch 失败（CI 的 windows-latest 就是这种状态）。
+# 这一段先试真正起一个浏览器：起不来就按本文件的设计意图**跳过几何检查**，
+# 但前面的静态检查（A 段）照跑 —— 不能让"环境缺浏览器"把整个套件判红。
+if sync_playwright:
+    try:
+        with sync_playwright() as _pw:
+            _b = _pw.chromium.launch(executable_path=_resolve_chrome())
+            _b.close()
+    except Exception as e:
+        skip("Playwright 起不了浏览器（%s）→ 跳过几何检查" % type(e).__name__)
+        sync_playwright = None
+
 if sync_playwright:
     ROW_EXPECT = 62   # 行高加大后激活项字号能到 20px（导航是目录，不是列表）
     with sync_playwright() as pw:
-        b = pw.chromium.launch(executable_path=os.environ.get("PW_CHROME") or None)  # 本机 chromium-1228
+        b = pw.chromium.launch(executable_path=_resolve_chrome())
         pg = b.new_page(viewport={"width": 1440, "height": 900})
         pg.route("**/api/**", lambda r: r.abort())      # 无后端也确定
         pg.goto("file:///" + V4.replace("\\", "/"), wait_until="load")

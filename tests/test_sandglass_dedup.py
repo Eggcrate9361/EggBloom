@@ -87,8 +87,17 @@ def main():
     check("Bot 行恰好 1 条", len(bots) == 1, f"实际 {bots}")
     check("Bot 行无 assistant 重复",
           not any(s == "assistant" for s, t in written), f"实际 {written}")
-    check("Bot 行正文干净（无 [Bot回复] 前缀）",
-          bots and bots[0] == "早上好", f"实际 {bots}")
+    # ★ 2026-10-22 修正：本断言原为 `bots[0] == "早上好"`，是 2026-10-10
+    #   「格式收敛」时期的写法。2026-10-19 用户明确要求「Bot 要能知道我在哪个群
+    #   说过什么」，agent 行因此**加回了 `[群:{gid}]` 归属标记** —— 否则
+    #   `_scope_match("group", gid)` 会把 Bot 自己的历史发言全部排除，
+    #   连本群都看不到自己说过什么。
+    #   所以现在正确的期望值是「带群标记、但不带旧的 [Bot回复] 前缀」：
+    #   群标记是归属信息（要留），[Bot回复] 是旧格式噪声（要去）。
+    check("Bot 行带群归属标记 [群:123]",
+          bots and bots[0] == "[群:123] 早上好", f"实际 {bots}")
+    check("Bot 行无旧格式 [Bot回复] 前缀",
+          bots and "[Bot回复]" not in bots[0], f"实际 {bots}")
     r = sb.memory_feed({"text": "x", "group_id": "", "reply": "y",
                         "user_pre_logged": True})
     check("返回值仍含四模块键",

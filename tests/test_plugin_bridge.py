@@ -330,11 +330,27 @@ def test_bot_core_wiring():
     check("定义了 _dispatch_typed_after_reply",
           "def _dispatch_typed_after_reply(" in src)
 
-    # 4.2 旧式派发点数量（作为对照基线）
+    # 4.2 派发点数量（作为对照基线）
+    #
+    # ★ 2026-10-22 更新：after_reply 的旧式调用从 `execute_hook`（单数）改成了
+    #   `execute_hook_chain`（链式串联）。这不是回退，是**修掉一个静默吞插件的事故**：
+    #     单数 execute_hook 的语义是「首个非 None 即返回」，配合 priority 升序
+    #     （decider 5 → ego 20 → web_search 30），ego 只要返回 override，
+    #     排在后面的 web_search 幻觉拦截就永远不执行 —— 一个插件悄悄把另一个顶掉，
+    #     日志里还看不出来。EGO 修好「丢弃人格改写」后 ego 开始稳定返回 override，
+    #     这个问题立刻显形，所以两处 after_reply 都必须改成链式。
+    #   本测试原来断言的是「旧行原样存在」，等于把 bug 的写法钉成了正确行为；
+    #   现在改为断言**新不变量**：before_reply 仍是批量派发，after_reply 全部走链式、
+    #   一条单数都不能有。这才是真正要守住的东西。
     n_legacy_before = len(re.findall(r'execute_hooks\(\s*"before_reply"', src))
-    n_legacy_after = len(re.findall(r'execute_hook\(\s*"after_reply"', src))
-    check("旧式 before_reply 派发点 = 3", n_legacy_before == 3, f"实际 {n_legacy_before}")
-    check("旧式 after_reply 派发点 = 2", n_legacy_after == 2, f"实际 {n_legacy_after}")
+    n_single_after = len(re.findall(r'execute_hook\(\s*"after_reply"', src))
+    n_chain_after = len(re.findall(r'execute_hook_chain\(\s*"after_reply"', src))
+    check("before_reply 派发点 = 3（批量 execute_hooks）",
+          n_legacy_before == 3, f"实际 {n_legacy_before}")
+    check("★ after_reply 无单数 execute_hook（会吞后续插件）",
+          n_single_after == 0, f"实际 {n_single_after}")
+    check("★ after_reply 走链式 execute_hook_chain = 2（群/私聊各一）",
+          n_chain_after == 2, f"实际 {n_chain_after}")
 
     # 4.3 ★ typed 派发点数量必须与旧式**对应**（并列追加的语义）
     n_typed_before = len(re.findall(r"_dispatch_typed_before_reply\(", src)) - 1  # 减去定义
@@ -344,13 +360,15 @@ def test_bot_core_wiring():
     check("★ typed after_reply 派发点 = 2（与旧式并列）",
           n_typed_after == 2, f"实际 {n_typed_after}")
 
-    # 4.4 旧式那几行必须**原样存在**（证明"不动旧逻辑"）
+    # 4.4 旧式 before_reply 那几行必须**原样存在**（证明"不动旧逻辑"）；
+    #     after_reply 改为断言链式形态（原因见 4.2 注释）
     check("旧式 before_reply 调用行未被改动",
           'pm.execute_hooks("before_reply", message=merged_text, group_id=group_id, context=_plugin_ctx)' in src)
-    check("旧式 after_reply（群）未被改动",
-          'pm.execute_hook("after_reply", message=merged_text, group_id=group_id, reply=sent_text, context=_plugin_ctx)' in src)
-    check("旧式 after_reply（私聊）未被改动",
-          'pm.execute_hook("after_reply", message=text, group_id="", reply=sent_text, context={"scope": "private", "sender": sender})' in src)
+    check("after_reply（群）走链式且参数完整",
+          'pm.execute_hook_chain(\n                                "after_reply", message=merged_text,\n                                group_id=group_id, reply=sent_text, context=_plugin_ctx)' in src)
+    check("after_reply（私聊）走链式且保留 scope/sender",
+          '"after_reply", message=text, group_id="",' in src
+          and 'context={"scope": "private", "sender": sender})' in src)
 
     # 4.5 typed 结果必须并入同一个 intervention 列表（避免两套裁决分叉）
     check("★ typed before_reply 结果并入同一 intervention 列表",

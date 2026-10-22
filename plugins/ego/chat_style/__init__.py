@@ -42,6 +42,11 @@ PLUGIN_META = {
 
 os.makedirs(DATA_DIR, exist_ok=True)
 
+# 同一时刻只该有一个值的特征类型 —— 刷新时整类覆盖，不做增量追加。
+# 「平均句长」是统计量而不是习惯项，value 每轮随样本变化，
+# 若按 (type, value) 去重就会一行一行往上堆（见 _refresh_features 注释）。
+SINGLE_VALUED_TYPES = frozenset({"平均句长"})
+
 
 def _load_json(path: str, default):
     try:
@@ -184,6 +189,18 @@ class ChatStyleLearner:
         try:
             conn = sqlite3.connect(DB_PATH)
             now = time.time()
+            # ★ 2026-10-21 修复：单值特征必须先删旧行，否则会无限增殖。
+            #   去重键是 (type, value)，而「平均句长」的 value 每轮都在变
+            #   （10字 → 9字 → 8字…），永远不会命中旧行 → 每次刷新新插一条。
+            #   实测 10 条样本后 style_features 里躺着 3 条平均句长，
+            #   注入侧取 top8 时被它们挤掉 3 个坑位，真正的口头禅反而排在后面。
+            #   这类"同一时刻只该有一个值"的特征，视为覆盖式更新（天秤型）。
+            for f in features:
+                if f["type"] in SINGLE_VALUED_TYPES:
+                    conn.execute(
+                        "DELETE FROM style_features WHERE scope_id=? AND user_id=? AND feature_type=?",
+                        (str(scope_id), str(user_id), f["type"])
+                    )
             for f in features:
                 row = conn.execute(
                     "SELECT id, weight, use_count FROM style_features WHERE scope_id=? AND user_id=? AND feature_type=? AND feature_value=?",
@@ -338,19 +355,48 @@ class ChatStyleLearner:
             print(f"[ChatStyle] 衰减特征失败: {e}")
 
     def get_style_prompt(self, scope_id: str, user_id: str) -> str:
-        """生成风格注入 prompt"""
+        """生成风格注入 prompt
+
+        ★ 2026-10-21：加了有效性过滤与排序。
+        实测发现原实现会把 8 个槽位里的 3 个浪费在重复的「平均句长」上，
+        再拿 1 个槽位写「标点习惯：，」—— 逗号人人都在用，写进提示词
+        既占预算又不产生任何区分度，真正有用的口头禅反而被挤到后面。
+        现在：按信息量排序、丢掉无区分度的项、同类型最多留 2 条。
+        """
         if not self.config.get("enabled", True):
             return ""
         auto_learn = self.config.get("auto_learn_enabled", True)
         if not auto_learn and user_id not in self.config.get("learn_targets", []):
             return ""
 
-        features = self.get_features(scope_id, user_id)
+        features = self.get_features(scope_id, user_id, top_k=24)
         if not features:
             return ""
 
+        # 无区分度：这些标点谁都在用，写进提示词等于没写
+        _MEANINGLESS_PUNCT = frozenset({"，", ",", "。", "、", "…"})
+        # 信息量排序：口头禅 > 开头句式 > 结尾语气 > 表情习惯 > 标点 > 句长
+        _ORDER = {"口头禅": 0, "开头句式": 1, "结尾语气": 2,
+                  "表情习惯": 3, "标点习惯": 4, "平均句长": 9}
+
+        picked: List[Dict[str, Any]] = []
+        per_type: Dict[str, int] = {}
+        for f in sorted(features, key=lambda x: _ORDER.get(x["type"], 5)):
+            _t, _v = f["type"], str(f["value"])
+            if _t == "标点习惯" and _v in _MEANINGLESS_PUNCT:
+                continue
+            if per_type.get(_t, 0) >= 2:      # 同类型最多 2 条，避免单一维度刷屏
+                continue
+            per_type[_t] = per_type.get(_t, 0) + 1
+            picked.append(f)
+            if len(picked) >= 8:
+                break
+
+        if not picked:
+            return ""
+
         lines = ["【说话风格参考】以下是从该用户历史消息中提取的说话习惯，请自然融入回复："]
-        for f in features[:8]:
+        for f in picked:
             lines.append(f"- {f['type']}：{f['value']}")
 
         return "\n".join(lines)

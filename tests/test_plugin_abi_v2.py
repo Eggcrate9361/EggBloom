@@ -79,6 +79,54 @@ bare = PluginContext("bare", "0.0.0", manager=None)
 check("无 manager 时 api_call 返回 None", bare.api_call("get_status") is None)
 check("无 manager 时 emit 返回 []", bare.emit("nothing") == [])
 
+# ══ 3.5 ai_chat 的返回形状（2026-10-22 补）══════════════════════
+# 背景：`AIClient.call()` 返回三元组 `(content, tool_calls, usage)`，
+# 而 abi.ai_chat 原来直接透传、没说形状。proactive_talk 和 qzone 都按
+# str / dict 写解包 → tuple 落到 `return ""` → **模型生成了内容却被静默丢掉**。
+# 症状：插件装了永远不产出，日志无异常，只能单步调试才看出来。
+# 现在 ai_chat 在 ABI 层归一化成 str；需要完整结构的用 ai_chat_raw。
+print("\n=== 3.5 ai_chat 返回形状归一化 ===")
+
+
+class _FakeAI:
+    """假 AI 客户端：call() 原样返回构造时给的东西。"""
+
+    def __init__(self, ret):
+        self.ret = ret
+        self.calls = 0
+
+    def call(self, messages, tools=None, max_tokens=800):
+        self.calls += 1
+        return self.ret
+
+
+_ai_backup = getattr(pm, "_ai_client", None)
+
+pm._ai_client = _FakeAI(("正文内容", None, {"total_tokens": 12}))
+check("★ 三元组 → 取正文（原来这里是空串）", ctx.ai_chat([]) == "正文内容",
+      repr(ctx.ai_chat([])))
+check("★ ai_chat 的返回一定是 str", isinstance(ctx.ai_chat([]), str))
+check("ai_chat_raw 仍保留三元组", isinstance(ctx.ai_chat_raw([]), tuple))
+
+pm._ai_client = _FakeAI("纯字符串")
+check("str 返回原样透传", ctx.ai_chat([]) == "纯字符串")
+
+pm._ai_client = _FakeAI({"content": "字典内容"})
+check("dict 返回取 content", ctx.ai_chat([]) == "字典内容")
+pm._ai_client = _FakeAI({"text": "字典 text"})
+check("dict 返回取 text", ctx.ai_chat([]) == "字典 text")
+
+pm._ai_client = _FakeAI((None, [{"id": "t1"}], {}))
+check("只有 tool_calls、没有正文 → 空串", ctx.ai_chat([]) == "")
+
+pm._ai_client = _FakeAI(None)
+check("客户端返回 None → 空串（不是 None）", ctx.ai_chat([]) == "")
+
+pm._ai_client = None
+check("未注入客户端 → 空串，且不抛异常", ctx.ai_chat([]) == "")
+
+pm._ai_client = _ai_backup
+
 # ══ 4. 事件总线 ══════════════════════════════════════════════
 print("\n=== 4. 事件总线 ===")
 received = []

@@ -565,7 +565,39 @@ class PluginManager:
 
         return results
 
-    # ── 钩子三档拦截语义（T7 批一 ⑤ P3 · 对应 dsh-tools）──────────
+    def execute_hook_chain(self, hook_name: str, text_key: str = "reply", **kwargs):
+        """链式执行 after_reply 类钩子，返回 (最终文本, 改写过它的插件名列表)。
+
+        为什么需要它（2026-10-21）：
+          `execute_hook`（单数）是**首个非 None 即返回**，配合 priority 升序，
+          意味着 ego(20) 只要返回 override，排在它后面的 web_search(30)
+          幻觉拦截就永远跑不到 —— 一个插件把另一个插件静默顶掉。
+          `execute_hooks`（复数）虽然全跑，但彼此独立、看不到前一个的改写结果，
+          没法做「人格删违禁句 → 联网插件拦幻觉」这种叠加。
+
+          这里逐个执行，**后一个插件看到的是前一个改完的文本**，
+          所以改写能链式叠加，且不会被高优先级插件短路。
+
+        契约：每个 hook 返回 {"action": "override", "reply": <新文本>} 才认；
+        返回其他/None 视为"无改写"，文本原样传给下一个。
+        """
+        cur = kwargs.get(text_key, "") or ""
+        changed_by = []
+        for priority, name, hook_func in self._hook_candidates(hook_name):
+            call_kwargs = dict(kwargs)
+            call_kwargs[text_key] = cur
+            try:
+                r = self._invoke_hook(name, hook_func, call_kwargs)
+            except Exception as e:
+                print(f"[Plugin:{name}] hook {hook_name} 异常: {e}")
+                continue
+            if isinstance(r, dict) and r.get("action") == "override":
+                new_text = r.get(text_key, "")
+                # 空串是"抑制发送"的合法契约，但只在**原本非空**时才算改写
+                if new_text != cur:
+                    changed_by.append(name)
+                    cur = new_text
+        return cur, changed_by
     # ⚠️ 不要复用 `tier` 一词：本文件里 `tier` 已表示插件 ABI 形态（spec/legacy）。
     # 三档的分工（都是「绝不向主循环抛异常」的兜底，不变量 A10）：
     #   · observe   —— 只读：返回值**一律忽略**，异常隔离。观测/日志类插件用它，

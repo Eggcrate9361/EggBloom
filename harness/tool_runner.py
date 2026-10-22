@@ -40,24 +40,66 @@ from . import spill as _spill
 # ★ 预算**不再是写死的死值**（用户："去掉预算定制，不是给一个死的值，是尽量降低成本"）。
 #   按**剩余上下文**自适应：剩余越多给得越宽，越到后期收得越紧 —— 成本随占用上升而下降。
 #   这里只作为"调用方没给预算"时的兜底下限；agent 侧每步会按剩余空间算出实际预算。
-DEFAULT_MAX_TOOL_RESULT_TOKENS = 1500
+#
+# 2026-10-21：窗口不再写死。原来 CONTEXT_CHARS=48000（注释说「≈24k token」，
+# 按 1.6 字/token 其实是 30k）+ 默认预算固定 1500，都是 64k 时代的假设。
+# 实际模型是 1M 窗口时：① 预算与窗口完全脱钩，1M 兑现不了任何收益；
+# ② 长会话里工具结果全被 spill 落盘，模型只能反复读文件空转。
+# 现在统一问 model_caps（环境变量 EGGBLOOM_CTX_WINDOW 仍最优先）。
+try:
+    from .. import model_caps as _caps
+except Exception:                                    # 包外直接跑脚本时
+    try:
+        import model_caps as _caps
+    except Exception:
+        _caps = None
+
+_WINDOW_TOKENS = _caps.context_window() if _caps else 131072
+_CHARS_PER_TOKEN = _caps.CHARS_PER_TOKEN if _caps else 1.6
+_SAFETY_RATIO = _caps.SAFETY_RATIO if _caps else 0.8
+
+#: 单条工具结果默认预算 = 窗口的 0.6%。1M → 约 6.3k；128k → 786（回落 floor 1500）。
+#  取 0.6% 而不是 1%：20 轮工具链最坏情况下总量仍可控（1M 窗口 ≈ 126k，占比 12%）。
+_TOOL_RESULT_RATIO = 0.006
+
+
+def _tool_result_budget(window_tokens):
+    """按窗口算单条工具结果的默认预算（floor 1500 / ceil 8000）。"""
+    try:
+        return max(1500, min(8000, int(int(window_tokens) * _TOOL_RESULT_RATIO)))
+    except (TypeError, ValueError):
+        return 1500
+
+
+DEFAULT_MAX_TOOL_RESULT_TOKENS = _tool_result_budget(_WINDOW_TOKENS)
 BUDGET_FLOOR = 800            # 再窄也要能看全一个工具结果
 BUDGET_CEIL = 12000           # 富余时也不无限给（成本纪律）
-CONTEXT_CHARS = 48000         # 上下文可用字符的保守估计（≈ 24k token 窗口）
+CONTEXT_CHARS = int(_WINDOW_TOKENS * _CHARS_PER_TOKEN * _SAFETY_RATIO)  # 按真实窗口推导
 
 
-def adaptive_budget(messages, steps_left=1, used_chars=None):
+def _context_chars(window_tokens=None):
+    """可用字符预算。给 window_tokens 时按该窗口算（测试/换模型用）。"""
+    if window_tokens is None:
+        return CONTEXT_CHARS
+    try:
+        return int(int(window_tokens) * _CHARS_PER_TOKEN * _SAFETY_RATIO)
+    except (TypeError, ValueError):
+        return CONTEXT_CHARS
+
+
+def adaptive_budget(messages, steps_left=1, used_chars=None, window_tokens=None):
     """按**剩余上下文**算本步的工具结果预算（不是常量）。
 
-    messages    : 即将发给模型的消息（用于估算已用字符）
-    steps_left  : 预计还剩几步 —— 剩下的步越多，每步分到的越少
+    messages      : 即将发给模型的消息（用于估算已用字符）
+    steps_left    : 预计还剩几步 —— 剩下的步越多，每步分到的越少
+    window_tokens : 覆盖窗口（None = 用当前模型的真实窗口）
     """
     try:
         used = used_chars if used_chars is not None else sum(
             len(json.dumps(m, ensure_ascii=False)) for m in (messages or []))
     except Exception:
         used = 0
-    room = max(0, CONTEXT_CHARS - int(used))
+    room = max(0, _context_chars(window_tokens) - int(used))
     per_step = int(room / max(1, int(steps_left)) * 0.5)
     return max(BUDGET_FLOOR, min(BUDGET_CEIL, per_step))
 

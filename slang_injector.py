@@ -125,6 +125,37 @@ def remove(term):
     return set_entries(entries)
 
 
+def _collect_hits(user_msg: str, entries: dict):
+    """找出消息里真正命中的词条，并**合并同义重复**。
+
+    为什么要去重（2026-10-22 实测发现）：
+        词典是纯子串匹配，而短词天然是长词的子串。一句话里出现
+        「他又开摆了」时，`开摆了` / `摆了` / `开摆` 三条会同时命中，
+        注入侧就把「放弃挣扎」讲了三次 —— 20 条预算里白白占掉 3 格，
+        还把真正有用的信息挤到后面。
+
+    去重规则（保守，只合并「确实是同一个词的不同形态」）：
+        按词长**从长到短**排序后逐个收，收下一个之前先看它是不是
+        已经被收下的某个词的一部分；是就跳过。
+        这样 `开摆了` 先收下，`开摆`/`摆了` 都判定为它的子串而跳过。
+        反过来 `新番` 和 `追番` 互不为子串，两条都留 —— 它们意思不同。
+
+    返回 [(term, meaning), ...]，已按词长降序（长的更具体，优先给模型看）。
+    """
+    raw = [t for t in entries if t and t in user_msg]
+    if not raw:
+        return []
+    # 长的优先：更具体的词先占位
+    raw.sort(key=len, reverse=True)
+    kept = []
+    for t in raw:
+        # 已被更长的命中词完全包含 → 是同义形态重复，跳过
+        if any(t != k and t in k for k in kept):
+            continue
+        kept.append(t)
+    return [(t, entries[t]) for t in kept]
+
+
 def get_context_for_llm(user_msg: str = "") -> str:
     entries = get_entries()
     if not entries:
@@ -132,10 +163,7 @@ def get_context_for_llm(user_msg: str = "") -> str:
     replies = get_replies()
     # 按需检索：只在用户消息中命中词典词条时才注入，避免全量塞入淹没重点
     if user_msg:
-        hit = []
-        for term, meaning in entries.items():
-            if term and term in user_msg:
-                hit.append((term, meaning))
+        hit = _collect_hits(user_msg, entries)
         if hit:
             lines = ["【网络用语词典·当前对话命中】对方刚说到的词，意思如下。请自然地接着对方的话回应（可以用这个词接梗、调侃、接话），不要生硬解释，不要提及本段提示："]
             for i, (term, meaning) in enumerate(hit[:20], 1):

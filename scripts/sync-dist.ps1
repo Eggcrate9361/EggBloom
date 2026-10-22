@@ -133,6 +133,12 @@ $excludeDirs = @(
     # ★ 运行时会话状态：源码库里是被 git 忽略的运行态，带个人 QQ 号命名，
     #   robocopy 按目录整体搬 → 2026-10-18 差点把它打进公开包。
     "conversation_state",
+    # ★ plugins/state：插件运行态（capabilities.json / qzone.json / scheduler.json）。
+    #   **这是用户数据**：scheduler.json 里可能是用户自己配的定时任务。
+    #   2026-10-22 修：此前它没被排除，于是每次同步都「把源码库的测试态复制过去，
+    #   再在收尾删掉目标端整个目录」—— 既做了无用功，又会在用户真有任务时把它删掉。
+    #   现在从源头不同步，收尾也不再删目标端（见文件末尾说明）。
+    "state",
     "image_cache", "personality_versions", "__pycache__", ".git", "tests",
     "scripts", ".qoder", ".neurobase", "node_modules", ".ruff_cache",
     ".venv", "venv", "build", "dist"
@@ -166,7 +172,12 @@ $excludeFiles = @(
     "slang_dict.json", "slang_replies.json",
     # ★ 调试日志不入库也不同步进发行包（2026-10 反复出现：webui/meme-debug.log、
     #   model-debug.log 被 git 跟踪或留在暂存树 → 包里带调试痕迹）。运行时自会再生成。
-    "*.log"
+    "*.log",
+    # ★ 审计脚本的产物（scripts/audit_fonts_v4.py / audit_page_parity.py 生成在项目根）。
+    #   它们是"跑审计时的中间物"，不是发行内容。原先靠收尾阶段 Remove-Item 补删 ——
+    #   但那要先把它们复制进包再删掉，多一次无谓写入，且 DryRun 时看着像"要新增"。
+    #   2026-10-22 直接在这里排除，从源头不同步。
+    "_font_audit.png", "_parity_report.json"
 )
 
 # 运行时数据目录（根目录下），整目录不同步
@@ -195,12 +206,15 @@ function Invoke-Robo([string]$src, [string]$dst) {
         $script:result.failed++
         return
     }
-    # 解析汇总行：形如
-    #   Files :       123        120         3         0         0         0
-    #            Total    Copied   Skipped  Mismatch   FAILED    Extras
+    # 解析汇总行。robocopy 的**输出语言跟随系统**，这里两种都要认：
+    #   英文:  Files :  123  120  3  0  0  0   /  Dirs :  6  0  6  0  0  1
+    #   中文:  文件:   123  120  3  0  0  0   /  目录:  6  0  6  0  0  1
+    # ★ 2026-10-22 修：原来只匹配英文 `Files :` / `Dirs :`，而本机 robocopy 输出中文，
+    #   于是统计**恒为 0** —— 干了活却报「复制文件 0」，看日志的人会以为同步没生效
+    #   （实测 webui 明明有 3 个文件要复制，脚本报 0）。这属于"输出骗人"，比报错更糟。
     # 取第 2 个数字（Copied）。若拿不到就跳过统计，不影响同步本身。
-    $filesLine = $out | Where-Object { $_ -match '^\s*Files\s*:' } | Select-Object -First 1
-    $dirsLine  = $out | Where-Object { $_ -match '^\s*Dirs\s*:' }  | Select-Object -First 1
+    $filesLine = $out | Where-Object { $_ -match '^\s*(Files|文件)\s*[:：]' } | Select-Object -First 1
+    $dirsLine  = $out | Where-Object { $_ -match '^\s*(Dirs|目录)\s*[:：]' }  | Select-Object -First 1
     if ($filesLine) {
         $nums = @($filesLine -split '\s+' | Where-Object { $_ -match '^\d+$' })
         if ($nums.Count -ge 2) { $script:result.files += [int]$nums[1] }
@@ -299,20 +313,18 @@ if ($DryRun) {
         Write-Host "  + LICENSE（根许可，显式拷贝）"
     }
 
-    # ── 收尾：清掉"源码库里有、但被 git 忽略"的运行态残留 ────────────────
-    #   （git 忽略了 ≠ robocopy 不搬；这些文件照样会被同步进发行包）
-    $junkPaths = @(
-        (Join-Path $TargetDir "plugins\state"),
-        (Join-Path $TargetDir "plugins\conversation_state"),
-        (Join-Path $TargetDir "_font_audit.png"),
-        (Join-Path $TargetDir "_parity_report.json")
-    )
-    foreach ($j in $junkPaths) {
-        if (Test-Path $j) {
-            Remove-Item -LiteralPath $j -Recurse -Force -ErrorAction SilentlyContinue
-            Write-Host "  - 清理运行态残留: $j"
-        }
-    }
+    # ── 收尾：不再删除目标端的任何运行态目录 ─────────────────────────────
+    #   2026-10-22 之前这里会 Remove-Item 掉 $TargetDir\plugins\state 与
+    #   \plugins\conversation_state。这两个都是**用户数据**：
+    #     · scheduler.json = 用户自己配的定时任务
+    #     · conversation_state = 会话状态
+    #   同步一次就把它们删掉，等于用户配好的东西无声消失。
+    #
+    #   真正该做的是**从源头不同步**，已经做了：
+    #     · plugins/state → $excludeDirs 里的 "state"
+    #     · conversation_state → $excludeDirs 里本来就有
+    #     · _font_audit.png / _parity_report.json → $excludeFiles
+    #   所以这里无事可做。保留段注释而不留代码，免得后来人以为"这里本该删点东西"。
 
     Write-Host "=== 同步完成 ===" -ForegroundColor Cyan
     Write-Host "  VERSION: $versionFile  (commit=$commit)"

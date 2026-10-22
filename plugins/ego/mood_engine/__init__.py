@@ -101,13 +101,25 @@ class MoodEngine:
     # ── 读取 ──
 
     def get_mood(self, group_id: str = "") -> dict:
-        """返回某群的当前情绪（含自然衰减后的实时值）"""
+        """返回某群的当前情绪（含自然衰减后的实时值）
+
+        ★ 2026-10-21 修复：这里原先有两条早退路径返回
+        `{"label": "平静", "score": 0, "boost": 0.0}` —— 既缺 `text` 字段，
+        label 又用了中文「平静」（其余路径都是 `neutral` 这种英文键）。
+        后果有两个：
+          · `get_prompt_block` 立刻取 `mood["text"]` → KeyError: 'text'
+            （日志里那条 `[MoodEngine] before_reply error: 'text'` 就是它），
+            整个心情注入被吞掉，插件等于没开。
+          · 即使补上 text，`label == "neutral"` 也判不中「平静」，
+            平静时会绕过提前返回、硬塞一句「【当前心情】平静」进提示词。
+        统一走 `_format(0.0)`，只有一条出口，结构天然一致。
+        """
         if not self.config.get("mood_enabled", True):
-            return {"label": "平静", "score": 0, "boost": 0.0}
+            return self._format(0.0)
         gid = str(group_id or "default")
         m = self.moods.get(gid)
         if not m:
-            return {"label": "平静", "score": 0, "boost": 0.0}
+            return self._format(0.0)
         score = self._decay_score(m)
         return self._format(score)
 

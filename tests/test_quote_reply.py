@@ -24,6 +24,13 @@ sys.path.insert(0, ROOT)
 
 import bot_core  # noqa: E402
 
+# 停掉 bot_core 带起来的守护线程：否则测试全过、退出码却是 0xC0000409
+# （解释器关闭时 daemon 线程还在写 stdout，抢锁失败 → 拖垮退出码）。
+# 详见 tests/_quiet_exit.py 开头的说明。
+sys.path.insert(0, HERE)
+from _quiet_exit import quiet_exit  # noqa: E402
+quiet_exit()
+
 PASS = 0
 FAIL = 0
 FAILURES = []

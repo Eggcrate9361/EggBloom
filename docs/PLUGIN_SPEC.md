@@ -1,4 +1,8 @@
-﻿# EggBloom 插件 UI 规范
+# EggBloom 插件 UI 规范
+
+> 本文只管 `ui.html` 的写法与前端/后端契约。
+> **插件 ABI（`PLUGIN_SPEC` / `PLUGIN_MANIFEST` / `PLUGIN_HOOKS` / `ctx` 能力）见
+> [`PLUGIN_DEV.md`](PLUGIN_DEV.md)** —— 当前 ABI 版本为 2，新插件请一律用真插件 ABI。
 
 ## 1. 目录结构
 ```
