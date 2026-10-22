@@ -3,13 +3,13 @@
 
 <img src="assets/readme-hero.png" width="840" alt="EGGBLOOM"><br><br>
 
-<span style="color:#F0EEEA;font-size:15px">一个跑在 QQ 群里的 AI，尽量别像个 AI。</span>
+<span style="color:#F0EEEA;font-size:15px">可用于 QQ 聊天的 bot 框架</span>
 
 <br><br>
 
 <a href="docs/USAGE.md"><img src="https://img.shields.io/badge/%E9%83%A8%E7%BD%B2%E6%95%99%E7%A8%8B-Setup-C9A96E?style=for-the-badge" alt="部署教程"></a>
 <a href="docs/USAGE_en.md"><img src="https://img.shields.io/badge/%E6%96%87%E6%A1%A3-Docs-16130F?style=for-the-badge" alt="文档"></a>
-<a href="CHANGELOG.md"><img src="https://img.shields.io/badge/%E5%8F%98%E6%9B%B4-Changelog-16130F?style=for-the-badge" alt="变更日志"></a>
+<a href="CHANGELOG.md"><img src="https://img.shields.io/badge/%E5%8F%98%E6%9B%B5-Changelog-16130F?style=for-the-badge" alt="变更日志"></a>
 
 </td></tr></table>
 
@@ -20,20 +20,17 @@
 <img src="https://img.shields.io/badge/License-MIT-C9A96E?style=flat-square" alt="MIT">
 </p>
 
-OneBot v11，支持 SnowLuma / NapCat / LLOneBot。模型后端 DeepSeek / OpenAI / Ollama / LM Studio / llama-server。不用装外部数据库，解压双击就能起。只有 Windows 试过，别的系统没验。
-
 ---
 
-## 🎉 是什么
+## 是什么
 
-别的 bot 在比谁功能多，这个在比谁更像群里那个人。
+可用于 QQ 聊天的 bot 框架。基于 OneBot v11，支持 SnowLuma / NapCat / LLOneBot。
 
-会敷衍，会骂人，会记不住三天前说过什么。这些不是没做完，是故意留着的。
-
-真正常用的就三样：知道什么时候该闭嘴、说话不带客服腔、被怼了能骂回去。
+模型后端 DeepSeek / OpenAI / Ollama / LM Studio / llama-server。
+群聊 / 私聊，带记忆、插件、表情包和 Agent 工具。WebUI 配置，不用装外部数据库。
 
 <details>
-<summary><b>都会什么（问就是都会，问就是都不精）</b></summary>
+<summary>功能</summary>
 <br>
 
 | | |
@@ -49,7 +46,7 @@ OneBot v11，支持 SnowLuma / NapCat / LLOneBot。模型后端 DeepSeek / OpenA
 </details>
 
 <details>
-<summary><b>群里的一次发言，具体是这样</b></summary>
+<summary>群里的一次发言，具体是这样</summary>
 <br>
 <img src="assets/gate-flow.png" alt="发言决策闸门">
 </details>
