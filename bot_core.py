@@ -1506,7 +1506,8 @@ def log(msg):
     msg = _replace_qq_with_nick(msg)
     line = f"[{ts}] {msg}"
     try:
-        print(line, flush=True)
+        # 终端：按级别上色（文件仍写纯文本，ANSI 码进文件就是乱码）
+        print(_colorize(line), flush=True)
     except Exception:
         pass
     try:
@@ -1516,6 +1517,81 @@ def log(msg):
             f.write(line + "\n")
     except Exception:
         pass
+
+
+# ── 日志色彩分级（2026-10-22 用户要求"色彩区分"）────────────────────
+# 原则：
+#   · **终端有色、文件无色**。ANSI 转义写进 qq_bot.log 会让文件变成一串
+#     \033[91m，grep 和 diff 全废，所以颜色只加在 print 那一支。
+#   · 按**内容**判级，不改调用方。上千处 log() 调用不可能逐个传级别，
+#     用关键词匹配是最省事也不破坏兼容的办法。
+#   · Windows 终端默认不吃 VT 序列，先试着开；开不了就静默退回无色，
+#     不影响任何功能（颜色只是可读性，不是正确性）。
+_LOG_STYLES = (
+    # (关键词元组, ANSI 颜色码, 说明)
+    (("CRASH", "未捕获异常", "失败", "异常", "错误", "ERROR", "Error",
+      "error", "Traceback"), "91", "错误 · 红"),
+    (("警告", "跳过", "冷却", "超时", "限流", "重试", "未匹配"), "93",
+     "注意 · 黄"),
+    (("AI 回复", "AI (", "AI失败", "AI 重试", "AI 不重试"), "96",
+     "AI 输出 · 青"),
+    (("[发送]", "发送成功", "已发送"), "92", "发送 · 绿"),
+    (("[Sandglass]", "[Plugin]", "[事件]", "[表情]", "[画图]", "[搜索]",
+      "[私聊]", "[群["), "95", "子系统 · 紫"),
+)
+_ANSI_RESET = "\033[0m"
+_ANSI_TS = "\033[90m"          # 时间戳暗灰，不抢内容
+_COLOR_OK = None               # 延迟探测：None=未探测, True=可用, False=不可用
+
+
+def _ansi_supported() -> bool:
+    """Windows 终端默认不吃 VT 序列，这里试着打开；失败就一路无色。"""
+    global _COLOR_OK
+    if _COLOR_OK is not None:
+        return _COLOR_OK
+    _COLOR_OK = False
+    if os.name != "nt":
+        _COLOR_OK = True
+        return True
+    try:
+        import ctypes
+        k = ctypes.windll.kernel32
+        # -11 = STD_OUTPUT_HANDLE
+        h = k.GetStdHandle(-11)
+        mode = ctypes.c_ulong(0)
+        if not k.GetConsoleMode(h, ctypes.byref(mode)):
+            return False
+        # 0x0004 = ENABLE_VIRTUAL_TERMINAL_PROCESSING
+        if k.SetConsoleMode(h, mode.value | 0x0004):
+            _COLOR_OK = True
+    except Exception:
+        pass
+    return _COLOR_OK
+
+
+def _colorize(line: str) -> str:
+    """给一行日志上色。探测失败或非 tty 时原样返回（绝不带 ANSI 进文件）。"""
+    if not _ansi_supported():
+        return line
+    try:
+        import sys as _sys
+        if not getattr(_sys.stdout, "isatty", lambda: False)():
+            return line          # 重定向到文件/管道时不上色
+    except Exception:
+        return line
+    color = None
+    for keys, code, _desc in _LOG_STYLES:
+        if any(k in line for k in keys):
+            color = code
+            break
+    if not color:
+        return line
+    # 时间戳单独暗化，内容按级别上色：一眼先看到"出了什么事"，再看时间
+    if line.startswith("[") and "]" in line:
+        i = line.index("]")
+        return (f"{_ANSI_TS}{line[:i + 1]}{_ANSI_RESET}"
+                f"\033[{color}m{line[i + 1:]}{_ANSI_RESET}")
+    return f"\033[{color}m{line}{_ANSI_RESET}"
 
 
 def _rotate_log_file(path, max_bytes=5 * 1024 * 1024, backup_count=5):
@@ -10667,17 +10743,6 @@ def main():
                             _handle_poke_event(ev)
                         except Exception as e:
                             log(f"[事件] poke 处理异常: {e}")
-                    elif post_type == "notice":
-                        # ★ 2026-10-22 调试：用户报「群聊的戳一戳去哪了」，
-                        #   而 qq_bot.log 里**零条** poke 记录 —— 说明事件根本没
-                        #   走到上面那个分支。各驱动对 notice 的字段拼法不一致
-                        #   （有的 notice_type 直接是 "poke"、有的没有 sub_type），
-                        #   所以这里把**所有没匹配上的 notice** 原样打出来，
-                        #   看到真实格式再收窄匹配条件。看到即修，别留着常开。
-                        try:
-                            log(f"[事件] notice 未匹配: {json.dumps(ev, ensure_ascii=False)[:300]}")
-                        except Exception:
-                            log(f"[事件] notice 未匹配(不可序列化): {str(ev)[:200]}")
                     elif (post_type == "notice"
                           and ev.get("notice_type") in ("group_recall", "friend_recall")):
                         try:
