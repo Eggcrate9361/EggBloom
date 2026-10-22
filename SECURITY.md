@@ -40,7 +40,7 @@ EggBloom 是**本地优先**的桌面程序，默认只监听 `127.0.0.1`，但�
 
 ## 不算安全问题的
 
-- 模型自己说错话、幻觉、语气不像人（这是效果问题，开 Issue 或 Discussion）
+- 模型自己说错话、幻觉、语气不像人（这是效果问题，走 [Discussions](https://github.com/Eggcrate9361/EggBloom/discussions)）
 - 需要本机管理员权限才能利用的配置问题
 - 依赖上游（NapCat / Electron / Python）的已知漏洞 —— 请同时报给上游
 

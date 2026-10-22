@@ -14,6 +14,8 @@ EggBloom Desktop 目前由维护者单人开发，仓库不开放常规 PR。本
 
 ### 1. 报告 Bug
 
+Issue 收两类：**Bug** 和 **功能建议**。装不上、配置不会、想问效果，走 [Discussions](https://github.com/Eggcrate9361/EggBloom/discussions)。
+
 - 先搜索 [Issues](https://github.com/Eggcrate9361/EggBloom/issues) 确认未被报告
 - 使用 Bug Report 模板创建新 Issue
 - 必须包含：
@@ -24,9 +26,11 @@ EggBloom Desktop 目前由维护者单人开发，仓库不开放常规 PR。本
 
 ### 2. 提出新功能
 
-- 先开 Issue 讨论设计方案，避免无效开发
-- 说明使用场景、预期收益、可能的风险
+用 [功能建议模板](https://github.com/Eggcrate9361/EggBloom/issues/new?template=feature_request.yml) 开 Issue。
+
+- 先说场景再说方案。模板第一栏就是「你遇到的问题」，写清现状为什么不够用
 - 涉及 UI 变更请提供草图/原型
+- 能自己改的小改动，直接提 PR 比开 Issue 快
 
 ### 3. 提交代码 (Pull Request)
 
@@ -212,15 +216,16 @@ CI（`.github/workflows/ci.yml`）只跑冒烟测试，不出包。
 
 ## 沟通渠道
 
-- **Issue Tracker**：Bug 报告、功能讨论
-- **Security 私密通道**：安全漏洞，见 [SECURITY.md](SECURITY.md)
+- **Issues**：Bug、功能建议（各有模板）
+- **Discussions**：使用问题、装不上、配置不会、想问效果
+- **Security 私密通道**：安全漏洞，见 [SECURITY.md](SECURITY.md)。不要开公开 Issue
 
 ---
 
 ## 常见问题
 
 **Q: 可以直接向 main 分支提 PR 吗？**
-A: 仓库目前不接受常规 PR，`main` 只走 Release 提交。发现问题请开 Issue。
+A: 仓库目前不接受常规 PR，`main` 只走 Release 提交。Bug 和功能建议开 Issue，使用问题走 Discussions。
 
 **Q: 我改了配置文件格式，需要注意什么？**
 A: 
