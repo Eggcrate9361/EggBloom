@@ -92,7 +92,16 @@ QQ 号和协议地址在「协议」页单独填，不在向导里。
 
 ## 演示
 
-> 视频 / 截图：待补
+控制台 v4，十五个页。导航是左下角那把机械闸片架，按右上角热区展开。
+
+<img src="docs/screenshots/nav.png" width="100%" alt="机械闸片架导航">
+
+| | |
+| --- | --- |
+| <img src="docs/screenshots/protocol.png" width="100%" alt="协议"> | <img src="docs/screenshots/config.png" width="100%" alt="配置中心"> |
+| <img src="docs/screenshots/behavior.png" width="100%" alt="群聊行为"> | <img src="docs/screenshots/agent.png" width="100%" alt="Agent"> |
+
+截图由 `shoot_webui.py` 生成（Playwright 驱动真实 WebUI，见仓库根目录）。
 
 ## 社区
 
