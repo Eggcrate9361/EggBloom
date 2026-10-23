@@ -2403,8 +2403,8 @@ body::after{content:'';position:fixed;inset:0;z-index:60;pointer-events:none;
 /* ── 展开态：中央机械结构 ─────────────────────────────────────── */
 .mech{position:fixed;inset:0;z-index:44;display:grid;place-items:center;
   opacity:0;pointer-events:none;background:
-    color-mix(in srgb,var(--deep) 62%,transparent);
-  backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px);
+    color-mix(in srgb,var(--deep) 88%,transparent);
+  backdrop-filter:blur(7px);-webkit-backdrop-filter:blur(7px);
   /* 出场：整层先淡出，壳体同时向中轴聚拢（收进机器里），比原地消失干净 */
   transition:opacity 260ms cubic-bezier(.4,0,.7,.2)}
 .mech.open{opacity:1;pointer-events:auto;transition:opacity 200ms var(--ez)}
@@ -7874,6 +7874,12 @@ function pvSignalBlip(root) {
     var TOTAL = PITCH * N;    /* 一圈高度 = 竖向回绕周期（"无限"的关键）*/
     /* ★ 展开时转到**当前页**，不是第 1 页（__pvPage 由 go() 同步）*/
     var cur = (typeof window.__pvPage === 'number' ? window.__pvPage : 0), last = 0, open = false;
+    /* ★ entered：指针这一轮是否**进到过导航壳体内**。
+       热区（.rack）在左上角，导航壳体在屏幕中间，中间隔着一片空白。
+       鼠标从热区往壳体移动时，700ms 计时器可能在半路就到点 —— 那时的位置
+       还在壳体外面，判成"可收" → 导航刚展开就自己关。
+       所以：没进过壳体的这一轮，一律不收；进去过之后再移出才收。 */
+    var entered = false;
 
     /* 结构：竖轴 + 螺旋板片 + 顶部金属机头（参考片 5.4–8.6s 的运动）*/
     var html = '<div class="mech-in">'
@@ -8031,6 +8037,7 @@ function pvSignalBlip(root) {
     }
     function show(){
       open = true;
+      entered = false;          /* 新一轮：等指针真的进到壳体内，才允许自动收 */
       window.__pvMechOpen = true;
       /* ★ 同步到当前页：热区可能在用户停留期间切过页（局部 __pvPage 会过期）*/
       try { if (typeof window.__pvPage === 'number') cur = window.__pvPage; } catch (e) {}
@@ -8076,10 +8083,18 @@ function pvSignalBlip(root) {
     function onTarget(){
       var el = null;
       try { el = document.elementFromPoint(px, py); } catch (e) {}
-      return !!(el && el.closest && el.closest('.mblk, .mech-cap, .blk-tag'));
+      if (!el || !el.closest) return false;
+      /* ★ 判据从「精确落在某个块上」放宽到「落在导航壳体内」。
+         旧写法只认 .mblk / .mech-cap / .blk-tag，而 .mech 是 position:fixed;inset:0
+         的全屏层 —— 鼠标滑到螺旋间隙、轴、壳体空白处就判成"可收"，
+         700ms 后自己关掉。用户反馈的"打开就自动关闭"就是这个（实测：
+         指针在 (60,900) 立刻收，在块中心 (801,553) 和壳体中部 (900,500) 保持）。
+         收到 .mech-in 这一层：壳体外面（屏幕边缘）仍然会收，符合"移开就关"的直觉。 */
+      return !!(el.closest('.mech-in') || el.closest('.rack') || el.closest('.mech-cap'));
     }
     function mayHide(){
       if (px < 0) return false;
+      if (!entered) return false;         /* 还没进过壳体 → 一律不收（见 entered 注释） */
       if (inHotRect()) return false;      /* 指针还在标记上 → 保持展开 */
       return !onTarget();                 /* 指针不在壳体/说明牌上 → 可收 */
     }
@@ -8087,8 +8102,9 @@ function pvSignalBlip(root) {
     document.addEventListener('pointermove', function (e) {
       px = e.clientX; py = e.clientY;
       if (!open) return;
+      if (onTarget()) entered = true;     /* 进过壳体，之后移出才允许收 */
       holdOpen();
-      outT = setTimeout(function () { outT = null; if (open && mayHide()) hide(); }, 700);
+      outT = setTimeout(function () { outT = null; if (open && mayHide()) hide(); }, 900);
     }, true);
     /* 指针离开窗口（没有后续 pointermove）：按最后位置判定一次 */
     document.addEventListener('mouseleave', function () {
