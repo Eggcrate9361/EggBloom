@@ -8004,6 +8004,65 @@ def _ctx_over_budget(messages, ratio: float = 0.8):
         return False, 0, 0
 
 
+# ── 历史按 token 预算截断（2026-10-23）──────────────────────────────
+#  为什么不能只按"条数"截断：
+#    同是 4 轮原文，一句「嗯」占 1 字，一条网页工具结果占 3000 字 ——
+#    条数相同，体积差 3000 倍。实测（2026-10-23）最近 4 轮 = 8 条原文，
+#    每条 50 字时共 250 token，每条 1500 字时共 7500 token。
+#    条数这个量纲在这里根本不成立。
+#
+#  为什么阈值要分「自己的话」和「别人的话」：
+#    别人说什么只是背景，压到 40 字够看出在聊什么；
+#    自己说过什么决定立场一致性，砍断会上下矛盾（照抄 _entry_line 的比例）。
+#    这两个比例只在**账本摘要**里用（见 _entry_line 的 _limit / _OWN_LIMIT），
+#    原文区一律用下面的 HISTORY_RECENT_CHARS_PER_ENTRY。
+HISTORY_RECENT_CHARS_PER_ENTRY = 1500   # 单条原文上限，超出按句截断
+
+
+def _clip_for_history(text, limit):
+    """按句截断，不硬切。
+
+    ★ 硬切会把一句话切成半截（「我明天要去上海看展」→「我明天要去上」），
+      模型读到残缺句子会顺着补全，反而更容易编。
+      优先在句末标点处断；找不到才退到逗号；再找不到才硬切。
+    """
+    s = str(text or "")
+    if len(s) <= limit:
+        return s
+    head = s[:limit]
+    for marks in ("。", "！", "？", "\n", "，", "、", " "):
+        i = head.rfind(marks)
+        # 至少留下 60% 的预算，否则一路退到逗号会把内容砍没
+        if i >= limit * 0.6:
+            return head[:i + 1]
+    return head
+
+
+def _budget_recent_history(entries, budget_chars):
+    """按总字符预算裁剪最近几轮的原文。
+
+    返回 (保留的条目列表, 被裁掉几条)。**只从头部丢整条**，不裁中间 ——
+    历史是对话，中间挖掉一条会让问答错位（问句在、答句没了）。
+
+    为什么要"从头部丢"而不是"压缩剩下的"：
+      压缩会改文本内容，而最近几轮本来就每轮都在滑（必 miss 区），
+      再叠一层压缩只是白花 CPU，省不下缓存。直接丢最旧的整条更干净。
+
+    保底：至少留最后 1 条（当前这一轮的上下文不能为空）。
+    """
+    ents = list(entries or ())
+    if not ents:
+        return [], 0
+    total = sum(len(str(e.get("content") or "")) for e in ents)
+    dropped = 0
+    # 从最旧的开始丢，但绝不丢到最后一条
+    while total > budget_chars and len(ents) > 1:
+        old = ents.pop(0)
+        total -= len(str(old.get("content") or ""))
+        dropped += 1
+    return ents, dropped
+
+
 def _build_cached_messages(history: List[Dict], cache_key: str,
                            static_prompt: str, dynamic_parts: List[str],
                            user_msg: str, images: Optional[List[str]] = None,
@@ -8097,6 +8156,22 @@ def _build_cached_messages(history: List[Dict], cache_key: str,
             ledger = ledger[-_HISTORY_SUMMARY_LINE_CAP:]
             _HISTORY_SUMMARY_LINES[cache_key] = ledger
             changed = True
+        # ★ 2026-10-23：再加一道**字符**预算。
+        #   只按行数封顶是不够的：300 行 × 100 字 = 30000 字 ≈ 18750 token，
+        #   这是每轮都要重发的量。行数相同、字数可能差十倍（一行「嗯」vs 一行长回复）。
+        #   从头部裁 —— 账本是 append-only，裁头只影响一次，尾部追加照旧。
+        _ledger_budget = int(_config.get("history_ledger_budget_chars") or 4000)
+        if _ledger_budget > 0:
+            _lchars = sum(len(x) for x in ledger)
+            _cut = 0
+            while _lchars > _ledger_budget and len(ledger) > 20:
+                _lchars -= len(ledger[0])
+                ledger = ledger[1:]
+                _cut += 1
+            if _cut:
+                _HISTORY_SUMMARY_LINES[cache_key] = ledger
+                changed = True
+                log(f"[账本预算] 摘要账本超出 {_ledger_budget} 字符，裁掉最旧 {_cut} 行")
         if changed or cache_key not in _HISTORY_SUMMARY_TEXT:
             _HISTORY_SUMMARY_TEXT[cache_key] = (
                 "【之前对话摘要】\n" + "\n".join(ledger))
@@ -8105,12 +8180,35 @@ def _build_cached_messages(history: List[Dict], cache_key: str,
                          "content": _HISTORY_SUMMARY_TEXT[cache_key]})
 
     # 最近几轮保留原文（每轮滑动 → 从这里开始就是必 miss 区）
+    # ★ 2026-10-23：这里原来是无条件全量塞进去，一条长回复能把最近区撑到 7500 token。
+    #   现在两道闸：
+    #     ① 单条按句截断到 HISTORY_RECENT_CHARS_PER_ENTRY（保句子完整，见 _clip_for_history）
+    #     ② 整段按总预算从最旧的开始丢整条（_budget_recent_history）
+    #   注意截断**不能改变角色顺序**，也不能把 assistant/user 配错 —— 所以只截内容，
+    #   不删中间条目。
     if len(history) > _RECENT_ENTRIES:
-        for h in history[-_RECENT_ENTRIES:]:
-            messages.append({"role": h["role"], "content": h["content"]})
+        _recent = history[-_RECENT_ENTRIES:]
     else:
-        for h in history:
-            messages.append({"role": h["role"], "content": h["content"]})
+        _recent = history
+
+    _recent_clipped = []
+    for h in _recent:
+        _c = str(h.get("content") or "")
+        # 原文区一律用 HISTORY_RECENT_CHARS_PER_ENTRY。
+        # 不要在这里套账本摘要的 100 字口径（见 _entry_line 的 _own_limit）——
+        # 原文区的意义就是"最近几轮说完整"，砍到 100 字就退化成摘要了。
+        _recent_clipped.append({"role": h["role"],
+                                "content": _clip_for_history(_c, HISTORY_RECENT_CHARS_PER_ENTRY)})
+
+    _recent_budget = int(_config.get("history_recent_budget_chars") or 6000)
+    if _recent_budget > 0:
+        _recent_clipped, _dropped = _budget_recent_history(_recent_clipped, _recent_budget)
+        if _dropped:
+            # 丢条必须留痕：否则有人看上下文少了会以为程序出 bug
+            log(f"[历史预算] 最近轮超出 {_recent_budget} 字符，丢弃最旧 {_dropped} 条")
+
+    for h in _recent_clipped:
+        messages.append({"role": h["role"], "content": h["content"]})
 
     # 动态上下文（时间/记忆等，放最后面——不影响前面的缓存）
     for part in dynamic_parts:
