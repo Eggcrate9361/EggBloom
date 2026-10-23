@@ -552,11 +552,27 @@ def _tidy_after_strip(text: str) -> str:
 
 
 def load_prohibited_patterns() -> List[str]:
+    """读禁用词表。文件里一行一个词，不支持注释。
+
+    ★ 2026-10-23：身份词只禁**套话**，不禁**直陈**。
+      表里留着「作为AI」「作为一个语言模型」「我是助手」「我是AI助手」——
+      这些是客服开场腔 + 回避话术（"作为AI，我无法回答"），删掉无害。
+      但「我是AI」「我是一个AI」「我是人工智能」**不能进表**：
+      人格已改成被问就承认，这里再删只会逼模型绕弯子撒谎，
+      改了 prompt 也看不出效果。判定标准是「像客服」而非「提到身份」。
+
+    ★ 2026-10-23：返回前按长度**降序**排序。子串删除对顺序敏感，
+      表里短词在前就会吃掉长词的前缀：
+        「作为AI助手」先命中「作为AI」→ 删完剩「助手」
+        「需要我帮你吗」先命中「需要我帮你」→ 删完剩「吗」
+      长词先删，短词才轮得到它自己该删的部分。
+    """
     try:
         if not os.path.exists(PROHIBITED_PATH):
             return []
         with open(PROHIBITED_PATH, "r", encoding="utf-8") as f:
-            return [line.strip() for line in f if line.strip()]
+            pats = [line.strip() for line in f if line.strip()]
+        return sorted(pats, key=len, reverse=True)
     except Exception:
         return []
 
