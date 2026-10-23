@@ -109,6 +109,36 @@ _FRESHNESS_TOOLS = frozenset({
     "search_web", "web_fetch", "web_operate", "get_system_info",
 })
 
+# ── 本轮工具调用台账（2026-10-23）──────────────────────────────
+# 事后校验用：模型说「已经发过去了」时，得有地方查它这轮到底调没调工具。
+# 为什么必须是**模块级**而不是挂在调用方：execute_tool_call 被主链、agent_loop、
+# skill 三条路径调用，调用方各不相同；只有这里能保证每一次真实执行都过一遍。
+# 只存 (时间, 工具名, 是否成功, 成败说明)，不存完整结果 —— 结果是长文本，
+# 存下来等于把上下文复制一份，而且事后校验只关心"调没调、成没成"。
+_TOOL_LEDGER = []
+_TOOL_LEDGER_MAX = 200
+
+
+def note_tool_call(name, ok, detail=""):
+    """把一次工具执行记进本轮台账。"""
+    _TOOL_LEDGER.append((time.time(), str(name or ""), bool(ok), str(detail or "")[:120]))
+    if len(_TOOL_LEDGER) > _TOOL_LEDGER_MAX:
+        del _TOOL_LEDGER[:len(_TOOL_LEDGER) - _TOOL_LEDGER_MAX]
+
+
+def recent_tool_calls(window_sec=180.0):
+    """最近 window 秒内执行过的工具 [(ts, name, ok, detail), ...]，按时间正序。"""
+    try:
+        now = time.time()
+        return [r for r in _TOOL_LEDGER if now - r[0] <= window_sec]
+    except Exception:
+        return []
+
+
+def clear_tool_ledger():
+    """清空台账。测试用；正常流程不清 —— 靠时间窗自然过期。"""
+    _TOOL_LEDGER.clear()
+
 
 def _compact_text(text, list_keep=12, str_head=160, str_tail=60):
     """结构化精简：JSON 优先，长列表留前 N 项 + 总数，长串留头尾，空值丢弃。
@@ -277,6 +307,8 @@ def execute_tool_call(tc, *, tool_functions, offered_names=None,
                 truncated=bool(sp.get("truncated")), spilled=spilled, path=path,
                 omitted_bytes=int(sp.get("omitted_bytes") or 0),
                 elapsed=elapsed, error=err)
+    # 记台账（成功与失败都记：失败也是"真的调过"，事后校验要看的是这个区别）
+    note_tool_call(name, ok, err or "")
     if err:
         log(f"  → {name}: 执行异常（已隔离）: {err}")
     return base

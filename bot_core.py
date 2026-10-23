@@ -8001,6 +8001,37 @@ def _summarize_group_history_inner(group_id, gh):
     log(f"群[{group_id}] 历史已压缩，摘要: {summary[:60]}")
 
 
+def _should_continue_tool_round(round_no: int, ok_flags, max_plain_rounds: int) -> bool:
+    """这一轮工具执行完之后，还要不要再给模型一轮。
+
+    抽成独立函数是为了能测（2026-10-23）：原先是内联在
+    `_call_chat_with_tools` 的循环里的三个 if，而那个函数体量太大、
+    依赖一大堆运行时状态，测不到；而这里的判据错一个符号，
+    表现只是"多烧一轮 token"或"少查一次就硬答"，日志里都正常。
+
+    规则
+      round_no       本轮是第几轮（进来前已 +1）
+      ok_flags       本轮每个工具的成功情况 [bool, ...]
+      max_plain_rounds 上限；1 = 退回旧行为（一轮就收尾）
+
+    判据是**这一轮有没有拿到东西**：全部失败就没必要再耗一轮，
+    模型手上什么都没有，再问一遍只会得到同样的失败。
+    """
+    try:
+        limit = int(max_plain_rounds)
+    except Exception:
+        limit = 3
+    if limit < 1:
+        limit = 1
+    flags = list(ok_flags or [])
+    if not any(bool(f) for f in flags):
+        return False
+    try:
+        return int(round_no) < limit
+    except Exception:
+        return False
+
+
 def _ctx_over_budget(messages, ratio: float = 0.8):
     """估算当前 messages 体量，判断是否已吃满上下文预算（总量闸）。
 
@@ -8820,7 +8851,14 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
     
     last_error = None
     web_rounds = 0
+    # 网页任务允许多轮（抓取-解析-再抓），普通工具此前只有一轮。
+    # 2026-10-23：普通工具也放开到 max_tool_rounds（默认 3）。
+    #   「先搜 → 读正文 → 再总结」需要三拍，一轮做完的话模型只能凭摘要硬答，
+    #   这本身就是它「假装查了」的诱因之一。
     MAX_WEB_ROUNDS = 20
+    _max_plain_rounds = int(_config.get("max_tool_rounds") or 3)
+    if _max_plain_rounds < 1:
+        _max_plain_rounds = 1        # 1 = 退回旧行为
     error_retries = 0
     _img_fallback_used = False     # 图片降级只做一次（native 拒图 → 视觉描述重试）
     _length_retry_used = False     # 思维链吃光输出预算的加倍重试，只做一次
@@ -8851,6 +8889,7 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
                         pass
                     messages.append({"role": "assistant", "content": msg.get("content") or "", "tool_calls": tool_calls})
                     web_rounds += 1
+                    _round_ok_flags = []        # 这一轮每个工具的成功情况
                     for tc in tool_calls:
                         _r = _trunner.execute_tool_call(
                             tc,
@@ -8866,6 +8905,7 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
                             _act = (json.loads(tc["function"].get("arguments") or "{}") or {}).get("action") or ""
                         except Exception:
                             pass
+                        _round_ok_flags.append(bool(_r["ok"]))
                         _res_parts = (_r["full_text"] or "")[:140].replace("\n", " ")
                         _mark = "" if _r["ok"] else (" [被拒:%s]" % _r["blocked"] if _r["blocked"] else " [失败]")
                         log(f"  → {_r['tool']}: action={_act} (第{web_rounds}轮)"
@@ -8888,8 +8928,16 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
                             log(f"[网页任务] 达到轮次上限 {MAX_WEB_ROUNDS}，强制流式收尾")
                             return _stream_chat_lines(messages, runtime_cfg=None, max_tokens=effective_max_tokens, with_tools=tools_for_call, scene="web")
                         continue
-                    # 非网页工具：维持原行为，工具一轮后流式生成最终回复
-                    return _stream_chat_lines(messages, runtime_cfg=None, max_tokens=effective_max_tokens, with_tools=tools_for_call, scene=("group" if is_group else "private"))
+                    # 普通工具（2026-10-23）：原先这里是"一轮就收尾"，现在按
+                    # max_tool_rounds 续轮。判据抽在 _should_continue_tool_round 里
+                    # （全部失败 → 收尾如实说；有成功的 → 继续）。
+                    # 上下文总量闸在上面对所有轮次都生效，不会无限堆。
+                    if not _should_continue_tool_round(web_rounds, _round_ok_flags,
+                                                       _max_plain_rounds):
+                        if web_rounds >= _max_plain_rounds and any(_round_ok_flags):
+                            log(f"[工具轮次] 达到上限 {_max_plain_rounds} 轮，收尾")
+                        return _stream_chat_lines(messages, runtime_cfg=None, max_tokens=effective_max_tokens, with_tools=tools_for_call, scene=("group" if is_group else "private"))
+                    continue
 
             reply = str(msg.get("content") or "").strip()
             # ── 思维链吃光输出预算 → 加倍重试一次（2026-10-13 私聊空回复事故）──
@@ -10241,6 +10289,24 @@ def process_buffered_message(group_id):
                             sent_text = _t_new
                 except Exception as e:
                     log(f"[Plugin] typed after_reply error: {e}")
+                # ── 事后校验（2026-10-23）：说了做过，就查有没有真做 ──
+                #  prompt 里的【诚实铁律】靠自觉，实测被绕过两次（08:48 声称在传
+                #  706MB、09:11 声称点进去看了 commit 数，两次日志都零工具调用）。
+                #  这里做机械校验：只拦**操作完成态**（已发送/已打开/存好了），
+                #  不碰知识类表述（查到了/我记得），理由见 harness/reply_audit.py。
+                try:
+                    from harness import reply_audit as _ra
+                    from harness import tool_runner as _tr2
+                    _hits = _ra.find_unsupported_claims(sent_text, _tr2.recent_tool_calls())
+                    if _hits:
+                        _before = sent_text
+                        sent_text = _ra.rewrite_unsupported(sent_text, _hits)
+                        log(f"群[{group_id}] [事后校验] 声称做过但无工具调用，已改写: "
+                            f"{_hits[0][:40]} → {sent_text[:40]}")
+                        if not sent_text:
+                            sent_text = _before      # 改空了就保留原文，宁可发也别吞
+                except Exception as e:
+                    log(f"[reply_audit] 校验跳过: {e}")
                 # ── 重复回复闸（2026-10-23 真机反馈）──
                 # 症状：11:17:10 和 11:17:18 各发一次完全相同的三行，群里看是复读机，
                 # 又因为中间夹了一条自己发的表情包，像是"bot 在评论自己发的图"。
@@ -12002,6 +12068,21 @@ def main():
                                     sent_text = _t_new
                         except Exception as e:
                             log(f"[Plugin] typed after_reply error: {e}")
+                        # ── 事后校验（2026-10-23，与群聊同款）──
+                        #  私聊更容易出现这类问题：一对一场景下模型更倾向"配合到底"。
+                        try:
+                            from harness import reply_audit as _ra
+                            from harness import tool_runner as _tr2
+                            _hits = _ra.find_unsupported_claims(sent_text, _tr2.recent_tool_calls())
+                            if _hits:
+                                _before = sent_text
+                                sent_text = _ra.rewrite_unsupported(sent_text, _hits)
+                                log(f"私聊[{sender}] [事后校验] 声称做过但无工具调用，已改写: "
+                                    f"{_hits[0][:40]} → {sent_text[:40]}")
+                                if not sent_text:
+                                    sent_text = _before
+                        except Exception as e:
+                            log(f"[reply_audit] 校验跳过: {e}")
                         ok = smart_send(sent_text, sender)
                     else:
                         log("私聊 仅表情标记，跳过文本发送")

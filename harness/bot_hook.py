@@ -14,6 +14,7 @@
     - 任何一步失败都**静默降级**为原行为，绝不阻断回复。
     - 所有输出**顺序稳定**，以保前缀缓存。
 """
+import re
 import threading
 
 from . import time_ctx as _tc
@@ -26,10 +27,23 @@ from . import skill_loader as _sk
 # 这样闲聊/普通群聊回复的请求里，工具描述几乎为零 → 省下的全是钱。
 
 #: 桌面操控类关键词
+#  ★ 2026-10-23：这一组除 web_operate / search_web 外的**全部内置工具**（含
+#    send_user_file）都挂在 GROUP_DESKTOP 下，见 bot_core.py 的注册循环。
+#    也就是说「发文件」这个能力和「关机」「截图」共用一个开关 —— 词没命中，
+#    整组都不在，模型会回答「我手上没有发文件的工具」。
+#    实测原话：私聊「…zip 发出来」→ 答「这轮我手上压根没有发文件的工具」；
+#    改口「发给我」立刻能发。同一件事两种措辞，一次成一次不成。
 _DESKTOP_KW = ("电脑", "屏幕", "桌面", "截图", "音量", "静音", "关机", "重启",
                "锁屏", "休眠", "进程", "任务管理器", "内存", "cpu", "显卡", "gpu",
                "打开", "启动", "运行", "app", "应用", "程序", "文件", "文件夹",
-               "发送文件", "发给我", "本地")
+               "发送文件", "发给我", "本地",
+               # ── 文件传输的同义说法（2026-10-23 补）──
+               #  只补「把东西给我」这一类，不补「发」单字 —— 单字会命中
+               #  「发现」「发布」，把 desktop 组拖进无关对话，白烧 token。
+               "发出来", "发过来", "发一下", "发我", "传给我", "传过来", "传一下",
+               "给我看", "给我发", "发份", "发个文件", "发这个", "发那个",
+               "拖出来", "挪出来", "导出来", "导出", "打包给", "压缩包", "zip",
+               ".zip", ".rar", ".7z", ".exe", ".msi", ".pdf", ".docx", ".xlsx")
 #: 网页操作类关键词
 _WEB_KW = ("网页", "网站", "链接", "http://", "https://", "打开网", "登录",
            "注册", "填表", "表单", "问卷", "答题", "下单", "购买", "提交",
@@ -81,6 +95,31 @@ def _should_offer_skills(user_msg):
     return _any_in(user_msg, _SKILL_KW)
 
 
+#: 像本机路径的东西：Windows 盘符路径、Unix 绝对路径、带扩展名的文件名。
+#  判据是**形态**不是措辞 —— 「E:\xxx.zip」「/home/a.txt」「报告.pdf」都算。
+_PATH_LIKE_RE = re.compile(
+    r"(?:[A-Za-z]:[\\/])"                       # C:\ 或 D:/
+    r"|(?:^|[\s（(])/(?:[^\s/]+/)+"             # /a/b/
+    r"|[\w\u4e00-\u9fff-]+\.(?:zip|rar|7z|tar|gz|exe|msi|dmg|pdf|docx?|xlsx?|pptx?|"
+    r"txt|md|json|ya?ml|csv|log|py|js|ts|html?|css|png|jpe?g|gif|mp4|mp3|wav)\b",
+    re.IGNORECASE,
+)
+
+
+def _mentions_local_path(text):
+    """这句话里有没有出现**像本机路径**的片段。
+
+    为什么要单独判：上面 _DESKTOP_KW 是措辞表，永远补不完。
+    「E:\\EggBloom水星\\dist\\EggBloom-Full.zip 发出来」这种句子，
+    真正说明"要动本机文件"的是那个路径，不是动词。
+    用户只要给出路径，要么想让我们读，要么想让我们发，两种都需要 desktop 组。
+    """
+    try:
+        return bool(_PATH_LIKE_RE.search(text or ""))
+    except Exception:
+        return False
+
+
 def agent_tools_for(user_msg, *, is_group=True, extra_groups=(), enable_desktop=True,
                     enable_write=True):
     """按场景挑选工具子集，返回**稳定顺序**的 OpenAI schema 列表。
@@ -102,7 +141,10 @@ def agent_tools_for(user_msg, *, is_group=True, extra_groups=(), enable_desktop=
     groups = [_tr.GROUP_CORE, _tr.GROUP_WORK]
     if _any_in(user_msg, _WEB_KW):
         groups.append(_tr.GROUP_WEB)
-    if not is_group and enable_desktop and _any_in(user_msg, _DESKTOP_KW):
+    if not is_group and enable_desktop and (
+            _any_in(user_msg, _DESKTOP_KW) or _mentions_local_path(user_msg)):
+        #  2026-10-23：加了 _mentions_local_path —— 措辞表补不完，路径形态是硬信号。
+        #  只给私聊（群里不给本机能力，这条边界不变）。
         groups.append(_tr.GROUP_DESKTOP)
     if is_group and _any_in(user_msg, _GROUP_KW):
         groups.append(_tr.GROUP_GROUP)
