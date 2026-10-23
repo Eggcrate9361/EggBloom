@@ -212,6 +212,43 @@ def set_config(data: Dict[str, Any]) -> Dict[str, Any]:
 # ------------------------------------------------------------------
 # 会话状态
 # ------------------------------------------------------------------
+#: 群聊消息里的发送者前缀，两种写法都要能剥掉：
+#    `[碱式碳酸大脑] 正文`   —— 抓取/转发格式
+#    `碱式碳酸大脑：正文`     —— 记录格式
+#  ★ 2026-10-23：加这个是因为 `_extract_topic` 用 `msg[:8]` 切，
+#    切出来的**永远**是昵称（214 条真实语料，无一例外）。见该方法说明。
+_SENDER_PREFIX_RE = re.compile(
+    r"^\s*(?:\[[^\]]{0,40}\]\s*|[^\s：:\[\]]{1,16}\s*[：:]\s*)"
+)
+
+#: 媒体占位符。它们是"这里有张图"，不是内容，拿来当话题等于没话题。
+_PLACEHOLDER_RE = re.compile(
+    r"^\s*(?:\[图片\]|\[卡片\]|\[分享\].*|\[语音\]|\[视频\]|\[表情\]|\[动画表情\]|\[文件\])\s*$"
+)
+
+
+def _strip_sender_prefix(text: str) -> str:
+    """剥掉消息开头的昵称前缀。没有前缀就原样返回。"""
+    t = str(text or "").strip()
+    if not t:
+        return ""
+    try:
+        # 可能叠了两层（转发里带原始记录），最多剥两次
+        for _ in range(2):
+            new = _SENDER_PREFIX_RE.sub("", t, count=1).strip()
+            if new == t:
+                break
+            t = new
+            if not t:
+                break
+    except Exception:
+        return str(text or "").strip()
+    # ★ 2026-10-23：剥完只剩空串时，原实现会因为 `new == t` 提前 break
+    #   而把带括号的昵称原样留下（「[某人] 」→ 仍带 `[某人] `）。
+    #   这类消息在群里就是纯昵称、没正文，话题应当为空而不是昵称。
+    return "" if not t else t
+
+
 class ConversationState:
     """轻量会话状态，不搞复杂权重。"""
 
@@ -283,9 +320,31 @@ class ConversationState:
         return any(msg.endswith(h) or f" {h}" in msg for h in follow_up_hints) or self.turn_count > 0
 
     def _extract_topic(self, msg: str) -> str:
-        if not msg:
-            return "default"
-        return msg[:8]
+        """取一句能代表"在聊什么"的短句。
+
+        ★ 2026-10-23：原先是 `msg[:8]`，实测**每一句都截到了昵称前缀**。
+          群消息的形态是 `[昵称] 正文`，`[:8]` 切出来是 `[碱式碳酸大脑]`、
+          `[(/ω＼)] `；214 条真实语料里，提取出的「话题」214 条全是昵称，
+          没有一条是话题。也就是说这个字段一直在给模型喂假情报：
+          它被告知「话题=[碱式碳酸大脑]」，而真相是那个群友叫这个名字。
+
+        ★ 2026-10-23 第二轮：剥完前缀仍不对 —— merged_text 是**多条消息拼的**，
+          形如 `[A] 你在哪\n[B] 你认识群主吗`。取 12 字会跨到换行后面，
+          又截到 `[B]`。所以只能取**第一行**，且跳过 `[图片]`/`[分享]`
+          这类占位符（它们不是内容，拿来当话题等于没话题）。
+        """
+        text = _strip_sender_prefix(msg)
+        if not text:
+            return ""
+        # 只取第一条有实际内容的消息行
+        for line in text.split("\n"):
+            s = _strip_sender_prefix(line).strip()
+            if not s:
+                continue
+            if _PLACEHOLDER_RE.fullmatch(s):
+                continue
+            return s[:12]
+        return ""
 
     def _is_serious(self, msg: str) -> bool:
         serious_keywords = ["难受", "抱歉", "对不起", "麻烦", "帮帮我", "怎么办", "焦虑", "抑郁", "累", "压力"]
@@ -315,13 +374,28 @@ class ConversationState:
         由 super_memory 自己以【用户关系】注入。两者同时进提示词时，
         模型会看到「好感度=0.5」和「好感度 65，好友」两个互相打脸的结论。
         所以这里**不再输出** affection —— 只报真正会被更新的那几项。
+
+        ★ 2026-10-23：加"不变化就不写"的过滤。真实语料统计（214 条群消息）：
+          情绪 neutral 203 条 / happy 11 条，模式 normal 210 条 / playful 4 条。
+          也就是说这两项**绝大多数时候都是默认值**，写出来等于每轮都告诉模型
+          「当前气氛正常、情绪中性」—— 一句恒定的、占 token 的废话。
+          而且它还会覆盖模型自己的判断：群聊里模型本来能读出"这句是在骂人"，
+          但旁边写着「情绪=neutral」，它就没有理由凶了。
+          规则：默认值不输出，只有真的偏离默认时才说。
         """
-        bits = [
-            f"话题={self.current_topic}",
-            f"模式={self.mode}",
-            f"情绪={self.emotion}",
-            f"连续追问={self.turn_count}",
-        ]
+        bits = []
+        if self.current_topic:
+            bits.append(f"话题={self.current_topic}")
+        # 默认值不写（normal / neutral 就是没说）
+        if self.mode and self.mode != "normal":
+            bits.append(f"模式={self.mode}")
+        if self.emotion and self.emotion != "neutral":
+            bits.append(f"情绪={self.emotion}")
+        # 单独一轮不算"连续追问"，说了也是噪声
+        if self.turn_count >= 2:
+            bits.append(f"连续追问={self.turn_count}")
+        if not bits:
+            return ""
         return "当前对话状态：" + "，".join(bits)
 
 
@@ -390,7 +464,18 @@ def build_personality_prompt(
             user_example = ex.get("user", ex.get("input", ""))
             bot_example = ex.get("bot", ex.get("reply", ""))
             if user_example and bot_example:
-                parts.append(f"{idx}. 用户：{user_example}\n   小a：{bot_example}")
+                # ★ 2026-10-23：多行示例要按行加缩进。
+                #   原实现直接 f-string 拼接，人格里的示例又都是多行（
+                #   「是啊\n怎么突然问这个」），拼出来是：
+                #       1. 用户：你是不是AI啊
+                #          小a：是啊
+                #       怎么突然问这个
+                #   第二行掉到顶格，编号结构被破坏，模型看到的是"示例之外
+                #   还有一条无主的行"。而群里真人回复几乎都是多行短句，
+                #   这恰恰是最该示范的形态 —— 结构错了示范就白给。
+                _bot_lines = str(bot_example).split("\n")
+                _bot_block = "\n".join("      " + ln.strip() for ln in _bot_lines if ln.strip())
+                parts.append(f"{idx}. 用户：{str(user_example).strip()}\n   小a：{_bot_block.strip()}")
 
     if state.mode == "serious":
         parts.append("注意：当前用户情绪偏严肃，回复更稳、更简洁，少玩梗。")
@@ -434,37 +519,102 @@ class ExampleRetriever:
         return examples
 
     def retrieve(self, message: str, state: ConversationState, top_k: int = 2) -> List[Dict[str, str]]:
-        """按场景名与消息的关键词重合度挑 few-shot 示例。
+        """挑 few-shot 示例。打分看两个来源：场景名，以及**示例自己的问句**。
 
         ★ 2026-10-21 修复：原实现把所有场景**无条件**塞进 candidates，
         零分场景也会参与排序。top_k=2 时，只要示例库超过 2 个场景，
         就必然会把「一个都没命中的场景」当成参考示例注入 —— 等于随机配货，
         跟当前这句话毫无关系，反而污染人格。现在零分场景直接丢弃，
         全都不命中就返回空（宁可不给示例，也不给错的示例）。
+
+        ★ 2026-10-23：只看场景名会漏得很厉害。场景名是文件名
+        （`AI_你是AI吗_机器人_GPT_人工智能`），拆成下划线当关键词用，
+        所以「你是真人吗」这种说法一条都命中不了 —— 而它恰恰是最需要
+        示例兜住的一类（问身份），命中不了就只能靠模型自由发挥。
+        现在把**示例里的问句**也当关键词来源，按字符 n-gram 重合度打分。
+        打分刻意做得很粗：只要有两三个字对得上就够，不需要语义理解。
         """
         if not self.examples:
             return []
-        text = (message or "").lower()
+        text = str(message or "").lower()
+        text_bg = _bigrams(text)
         candidates = []
         for scene, items in self.examples.items():
             score = 0
             lowered = scene.lower()
             if lowered in text:
-                score += 2
-            keywords = lowered.split("_")
-            for kw in keywords:
+                score += 3
+            for kw in lowered.split("_"):
                 if kw and kw in text:
-                    score += 1
+                    score += 2
+            # 示例问句与这句话的字面重合（二元组），封顶免得长句占尽便宜
+            #  ★ 2026-10-23：阈值不能是 1。实测「你好」和「你好厉害啊」
+            #    会共享「你好」这一个二元组 → 把夸赞示例配给一句打招呼；
+            #    「今天天气不错」和「今天好累啊」共享「今天」→ 配给心情不好示例。
+            #    这种错误示例比不给示例更糟（模型会照着错误语境说话）。
+            #    要求「短句至少一半的字重合」，长句按 3 个封顶。
+            for ex in (items or []):
+                q = str(ex.get("user") or ex.get("input") or "").lower()
+                if not q:
+                    continue
+                q_bg = _bigrams(q)
+                if not q_bg:
+                    continue
+                overlap = len(text_bg & q_bg)
+                if not overlap:
+                    continue
+                need = max(2, len(q_bg) // 2) if len(q_bg) <= 6 else 3
+                if overlap >= need:
+                    score += min(3, overlap)
             if score <= 0:          # ← 没命中就别当示例
                 continue
             candidates.append((score, scene, items))
+
+        # ★ 2026-10-23：身份问句单独兜一层，且只兜**身份场景**。
+        #   字面重合在这里必然失效：「你是真人吗」和示例「你是不是AI啊」
+        #   只共享「你是」一个二元组，达不到阈值 → 0 条。而问身份恰恰是
+        #   最不能自由发挥的一类（答错就等于不承认自己是 AI）。
+        #   所以不靠字面，靠**问法枚举**；但必须限定只在身份场景里加分，
+        #   否则会给所有场景一起抬分，等于没判。
+        if _is_identity_question(text):
+            for scene, items in self.examples.items():
+                if not _is_identity_scene(scene):
+                    continue
+                if not any(c[1] == scene for c in candidates):
+                    candidates.append((9, scene, items))
         if not candidates:
             return []
-        candidates.sort(key=lambda x: x[0], reverse=True)
+        candidates.sort(key=lambda x: (x[0], x[1]), reverse=True)
         results: List[Dict[str, str]] = []
         for _, _scene, items in candidates[:top_k]:
             results.extend(items[:3])
         return results[:top_k]
+
+
+def _bigrams(text: str) -> set:
+    """中文没有词边界，用二元组做粗重合度。扣掉标点与空白。"""
+    t = re.sub(r"[\s，。！？、；：,.!?;:~…\-—_（）()\"'“”‘’]+", "", str(text or ""))
+    return {t[i:i + 2] for i in range(len(t) - 1)}
+
+
+#: 「在问你是不是人/AI」的问法。枚举而不是靠字面重合，理由见 retrieve。
+_IDENTITY_ASK_KW = (
+    "你是ai", "是不是ai", "是ai吗", "你是机器人", "是机器人", "是不是人",
+    "真人", "是人吗", "你是人", "你是gpt", "是gpt", "你是不是程序",
+    "你是程序", "是模型吗", "你是模型", "人机", "你是假的", "你不是人",
+    "你到底是什么", "你是啥", "你是什么东西",
+)
+
+
+def _is_identity_question(text: str) -> bool:
+    t = str(text or "").lower()
+    return any(k in t for k in _IDENTITY_ASK_KW)
+
+
+def _is_identity_scene(scene: str) -> bool:
+    """场景名是不是"身份问答"这一类。文件名形如 `AI_你是AI吗_机器人_GPT_人工智能`。"""
+    s = str(scene or "").lower()
+    return ("ai" in s) or ("机器人" in s) or ("gpt" in s) or ("人工智能" in s)
 
 
 def get_example_retriever() -> ExampleRetriever:

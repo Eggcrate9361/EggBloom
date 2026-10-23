@@ -264,18 +264,25 @@ def transform_to_board(text: str, intensity: float = 0.7, context: str = "generi
     text = text.strip()
 
     # 短文本特殊处理
+    #  ★ 2026-10-23：原先这里是「三字以内 → 按 intensity 概率直接换成固定模板」。
+    #    intensity 默认 0.7，也就是 70% 的三字回复被换成那 6 条之一。
+    #    群里真人回复有 34% 是五个字以内（见 10-23 语料统计），
+    #    这条规则等于把最大的一类回复全部替换成同一批固定文本 ——
+    #    不同的问题、不同的上下文，输出却一模一样。
+    #    现在短句**原样保留**：短句本身就是最像人的形态，没有改的必要。
     if len(text) <= 3:
-        if random.random() < intensity:
-            return random.choice([
-                "确认/收到/记录。", "委员会/管理局 已确认/已记录。",
-                "批准/确认/同意。", "委员会/管理局 已确认/已记录/已登记。",
-                "连接/锚定。", "共振/检测到信号。",
-            ])
         return text
 
     # 完全替换模式
+    #  ★ 2026-10-23：这里原先调用 `_full_board_transform(text)`，少传一个
+    #    `context` 参数 → 只要 intensity 被调到 0.95 以上，每次回复都抛
+    #    TypeError。异常在 after_reply 里被外层 try 吞掉，表现是"插件静默失效"，
+    #    很难从日志看出是崩了还是没命中。补上参数，并给出兜底。
     if intensity >= 0.95:
-        return _full_board_transform(text)
+        try:
+            return _full_board_transform(text, context)
+        except Exception:
+            return text
 
     # 主转换流程
     result = text

@@ -12,7 +12,7 @@ import random
 import re
 import os
 import json
-from .voice import transform_to_board, get_specific_reply
+from .voice import transform_to_board  # get_specific_reply 保留在 voice.py，此处不再用
 
 PLUGIN_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -83,6 +83,12 @@ PLUGIN_META = {
     "description": "委员会口音 - 模仿《控制》中 The Board 的说话风格（斜 slash 分割多选词）",
     "author": "EggBloom Community",
     "group_only": False,
+    # ★ 2026-10-23：默认关闭。这个插件会把**每一句**正常回复改成
+    #   「在的/并且/同时/以及，什么事」这种斜杠体，与当前人格方向
+    #   （短句、口语、不装）正面冲突。它是个猎奇风格的娱乐插件，
+    #   适合想玩的时候单独打开，不适合作为默认。
+    #   注意：plugin_state.json 里如果有旧的 true，会盖过这里的默认值，
+    #   升级后需要到插件页手动关一次，或删掉 state 里那一项。
     "enabled": False,
     "dependencies": [],
     "hooks": ["after_reply"],
@@ -216,10 +222,17 @@ def after_reply(message: str = "", group_id: str = "", reply: str = "", context:
     ctx = _detect_context(message)
     template_ctx = _get_template_context(ctx)
 
-    # 特定场景优先
-    specific = get_specific_reply(ctx)
-    if specific and random.random() < 0.4:
-        return {"action": "override", "reply": specific}
+    # ★ 2026-10-23 删除「特定场景直接换模板」这一支。
+    #   原实现：
+    #       specific = get_specific_reply(ctx)
+    #       if specific and random.random() < 0.4:
+    #           return {"action": "override", "reply": specific}
+    #   `get_specific_reply` 返回的是**写死的三选一**（打招呼/道谢/道别各 3 条），
+    #   与模型这轮说了什么完全无关，只由关键词命中决定。40% 概率意味着平均每
+    #   2.5 条回复就有 1 条被换成同一批文本 —— 不同的人问不同的事，输出一样。
+    #   这就是"文本被覆盖"最直接的形态，也是本轮要清的东西。
+    #   没有改成"降概率保留"：固定文本池本身没有存在理由，留 10% 也还是那三条。
+    #   `get_specific_reply` 函数保留在 voice.py 里，但不再被调用。
 
     # 转换为委员会风格
     transformed = transform_to_board(reply, intensity=INTENSITY, context=template_ctx)
