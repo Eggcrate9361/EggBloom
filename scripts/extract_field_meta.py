@@ -91,22 +91,38 @@ for fn, panel in FUNC2PANEL.items():
         fid = cm.group(2)
         before, after = b[:cm.start()], b[cm.end():cm.end() + 500]
 
-        def nearest(pat, text1, text2):
-            """取**距离最近**的标签/说明。
-            不能无条件用 before 的最后一个：横排开关写法里，控件前面往往还残留着
-            **上一个字段**的 field-label（实测 group_tool_allowlist 被标成
-            「触发缓冲窗口（秒）」就是这个坑）。"""
-            best, bestd = None, None
-            for m in re.finditer(pat, text1 or "", re.S):
-                best, bestd = m.group(1), len(text1) - m.start()
-            for m in re.finditer(pat, text2 or "", re.S):
-                d = m.start()
-                if bestd is None or d < bestd:
-                    best, bestd = m.group(1), d
-            return best
+        def pick(pat):
+            """取这个控件**自己那个 .field 块**里的标签/说明。
 
-        lab = nearest(r'class="field-label"[^>]*>(.*?)</div>', before, after)
-        dsc = nearest(r'class="field-desc"[^>]*>(.*?)</div>', before, after)
+            ★ 2026-10-24 重写。原实现是"两侧都扫、取字符距离最近的"，
+              在竖排写法（label → desc → input）下**系统性串位**：
+              自己的 label 与控件之间隔着整段 desc，字符距离 60~100；
+              而下一个字段的 label 只隔着几个闭合 div，距离约 45。
+              于是"最近"总是选到**别人的**标签 —— 实测标签整体前移一位：
+                poke_timeout 显示成「会话缓冲窗口（秒）」
+                group_msg_buffer_window_session 显示成「触发缓冲窗口（秒）」
+              群聊面板因此出现两个同名标签，用户分不清哪个是哪个。
+
+              字符距离在这里不是有效判据，**块归属**才是：
+                ① 控件之前、本块之内的第一个 label/desc → 竖排写法
+                   （横排开关写法里控件前面没有 label，会落到 ②）
+                ② 否则取控件之后、且**不跨过下一个 .field** 的第一个 → 横排开关写法
+              这样既不依赖嵌套 div 的配对，也不会串到邻居字段。
+            """
+            bs = b.rfind('class="field"', 0, cm.start())
+            if bs != -1:
+                seg = b[bs:cm.start()]
+                m = re.search(pat, seg, re.S)
+                if m:
+                    return m.group(1)
+            tail = b[cm.end(): cm.end() + 500]
+            nxt = tail.find('class="field"')
+            seg2 = tail[:nxt] if nxt != -1 else tail
+            m = re.search(pat, seg2, re.S)
+            return m.group(1) if m else None
+
+        lab = pick(r'class="field-label"[^>]*>(.*?)</div>')
+        dsc = pick(r'class="field-desc"[^>]*>(.*?)</div>')
         label = plain(lab) if lab else ""
         unit = ""
         mu = re.search(r"[（(]([^）)]*?)[)）]\s*$", label)
@@ -287,9 +303,32 @@ for lid, meta in lists.items():
 # ② 见上（MANUAL_KEY 已在缝合前应用，这里只补面板归属）
 
 path = os.path.join(HERE, "_fieldmeta.json")
+
+# ── 保留 v3 里没有的字段（2026-10-24 补）────────────────────────────
+# 本脚本只能抽出 v3 页面上存在的字段。但 _fieldmeta.json 里还有几个
+# **只在 v4 加过、v3 从没有**的字段（bot_nicknames、group_quote_mode）。
+# 原来这里是整文件覆盖 → 每跑一次就把它们删掉，且没有任何提示。
+# 2026-10-24 实测：在未改动的代码上跑，fields 从 92 掉到 90。
+#
+# 现在的做法：先读旧表，把本次没抽出来的字段补回去，并在输出里点名。
+# 这样「有字段被保留」是可见的，而不是静默丢。
+_carried = OrderedDict()
+try:
+    _old = json.load(io.open(path, encoding="utf-8"))
+    for _k, _v in (_old.get("fields") or {}).items():
+        if _k not in out:
+            _carried[_k] = _v
+except Exception:
+    pass
+for _k, _v in _carried.items():
+    out[_k] = _v
+
 io.open(path, "w", encoding="utf-8").write(
     json.dumps({"panels": PANELS, "fields": out, "actions": actions},
                ensure_ascii=False, indent=1))
+
+if _carried:
+    print("保留 v3 中不存在的字段 %d 个: %s" % (len(_carried), list(_carried)))
 
 print('DEBUG by_id=%d lists=%d id2key=%d' % (len(by_id), len(lists), len(id2key)))
 print('DEBUG id2key sample:', list(id2key.items())[:8])

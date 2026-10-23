@@ -1851,8 +1851,8 @@ function renderSessionPanel(root){
 }
 function renderGroupPanel(root){
   root.innerHTML += `
-    <div class="field"><div class="field-label">消息合并窗口（条）</div>
-      <div class="field-desc">同一群短时间内几条消息合并成一次回复的条数上限</div>
+    <div class="field"><div class="field-label">消息合并窗口（秒）</div>
+      <div class="field-desc">普通消息（没被 @、也不在会话里）等多久没有后续，才作为一批送进模型。同一个人接着说话会重置倒计时，整批最多等 8 秒</div>
       <input class="input" id="sGroupMsgBuffer" type="number" min="0"></div>
     <div class="field"><div class="field-label">引用回抓窗口（秒）</div>
       <div class="field-desc">记录多久内的群消息，用于 Bot 回复时回看上下文 / 处理引用消息</div>
@@ -1875,7 +1875,7 @@ function renderGroupPanel(root){
       <input class="input" id="sGroupIdleExitProb" type="number" min="0" max="1" step="0.1"></div>
     <div class="field"><div class="field-label">退场静默时间（秒）</div>
       <div class="field-desc">Bot 是群里最后说话者, 且超过该时长无新消息 → 才考虑退场（下限 30 秒）</div>
-      <input class="input" id="sGroupMinSilence" type="number" min="0"></div>
+      <input class="input" id="sGroupIdleMinSilence" type="number" min="0"></div>
     <div class="field"><div class="field-label">戳一戳超时（秒）</div>
       <div class="field-desc">同一人同一群戳 Bot 的连击计数保留时长, 超时后重新计数</div>
       <input class="input" id="sPokeTimeout" type="number" min="0"></div>
@@ -1885,6 +1885,16 @@ function renderGroupPanel(root){
     <div class="field"><div class="field-label">触发缓冲窗口（秒）</div>
       <div class="field-desc">被触发（@/小a）且还没有上下文时, 等多久再回。超过 8 无效——整批从第一条算起有 8 秒硬顶</div>
       <input class="input" id="sGroupMsgBufferTrigger" type="number" min="0"></div>
+    <hr class="panel-divider">
+    <div class="settings-section-label">Agent 入口</div>
+    <div class="field" style="display:flex;align-items:center;gap:24px">
+      <input type="checkbox" class="toggle-input" id="sAgentGroupEnable">
+      <div class="field-label" style="margin:0;flex-shrink:0">群聊内可派活</div>
+      <div class="field-desc" style="margin:0">被 @ 或叫名字、并且是管理员、并且说的是明确的执行指令（不是闲聊）时，交给 agent 多步执行。三个条件缺一不可。</div></div>
+    <div class="field" style="display:flex;align-items:center;gap:24px">
+      <input type="checkbox" class="toggle-input" id="sAgentPrivateEnable">
+      <div class="field-label" style="margin:0;flex-shrink:0">私聊内可派活</div>
+      <div class="field-desc" style="margin:0">同上，但只在私聊。默认关闭：派活得到的是任务汇报式回答，会把聊天的人格顶掉。带图的消息不走这条路。</div></div>
     <hr class="panel-divider">
     <div class="settings-section-label">群聊工具白名单</div>
     <div class="field" style="display:flex;align-items:center;gap:20px">
@@ -2349,6 +2359,7 @@ async function loadSettingsData(){
     s('sGroupMaxReplies', c.group_session_max_replies); s('sGroupIdleTimeout', c.group_session_idle_timeout);
     s('sGroupExitCooldown', c.group_last_exit_cooldown);
     t('sGroupIdleExitEnable', c.group_idle_exit_enable);
+    t('sAgentGroupEnable', c.agent_group_enable); t('sAgentPrivateEnable', c.agent_private_enable);
     s('sGroupIdleExitProb', c.group_idle_exit_probability); s('sGroupIdleMinSilence', c.group_idle_exit_min_silence); s('sPokeTimeout', c.poke_timeout); s('sGroupMsgBufferSession', c.group_msg_buffer_window_session); s('sGroupMsgBufferTrigger', c.group_msg_buffer_window_trigger);
       const allowEn = $('sGroupToolAllowEnable');
       const allowRaw = c.group_tool_allowlist;
@@ -2479,6 +2490,8 @@ function collectSettings(){
     group_session_max_replies: num('sGroupMaxReplies'), group_session_idle_timeout: num('sGroupIdleTimeout'),
     group_last_exit_cooldown: num('sGroupExitCooldown'),
     group_idle_exit_enable: chk('sGroupIdleExitEnable'),
+    agent_group_enable: chk('sAgentGroupEnable'),
+    agent_private_enable: chk('sAgentPrivateEnable'),
     group_idle_exit_probability: num('sGroupIdleExitProb'),
     group_idle_exit_min_silence: num('sGroupIdleMinSilence'),
     poke_timeout: (()=>{ const v=parseFloat(val('sPokeTimeout')); return isNaN(v)||v<0 ? undefined : v; })(),

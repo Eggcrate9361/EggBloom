@@ -257,6 +257,15 @@ DEFAULT_CONFIG = {
     "group_idle_exit_probability": 0.3,
     "group_idle_exit_min_silence": 600,
 
+    # Agent 入口（2026-10-24 补进 DEFAULT_CONFIG）
+    # ★ 这两个键此前**只存在于 bot_core 的 _config.get 兜底和 example 里**，
+    #   DEFAULT_CONFIG 没有 → 配置对象里缺这两个名字 → 设置页拿不到值，
+    #   用户只能手改 JSON 才能打开，等于功能对普通用户不存在。
+    #   两处分开授权：群聊是公开场合（有 @ 这个人工确认动作），
+    #   私聊是伴侣场景，agent 的任务汇报式回答会把人设顶掉，所以各自一个开关。
+    "agent_group_enable": False,
+    "agent_private_enable": False,
+
     # 群聊白名单（P0-2）：Bot 只在这些群里参与，其余群完全静默。
     #   [] 或未设置 = 不限制（兼容现状：所有群都参与，升级不改变现网行为）
     #   非空       = 只有列出的群号允许

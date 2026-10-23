@@ -178,7 +178,7 @@
   },
   "target_qqs": {
    "label": "目标 QQ（每行一个）",
-   "desc": "Bot 启动后忽略消息的冷却时间",
+   "desc": "",
    "ctl": "lines",
    "panel": "basic",
    "unit": "",
@@ -186,7 +186,7 @@
   },
   "group_ids": {
    "label": "群 ID（每行一个）",
-   "desc": "Bot 启动后忽略消息的冷却时间",
+   "desc": "",
    "ctl": "lines",
    "panel": "basic",
    "unit": "",
@@ -209,7 +209,7 @@
    "id": "sApiUrl"
   },
   "api_key": {
-   "label": "模型",
+   "label": "API Key",
    "desc": "Key 只写不回显：保存后写入 Windows 凭据管理器，页面不再显示；切换提供商自动使用对应 Key",
    "ctl": "text",
    "panel": "llm",
@@ -218,7 +218,7 @@
   },
   "model_name": {
    "label": "模型",
-   "desc": "Key 只写不回显：保存后写入 Windows 凭据管理器，页面不再显示；切换提供商自动使用对应 Key",
+   "desc": "该提供商不支持自动拉取模型，请手动输入模型代码（保存时优先使用此输入框的值）",
    "ctl": "select",
    "panel": "llm",
    "unit": "",
@@ -229,8 +229,8 @@
    ]
   },
   "use_local_llm": {
-   "label": "LLaMA 驱动程序",
-   "desc": "本地模式自动管理 GGUF 模型（llama-server / Ollama / LM Studio），无需 API Key；与远程 API 互斥",
+   "label": "模型",
+   "desc": "该提供商不支持自动拉取模型，请手动输入模型代码（保存时优先使用此输入框的值）",
    "ctl": "bool",
    "panel": "llm",
    "unit": "",
@@ -286,7 +286,7 @@
   },
   "use_local_image_llm": {
    "label": "使用本地模型生成生图提示词",
-   "desc": "本地聊天模型与生图提示词模型同时启用时，同时跑两个本地模型可能显存爆炸；建议生图提示词模型使用 DeepSeek 或与聊天模型相同。",
+   "desc": "",
    "ctl": "bool",
    "panel": "llm",
    "unit": "",
@@ -341,24 +341,24 @@
    "id": "sAiTemp"
   },
   "ai_max_tokens": {
-   "label": "Top P",
-   "desc": "0 = 固定，2 = 非常随机",
+   "label": "最大令牌数",
+   "desc": "",
    "ctl": "number",
    "panel": "llm",
    "unit": "",
    "id": "sAiMaxTokens"
   },
   "ai_top_p": {
-   "label": "频率惩罚",
-   "desc": "0 = 固定，2 = 非常随机",
+   "label": "Top P",
+   "desc": "",
    "ctl": "number",
    "panel": "llm",
    "unit": "",
    "id": "sAiTopP"
   },
   "ai_frequency_penalty": {
-   "label": "存在惩罚",
-   "desc": "0 = 固定，2 = 非常随机",
+   "label": "频率惩罚",
+   "desc": "",
    "ctl": "number",
    "panel": "llm",
    "unit": "",
@@ -366,30 +366,30 @@
   },
   "ai_presence_penalty": {
    "label": "存在惩罚",
-   "desc": "0 = 固定，2 = 非常随机",
+   "desc": "",
    "ctl": "number",
    "panel": "llm",
    "unit": "",
    "id": "sAiPresencePenalty"
   },
   "session_ttl": {
-   "label": "对话最大轮次",
+   "label": "对话超时（秒）",
    "desc": "一次会话持续多久后视为结束（连续对话可延续，超时则清空上下文重新开始）",
    "ctl": "number",
    "panel": "session",
-   "unit": "",
+   "unit": "秒",
    "id": "sSessionTtl"
   },
   "session_max_rounds": {
-   "label": "私聊回复间隔（秒）",
+   "label": "对话最大轮次",
    "desc": "一次会话内最多来回对话多少轮，超出后视为本段对话结束",
    "ctl": "number",
    "panel": "session",
-   "unit": "秒",
+   "unit": "",
    "id": "sSessionMaxRounds"
   },
   "private_reply_interval": {
-   "label": "离线判定（秒）",
+   "label": "私聊回复间隔（秒）",
    "desc": "私聊长回复分多条发送时，每条之间的最小间隔",
    "ctl": "number",
    "panel": "session",
@@ -405,31 +405,31 @@
    "id": "sIdleTimeout"
   },
   "group_msg_buffer_window": {
-   "label": "引用回抓窗口（秒）",
-   "desc": "同一群短时间内几条消息合并成一次回复的条数上限",
+   "label": "消息合并窗口（秒）",
+   "desc": "普通消息（没被 @、也不在会话里）等多久没有后续，才作为一批送进模型。同一个人接着说话会重置倒计时，整批最多等 8 秒",
    "ctl": "number",
    "panel": "group",
    "unit": "秒",
    "id": "sGroupMsgBuffer"
   },
   "group_recent_msgs_window": {
-   "label": "每会话最大回复数",
+   "label": "引用回抓窗口（秒）",
    "desc": "记录多久内的群消息，用于 Bot 回复时回看上下文 / 处理引用消息",
    "ctl": "number",
    "panel": "group",
-   "unit": "",
+   "unit": "秒",
    "id": "sGroupRecentMsgs"
   },
   "group_session_max_replies": {
-   "label": "会话维持时长（秒）",
+   "label": "每会话最大回复数",
    "desc": "被 @ 或提及后进入会话模式，Bot 最多连续回复多少轮",
    "ctl": "number",
    "panel": "group",
-   "unit": "秒",
+   "unit": "",
    "id": "sGroupMaxReplies"
   },
   "group_session_idle_timeout": {
-   "label": "退场冷却（秒）",
+   "label": "会话维持时长（秒）",
    "desc": "会话模式保持多长时间（期间 Bot 持续参与群里互动）",
    "ctl": "number",
    "panel": "group",
@@ -453,15 +453,23 @@
    "id": "sGroupIdleExitEnable"
   },
   "group_idle_exit_probability": {
-   "label": "退场静默时间（秒）",
+   "label": "空闲退出概率",
    "desc": "满足静默条件时, 触发退场的概率（0-1, 0.3 = 30% 概率退场）",
    "ctl": "number",
    "panel": "group",
-   "unit": "秒",
+   "unit": "",
    "id": "sGroupIdleExitProb"
   },
+  "group_idle_exit_min_silence": {
+   "label": "退场静默时间（秒）",
+   "desc": "Bot 是群里最后说话者, 且超过该时长无新消息 → 才考虑退场（下限 30 秒）",
+   "ctl": "number",
+   "panel": "group",
+   "unit": "秒",
+   "id": "sGroupIdleMinSilence"
+  },
   "poke_timeout": {
-   "label": "会话缓冲窗口（秒）",
+   "label": "戳一戳超时（秒）",
    "desc": "同一人同一群戳 Bot 的连击计数保留时长, 超时后重新计数",
    "ctl": "number",
    "panel": "group",
@@ -469,7 +477,7 @@
    "id": "sPokeTimeout"
   },
   "group_msg_buffer_window_session": {
-   "label": "触发缓冲窗口（秒）",
+   "label": "会话缓冲窗口（秒）",
    "desc": "会话模式下消息合并的时间窗口",
    "ctl": "number",
    "panel": "group",
@@ -483,6 +491,22 @@
    "panel": "group",
    "unit": "秒",
    "id": "sGroupMsgBufferTrigger"
+  },
+  "agent_group_enable": {
+   "label": "群聊内可派活",
+   "desc": "被 @ 或叫名字、并且是管理员、并且说的是明确的执行指令（不是闲聊）时，交给 agent 多步执行。三个条件缺一不可。",
+   "ctl": "bool",
+   "panel": "group",
+   "unit": "",
+   "id": "sAgentGroupEnable"
+  },
+  "agent_private_enable": {
+   "label": "私聊内可派活",
+   "desc": "同上，但只在私聊。默认关闭：派活得到的是任务汇报式回答，会把聊天的人格顶掉。带图的消息不走这条路。",
+   "ctl": "bool",
+   "panel": "group",
+   "unit": "",
+   "id": "sAgentPrivateEnable"
   },
   "meme_enable": {
    "label": "启用表情包",
@@ -526,7 +550,7 @@
   },
   "recall_feedback_cooldown": {
    "label": "冷却（秒）",
-   "desc": "Bot 的 AI 回复被撤回截断时的反馈语",
+   "desc": "",
    "ctl": "number",
    "panel": "recall",
    "unit": "秒",
@@ -534,7 +558,7 @@
   },
   "recall_private_enable": {
    "label": "启用私聊撤回反馈",
-   "desc": "好友私聊撤回时的回应，与群聊独立配置",
+   "desc": "",
    "ctl": "bool",
    "panel": "recall",
    "unit": "",
@@ -542,7 +566,7 @@
   },
   "recall_private_cooldown": {
    "label": "冷却（秒）",
-   "desc": "私聊撤回时的反馈语",
+   "desc": "",
    "ctl": "number",
    "panel": "recall",
    "unit": "秒",
@@ -589,7 +613,7 @@
    "id": "sNsfwEnable"
   },
   "private_reply_max_length": {
-   "label": "群聊回复最大长度（字）",
+   "label": "私聊回复最大长度（字）",
    "desc": "私聊单条回复的最大字数，超出会按句子拆分多条发送",
    "ctl": "number",
    "panel": "length",
@@ -597,34 +621,12 @@
    "id": "sPrivateReplyMaxLen"
   },
   "group_reply_max_length": {
-   "label": "超长消息切分阈值（字）",
+   "label": "群聊回复最大长度（字）",
    "desc": "群聊单条回复的最大字数，防止刷屏霸版",
    "ctl": "number",
    "panel": "length",
    "unit": "字",
    "id": "sGroupReplyMaxLen"
-  },
-  "group_quote_mode": {
-   "label": "群引用回复",
-   "desc": "回复时是否引用它正在回的那条消息：off=不引用 / auto=只在对象明确时引用（合并多条历史、或对方本来就发了引用）/ always=每条都引用",
-   "ctl": "select",
-   "panel": "group",
-   "unit": "",
-   "id": "sGroupQuoteMode",
-   "options": [
-    [
-     "auto",
-     "自动（推荐）"
-    ],
-    [
-     "always",
-     "每条都引用"
-    ],
-    [
-     "off",
-     "从不引用"
-    ]
-   ]
   },
   "msg_split_len": {
    "label": "超长消息切分阈值（字）",
@@ -641,14 +643,6 @@
    "panel": "trigger",
    "unit": "",
    "id": "sTriggerWords"
-  },
-  "bot_nicknames": {
-   "label": "Bot 昵称（每行一个）",
-   "desc": "Bot 的全部称呼：群友叫其中任何一个都算在叫它。第一个当作网名用；留空则用群名片，再空才兜底 小a。大小写/全角/@ 不敏感",
-   "ctl": "lines",
-   "panel": "trigger",
-   "unit": "",
-   "id": "sBotNicknames"
   },
   "group_trigger_include_bot_nick": {
    "label": "包含 Bot 昵称",
@@ -676,14 +670,14 @@
   },
   "command_permission": {
    "label": "权限模式",
-   "desc": "除 target_qqs（私聊白名单）与 Bot 本人外，追加可执行管理员指令的 QQ",
+   "desc": "",
    "ctl": "select",
    "panel": "perm",
    "unit": "",
    "id": "sCmdPermMode"
   },
   "command_admins": {
-   "label": "群管理白名单 QQ（每行一个）",
+   "label": "额外管理员 QQ（每行一个）",
    "desc": "除 target_qqs（私聊白名单）与 Bot 本人外，追加可执行管理员指令的 QQ",
    "ctl": "lines",
    "panel": "perm",
@@ -700,7 +694,7 @@
   },
   "admin_commands_enable": {
    "label": "启用群管理指令",
-   "desc": "可在群里 @Bot 执行踢人/禁言/改名片等管理指令的 QQ；留空 = 仅 Bot 本人 + 上方管理员",
+   "desc": "",
    "ctl": "bool",
    "panel": "perm",
    "unit": "",
@@ -758,7 +752,7 @@
   },
   "auto_accept.welcome_new_member": {
    "label": "新成员入群自动发欢迎语",
-   "desc": "留空 = 新好友不发送欢迎语；不填且未保存过 = 默认「你好，我是小a～」",
+   "desc": "",
    "ctl": "bool",
    "panel": "autoaccept",
    "unit": "",
@@ -777,8 +771,8 @@
    "sub": "welcome_private"
   },
   "auto_accept.welcome_group": {
-   "label": "白名单 QQ/群（每行一个，空 = 全部通过）",
-   "desc": "留空 = 新好友不发送欢迎语；不填且未保存过 = 默认「你好，我是小a～」",
+   "label": "入群欢迎语",
+   "desc": "",
    "ctl": "text",
    "panel": "autoaccept",
    "unit": "",
@@ -787,8 +781,8 @@
    "sub": "welcome_group"
   },
   "auto_accept.allowlist": {
-   "label": "黑名单 QQ/群（每行一个，直接拒绝）",
-   "desc": "留空 = 新好友不发送欢迎语；不填且未保存过 = 默认「你好，我是小a～」",
+   "label": "白名单 QQ/群（每行一个，空 = 全部通过）",
+   "desc": "",
    "ctl": "lines",
    "panel": "autoaccept",
    "unit": "",
@@ -798,7 +792,7 @@
   },
   "auto_accept.denylist": {
    "label": "黑名单 QQ/群（每行一个，直接拒绝）",
-   "desc": "留空 = 新好友不发送欢迎语；不填且未保存过 = 默认「你好，我是小a～」",
+   "desc": "",
    "ctl": "lines",
    "panel": "autoaccept",
    "unit": "",
@@ -853,6 +847,36 @@
    "panel": "exit",
    "mount": "exitIdleList",
    "key": "custom_exit_phrases_idle"
+  },
+  "group_quote_mode": {
+   "label": "群引用回复",
+   "desc": "回复时是否引用它正在回的那条消息：off=不引用 / auto=只在对象明确时引用（合并多条历史、或对方本来就发了引用）/ always=每条都引用",
+   "ctl": "select",
+   "panel": "group",
+   "unit": "",
+   "id": "sGroupQuoteMode",
+   "options": [
+    [
+     "auto",
+     "自动（推荐）"
+    ],
+    [
+     "always",
+     "每条都引用"
+    ],
+    [
+     "off",
+     "从不引用"
+    ]
+   ]
+  },
+  "bot_nicknames": {
+   "label": "Bot 昵称（每行一个）",
+   "desc": "Bot 的全部称呼：群友叫其中任何一个都算在叫它。第一个当作网名用；留空则用群名片，再空才兜底 小a。大小写/全角/@ 不敏感",
+   "ctl": "lines",
+   "panel": "trigger",
+   "unit": "",
+   "id": "sBotNicknames"
   }
  },
  "actions": {
