@@ -4480,98 +4480,82 @@ def handle_user_file(file_path: str, target_qq: Optional[str] = None) -> str:
 #  联网搜索
 # ═══════════════════════════════════════════
 
-def _parse_sogou_results(html: str):
-    """搜狗 → [(url, title, snippet)]。中文生活/商品类查询质量远好于 Bing
-    （2026-10-13 实测：Bing 免JS端把"200元价位 机械键盘"匹配成 HTTP 200
-    状态码文章，搜狗给的是知乎/评测）。链接是 /link?url= 跳转壳，补全为
-    绝对地址（抓正文时跟随重定向）。"""
-    out = []
-    if not html:
-        return out
-    chunks = re.split(r'class="vr-title"', html)[1:]
-    for ch in chunks[:8]:
-        m = re.search(r'href="([^"]+)"[^>]*>(.*?)</a>', ch, re.DOTALL)
-        if not m:
-            continue
-        href, title = m.group(1), _strip_tags(m.group(2))
-        if href.startswith("/link"):
-            link = "https://www.sogou.com" + href
-        elif href.startswith("http"):
-            link = href
-        else:
-            continue
-        if not title or len(title) < 4:
-            continue
-        # 摘要在标题后面的 fz-mid/space-txt（或 text-layout）div 里
-        m_sn = re.search(r'class="[^"]*(?:fz-mid|space-txt|text-layout)[^"]*"[^>]*>(.*?)</div>',
-                         ch, re.DOTALL)
-        if not m_sn:
-            m_sn = re.search(r'<p[^>]*>(.*?)</p>', ch, re.DOTALL)
-        snippet = _strip_tags(m_sn.group(1)) if m_sn else ""
-        out.append((link, title[:120], snippet[:300]))
-    return out
+# ★ 2026-10-23：这里原本有 _parse_sogou_results / _strip_tags /
+#   _parse_bing_results / _parse_ddg_results 四个函数，返回
+#   (url, title, snippet) 三元组。全都删了，原因：
+#     ① 它们是**平行列表时代**的产物 —— 摘要和链接没有归属关系。
+#        现在的解析在 web_access 里按结果块解析，直接产出 SearchResult。
+#     ② 删掉之前已经没有任何调用方（grep 确认），唯一引用是测试文件，
+#        而测试测的是"旧解析器"，不是线上真正跑的那份。
+#     ③ 留着会诱导下一个人去改错文件 —— 2026-10-13 的 b_algo 事故规则
+#        （只认 b_algo、跳过 bing 自家链接）现在由
+#        web_access._parse_bing 承载，并且有离线测试盯着。
+#
+#   顺带：搜狗解析（_parse_sogou_results）也在这批里删了。它当年是因为
+#   Bing 把「200元机械键盘」匹配成 HTTP 200 才加的备胎，但 Sogou 现在
+#   需要 JS 且常见验证码，_own_search 里从来没接它，纯死代码。
 
 
-def _strip_tags(s: str) -> str:
-    s = re.sub(r'<[^>]+>', '', s or '')
-    s = re.sub(r'&ensp;|&nbsp;|&#\d+;|&amp;|&quot;|&#x27;|&lt;|&gt;', ' ', s)
-    return re.sub(r'\s+', ' ', s).strip()
+def _search_via_deepseek(query, _log_prefix="搜索"):
+    """DeepSeek 原生搜索。返回结果列表；没走通返回 None，没有结果返回 []。
+
+    ★ 2026-10-23：这条现在只是**兜底**。主线在 web_access，顺序是
+      自家抓取优先、DeepSeek 兜底 —— 自己的路零搜索费，只有上下文 token，
+      而 DeepSeek 每千次 5 元。
+      这里保留独立入口是因为 bot_core 的 search_web 还要先走天气/股票 API，
+      那两个分支在调通用搜索之前就 return 了，不能整段交给 web_access。
+
+    两个返回值必须分开：
+      · None  = 没走通（没 key、网络错、429）→ 该降级
+      · []    = 走通了但没有结果        → 就是没有，别再降级白花时间
+    """
+    try:
+        import ds_search
+    except Exception as e:
+        log(f"[{_log_prefix}] ds_search 不可用: {e}")
+        return None
+
+    try:
+        if not ds_search.available():
+            return None
+        results = ds_search.search(query, count=8, ori_question=query)
+    except Exception as e:
+        log(f"[{_log_prefix}] DeepSeek 搜索未走通: {str(e)[:100]}")
+        return None
+
+    if not results:
+        log(f"[{_log_prefix}] DeepSeek 搜索「{query}」返回空")
+        return []
+    return results
 
 
-def _parse_bing_results(html: str):
-    """Bing SERP → [(url, title, snippet)]。**只认 b_algo 真结果块**。
+def _render_ds_search(results, query, _log_prefix="搜索"):
+    """把 DeepSeek 结果排成给模型读的文本。
 
-    ★ 2026-10-13 搜索事故修复：旧版正则抓页面里任意 b_caption/<p>，
-      把广告、侧栏、页脚文本当结果返回（问"200元机械键盘"回"HTTP状态码
-      详解"），模型拿垃圾结果直接懵了。b_algo 是 Bing 自然结果的容器，
-      块内的 h2>a 是标题链接、b_caption 的 <p> 是摘要 —— 块外一概不要。"""
-    out = []
-    if not html:
-        return out
-    # 每个结果块以 <li class="b_algo" 开头；切块再在块内解析
-    chunks = re.split(r'<li[^>]+class="[^"]*b_algo[^"]*"', html)[1:]
-    for ch in chunks[:8]:
-        m_url = re.search(r'<h2[^>]*>\s*<a[^>]*href="(https?://[^"]+)"', ch)
-        if not m_url:
-            continue
-        link = m_url.group(1)
-        if any(skip in link for skip in ('bing.com/', 'microsoft', 'microsofttranslator')):
-            continue
-        m_title = re.search(r'<h2[^>]*>\s*<a[^>]*>(.*?)</a>', ch, re.DOTALL)
-        title = _strip_tags(m_title.group(1)) if m_title else ""
-        m_sn = re.search(r'<p[^>]*>(.*?)</p>', ch, re.DOTALL)
-        snippet = _strip_tags(m_sn.group(1)) if m_sn else ""
-        if len(snippet) < 20 and not title:
-            continue
-        out.append((link, title[:120], snippet[:300]))
-    return out
+    ★ 2026-10-23：转换和排版全部走 search_core / ds_search 的公开入口。
+      这里原来自己手写 search_core.make(...) 逐个字段搬一遍，还调了
+      ds_search.quality_of —— 而 quality_of 已经在清理中并入 search_core。
+      手搬字段的坏处是官方 schema 加字段时这里不会报错，只会静默丢掉。
+    """
+    import search_core
+    import ds_search
 
+    items = ds_search.to_core_list(results, source="ds")
+    if not items:
+        return ""
 
-def _parse_ddg_results(html: str):
-    """DuckDuckGo html 端点 → [(url, title, snippet)]（Bing 解析不出结果时的备胎）。
+    q_info = search_core.quality_of(items)
+    log(f"[{_log_prefix}] DeepSeek「{query}」→ {len(items)} 条 "
+        f"(质量 {q_info['verdict']}, top {q_info['top_score']})")
 
-    DDG 的链接是跳转壳（/l/?uddg=<编码真链>），要抠 uddg 参数还原。"""
-    out = []
-    if not html:
-        return out
-    chunks = re.split(r'<div[^>]+class="[^"]*result[result__body]*"', html)[1:]
-    for ch in chunks[:8]:
-        m_link = re.search(r'class="result__a"[^>]*href="([^"]+)"', ch)
-        if not m_link:
-            continue
-        href = m_link.group(1)
-        m_real = re.search(r'uddg=([^&]+)', href)
-        link = urllib.parse.unquote(m_real.group(1)) if m_real else href
-        if not link.startswith("http"):
-            continue
-        m_title = re.search(r'class="result__a"[^>]*>(.*?)</a>', ch, re.DOTALL)
-        title = _strip_tags(m_title.group(1)) if m_title else ""
-        m_sn = re.search(r'class="result__snippet"[^>]*>(.*?)</a>', ch, re.DOTALL)
-        snippet = _strip_tags(m_sn.group(1)) if m_sn else ""
-        if len(snippet) < 20 and not title:
-            continue
-        out.append((link, title[:120], snippet[:300]))
-    return out
+    body = search_core.format_for_model(items, query)
+    if not body:
+        return ""
+    parts = [f"【{query}】搜索结果：", body]
+    hint = search_core.quality_hint(q_info)
+    if hint:
+        parts.append("\n\n" + hint)
+    return "\n".join(parts)
 
 
 def search_web(query):
@@ -4674,72 +4658,32 @@ def search_web(query):
             log(f"股票 API 失败: {e}")
             # 降级到 Bing 搜索
 
-    # 普通搜索（2026-10-13 重做）：**搜狗优先** —— 中文生活/商品类查询实测
-    # 质量碾压 Bing 免JS端（"200元价位 机械键盘"被 Bing 匹配成"HTTP 200
-    # 状态码"文章 → 模型在群里搜了个寂寞）；Bing 兜底，DDG 最后备胎。
-    q = urllib.parse.quote(query)
-    results = []
-    for engine, url, parser in (
-        ("sogou", f"https://www.sogou.com/web?query={q}", _parse_sogou_results),
-        ("bing", f"https://www.bing.com/search?q={q}&setlang=zh-cn", _parse_bing_results),
-        ("ddg", f"https://html.duckduckgo.com/html/?q={q}", _parse_ddg_results),
-    ):
-        try:
-            req = urllib.request.Request(url, headers={
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-            })
-            with urllib.request.urlopen(req, timeout=12, context=CTX) as r:
-                html = r.read().decode("utf-8", errors="ignore")
-            results = parser(html)
-            if results:
-                break
-        except Exception as e:
-            log(f"搜索失败({engine}): {str(e)[:80]}")
+    # 普通搜索（2026-10-23 二次重排，用户要求以自家搜索为主）：
+    #   ① 自家抓取（web_access：Bing + 360 → 合并 → 补分 → 抓正文）
+    #   ② DeepSeek 原生搜索 —— 只在自家没出结果时兜底
+    #   顺序这么定是因为 ① 零搜索费（只有上下文 token），② 每千次 5 元。
+    #   但 ① 的前提是结果质量够用，所以这一轮给它补了三个原本没有的信号：
+    #   时间（从摘要开头抽）、权威性（按域名估）、相关性（引擎位置 + 词面重合）。
+    #   没有这三样，自家结果排不了序，也就谈不上"接近"。
+    try:
+        import web_access as _wa
+        _own = _wa.search_web(query)
+        if _own and not _is_search_failure(_own):
+            log(f"搜索「{query}」→ 自家搜索命中")
+            return _own
+        log(f"搜索「{query}」自家没出结果，走 DeepSeek 兜底")
+    except Exception as e:
+        log(f"搜索「{query}」自家搜索异常，走 DeepSeek 兜底: {str(e)[:100]}")
 
-    if not results:
+    _ds_results = _search_via_deepseek(query)
+    if _ds_results is None:
         return f"搜索「{query}」失败或无结果。如实告诉用户没搜到，**不要编造搜索结果**。"
-
-    # 摘要 = 标题 + 站点 + 摘要行（旧版只回摘要文本不带标题/URL，
-    # 模型分不清结果出自哪，容易张冠李戴）
-    lines = []
-    for i, (link, title, snippet) in enumerate(results[:5]):
-        host = ""
-        try:
-            host = urllib.parse.urlparse(link).netloc
-        except Exception:
-            pass
-        one = f"{i+1}. {title or link}"
-        if host:
-            one += f"（{host}）"
-        if snippet:
-            one += f"：{snippet}"
-        lines.append(one)
-    summary = "\n".join(lines)
-    urls = [link for link, _t, _s in results]
-
-    # 尝试打开前 3 个 URL 抓取正文内容
-    page_texts = []
-    for url in urls[:3]:
-        try:
-            req = urllib.request.Request(url, headers={
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-            })
-            with urllib.request.urlopen(req, timeout=10, context=CTX) as resp:
-                page_html = resp.read().decode("utf-8", errors="ignore")
-            page_html = re.sub(r'<(script|style|nav|header|footer)[^>]*>.*?</\1>', '', page_html, flags=re.DOTALL|re.IGNORECASE)
-            text = re.sub(r'<[^>]+>', ' ', page_html)
-            text = re.sub(r'&ensp;|&nbsp;|&#\d+;', ' ', text)
-            text = re.sub(r'\s+', ' ', text).strip()
-            if len(text) > 200:
-                page_texts.append(text[:3000])
-        except Exception as e:
-            log(f"[搜索] 页面抓取失败 {url[:60]}: {e}")
-
-    if page_texts:
-        summary += "\n\n【页面正文】\n" + "\n---\n".join(page_texts)
-
-    log(f"搜索「{query}」 → {len(results)} 条摘要 + {len(page_texts)} 个页面正文")
-    return f"【{query}】搜索结果：\n{summary}"
+    if not _ds_results:
+        return f"搜索「{query}」失败或无结果。如实告诉用户没搜到，**不要编造搜索结果**。"
+    _ds_text = _render_ds_search(_ds_results, query)
+    if not _ds_text:
+        return f"搜索「{query}」失败或无结果。如实告诉用户没搜到，**不要编造搜索结果**。"
+    return _ds_text
 
 
 def _is_search_failure(text) -> bool:

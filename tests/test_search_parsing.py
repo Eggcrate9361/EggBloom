@@ -1,48 +1,34 @@
 # -*- coding: utf-8 -*-
-"""tests/test_search_parsing.py —— 搜索结果解析回归（2026-10-13 搜索事故）
+"""tests/test_search_parsing.py —— SERP 解析回归（2026-10-13 搜索事故）
 
 线上事故：群里问"200块机械键盘推荐"，search_web 返回的全是
 「HTTP状态码 200 详解」「200（阿拉伯数字）百度百科」——Bing 免JS端
 把 "200" 匹配成了 HTTP 200，旧解析器又把页面上任意 b_caption/<p>
 当结果抓，模型拿垃圾结果"搜了个寂寞"，最后 AI决定不回复(空)。
 
-钉死三件事：
-  ① _parse_bing_results 只认 b_algo 块（块外广告/侧栏文本一概不要）；
-  ② _parse_sogou_results 认 vr-title + fz-mid 摘要，/link 跳转壳补全；
-  ③ _parse_ddg_results 认 result__a/result__snippet，uddg 还原真链。
-全部离线（HTML 夹具），不碰网络。
+★ 2026-10-23 迁移说明：
+  本文件原来测的是 `bot_core._parse_bing_results` / `_parse_sogou_results` /
+  `_parse_ddg_results`。那三个函数已经删除（返回平行列表，摘要和链接没有
+  归属关系，且线上早就不走了）。但因为删除而**丢掉这份夹具是不行的** ——
+  b_algo 块边界、跳过 bing 自家链接、uddg 还原这几条是事故换来的规矩，
+  现在的实现是 `web_access._parse_bing` / `_parse_so` / `_parse_ddg`，
+  所以把用例整体迁过来，判据一条不减。
+
+  顺带一个收益：不再 import bot_core，测试不会拉起插件系统和守护线程，
+  跑一次从十几秒降到几十毫秒。
+
+  `_parse_sogou_results` 随函数一起删除（Sogou 现在需要 JS + 验证码，
+  `_own_search` 从来没接它，是纯死代码），对应的搜狗用例也一并移除。
+  它当年存在的理由（Bing 把「200元机械键盘」匹配成 HTTP 200）现在由
+  `_merge_results` 的多引擎合并覆盖，见 tests/test_web_search.py。
 """
 import os
 import sys
+import unittest
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-ROOT = os.path.dirname(HERE)
-sys.path.insert(0, ROOT)
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import bot_core  # noqa: E402
-
-# 停掉 bot_core 带起来的守护线程：否则测试全过、退出码却是 0xC0000409
-# （解释器关闭时 daemon 线程还在写 stdout，抢锁失败 → 拖垮退出码）。
-# 详见 tests/_quiet_exit.py 开头的说明。
-sys.path.insert(0, HERE)
-from _quiet_exit import quiet_exit  # noqa: E402
-quiet_exit()
-
-PASS = 0
-FAIL = 0
-FAILURES = []
-
-
-def check(name, cond, extra=""):
-    global PASS, FAIL
-    if cond:
-        PASS += 1
-        print(f"  [OK]   {name}")
-    else:
-        FAIL += 1
-        FAILURES.append(f"{name} :: {extra}")
-        print(f"  [FAIL] {name} :: {extra}")
-
+import web_access as wa
 
 BING_FIXTURE = """
 <html><body>
@@ -55,15 +41,6 @@ BING_FIXTURE = """
   <li class="b_algo"><h2><a href="https://cn.bing.com/ad">bing自家链接要跳过</a></h2>
     <div class="b_caption"><p>bing.com 域名的结果链接应当被过滤掉不返回。</p></div></li>
 </div></body></html>
-"""
-
-SOGOU_FIXTURE = """
-<html><body>
-<div class="vrTitle-box"><h3 class="vr-title"><!--x--><a href="/link?url=ABC123" target="_blank">200元以下,性价比最高的<em>机械键盘</em>推荐!</a></h3>
-<div class="fz-mid space-txt base-ellipsis clamp2">这几款<em>机械键盘</em>性价比极高，适合办公和初学者日常使用。</div></div>
-<div class="vrTitle-box"><h3 class="vr-title"><a href="https://www.zhihu.com/question/456">200预算买什么键盘</a></h3>
-<p>知乎上的高赞回答摘要，讨论百元级键盘的选购要点。</p></div>
-</body></html>
 """
 
 DDG_FIXTURE = """
@@ -84,51 +61,79 @@ DDG_FIXTURE = """
 """
 
 
-def main():
-    print("\n=== ① Bing：只认 b_algo 块 ===")
-    res = bot_core._parse_bing_results(BING_FIXTURE)
-    check("解析出 2 条（侧栏广告不算）", len(res) == 2, str(len(res)))
-    if len(res) >= 2:
-        check("第一条标题正确", "机械键盘" in res[0][1], res[0][1])
-        check("摘要带站点语义", "性价比" in res[0][2], res[0][2])
-        check("bing.com 自家链接被跳过", not any("cn.bing.com" in r[0] for r in res))
-    check("侧栏广告文本绝不混入", not any("侧栏广告" in (r[1] + r[2]) for r in res))
-    check("空输入 → 空列表", bot_core._parse_bing_results("") == [])
+class TestBingOnlyBAlgo(unittest.TestCase):
+    """① 只认 b_algo 块（块外广告/侧栏文本一概不要）。"""
 
-    print("\n=== ② 搜狗：vr-title + fz-mid 摘要 + /link 补全 ===")
-    res2 = bot_core._parse_sogou_results(SOGOU_FIXTURE)
-    check("解析出 2 条", len(res2) == 2, str(len(res2)))
-    if len(res2) >= 2:
-        check("/link 跳转壳补成绝对地址", res2[0][0].startswith("https://www.sogou.com/link"),
-              res2[0][0])
-        check("em 高亮标签被剥净", "<em>" not in res2[0][1] and "<em>" not in res2[0][2],
-              res2[0][1])
-        check("fz-mid 摘要进结果", "性价比极高" in res2[0][2], res2[0][2])
-        check("<p> 摘要兜底也生效", "高赞回答" in res2[1][2], res2[1][2])
+    def test_count_excludes_sidebar(self):
+        res = wa._parse_bing(BING_FIXTURE)
+        self.assertEqual(len(res), 2, [x["title"] for x in res])
 
-    print("\n=== ③ DDG：uddg 还原真链 ===")
-    res3 = bot_core._parse_ddg_results(DDG_FIXTURE)
-    check("解析出 2 条", len(res3) == 2, str(len(res3)))
-    if len(res3) >= 2:
-        check("uddg 壳还原为真链", res3[0][0] == "https://post.smzdm.com/p/abc", res3[0][0])
-        check("直链原样保留", res3[1][0] == "https://direct.example.com/kb", res3[1][0])
-        check("摘要解析", "五款" in res3[0][2], res3[0][2])
+    def test_first_result_fields(self):
+        res = wa._parse_bing(BING_FIXTURE)
+        self.assertIn("机械键盘", res[0]["title"])
+        self.assertIn("性价比", res[0]["snippet"])
 
-    print("\n=== ④ 事故钉死：垃圾结果不许混进 Bing 解析 ===")
-    # 旧版事故形态：页面里只有非 b_algo 的杂文本 → 必须返回空（走下一引擎），
-    # 而不是把侧栏/页脚文本当结果
-    junk = '<html><div class="b_caption"><p>HTTP状态码 当浏览者访问一个网页时…</p></div></html>'
-    check("无 b_algo 块 → 0 条（换引擎，不硬凑）",
-          bot_core._parse_bing_results(junk) == [])
+    def test_self_link_skipped(self):
+        res = wa._parse_bing(BING_FIXTURE)
+        self.assertFalse(any("cn.bing.com" in r["url"] for r in res))
 
-    print("\n" + "=" * 56)
-    print(f"通过 {PASS} / 失败 {FAIL}")
-    if FAILURES:
-        print("失败项：")
-        for f in FAILURES:
-            print("  -", f)
-    return 1 if FAIL else 0
+    def test_sidebar_never_mixed_in(self):
+        res = wa._parse_bing(BING_FIXTURE)
+        self.assertFalse(any("侧栏广告" in (r["title"] + r["snippet"]) for r in res))
+
+    def test_empty_input(self):
+        self.assertEqual(wa._parse_bing(""), [])
+
+    def test_accident_form_returns_empty(self):
+        """旧版事故形态：页面里只有非 b_algo 的杂文本 → 必须返回空（换引擎，
+        不硬凑），而不是把侧栏/页脚文本当结果。"""
+        junk = '<html><div class="b_caption"><p>HTTP状态码 当浏览者访问一个网页时…</p></div></html>'
+        self.assertEqual(wa._parse_bing(junk), [])
+
+
+class TestDdgUddgUnwrap(unittest.TestCase):
+    """② DDG 的链接是跳转壳，要抠 uddg 还原真链。"""
+
+    def test_count(self):
+        self.assertEqual(len(wa._parse_ddg(DDG_FIXTURE)), 2)
+
+    def test_uddg_unwrapped(self):
+        res = wa._parse_ddg(DDG_FIXTURE)
+        self.assertEqual(res[0]["url"], "https://post.smzdm.com/p/abc")
+
+    def test_direct_link_kept(self):
+        res = wa._parse_ddg(DDG_FIXTURE)
+        self.assertEqual(res[1]["url"], "https://direct.example.com/kb")
+
+    def test_snippet_parsed(self):
+        res = wa._parse_ddg(DDG_FIXTURE)
+        self.assertIn("五款", res[0]["snippet"])
+
+
+class TestFieldsBelongTogether(unittest.TestCase):
+    """★ 2026-10-23 新增：这是重写解析器的唯一目的。
+
+    旧实现返回 (summaries, urls) 两个**平行列表**，摘要 A 配链接 B 是常态。
+    并行列表上看不出错 —— 两条都有、都非空、长度也一致 ——
+    但把摘要归到结果上时就会错位，正文也挂不到具体某条上。
+    """
+
+    def test_title_url_snippet_from_same_block(self):
+        res = wa._parse_bing(BING_FIXTURE)
+        # 第一条是知乎那条，摘要必须是它自己的「性价比」而不是第二条的「横评」
+        self.assertIn("zhuanlan.zhihu.com", res[0]["url"])
+        self.assertIn("性价比", res[0]["snippet"])
+        self.assertNotIn("横评", res[0]["snippet"])
+
+        self.assertIn("bilibili.com", res[1]["url"])
+        self.assertIn("横评", res[1]["snippet"])
+        self.assertNotIn("性价比", res[1]["snippet"])
+
+    def test_rank_recorded(self):
+        """`_rank_in_source` 是打分主判据，解析时必须记下来。"""
+        res = wa._parse_bing(BING_FIXTURE)
+        self.assertEqual([x["_rank_in_source"] for x in res], [1, 2])
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    unittest.main(verbosity=2)
