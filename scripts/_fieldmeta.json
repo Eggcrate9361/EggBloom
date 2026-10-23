@@ -478,7 +478,7 @@
   },
   "group_msg_buffer_window_trigger": {
    "label": "触发缓冲窗口（秒）",
-   "desc": "被触发（@/小a）前后, 额外合并消息的时间窗口",
+   "desc": "被触发（@/小a）且还没有上下文时, 等多久再回。超过 8 无效——整批从第一条算起有 8 秒硬顶",
    "ctl": "number",
    "panel": "group",
    "unit": "秒",

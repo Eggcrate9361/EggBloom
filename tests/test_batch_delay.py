@@ -11,6 +11,12 @@
 
   抽成 _batch_delay 之后，这里钉死的是「两边行为必须一致」+「每条规则真的生效」。
   这类差异不会报错、不会崩，只会让某些场景的回慢半拍，所以必须有测试盯着。
+
+★ 2026-10-23 第二批：另有一套 merge_window（三个 group_msg_buffer_window*
+  配置键）在算"还能不能合并进来"，与 _batch_delay 是两套独立判据。
+  实测三个档位里两个空转、一个有害（详见 _batch_delay docstring）。
+  现在"批次何时关闭"由 _batch_deadline 算出的 deadline 独家决定，
+  下面第 7 节钉的就是这件事：deadline 与定时器**必须出自同一次计算**。
 """
 import os
 import sys
@@ -113,6 +119,85 @@ vals = [mk(same_sender=True), mk(has_bare_image=True), mk(triggered=True),
         mk(first_time=0, now=99)]
 check("全部为正数", all(v > 0 for v in vals), f"实际={vals}")
 check("全部是整数秒", all(isinstance(v, int) for v in vals), f"实际={vals}")
+
+
+# ── 7. deadline 与定时器同源（本轮修的核心）──────────────────
+#   旧代码：定时器按 _batch_delay(4s) 设，"能不能合并"按 merge_window(3s) 判。
+#   结果定时器还没响，缓冲区先被判过期 —— 本该等的 1 秒被吃掉。
+#   现在两者都由 _batch_deadline 一次算出来，这里钉死它们不可能再分叉。
+dl = bot_core._batch_deadline
+
+base7 = dict(same_sender=False, in_session=False, triggered=False,
+             has_context=False, has_bare_image=False)
+
+# 同一个 now，deadline - now 必须恰好等于 _batch_delay 的返回值
+for name, kw in (("裸图", dict(has_bare_image=True)),
+                 ("同人", dict(same_sender=True)),
+                 ("触发", dict(triggered=True)),
+                 ("普通", dict())):
+    _d = d(now=100, first_time=100, **dict(base7, **kw))
+    _dl = dl(now=100, first_time=100, **dict(base7, **kw))
+    check(f"「{name}」deadline - now == delay", _dl - 100 == _d, f"deadline 差={_dl-100} delay={_d}")
+
+# ★ 关键回归：窗口 3 秒、裸图 4 秒的场景，deadline 必须比旧窗口晚
+#   （旧代码这里会在第 3 秒判过期，把批次提前结算）
+check("裸图 deadline 晚于旧 3 秒窗口",
+      dl(now=0, first_time=0, **dict(base7, has_bare_image=True)) > 3,
+      "★ 旧 merge_window=3 < delay=4，窗口先到期 → 本该等 4 秒的批次 3 秒就被结算")
+
+# 硬顶必须在 deadline 上也生效（不能只有定时器受硬顶约束）
+check("deadline 受 8 秒硬顶约束",
+      dl(now=7, first_time=0, **dict(base7, same_sender=True)) == 8,
+      "第 7 秒又来一条同人消息：delay 本要 5 秒，硬顶后只剩 1 秒，deadline=8")
+
+# first_time 必传：传错就等于换了批次，界面上不会有任何提示，所以只允许显式传
+try:
+    dl(now=0, **base7)
+    check("deadline 缺 first_time 必须报错", False, "缺参数却静默成功，硬顶起点会变成 now")
+except TypeError:
+    check("deadline 缺 first_time 必须报错", True)
+
+# ── 8. 配置值真的被读到（三个键不能变成死配置）──────────────
+#   这三个键挂在群聊设置页上。如果 _batch_delay 不读它们，用户在界面上
+#   改成什么都毫无效果 —— 那和 SESSION_MAX_ROUNDS 那种死配置是同一类问题。
+_cfg = bot_core._config
+_saved = {k: _cfg.get(k) for k in
+          ("group_msg_buffer_window", "group_msg_buffer_window_session",
+           "group_msg_buffer_window_trigger")}
+try:
+    _cfg["group_msg_buffer_window"] = 9
+    check("普通档读 group_msg_buffer_window",
+          d(now=0, first_time=None, **base7) == 9,
+          "设成 9 就应得 9，得 3 说明没读配置")
+    _cfg["group_msg_buffer_window_session"] = 7
+    check("同人档读 group_msg_buffer_window_session",
+          d(now=0, first_time=0, **dict(base7, same_sender=True)) == 7)
+    _cfg["group_msg_buffer_window_trigger"] = 6
+    check("触发档读 group_msg_buffer_window_trigger",
+          d(now=0, first_time=0, **dict(base7, triggered=True)) == 6)
+finally:
+    for k, v in _saved.items():
+        if v is None:
+            _cfg.pop(k, None)
+        else:
+            _cfg[k] = v
+
+# 配置写坏（负数 / 非数字）必须退回默认值，不能算出 0 或负数秒
+_check_dl = bot_core._delay_cfg
+try:
+    _cfg["group_msg_buffer_window"] = 0
+    check("配置 0 秒退回默认", _check_dl("group_msg_buffer_window", 3) == 3,
+          "0 会让 Timer 立即触发，等于不合并")
+    _cfg["group_msg_buffer_window"] = "abc"
+    check("配置非数字退回默认", _check_dl("group_msg_buffer_window", 3) == 3)
+    _cfg["group_msg_buffer_window"] = -5
+    check("配置负数退回默认", _check_dl("group_msg_buffer_window", 3) == 3)
+finally:
+    for k, v in _saved.items():
+        if v is None:
+            _cfg.pop(k, None)
+        else:
+            _cfg[k] = v
 
 
 print()

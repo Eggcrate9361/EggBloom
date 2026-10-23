@@ -2885,7 +2885,7 @@ def _all_memes(paths) -> bool:
 #  一条规则只能有一个权威源（10-23 已经吃过一次这个教训），所以抽出来。
 GROUP_BATCH_HARD_CAP = 8        # 整批从第一条算起最多等几秒
 GROUP_BARE_IMAGE_DELAY = 4      # 裸图至少等几秒（下载 + 视觉理解要时间）
-#: 被 @/叫名字但还没上下文时等多久。
+#: 被 @/叫名字但还没上下文时等多久的**默认值**（实际取值见 group_msg_buffer_window_trigger）。
 #  ★ 2026-10-23 用户拍板：原写 15，但**从来没生效过** ——
 #    硬顶是"从批次第一条算起 8 秒"，而第一条的剩余时间恒为 8，
 #    于是 15 每次都被压成 8。两套规则里 15 是个死值。
@@ -2893,6 +2893,27 @@ GROUP_BARE_IMAGE_DELAY = 4      # 裸图至少等几秒（下载 + 视觉理解�
 #    想让它真的等更久，得同时调大 GROUP_BATCH_HARD_CAP —— 但那会让
 #    热闹群里同一个人连发时最多等 15 秒才回，错过对话节奏，所以不选。
 GROUP_TRIGGER_DELAY = 8
+
+
+def _delay_cfg(key, default):
+    """读"等几秒"类配置项：非数字/非正数退回 default。
+
+    ★ 为什么不在模块加载时读死：这三个值挂在群聊设置页上，用户改了应当立刻生效。
+      _config 被 reload_config() 整体替换，这里每次调用都从当前 _config 取，
+      热重载自然是通的；读死成模块常量则要额外维护 _RELOADABLE_GLOBALS 映射。
+    """
+    v = _config.get(key)
+    if v is None:
+        return default
+    try:
+        v = int(v)
+    except (TypeError, ValueError):
+        log(f"[批次延迟] 配置 {key}={v!r} 不是整数，用默认 {default}s")
+        return default
+    if v <= 0:
+        log(f"[批次延迟] 配置 {key}={v} 不是正数，用默认 {default}s")
+        return default
+    return v
 
 
 def _batch_delay(*, same_sender, in_session, triggered, has_context,
@@ -2918,15 +2939,28 @@ def _batch_delay(*, same_sender, in_session, triggered, has_context,
       两种调用方算硬顶剩余用的是同一个减法，多传一个布尔只会让人以为
       「新建批次不参与硬顶」。实测也不需要区分：新建时 first_time == now，
       剩余恰为 8，硬顶对它是空操作，正好等于不做特殊处理。
+
+    ★ 2026-10-23 追加：**这个返回值同时就是"批次何时关闭"的唯一判据**。
+      原来另有一套 merge_window（group_msg_buffer_window* 三个配置键）
+      独立算"还能不能合并进来"，两套判据并行，实测三个档位里两个空转、一个有害：
+        session  window=5  delay=5   → 碰巧一致
+        trigger  window=15 delay=8   → 8 秒 Timer 就 pop 了 buffer，15 秒里 7 秒空转
+        普通     window=3  delay=4   → 窗口先到期，裸图本该等 4 秒却在 3 秒被判过期
+      现在调用方用 `_batch_deadline(...)` 拿绝对时间戳存进 buffer，
+      "能不能合并"一律用 `now <= deadline` 判。
+
+      ⚠️ 那三个配置键**没有废弃**，只是不再由调用方各自算窗口，而是并进这里
+      当各档位的基准值：同人/会话读 group_msg_buffer_window_session，
+      触发读 group_msg_buffer_window_trigger，其余读 group_msg_buffer_window。
+      这样群聊设置页那三个输入框仍然控制真实行为（改了立刻生效），
+      且只有一个地方读它们 —— 原来是两处各自读，这才是冲突的来源。
     """
-    if same_sender:
-        d = 5
-    elif in_session:
-        d = 5
+    if same_sender or in_session:
+        d = _delay_cfg("group_msg_buffer_window_session", 5)
     elif triggered and not has_context:
-        d = GROUP_TRIGGER_DELAY
+        d = _delay_cfg("group_msg_buffer_window_trigger", GROUP_TRIGGER_DELAY)
     else:
-        d = 3
+        d = _delay_cfg("group_msg_buffer_window", 3)
     # 裸图：图要下载、可能要理解，秒回会答非所问
     if has_bare_image and d < GROUP_BARE_IMAGE_DELAY:
         d = GROUP_BARE_IMAGE_DELAY
@@ -2938,6 +2972,21 @@ def _batch_delay(*, same_sender, in_session, triggered, has_context,
         if d > left:
             d = left
     return d
+
+
+def _batch_deadline(*, now, first_time, **kw):
+    """批次关闭的绝对时间戳（= now + _batch_delay）。
+
+    ★ 为什么要有它：只有把"等到什么时候"落成**一个时间戳**存进 buffer，
+      定时器与"还能不能合并"才可能用同一个判。让调用方拿 delay 再自己
+      加 now，等于又把一次算术复制到两处。
+
+    now 与 first_time 都必传，不给默认值 ——
+    同一批次的两次计算必须基于同一个 now，否则定时器按 A 秒设、
+    deadline 按 B 秒算，又是两套判据。first_time 同理：它是硬顶的起点，
+    由调用方从 buffer 里取，猜错就等于换了批次。
+    """
+    return now + _batch_delay(now=now, first_time=first_time, **kw)
 
 
 # 图片理解按需触发（2026-10-13 用户："不要让 AI 次次都读表情包"）：
@@ -9491,6 +9540,10 @@ def _observe_second_look(group_id: str):
     with _buffer_lock:
         GROUP_MSG_BUFFER[group_id] = {
             "text": text, "sender": "", "time": time.time(),
+            # 这里是"人工合成一批"：不经过定时器，process_buffered_message
+            # 被本函数直接同步调用，deadline 只是为了字段齐备
+            # （缺了会被消息线程当成"过期已久"，把这条立刻结算掉）。
+            "deadline": time.time() + 1, "first_time": time.time(),
             "is_at_bot": False, "has_xiao_a": False, "has_bot_nick": False,
             "has_quote": False, "quote_me": False, "has_text_at": False,
             "in_session": False, "has_context": False, "images": [],
@@ -11635,29 +11688,28 @@ def main():
                         has_xiao_a = False
                         in_session = True
                     
-                    # 被 @ 或叫「小a」 → 进入消息合并流程
-                    if buffer:
-                        buf_is_session = buffer.get("in_session", False)
-                        buf_is_trigger = buffer.get("is_at_bot", False) or buffer.get("has_xiao_a", False)
-                        buf_has_context = buffer.get("has_context", False)
-                        if buf_is_session:
-                            merge_window = _config.get("group_msg_buffer_window_session", 5)
-                        elif buf_is_trigger and not buf_has_context:
-                            merge_window = _config.get("group_msg_buffer_window_trigger", 15)
-                        else:
-                            merge_window = GROUP_MSG_BUFFER_WINDOW
-                    else:
-                        merge_window = 5 if in_session else (15 if (is_at_bot or has_xiao_a) else GROUP_MSG_BUFFER_WINDOW)
                     # ── 合并 / 过期（清单 3.1：全程持 _buffer_lock）──
                     # ⚠️ 过期分支的 process_buffered_message 内部也要拿同一把锁，
                     #    所以必须在**锁外**调用（非重入 Lock，锁内调 = 必死锁）。
+                    #
+                    # ★ 2026-10-23：“还能不能合并”改读 buffer 自己的 deadline。
+                    #   原来这里按档位算 merge_window（三个配置键），与 _batch_delay
+                    #   是两套独立判据，实测两个空转、一个有害（详见 _batch_delay
+                    #   docstring）。现在 deadline 由建批/合并时那一次计算写下，
+                    #   定时器与这里读的是同一个数 —— 不可能再冲突。
                     _merged = False
                     _expired = False
-                    if buffer and current_time - buffer["time"] <= merge_window:
+                    # 旧的 buffer 可能来自 deadline 字段出现之前的进程（热重载），
+                    # 缺字段时退回旧口径，避免直接判过期把批次立刻结算。
+                    _buf_dl = (buffer or {}).get("deadline")
+                    if buffer and (_buf_dl is None
+                                   or current_time <= _buf_dl):
                         with _buffer_lock:
                             # 并发守卫：Timer 线程可能刚把缓冲区 pop 走 → 以锁内现值为准
                             buffer = GROUP_MSG_BUFFER.get(group_id)
-                            if buffer and current_time - buffer["time"] <= merge_window:
+                            _buf_dl = (buffer or {}).get("deadline")
+                            if buffer and (_buf_dl is None
+                                           or current_time <= _buf_dl):
                                 # 合并消息，格式："[昵称A] 消息1\n[昵称B] 消息2"
                                 # ★ 必须用 _display_name（昵称/我(Bot)），不能用裸 QQ 号：
                                 #   旧版这里直接 f"[{sender}]"，模型对不上号只能猜说话人
@@ -11702,15 +11754,19 @@ def main():
                                 # ★ 2026-10-23：四条分支合并成 _batch_delay 一处计算。
                                 #   原来这里一套、新建批次那里另一套，裸图 4 秒只在
                                 #   这一侧生效、触发等待一侧 15 另一侧 10。详见函数 docstring。
-                                delay = _batch_delay(
+                                # ★ 定时器与"还能不能再合并"必须用同一个数 —— 只算一次，
+                                #   delay 由 deadline 反推，不再各处 + current_time。
+                                _deadline = _batch_deadline(
+                                    now=current_time,
+                                    first_time=buffer.get("first_time"),
                                     same_sender=(sender == buffer["sender"]),
                                     in_session=buf_sess,
                                     triggered=buf_trig,
                                     has_context=buf_ctx,
                                     has_bare_image=bool(_img_paths and _is_pure_image_text(text)),
-                                    first_time=buffer.get("first_time"),
-                                    now=current_time,
                                 )
+                                delay = _deadline - current_time
+                                buffer["deadline"] = _deadline
                                 buffer["timer"] = Timer(delay, lambda gid=group_id: process_buffered_message(gid))
                                 _merged = True
                             elif buffer:
@@ -11791,15 +11847,18 @@ def main():
                     #     · **裸图 4 秒完全没生效**：一张图作为本批第一条时只等 3~10 秒，
                     #       而"图要下载、可能要理解"最慢的正是这个场景
                     #   现在统一走 _batch_delay，与合并分支同一个权威源。
-                    delay = _batch_delay(
+                    # ★ 2026-10-23 追加：deadline 与 delay 出自同一次计算
+                    #   （_batch_deadline），"还能不能再合并"读的就是它。
+                    _deadline = _batch_deadline(
+                        now=current_time,
+                        first_time=current_time,
                         same_sender=False,
                         in_session=in_session,
                         triggered=bool(is_at_bot or has_xiao_a or has_bot_nick or has_quote),
                         has_context=has_context,
                         has_bare_image=bool(_img_paths and _is_pure_image_text(text)),
-                        first_time=current_time,
-                        now=current_time,
                     )
+                    delay = _deadline - current_time
                     _new_timer = Timer(delay, lambda gid=group_id: process_buffered_message(gid))
                     with _buffer_lock:
                         GROUP_MSG_BUFFER[group_id] = {
@@ -11809,6 +11868,9 @@ def main():
                             # ★ 批次起点：整批 8 秒硬顶用（2026-10-23）。
                             #   同人每条都重置 delay，没有这个字段就会无限等下去。
                             "first_time": current_time,
+                            # ★ 批次关闭时刻（2026-10-23）：定时器与"能否合并"共用。
+                            #   旧代码这里没有，靠外面按档位算 merge_window，两套判据冲突。
+                            "deadline": _deadline,
                             "message_id": _reply_mid,      # 用于引用回复（QQ message_id）
                             "merged_n": _merged_n,          # 本轮合并了几条历史消息
                             "is_at_bot": is_at_bot,

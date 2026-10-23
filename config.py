@@ -247,7 +247,10 @@ DEFAULT_CONFIG = {
     "group_session_max_replies": 20,
     "group_session_idle_timeout": 300,
     "group_msg_buffer_window_session": 5,
-    "group_msg_buffer_window_trigger": 15,
+    # ★ 2026-10-23 15 → 8：这个值原来写 15，但整批 8 秒硬顶恒把它压成 8，
+    #   于是 15 从来没生效过（第一次等 8 秒，之后每次最多 8 秒）。用户拍板统一为 8，
+    #   配置与现实一致。想真的等更久要同时改 GROUP_BATCH_HARD_CAP。
+    "group_msg_buffer_window_trigger": 8,
     "group_last_exit_cooldown": 3000,
     "poke_timeout": 30,
     "group_idle_exit_enable": True,

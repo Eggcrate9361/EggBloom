@@ -4377,7 +4377,7 @@ window.FIELD_META = {
     "group_idle_exit_probability": {"label": "退场静默时间（秒）", "desc": "满足静默条件时, 触发退场的概率（0-1, 0.3 = 30% 概率退场）", "ctl": "number", "panel": "group", "unit": "秒", "id": "sGroupIdleExitProb"},
     "poke_timeout": {"label": "会话缓冲窗口（秒）", "desc": "同一人同一群戳 Bot 的连击计数保留时长, 超时后重新计数", "ctl": "number", "panel": "group", "unit": "秒", "id": "sPokeTimeout"},
     "group_msg_buffer_window_session": {"label": "触发缓冲窗口（秒）", "desc": "会话模式下消息合并的时间窗口", "ctl": "number", "panel": "group", "unit": "秒", "id": "sGroupMsgBufferSession"},
-    "group_msg_buffer_window_trigger": {"label": "触发缓冲窗口（秒）", "desc": "被触发（@/小a）前后, 额外合并消息的时间窗口", "ctl": "number", "panel": "group", "unit": "秒", "id": "sGroupMsgBufferTrigger"},
+    "group_msg_buffer_window_trigger": {"label": "触发缓冲窗口（秒）", "desc": "被触发（@/小a）且还没有上下文时, 等多久再回。超过 8 无效——整批从第一条算起有 8 秒硬顶", "ctl": "number", "panel": "group", "unit": "秒", "id": "sGroupMsgBufferTrigger"},
     "meme_enable": {"label": "启用表情包", "desc": "", "ctl": "bool", "panel": "meme", "unit": "", "id": "sMemeEnable"},
     "meme_cooldown": {"label": "冷却（秒）", "desc": "", "ctl": "number", "panel": "meme", "unit": "秒", "id": "sMemeCooldown"},
     "meme_idle_exit_enable": {"label": "启用空闲退出", "desc": "", "ctl": "bool", "panel": "meme", "unit": "", "id": "sMemeIdleExitEnable"},

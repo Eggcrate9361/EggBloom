@@ -104,7 +104,7 @@
   "group_session_max_replies": 20,
   "group_session_idle_timeout": 300,
   "group_msg_buffer_window_session": 5,
-  "group_msg_buffer_window_trigger": 15,
+  "group_msg_buffer_window_trigger": 8,
   "group_last_exit_cooldown": 3000,
   "poke_timeout": 30,
   "reply_reaction_delay": 1.6,
