@@ -669,15 +669,33 @@ _ACTION_VERBS = (
     # 「发」必须**带接收方**才算指令：「发个表情包」是闲聊，「发给我」才是委托
     r'发[^。！？!?\n]{0,6}?(?:我|他|她|群里|群文件|过来|一下)|'
     r'写|运行|跑|安装|部署|编译|生成|改|删|移动|复制|重命名|压缩|解压|转成|转换成|'
-    r'看(?:一下|看)\s*(?:屏幕|桌面|电脑)|执行)'
+    # 「看」要带**具体对象**才算指令。原来只认「屏幕/桌面/电脑」，
+    # 实测「看一下 D 盘还剩多少空间」判成无意图 —— 管理员真会这么说。
+    r'看(?:一下|看)[^。！？!?\n]{0,4}?'
+    r'(?:盘|磁盘|硬盘|屏幕|桌面|电脑|文件|目录|文件夹|日志|进程|端口|配置)|执行)'
+)
+# 必须**带宾语**才成立的动词（2026-10-24 补）。
+#
+# 为什么单独一组：这些词单独出现时多半是在**评论**而不是委托。
+#   实测反例：「分析过了」「合并同类项」「检查完了」——
+#   如果直接塞进 _ACTION_VERBS，形态 A（句首动词）会把这些全判成指令。
+# 所以只在三种明确场合算委托：
+#   ① 帮/给/替/请/麻烦 + … + 动词（「帮我把日志按日期拆分」）
+#   ② 把/将 + … + 动词（「把这三个文件合并成一个」）
+#   ③ 动词 + 指示词（「合并一下」「对比这两份」「检查一下这个配置」）
+_OBJECT_VERBS = (
+    r'(?:合并|拆分|分割|分析|对比|比较|检查|核对|清理|备份|恢复|导出|导入)'
 )
 _ACTION_VERB_RE = re.compile(
     # 形态 B：人称委托
-    r'(?:帮|给|替|请|麻烦)[^。！？!?\n]{0,8}?' + _ACTION_VERBS +
-    r'|'
+    r'(?:帮|给|替|请|麻烦)[^。！？!?\n]{0,8}?(?:' + _ACTION_VERBS + r'|' + _OBJECT_VERBS + r')' +
+    r'|' +
     # 形态 C：处置式「把/将 + … + 动词」（中文最常见的委托句式）
-    r'(?:把|将)[^。！？!?\n]{0,12}?' + _ACTION_VERBS +
-    r'|'
+    r'(?:把|将)[^。！？!?\n]{0,12}?(?:' + _ACTION_VERBS + r'|' + _OBJECT_VERBS + r')' +
+    r'|' +
+    # 形态 D：需要宾语的动词 + 指示词（「合并一下」「对比这两份」）
+    _OBJECT_VERBS + r'\s*(?:一下|下|这个|这份|这些|这两|这段|那份|那个)' +
+    r'|' +
     # 形态 A：动词在句首（允许前面有 @昵称 / 少量语气词）
     r'(?:^|[\s,，:：@]|小a\s*|干活[：:]\s*)'
     r'(?:把|将|去|先|再|帮我|给我|替我|请|麻烦)?\s*'
@@ -715,11 +733,12 @@ def detect_intent(text):
     return False, "无明确执行意图"
 
 
-def group_gate(*, text, sender, is_group=True):
-    """群内 agent 双闸判断。返回 (allowed: bool, reason: str)。
+def _agent_gate(*, text, sender):
+    """双闸本体：权限 + 明确执行意图。群聊与私聊共用这一份判断。
 
     闸一 · 权限：仅 _is_authorized（管理员白名单）。**先判权限再判意图**，
     权限不足直接拒（连意图都不解析），避免探测。
+    闸二 · 意图：闲聊/陈述不许触发，见 detect_intent。
     """
     auth_fn = _CFG.get("is_authorized_fn")
     if auth_fn is None:
@@ -734,6 +753,25 @@ def group_gate(*, text, sender, is_group=True):
     if not intent_ok:
         return False, why
     return True, why
+
+
+def group_gate(*, text, sender, is_group=True):
+    """群内 agent 双闸判断。返回 (allowed: bool, reason: str)。
+
+    is_group 参数保留是为了不破坏既有调用方，判断逻辑与渠道无关。
+    """
+    return _agent_gate(text=text, sender=sender)
+
+
+def private_gate(*, text, sender):
+    """私聊 agent 双闸判断。
+
+    ★ 单独一个函数而不是复用 group_gate：两处的**授权是分开的**
+      （`agent_group_enable` / `agent_private_enable` 各一个开关），
+      名字带 group 的函数挂在私聊上，后来人会以为私聊跟着群聊开关走。
+      判断逻辑本身相同，所以走同一个 _agent_gate。
+    """
+    return _agent_gate(text=text, sender=sender)
 
 
 # ── 供 UI 读取的会话轨迹 ───────────────────────────────────────────

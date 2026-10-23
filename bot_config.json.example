@@ -25,6 +25,7 @@
   "history_ledger_budget_chars": 4000,
   "meme_cooldown": 10,
   "agent_group_enable": false,
+  "agent_private_enable": false,
   "protocol_enabled": false,
   "protocol_api_port": 3000,
   "protocol_driver": "napcat",

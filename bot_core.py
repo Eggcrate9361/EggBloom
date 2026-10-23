@@ -9010,10 +9010,18 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
     
     last_error = None
     web_rounds = 0
-    # 网页任务允许多轮（抓取-解析-再抓），普通工具此前只有一轮。
-    # 2026-10-23：普通工具也放开到 max_tool_rounds（默认 3）。
-    #   「先搜 → 读正文 → 再总结」需要三拍，一轮做完的话模型只能凭摘要硬答，
-    #   这本身就是它「假装查了」的诱因之一。
+    # ── 三处"轮次预算"，服务三种场景，**故意不同，不要合并** ──
+    #   主链普通（本处，可配 max_tool_rounds，默认 3）
+    #       一次聊天回复里允许几拍工具。聊天要快，"先搜 → 读正文 → 再总结"
+    #       三拍够用；再多用户已经在等第二轮了。
+    #   主链网页（本处，MAX_WEB_ROUNDS，默认 20）
+    #       网页/问卷任务要反复抓取-解析-再抓，3 拍根本不够。硬编码是有意的：
+    #       这是安全阀，不是调参项，填大了只会让一次任务烧掉更多 token。
+    #   agent 侧（harness.agent_loop.DEFAULT_MAX_STEPS，默认 12，可在 agent 页改）
+    #       桌面 agent 是"把一件事做完"，允许更多步；它不在聊天主链上，慢一点没事。
+    #   曾计划把它们"统一成一份轮次配置"，核实后不成立：三者对应不同等待预期，
+    #   统一后要么网页任务做不完，要么闲聊变贵。真正该统一的是**工具集语义**
+    #   （已经统一：都走 harness.bot_hook.agent_tools_for）。
     MAX_WEB_ROUNDS = 20
     _max_plain_rounds = int(_config.get("max_tool_rounds") or 3)
     if _max_plain_rounds < 1:
@@ -12090,6 +12098,51 @@ def main():
                         log(f"私聊冷却中（{elapsed:.1f}s/{PRIVATE_REPLY_INTERVAL}s），跳过")
                         continue
                 PRIVATE_REPLY_COOLDOWN[sender] = time.time()
+
+                # ── 私聊 Agent 模式（2026-10-24 补：此前只有群聊有入口）──
+                # 三道全过才走：配置开关（默认关）+ 管理员权限 + 明确执行意图。
+                #
+                # 为什么要默认关：私聊是伴侣场景，不是工作台。把「帮我想想怎么回她」
+                # 这种话丢给 agent，会得到一份任务汇报式的回答，人格直接没了。
+                # 用户在群里已经把这个开关打开了（agent_group_enable=true），
+                # 但私聊的默认值不跟着开，两件事分开授权。
+                #
+                # 为什么带图时不走：图片已经下载到本地路径，agent 侧拿不到这个路径，
+                # 模型会答「我看不到图」。带图的消息继续走主链（那里有视觉链路）。
+                if text and not images and _config.get("agent_private_enable", False):
+                    try:
+                        from harness import agent_service as _pagent
+                        if _pagent.is_ready():
+                            _p_allowed, _p_why = _pagent.private_gate(
+                                text=text, sender=sender)
+                            if _p_allowed:
+                                log(f"[Agent] 私聊[{sender[:6]}] 触发（{_p_why}）: {text[:60]}")
+                                # 会话按人 + 日期复用：同一天的多次指令共享上下文，
+                                # 跨天换新会话，避免历史无限增长。
+                                _p_day = time.strftime("%Y%m%d")
+                                _p_sid = f"priv-{sender}-{_p_day}"
+                                _p_ctx = (f"当前是 QQ 私聊，对方 QQ={sender}。"
+                                          f"任务做完把结果用一两句话回给他。")
+                                _p_ar = _pagent.run_chat(
+                                    user_input=text, session_id=_p_sid,
+                                    is_group=False, context_hint=_p_ctx,
+                                )
+                                _p_ans = str((_p_ar or {}).get("answer") or "").strip()
+                                if not _p_ans and (_p_ar or {}).get("error"):
+                                    _p_ans = f"（任务没跑完：{_p_ar.get('error')}）"
+                                if _p_ans:
+                                    try:
+                                        smart_send(_p_ans, sender)
+                                    except Exception:
+                                        pass
+                                    try:
+                                        save_instruction(text, _p_ans)
+                                    except Exception:
+                                        pass
+                                    continue
+                                # 没有答案也没错误 → 不 continue，交给正常回复流程
+                    except Exception as _p_e:
+                        log(f"[Agent] 私聊执行异常: {_p_e}")
 
                 log("  → 进入AI聊天流程")
                 # 3. AI 聊天（私聊记忆由 EGO/super_memory 向量召回经 before_reply 注入，见下方 ego 钩子）
