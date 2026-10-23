@@ -2872,6 +2872,74 @@ def _all_memes(paths) -> bool:
     return True
 
 
+# ── 群消息合并的等待时长（2026-10-23）────────────────────────────────
+#  为什么要有这个函数：这段逻辑原来写在**两个地方**，各算各的 ——
+#    ① 合并到已有批次时
+#    ② 新建批次时
+#  两套公式不一致，实测差出三类行为差异：
+#    · 裸图 4 秒：只有合并分支有。新建批次（"一张图作为本批第一条"）
+#      完全没等 —— 而图片下载 + 视觉理解慢的正是这个场景，规则本来为它写的
+#    · 触发词等待：合并分支 15 秒，新建分支 10 秒，同一情况两个数
+#    · 8 秒硬顶：只有合并分支有（新建时 first_time == now，硬顶恒不触发，
+#      所以这条只是看起来缺，实际等价）
+#  一条规则只能有一个权威源（10-23 已经吃过一次这个教训），所以抽出来。
+GROUP_BATCH_HARD_CAP = 8        # 整批从第一条算起最多等几秒
+GROUP_BARE_IMAGE_DELAY = 4      # 裸图至少等几秒（下载 + 视觉理解要时间）
+#: 被 @/叫名字但还没上下文时等多久。
+#  ★ 2026-10-23 用户拍板：原写 15，但**从来没生效过** ——
+#    硬顶是"从批次第一条算起 8 秒"，而第一条的剩余时间恒为 8，
+#    于是 15 每次都被压成 8。两套规则里 15 是个死值。
+#    现在改成 8，与硬顶对齐，代码不再声称一个不存在的等待时长。
+#    想让它真的等更久，得同时调大 GROUP_BATCH_HARD_CAP —— 但那会让
+#    热闹群里同一个人连发时最多等 15 秒才回，错过对话节奏，所以不选。
+GROUP_TRIGGER_DELAY = 8
+
+
+def _batch_delay(*, same_sender, in_session, triggered, has_context,
+                 has_bare_image, first_time=None, now=None):
+    """算这批消息的定时器延迟（秒）。
+
+    same_sender   : 合并的这条和批次发起人同一个人
+    in_session    : 是否在连续会话模式
+    triggered     : 被 @ / 叫「小a」/ 昵称 / 引用我
+    has_context   : 本批已经有了有意义的上下文
+    has_bare_image: 这条是"只发了张图"（去掉占位符后无文字）
+    first_time    : 批次第一条的时间戳，用于 8 秒硬顶
+    now           : 当前时间，默认 time.time()
+
+    规则（用户 2026-10-23 定）：
+      同一个人接着说话 → 重置倒计时等他讲完（三连发不能被切成三批）
+      换人 → 不重置那么久，对话在流转，该回了
+      被点名但还没上下文 → 等 GROUP_TRIGGER_DELAY（8 秒，与硬顶对齐，见常量注释）
+      裸图 → 至少 4 秒
+      整批 → 从第一条起最多 8 秒，否则热闹群里永远等不到回复
+
+    ★ 只收 first_time 一个时间戳，不问调用方「是不是新建的」。
+      两种调用方算硬顶剩余用的是同一个减法，多传一个布尔只会让人以为
+      「新建批次不参与硬顶」。实测也不需要区分：新建时 first_time == now，
+      剩余恰为 8，硬顶对它是空操作，正好等于不做特殊处理。
+    """
+    if same_sender:
+        d = 5
+    elif in_session:
+        d = 5
+    elif triggered and not has_context:
+        d = GROUP_TRIGGER_DELAY
+    else:
+        d = 3
+    # 裸图：图要下载、可能要理解，秒回会答非所问
+    if has_bare_image and d < GROUP_BARE_IMAGE_DELAY:
+        d = GROUP_BARE_IMAGE_DELAY
+    # 整批硬顶：同人规则每条重置，没有上限就会无限等
+    if first_time is not None:
+        left = first_time + GROUP_BATCH_HARD_CAP - (now if now is not None else time.time())
+        if left < 1:
+            left = 1          # 保底 1 秒，允许立刻收
+        if d > left:
+            d = left
+    return d
+
+
 # 图片理解按需触发（2026-10-13 用户："不要让 AI 次次都读表情包"）：
 # 只有话里确实在说这张图（或 @我/引用我），才把图交给模型；否则当没看见，正常接话。
 # ── 表情包按需理解：判定"这轮到底该不该读这张图" ──
@@ -11630,36 +11698,19 @@ def main():
                                 # 不然三连发（"你听我说" / "那个事" / "算了没事"）会被切成两批。
                                 # ⚠️ 只在**同人**时重置：换人也重置会无限延长，
                                 # 热闹群里永远等不到回复（MaiBot 用 BATCH_LIMIT=8s 兜底，
-                                # 这里用窗口自然兜底：距上一条超过 merge_window 就不合并）。
-                                if sender == buffer["sender"]:
-                                    delay = 5
-                                elif buf_sess:
-                                    delay = 5
-                                elif buf_trig and not buf_ctx:
-                                    delay = 15
-                                else:
-                                    delay = 3
-                                # ── 图片与表情包的等待规则（2026-10-23，参照 MaiBot）──
-                                # ① 裸图至少等 4 秒：图要下载、可能要理解，秒回会答非所问。
-                                #    判据用 _is_pure_image_text：去掉 [图片]/[引用]/[发送人] 等
-                                #    占位后什么都不剩，才算"只发了张图"。
-                                if _img_paths and _is_pure_image_text(text):
-                                    if delay < 4:
-                                        delay = 4
-                                # ② 纯表情包不延长已有批次：斗图节奏快，等久了就错过。
-                                #    只对 GIF（_all_memes）生效；照片/截图不在此列。
-                                #    这里只做到"不延长"，提前截止交给上面的 delay 值本身
-                                #    （同人 5s / 换人 3s 已经比原来的固定值短）。
-                                # ③ 整批 8 秒硬顶：从批次第一条算起，最多等 8 秒。
-                                #    同人规则会每条重置 delay，没有这个上限，
-                                #    热闹群里同一个人连发十条就永远等不到回复。
-                                _ft = buffer.get("first_time")
-                                if _ft is not None:
-                                    _left = _ft + 8 - current_time
-                                    if _left < 1:
-                                        _left = 1        # 保底 1 秒，允许立刻收
-                                    if delay > _left:
-                                        delay = _left
+                                # 这里用 8 秒硬顶兜底，见 _batch_delay）。
+                                # ★ 2026-10-23：四条分支合并成 _batch_delay 一处计算。
+                                #   原来这里一套、新建批次那里另一套，裸图 4 秒只在
+                                #   这一侧生效、触发等待一侧 15 另一侧 10。详见函数 docstring。
+                                delay = _batch_delay(
+                                    same_sender=(sender == buffer["sender"]),
+                                    in_session=buf_sess,
+                                    triggered=buf_trig,
+                                    has_context=buf_ctx,
+                                    has_bare_image=bool(_img_paths and _is_pure_image_text(text)),
+                                    first_time=buffer.get("first_time"),
+                                    now=current_time,
+                                )
                                 buffer["timer"] = Timer(delay, lambda gid=group_id: process_buffered_message(gid))
                                 _merged = True
                             elif buffer:
@@ -11734,7 +11785,22 @@ def main():
                     
                     # 清单 3.1：写入持锁；Timer 在锁外创建与启动
                     # （回调内部要拿 _buffer_lock，持锁启动有理论上的竞态窗口）
-                    _new_timer = Timer(delay := (5 if in_session else (10 if (is_at_bot or has_xiao_a or has_bot_nick or has_quote) and not has_context else 3)), lambda gid=group_id: process_buffered_message(gid))
+                    # ★ 2026-10-23：原来这里是 `5 if in_session else (10 if 触发 and not
+                    #   has_context else 3)` —— 与合并分支的公式不一致，两处差异：
+                    #     · 触发等待 10 vs 15（同一种情况两个数，以 15 为准）
+                    #     · **裸图 4 秒完全没生效**：一张图作为本批第一条时只等 3~10 秒，
+                    #       而"图要下载、可能要理解"最慢的正是这个场景
+                    #   现在统一走 _batch_delay，与合并分支同一个权威源。
+                    delay = _batch_delay(
+                        same_sender=False,
+                        in_session=in_session,
+                        triggered=bool(is_at_bot or has_xiao_a or has_bot_nick or has_quote),
+                        has_context=has_context,
+                        has_bare_image=bool(_img_paths and _is_pure_image_text(text)),
+                        first_time=current_time,
+                        now=current_time,
+                    )
+                    _new_timer = Timer(delay, lambda gid=group_id: process_buffered_message(gid))
                     with _buffer_lock:
                         GROUP_MSG_BUFFER[group_id] = {
                             "text": buffer_text,

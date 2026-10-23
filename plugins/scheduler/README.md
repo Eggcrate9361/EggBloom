@@ -8,7 +8,7 @@
 
 | 位置 | 实现 | 用途 |
 |---|---|---|
-| `bot_core.py` | `threading.Timer` | 消息缓冲合并（3/5/15 秒） |
+| `bot_core.py` | `threading.Timer` | 消息缓冲合并（3/5/8 秒，裸图 4 秒，整批硬顶 8 秒） |
 | `proactive_talk` | 自己的 `_heartbeat_loop` | 主动开口（默认 900 秒） |
 | `slang_learner` | 独立间隔循环 | 抓热词 |
 
