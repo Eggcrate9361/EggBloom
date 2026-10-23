@@ -385,8 +385,18 @@ def decide(message: str, group_id: str, context: dict = None) -> Optional[Decisi
 
     # ═══════ Layer 2: AI 读空气（~80-200 token） ═══════
     # 走到这里的都是规则无法确定的模糊情况
+    # ★ 2026-10-23：把 bot_core 算好的场感数据原样透传给模板。
+    #   此前这里只传 message/recent_msgs/bot_replies/history —— bot_core 手上
+    #   有「上次开口多久前」「5 分钟发言占比」「对话停在哪」，一个都没上来，
+    #   于是 AI 只能用规则表判断，等于 AI 读空气却没给空气。
+    #   键不在这里白名单，直接 ** 透传：以后 bot_core 加字段不用改这里。
+    _field_kw = {k: v for k, v in ctx.items()
+                 if k in ("bot_last_reply_ago", "bot_share_5min",
+                          "batch_idle_gap", "batch_msg_count",
+                          "conversation_closed", "sender")}
     prompt = build_prompt(message, recent_msgs, bot_replies,
-                          bot_name=bot_name, bot_qq=bot_qq, history=history)
+                          bot_name=bot_name, bot_qq=bot_qq, history=history,
+                          **_field_kw)
 
     client = _get_ai_client()
     if client is None:

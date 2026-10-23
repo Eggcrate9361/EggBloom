@@ -21,8 +21,9 @@ PASS = []
 FAIL = []
 
 
-def check(name, cond):
-    (PASS if cond else FAIL).append(name)
+def check(name, cond, why=""):
+    """why: 失败时打印的原因（可选）。断言名本身只说"什么变了"，原因说"为什么不能变"。"""
+    (PASS if cond else FAIL).append(name if not why or cond else f"{name}　← {why}")
 
 
 def _reset_cache():
@@ -63,8 +64,18 @@ bot_core._build_static_prompt(False)
 check("群/私聊各占一项（长度=2）", len(bot_core._STATIC_PROMPT_CACHE) == 2)
 
 # ── 5. static_prompt 正文确实随 is_group 变化（指纹敏感度验证）────
-check("群聊 prompt 含【群聊规则】", "【群聊规则】" in bot_core._build_static_prompt(True))
-check("私聊 prompt 不含【群聊规则】", "【群聊规则】" not in bot_core._build_static_prompt(False))
+# 2026-10-23 段名调整：「群聊规则」拆成【群里什么样】+【群聊事实】两段。
+# 断言目的没变 —— 群聊专属内容只能在群聊出现、私聊不能有。所以按**新段名**钉，
+# 并且额外钉住旧名不得回归（防止有人把拆开的段又合回去）。
+check("群聊 prompt 含【群里什么样】", "【群里什么样】" in bot_core._build_static_prompt(True))
+check("群聊 prompt 含【群聊事实】", "【群聊事实】" in bot_core._build_static_prompt(True))
+check("私聊 prompt 不含【群里什么样】", "【群里什么样】" not in bot_core._build_static_prompt(False))
+check("私聊 prompt 不含【群聊事实】", "【群聊事实】" not in bot_core._build_static_prompt(False))
+# 决策权已收归决策器插件：static prompt 里不许再有沉默出口
+# （否则主模型会否决决策器的判断，说/不说被判断两次）
+check("群聊 prompt 不含 [不说话] 出口",
+      "[不说话]" not in bot_core._build_static_prompt(True),
+      "static prompt 里又出现了 [不说话]，决策权被拆回两处")
 
 # ── 6. ★无关配置变更不改变指纹（BOT_GROUP_NICK/BOT_QQ 未动时）────
 fp1 = bot_core._static_prompt_fingerprint(True)
