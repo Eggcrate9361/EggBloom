@@ -7765,8 +7765,9 @@ async function pageChatlogs(el) {
       };
     } catch (e) {
       if (!silent) {
-        $('evList').innerHTML = '<div class="errbox">读取 /api/events 失败：' + esc(e.message)
-          + '<br>（后端未启动时属正常）</div>';
+        $('evList').innerHTML = '<div class="errbox">读取事件失败：' + esc(e.message)
+          + '<br>这条提示只说明请求没成功，不代表后端没启动 —— '
+          + '顶栏「BOT 运行」在走就说明后端活着。</div>';
         return;
       }
     }

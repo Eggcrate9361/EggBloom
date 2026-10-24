@@ -2201,17 +2201,6 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(200, {"logs": _collect_logs(limit)})
             return
 
-        if path == "/api/events":
-            # 日志页用：消息 / 决策 / 工具 / 错误，不含调试行（那些去终端页）
-            try:
-                length = int(self.headers.get("Content-Length", 0))
-                body = json.loads(self.rfile.read(length).decode("utf-8")) if length > 0 else {}
-            except Exception:
-                body = {}
-            limit = int(body.get("limit", 400)) if isinstance(body, dict) else 400
-            self._send_json(200, collect_events(limit))
-            return
-
         if path == "/api/imagegen/status":
             cfg = load_config()
             comfyui_running = False
@@ -2371,6 +2360,18 @@ class Handler(BaseHTTPRequestHandler):
         #  bot 未运行时返回一个可读的错误（前端能提示"先启动 Bot"），而不是静默失败。
         if path.startswith("/api/agent/"):
             self._proxy_agent_post(path, data)
+            return
+
+        # ── 日志页的事件源（2026-10-24）──────────────────────────────
+        # ★ 必须在 do_POST 里：前端是 `API('/events', {method:'POST', ...})`。
+        #   第一版错放在 do_GET，POST 请求匹配不到路由 → 落到默认分支返回
+        #   空响应体 → 前端 `res.json()` 抛 "UNEXPECTED END OF JSON INPUT"，
+        #   而页面还提示"后端未启动时属正常"，把人往错的方向引。
+        #   实测：后端活着（BOT 运行 11 秒）但日志页一片空白。
+        #   body 用上面已解析好的 data，不重复读 rfile（读第二次会拿到空）。
+        if path == "/api/events":
+            limit = int(data.get("limit", 400)) if isinstance(data, dict) else 400
+            self._send_json(200, collect_events(limit))
             return
 
         if path == "/api/imagegen/generate":
