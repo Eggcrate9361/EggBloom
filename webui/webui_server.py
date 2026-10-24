@@ -1076,6 +1076,80 @@ def _collect_logs(limit=200):
             e["level"] = log_levels.classify(e.get("text") or e.get("msg") or "")
     return out
 
+# ── 事件分类（2026-10-24）────────────────────────────────────────────
+# 日志文件里混着三种东西：用户看得懂的事件、给人排查用的调试行、以及聊天记录。
+# 日志页只该显示第一种，第二种去「终端」页看。分类在**服务端**做，
+# 因为判据是日志文本的格式，前端再写一遍就是两份规则各算各的。
+_EVT_TOOL_KEYS = ("工具调用", "[工具轮次]", "[工具]", "已执行工具")
+_EVT_DECISION_KEYS = ("决策放行", "决策结论", "决策插件", "typed 决策",
+                      "[观察]", "建议插话", "判定不接", "沉默")
+_EVT_ERR_RE = re.compile(r"(异常|失败|Traceback|Error|error:)", re.I)
+
+
+def _classify_event(e):
+    """把一条记录归成 message / decision / tool / error / debug。"""
+    if not isinstance(e, dict):
+        return "debug"
+    # 聊天记录（[CHAT] 打出来的）自带 direction，最可信，先判
+    if str(e.get("direction") or "") in ("in", "out"):
+        return "message"
+    text = str(e.get("text") or e.get("msg") or "")
+    if not text:
+        return "debug"
+    if any(k in text for k in _EVT_TOOL_KEYS):
+        return "tool"
+    if any(k in text for k in _EVT_DECISION_KEYS):
+        return "decision"
+    if (e.get("level") == "err") or _EVT_ERR_RE.search(text):
+        return "error"
+    return "debug"
+
+
+_EVT_TAG_RE = re.compile(r"^\s*(?:群\[\d+\]|私聊\[\d+\]|\[群:\d+\])?\s*\[([^\]]{1,12})\]\s*")
+_EVT_TOOLNAMES_RE = re.compile(r"['\"]([A-Za-z0-9_]+)['\"]")
+
+
+def _norm_event(e, kind):
+    """转成前端直接能画的形状。
+
+    决策/工具这两类在日志里是「群[829854136] [决策放行] 无触发消息…」这种
+    带前缀带标签的一行长文。前端再去正则拆一遍就是把格式知识写两份，
+    所以在这里一次拆好：tag=标签，text=去掉前缀与标签后的正文。
+    """
+    text = str(e.get("text") or e.get("msg") or "")
+    out = {"kind": kind,
+           "time": str(e.get("time") or e.get("ts") or ""),
+           "text": text}
+    if kind == "message":
+        out["dir"] = "in" if str(e.get("direction")) == "in" else "out"
+        out["scope"] = ("私聊 " if str(e.get("type")) == "private" else "群 ") + str(e.get("target") or "")
+        out["who"] = str(e.get("sender") or "")
+        return out
+    tagged = _EVT_TAG_RE.match(text)
+    if tagged:
+        out["tag"] = tagged.group(1)
+        out["text"] = text[tagged.end():].strip()
+    if kind == "tool":
+        names = _EVT_TOOLNAMES_RE.findall(text)
+        if names:
+            out["tools"] = names
+            out["tag"] = "工具"
+            out["text"] = "、".join(names)
+    return out
+
+
+def collect_events(limit=400):
+    """日志页的数据源：剥掉调试行，只留消息/决策/工具/错误，并带上被隐藏的条数。"""
+    rows = _collect_logs(limit)
+    events, counts = [], {"message": 0, "decision": 0, "tool": 0, "error": 0, "debug": 0}
+    for e in rows:
+        kind = _classify_event(e)
+        counts[kind] = counts.get(kind, 0) + 1
+        if kind != "debug":
+            events.append(_norm_event(e, kind))
+    return {"events": events, "counts": counts, "total": len(rows)}
+
+
 def get_chat_logs(limit=200):
     logs = []
     try:
@@ -2125,6 +2199,17 @@ class Handler(BaseHTTPRequestHandler):
                 body = {}
             limit = int(body.get("limit", 200)) if isinstance(body, dict) else 200
             self._send_json(200, {"logs": _collect_logs(limit)})
+            return
+
+        if path == "/api/events":
+            # 日志页用：消息 / 决策 / 工具 / 错误，不含调试行（那些去终端页）
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+                body = json.loads(self.rfile.read(length).decode("utf-8")) if length > 0 else {}
+            except Exception:
+                body = {}
+            limit = int(body.get("limit", 400)) if isinstance(body, dict) else 400
+            self._send_json(200, collect_events(limit))
             return
 
         if path == "/api/imagegen/status":

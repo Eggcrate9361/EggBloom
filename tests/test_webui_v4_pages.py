@@ -87,6 +87,24 @@ LOGS = {"logs": [
     {"time": "16:01:03", "level": "warn", "msg": "事件端口 3005 被占用，已顺延"},
     {"time": "16:01:05", "level": "error", "msg": "登录态失效，需重新扫码"}]}
 
+# 日志页现在吃 /api/events（服务端 webui_server.collect_events 的形状）。
+# 四类各给一条 + 2 条调试行，用来验"调试不进事件流、但页脚要点名条数"。
+EVENTS = {
+    "events": [
+        {"kind": "message", "time": "16:01:10", "text": "今天去不去",
+         "dir": "in", "scope": "群 829854136", "who": "小明"},
+        {"kind": "message", "time": "16:01:12", "text": "去啊 几点", "dir": "out",
+         "scope": "群 829854136", "who": "水星"},
+        {"kind": "decision", "time": "16:01:11",
+         "text": "无触发消息，决策插件建议插话: 今天去不去",
+         "tag": "决策放行"},
+        {"kind": "tool", "time": "16:01:13", "text": "search_web、fetch_page",
+         "tag": "工具", "tools": ["search_web", "fetch_page"]},
+    ],
+    "counts": {"message": 2, "decision": 1, "tool": 1, "error": 0, "debug": 2},
+    "total": 6,
+}
+
 GROUPS = {"ok": True, "groups": [
     {"group_id": "123456", "group_name": "核院 2026 级", "member_count": 128,
      "bot_role": "admin", "bot_is_admin": True, "bot_card": "水星",
@@ -201,6 +219,8 @@ with sync_playwright() as pw:
             return r.fulfill(status=200, content_type="application/json", body='{"ok":true}')
         if "/api/protocol/logs" in u:
             return r.fulfill(status=200, content_type="application/json", body=json.dumps(LOGS))
+        if u.rstrip("/").endswith("/api/events"):
+            return r.fulfill(status=200, content_type="application/json", body=json.dumps(EVENTS))
         # 配置页的「接入与诊断」动作
         # 控制台 / 记忆 / 生图 / 表情包
         if "/api/command" in u:
@@ -510,6 +530,69 @@ with sync_playwright() as pw:
     ck("★ 已配置模型时不显示引导横幅",
        pg.eval_on_selector("#cfgSetup", "e=>e.hidden") is True)
 
+    print("\n=== ★ 日志页：事件视图（不是原始日志行）===")
+    pg.evaluate("() => go(9)")
+    pg.wait_for_timeout(1100)
+    ev_rows = pg.eval_on_selector_all("#evList .evt", "e => e.map(x=>x.className)")
+    ck("★ 日志页画的是事件行", len(ev_rows) >= 3, ev_rows)
+    ck("★ 事件行带四类之一的 kind 标记",
+       all(("k-message" in c) or ("k-decision" in c) or ("k-tool" in c) or ("k-error" in c)
+           for c in ev_rows), ev_rows)
+    ev_text = pg.inner_text("#evList")
+    ck("★ 消息写明「谁 · 在哪说 + 说了什么」",
+       "今天去不去" in ev_text and "小明" in ev_text, ev_text[:260])
+    ck("★ 决策写明结论（建议插话）", "建议插话" in ev_text, ev_text[:260])
+    ck("★ 工具调用写明工具名", "search_web" in ev_text and "fetch_page" in ev_text, ev_text[:260])
+    ck("★ 调试行不出现在事件流里", "loaded module" not in ev_text, ev_text[:300])
+    ck("★ 页脚点名被隐藏的调试行数",
+       "2" in pg.inner_text("#evMore") and "调试" in pg.inner_text("#evMore"),
+       pg.inner_text("#evMore"))
+    # 分类筛选
+    pg.click('[data-k="tool"]')
+    pg.wait_for_timeout(300)
+    only_tool = pg.eval_on_selector_all("#evList .evt", "e => e.map(x=>x.className)")
+    ck("★ 点「工具」只留工具事件", len(only_tool) == 1 and "k-tool" in only_tool[0], only_tool)
+    pg.click('[data-k=""]')
+    pg.wait_for_timeout(300)
+
+    print("\n=== ★ 控制台：原始日志流搬到了这里 ===")
+    pg.evaluate("() => go(11)")
+    pg.wait_for_timeout(1200)
+    cx = pg.inner_text("#cxLog")
+    ck("★ 控制台有原始日志（含调试行）",
+       "协议层已启动" in cx and "事件端口 3005" in cx, cx[:260])
+    ck("★ 日志行数统计在", "3 / 3 行" in pg.inner_text("#cxLogStats"),
+       pg.inner_text("#cxLogStats"))
+    pg.fill("#cxLogSearch", "3005")
+    pg.wait_for_timeout(300)
+    ck("★ 原始日志可搜索", "1 / 3 行" in pg.inner_text("#cxLogStats"),
+       pg.inner_text("#cxLogStats"))
+    pg.fill("#cxLogSearch", "")
+    pg.wait_for_timeout(200)
+
+    print("\n=== ★ 插件页：网格 + 1:1 插图位 ===")
+    pg.evaluate("() => go(13)")
+    pg.wait_for_timeout(1100)
+    cards = pg.eval_on_selector_all(".plg-grid .plg", "e => e.length")
+    ck("★ 插件用网格卡片而不是三列窄行", cards == 2, cards)
+    art = pg.eval_on_selector_all(".plg-art", "e => e.length")
+    ck("★ 每张卡都有一个插图位", art == cards, art)
+    ratio = pg.eval_on_selector(".plg-art", "e => {const r=e.getBoundingClientRect();"
+                                "return Math.abs(r.width - r.height) < 2 ? 1 : r.width/r.height;}")
+    ck("★ 插图位是 1:1 正方形", ratio == 1, ratio)
+    ck("★ 插图位是「留位」形态（首字母 + 角标），不是破图",
+       pg.eval_on_selector_all(".plg-art .ch", "e=>e.length") == cards
+       and pg.eval_on_selector_all(".plg-art .rt", "e=>e.length") == cards)
+    ck("★ 停用的插件在网格里可见且标了停用",
+       "mood_engine" in pg.inner_text(".plg-grid") and "停用" in pg.inner_text(".plg-grid"))
+
+    # 回到配置中心并切回「接入」小节 —— 后面几条断言（只读键、掩码、类型化编辑）
+    # 用的都是这一页的控件，前面那几段导航会把它换掉。
+    pg.evaluate("() => go(7)")
+    pg.wait_for_timeout(1100)
+    pg.evaluate("()=>window.__cfGo('basic')")
+    pg.wait_for_timeout(400)
+
     print("\n=== ★ 只读键不能有可编辑入口（providers 含掩码 Key）===")
     editable = pg.eval_on_selector_all(".panel [data-k]", "e => e.map(x=>x.dataset.k)")
     ck("`providers` 不在可编辑控件里", "providers" not in editable, editable[:12])
@@ -575,6 +658,32 @@ with sync_playwright() as pw:
     saved3 = [c[1] for c in config_calls if c[0] == "save"]
     ck("★ 数字项提交为 number（不是字符串）",
        bool(saved3) and saved3[0].get("ai_temperature") == 1.25, saved3)
+
+    # ── 静默时段（2026-10-24 新增的两个真实字段）──────────────
+    # 这两项是"睡觉"的全部人工入口。它们没渲染出来 / 保存不上去，
+    # 用户就没有任何办法让 Bot 在凌晨闭嘴，功能等于不存在。
+    # 断言到"值真的进了 save 请求"这一层，而不是只看控件在不在。
+    config_calls.clear()
+    pg.evaluate("() => go(7)")
+    pg.wait_for_timeout(1300)
+    pg.evaluate("""() => {
+      const m = window.FIELD_META.fields['quiet_hours'];
+      if (m) window.__cfGo(m.panel);
+    }""")
+    pg.wait_for_timeout(350)
+    ck("静默时段字段渲染在群聊面板",
+       pg.evaluate("()=>{const e=document.querySelector('#cfArea [data-k=\\'quiet_hours\\']');"
+                   "return !!e && !!e.closest('.cf-fld') && /静默/.test(e.closest('.cf-fld').textContent);}"))
+    pg.fill('#cfArea [data-k="quiet_hours"]', "1:00-7:00")
+    pg.wait_for_timeout(300)
+    pg.select_option('#cfArea [data-k="quiet_when_mentioned"]', "ignore")
+    pg.wait_for_timeout(300)
+    pg.click("#cSave")
+    pg.wait_for_timeout(900)
+    saved_q = [c[1] for c in config_calls if c[0] == "save"]
+    ck("★ 静默时段与唤醒策略都提交进了 save 请求",
+       bool(saved_q) and saved_q[0].get("quiet_hours") == "1:00-7:00"
+       and saved_q[0].get("quiet_when_mentioned") == "ignore", saved_q)
 
     pg.screenshot(path=str(OUT / "_v4_config.png"), full_page=True)
 

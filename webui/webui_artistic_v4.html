@@ -442,6 +442,98 @@ input,select,textarea{font:inherit;color:inherit}
 .setup-bn-l b{font-family:var(--f-m);font-size:12px;letter-spacing:.16em;color:var(--c10);font-weight:400}
 .setup-bn-l span{font-size:11px;color:var(--ink3);line-height:1.6;letter-spacing:.02em;max-width:70ch}
 .setup-bn-r{display:flex;align-items:center;gap:var(--s2);flex-wrap:wrap}
+
+/* ══ 日志页：事件流（2026-10-24 重新设计）═════════════════════════
+   旧页面是把日志文件整行铺出来：调试打印、Traceback、插件内部流水混在一起，
+   一条"谁说了什么"和一串"loaded module x"长得一样，谁也读不出来。
+   现在按**事件**画：每一行只回答一个问题 —— 发生了什么。
+     · 消息  谁在哪个群/私聊说了什么
+     · 决策  为什么回 / 为什么不回（放行、建议插话、判定不接、沉默）
+     · 工具  这一轮调了哪些工具
+     · 出错  真正需要抬头看的异常
+   调试行不进这一页（去「控制台」看原始日志），但在页脚点名被隐藏了多少条，
+   不让人以为日志丢了。 */
+.evt-chips{display:flex;gap:var(--s2);flex-wrap:wrap;align-items:center}
+.evt-chip{display:inline-flex;align-items:center;gap:7px;padding:5px var(--s3);
+  border:1px solid var(--line2);color:var(--ink3);font-size:12px;letter-spacing:.04em;
+  transition:border-color 120ms var(--ez),color 120ms var(--ez),background-color 120ms var(--ez)}
+.evt-chip:hover{border-color:var(--ink4);color:var(--ink2)}
+.evt-chip .d{width:6px;height:6px;border-radius:50%;background:currentColor;opacity:.55}
+.evt-chip .n{font-variant-numeric:tabular-nums;color:var(--ink4);font-size:12px}
+.evt-chip.on{color:var(--ink);border-color:var(--accent-dim);background:rgba(201,169,110,.07)}
+.evt-chip.on .n{color:var(--accent)}
+.evt-list{position:relative}
+.evt{display:grid;grid-template-columns:64px 1fr;gap:var(--s4);align-items:start;
+  padding:11px 0;border-bottom:1px solid var(--line)}
+.evt:last-child{border-bottom:0}
+.evt-t{font-family:var(--f-m);font-size:12px;color:var(--ink4);letter-spacing:.03em;
+  padding-top:1px;font-variant-numeric:tabular-nums}
+/* 左侧一条时间轴：点是事件类别，线把它们串起来。四类各一色，但只有决策/工具/出错
+   上色 —— 消息占绝大多数，跟着上色整页就花了。 */
+.evt-b{min-width:0;position:relative;padding-left:var(--s4)}
+.evt-b::before{content:'';position:absolute;left:0;top:6px;bottom:-12px;width:1px;background:var(--line2)}
+.evt:last-child .evt-b::before{display:none}
+.evt-b::after{content:'';position:absolute;left:-2px;top:5px;width:5px;height:5px;
+  border-radius:50%;background:var(--ink4)}
+.evt.k-message .evt-b::after{background:var(--ink3)}
+.evt.k-decision .evt-b::after{background:var(--accent)}
+.evt.k-tool .evt-b::after{background:var(--ai)}
+.evt.k-error .evt-b::after{background:var(--err)}
+.evt-hd{display:flex;align-items:baseline;gap:var(--s3);flex-wrap:wrap;margin-bottom:3px}
+.evt-k{font-family:var(--f-m);font-size:12px;letter-spacing:.14em;color:var(--ink4)}
+.evt.k-decision .evt-k{color:var(--accent)}
+.evt.k-tool .evt-k{color:var(--ai)}
+.evt.k-error .evt-k{color:var(--err)}
+.evt-tag{font-size:12px;color:var(--ink4);letter-spacing:.02em}
+.evt-who{font-size:12px;color:var(--ink3);letter-spacing:.02em;min-width:0}
+.evt-who b{color:var(--ink2);font-weight:400}
+.evt-x{font-size:12px;color:var(--ink2);line-height:1.7;word-break:break-word;
+  white-space:pre-wrap;max-width:96ch}
+.evt.k-message .evt-x{color:var(--ink);font-size:var(--z3)}
+.evt.k-error .evt-x{color:var(--err)}
+.evt.out .evt-x{color:var(--accent)}
+.evt-tools{display:flex;gap:6px;flex-wrap:wrap;margin-top:5px}
+.evt-tool{font-family:var(--f-m);font-size:12px;color:var(--ai);padding:1px 7px;
+  border:1px solid var(--line2)}
+.evt-more{display:flex;align-items:center;gap:var(--s3);flex-wrap:wrap;
+  margin-top:var(--s3);padding:var(--s3) var(--s4);border:1px solid var(--line2);
+  background:var(--panel);font-size:12px;color:var(--ink3)}
+.evt-more b{color:var(--ink2);font-weight:400;font-variant-numeric:tabular-nums}
+
+/* ══ 插件页：网格 + 每张卡一个 1:1 插图位（2026-10-24）══════════════
+   原来是「名称 | 状态 | 操作」的三列窄行，插件一多就是一堵墙。
+   改成商户陈列式的卡片网格：每卡上方留一个**正方形**位置放插图
+   （后端目前没有插图字段，所以是虚线空位，不是破图），下方才是名字、
+   简介、标签与开关。字数不齐也不会把网格拉歪 —— 卡片等高，内容自动换行。 */
+.plg-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(246px,1fr));gap:var(--s4)}
+.plg{display:flex;flex-direction:column;border:1px solid var(--line2);background:var(--panel);
+  transition:border-color 140ms var(--ez),transform 200ms var(--ez)}
+.plg:hover{border-color:var(--accent-dim)}
+.plg.off{opacity:.62}
+/* 1:1 插图位：空着也要有内容 —— 大号首字母 + 角标「1:1」，一眼看出这是留的位
+   而不是渲染失败。斜纹底让空位有材质，不至于是一块死白。 */
+.plg-art{position:relative;aspect-ratio:1/1;display:flex;align-items:center;justify-content:center;
+  border-bottom:1px solid var(--line);overflow:hidden;
+  background:
+    repeating-linear-gradient(45deg,transparent 0 7px,rgba(140,140,140,.05) 7px 8px)}
+.plg-art .ch{font-family:var(--f-m);font-size:64px;line-height:1;color:var(--ink);
+  opacity:.10;letter-spacing:-.04em}
+.plg-art .rt{position:absolute;right:8px;bottom:7px;font-family:var(--f-m);font-size:9px;
+  letter-spacing:.14em;color:var(--ink4)}
+.plg-art .dot{position:absolute;left:9px;top:9px;width:6px;height:6px;border-radius:50%;
+  background:var(--ink4)}
+.plg:not(.off) .plg-art .dot{background:var(--ok)}
+.plg-b{padding:var(--s3) var(--s4) var(--s4);display:flex;flex-direction:column;gap:6px;flex:1}
+.plg-n{display:flex;align-items:baseline;gap:var(--s2);flex-wrap:wrap}
+.plg-n b{font-size:var(--z3);font-weight:400;color:var(--ink);word-break:break-all}
+.plg-n em{font-style:normal;font-family:var(--f-m);font-size:9px;color:var(--ink4);letter-spacing:.1em}
+.plg-d{font-size:12px;color:var(--ink3);line-height:1.65;flex:1;
+  display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.plg-tg{display:flex;gap:5px;flex-wrap:wrap}
+.plg-tg span{font-family:var(--f-m);font-size:9px;letter-spacing:.1em;color:var(--ink4);
+  border:1px solid var(--line2);padding:1px 5px}
+.plg-f{display:flex;align-items:center;gap:var(--s2);margin-top:2px}
+.plg-f .sig{margin-right:auto}
 /* #pvCards 自身就是这个 grid 容器；常用/其他的小节标题与内层网格必须整行跨列，
    否则它们会被当成栅格项并排（实测：常用与"其他"左右分栏、卡片被拉得很高）。 */
 #pvCards>.pv-sec-hd,#pvCards>.pv-cards,#pvCards>.pv-empty{grid-column:1/-1}
@@ -3232,6 +3324,62 @@ function pvConfirm(title, detail, okText) {
   });
 }
 
+/* ── 未配置模型的引导横幅（配置页与仪表盘共用，2026-10-24）────────────
+   判据不能看字段空不空 —— api_provider / model_name 都有默认值。
+   真正的门槛是**有没有可用的 Key**：
+     全局 Key（api_key）· 当前提供商的独立 Key（has_api_key）· 或本来就用本地模型。
+   两处共用同一个判据函数，避免"配置页说没配好、仪表盘说配好了"这种自相矛盾。
+   检查结果按会话缓存（_SETUP_STATE），两个页面来回切不用反复拉配置。 */
+const _SETUP_STATE = { checked: false, ready: false };
+function setupDismissed() {
+  try { return localStorage.getItem('cfg-setup-dismissed') === '1'; } catch (e) { return false; }
+}
+async function setupReady(force) {
+  if (_SETUP_STATE.checked && !force) return _SETUP_STATE.ready;
+  let cfg = {}, providers = [];
+  try {
+    const r = await API('/config');
+    cfg = (r && r.config) ? r.config : (r || {});
+    providers = cfg.providers || [];
+  } catch (e) {
+    /* 读不到配置时不要下结论（否则后端没起会一直挂横幅）*/
+    return true;
+  }
+  let cat = null;
+  try { cat = await API('/providers/catalog'); } catch (e) { cat = null; }
+  const provId = (cat && cat.api_provider) || cfg.api_provider || '';
+  const cur = (providers.find(p => String(p.id) === String(provId)) || {});
+  _SETUP_STATE.ready = !!(cfg.api_key || cur.has_api_key || cfg.use_local_llm);
+  _SETUP_STATE.checked = true;
+  return _SETUP_STATE.ready;
+}
+/* 画一条引导横幅。host = 容器元素；onGo = 点「开始配置」后的动作 */
+function setupBanner(host, opts) {
+  if (!host) return;
+  const o = opts || {};
+  host.innerHTML = '<div class="setup-bn">'
+    + '<div class="setup-bn-l"><b>' + esc(o.title || '还没有配置模型') + '</b>'
+    + '<span>' + esc(o.text
+        || 'Bot 能连上 QQ，但收到消息不会回话 —— 三步就能跑通：选提供商 → 填 Key → 选模型。')
+    + '</span></div>'
+    + '<div class="setup-bn-r">'
+    + '<button class="btn primary" data-setup-go>' + esc(o.goText || '开始配置') + '</button>'
+    + '<button class="btn sm" data-setup-skip>我自己配</button></div></div>';
+  host.hidden = false;
+  const goBtn = host.querySelector('[data-setup-go]');
+  if (goBtn) goBtn.onclick = () => {
+    if (o.onGo) { o.onGo(); return; }
+    const pi = PAGES.findIndex(p => p.id === 'settings');
+    if (pi >= 0) go(pi);
+  };
+  const skip = host.querySelector('[data-setup-skip]');
+  if (skip) skip.onclick = () => {
+    try { localStorage.setItem('cfg-setup-dismissed', '1'); } catch (e) {}
+    host.hidden = true;
+    host.innerHTML = '';
+  };
+}
+
 async function pageDashboard(el) {
   el.innerHTML = '<div class="empty">读取中…</div>';
   let s;
@@ -3260,7 +3408,12 @@ async function pageDashboard(el) {
                 'memes_sent','plugin_count','plugin_active','llm_status','llm_model',
                 'memory_total','session_count'];
   const rows = keys.filter(k => d2[k] !== undefined && d2[k] !== null && typeof d2[k] !== 'object');
+  /* 引导横幅：入口页就是仪表盘，用户第一次打开看到的就是这里 —— 只在这里放
+     "没配模型"的提示，比让他自己摸到配置中心更直接（配置中心那一份仍在，
+     两处共用同一判据与同一个"我自己配"开关）。 */
+  const needSetup = !setupDismissed() && !(await setupReady());
   el.innerHTML = ''
+    + '<div id="dbSetup" hidden></div>'
     + '<div class="hd"><span class="lab">运行状态</span><i class="rule"></i></div>'
     + '<div class="stats">'
     +   '<div class="st"><div class="lab">Bot</div><div class="v">' + (running ? '运行中' : '已停止')
@@ -3284,6 +3437,17 @@ async function pageDashboard(el) {
           + '<pre class="log">' + esc(JSON.stringify(s, null, 2).slice(0, 4000)) + '</pre>');
   /* M2 信号硬切：读数真的变化时才闪一下 */
   try { pvSignalBlip(el); } catch (e) {}
+  if (needSetup) {
+    setupBanner($('dbSetup'), {
+      title: '还没有配置模型',
+      text: 'Bot 连得上 QQ，但收到消息不会回话。三步跑通：选提供商 → 填 Key → 选模型。',
+      goText: '去配置',
+      onGo: () => {
+        const pi = PAGES.findIndex(p => p.id === 'settings');
+        if (pi >= 0) go(pi);
+      },
+    });
+  }
 }
 
 /* 插件：真实 /api/plugins + /api/plugins/toggle */
@@ -3297,33 +3461,45 @@ async function pagePlugins(el) {
   const list = (r && (r.plugins || r.items)) || [];
   if (!list.length) { el.innerHTML = '<div class="empty">没有插件</div>'; return; }
   const on = list.filter(p => p.enabled !== false && p.已启用 !== false).length;
+  /* 网格陈列：每张卡顶部一个 1:1 插图位。
+     后端目前没有插图字段（PLUGIN_META 里没有 image/icon），所以这里留的是
+     **空位**：斜纹底 + 插件名首字母 + 右下角「1:1」角标。空位要让人看出是
+     "留给插图的位置"，就不能是纯空白 —— 纯空白会被当成图片加载失败。 */
+  const card = (p, i) => {
+    const name = p.name || p.id || ('#' + i);
+    const en = p.enabled !== false && p.已启用 !== false;
+    const desc = String(p.description || '').trim();
+    const tags = Array.isArray(p.tags) ? p.tags.slice(0, 4) : [];
+    const art = String(p.image || p.icon || p.art || '').trim();
+    /* 首字母：取名字里第一个字母/汉字（跳过下划线与点）*/
+    const ch = (String(name).replace(/^[_.]+/, '').match(/[A-Za-z\u4e00-\u9fa5]/) || ['?'])[0];
+    return '<div class="plg' + (en ? '' : ' off') + '">'
+      + '<div class="plg-art">'
+      +   (art
+          ? '<img src="' + esc(art) + '" alt="" style="width:100%;height:100%;object-fit:cover">'
+          : '<span class="ch">' + esc(ch.toUpperCase()) + '</span>')
+      +   '<i class="dot" title="' + (en ? '已启用' : '已停用') + '"></i>'
+      +   '<span class="rt">1:1</span>'
+      + '</div>'
+      + '<div class="plg-b">'
+      +   '<div class="plg-n"><b>' + esc(name) + '</b>'
+      +     (p.version ? '<em>' + esc(p.version) + '</em>' : '') + '</div>'
+      +   '<div class="plg-d" title="' + esc(desc || '') + '">'
+      +     esc(desc || '（该插件没写简介）') + '</div>'
+      +   (tags.length ? '<div class="plg-tg">' + tags.map(t =>
+            '<span>' + esc(t) + '</span>').join('') + '</div>' : '')
+      +   '<div class="plg-f">'
+      +     '<span class="sig ' + (en ? 'ok' : '') + '"><i></i>' + (en ? '启用' : '停用') + '</span>'
+      +     '<button class="btn sm" data-ui="' + esc(name) + '">打开</button>'
+      +     '<button class="btn sm" data-tg="' + esc(name) + '" data-en="' + (en ? '1' : '0') + '">'
+      +       (en ? '停用' : '启用') + '</button>'
+      +   '</div>'
+      + '</div></div>';
+  };
   el.innerHTML = ''
-    + '<div class="hd"><span class="lab">插件 ' + list.length + ' 个 · 启用 ' + on + '</span><i class="rule"></i></div>'
-    + '<div class="rows"><div class="row head" style="grid-template-columns:1fr 120px 110px">'
-    + '<span>名称与简介</span><span>状态</span><span>操作</span></div>'
-    + list.map((p, i) => {
-        const name = p.name || p.id || ('#' + i);
-        const en = p.enabled !== false && p.已启用 !== false;
-        /* ★ 显示简介（用户："插件太多，不知道哪个是哪个（加简介）"）。
-           简介来自 PLUGIN_META.description 或 ABI v1 的 PLUGIN_MANIFEST.description，
-           后端两者都解析。没有简介时给一句明确提示，不留白。 */
-        const desc = String(p.description || '').trim();
-        const tags = Array.isArray(p.tags) ? p.tags.slice(0, 4) : [];
-        return '<div class="row" style="grid-template-columns:1fr 120px 110px;align-items:start">'
-          + '<span style="min-width:0">'
-          +   '<div>' + esc(name) + (p.version ? ' <span class="dim">' + esc(p.version) + '</span>' : '')
-          +     (tags.length ? ' <span class="dim" style="font-size:10px">' + tags.map(esc).join(' · ') + '</span>' : '')
-          +   '</div>'
-          +   '<div class="dim" style="font-size:var(--z2);line-height:1.6;margin-top:2px">'
-          +     esc(desc || '（该插件没写简介）') + '</div>'
-          + '</span>'
-          + '<span class="sig ' + (en ? 'ok' : '') + '"><i></i>' + (en ? '启用' : '停用') + '</span>'
-          + '<span style="display:flex;gap:var(--s2);flex-wrap:wrap">'
-          +   '<button class="btn sm" data-ui="' + esc(name) + '">打开 UI</button>'
-          +   '<button class="btn" data-tg="' + esc(name) + '" data-en="' + (en ? '1' : '0') + '">'
-          +   (en ? '停用' : '启用') + '</button></span></div>';
-      }).join('')
-    + '</div>';
+    + '<div class="hd"><span class="lab">插件 ' + list.length + ' 个 · 启用 ' + on + '</span>'
+    +   '<i class="rule"></i><span class="dim">每格上方是插件插图位（1:1）</span></div>'
+    + '<div class="plg-grid">' + list.map(card).join('') + '</div>';
   /* ★ 打开插件 UI = iframe 加载 /page?plugin_id=（v3 的 mountPluginPage 就是这样，
      后端没有 open_ui 这种 action）。覆盖层 + 关闭按钮。*/
   qsa('[data-ui]', el).forEach(b => b.onclick = () => {
@@ -4408,7 +4584,7 @@ window.FIELD_META = {
     "api_url": {"label": "API URL", "desc": "Chat Completions 完整地址，切换提供商时会自动覆盖", "ctl": "text", "panel": "llm", "unit": "", "id": "sApiUrl", "default": "https://api.deepseek.com/chat/completions"},
     "api_key": {"label": "API Key", "desc": "Key 只写不回显：保存后写入 Windows 凭据管理器，页面不再显示；切换提供商自动使用对应 Key", "ctl": "text", "panel": "llm", "unit": "", "id": "sApiKey"},
     "model_name": {"label": "模型", "desc": "该提供商不支持自动拉取模型，请手动输入模型代码（保存时优先使用此输入框的值）", "ctl": "select", "panel": "llm", "unit": "", "id": "sModel", "_panels": ["llm", "llm"], "default": "deepseek-flash", "default_text": "deepseek-flash"},
-    "use_local_llm": {"label": "模型", "desc": "该提供商不支持自动拉取模型，请手动输入模型代码（保存时优先使用此输入框的值）", "ctl": "bool", "panel": "llm", "unit": "", "id": "sUseLocalLlm"},
+    "use_local_llm": {"label": "本地聊天模型", "desc": "本地模式自动管理 GGUF 模型（llama-server / Ollama / LM Studio），无需 API Key；与远程 API 互斥", "ctl": "bool", "panel": "llm", "unit": "", "id": "sUseLocalLlm"},
     "llama_driver": {"label": "LLaMA 驱动程序", "desc": "选择你本机已安装的 LLaMA 运行时", "ctl": "select", "panel": "llm", "unit": "", "id": "sLlamaDriver"},
     "llama_exe_path": {"label": "llama-server 路径", "desc": "仅 llama-server 需要填写可执行文件路径；留空使用内置默认路径", "ctl": "text", "panel": "llm", "unit": "", "id": "sLlamaExePath"},
     "llama_model_path": {"label": "模型文件路径", "desc": "仅 llama-server 需要填写完整 .gguf 路径；Ollama/LM Studio 可留空", "ctl": "text", "panel": "llm", "unit": "", "id": "sLlamaModelPath"},
@@ -4427,7 +4603,7 @@ window.FIELD_META = {
     "ai_frequency_penalty": {"label": "频率惩罚", "desc": "", "ctl": "number", "panel": "llm", "unit": "", "id": "sAiFreqPenalty", "default": 0.0, "default_text": "0.0"},
     "ai_presence_penalty": {"label": "存在惩罚", "desc": "", "ctl": "number", "panel": "llm", "unit": "", "id": "sAiPresencePenalty", "default": 0.0, "default_text": "0.0"},
     "session_ttl": {"label": "对话超时（秒）", "desc": "一次会话持续多久后视为结束（连续对话可延续，超时则清空上下文重新开始）", "ctl": "number", "panel": "session", "unit": "秒", "id": "sSessionTtl", "default": 300, "default_text": "300"},
-    "session_max_rounds": {"label": "对话最大轮次", "desc": "一次会话内最多来回对话多少轮，超出后视为本段对话结束", "ctl": "number", "panel": "session", "unit": "", "id": "sSessionMaxRounds", "default": 30, "default_text": "30"},
+    "session_max_rounds": {"label": "对话最大轮次", "desc": "仅在「每会话最大回复数」未设置时作为回落值；实际生效的是群聊面板里的「每会话最大回复数」。历史长度由字符预算控制（history_recent_budget_chars / history_ledger_budget_chars），与本项无关", "ctl": "number", "panel": "session", "unit": "", "id": "sSessionMaxRounds", "default": 30, "default_text": "30"},
     "private_reply_interval": {"label": "私聊回复间隔（秒）", "desc": "私聊长回复分多条发送时，每条之间的最小间隔", "ctl": "number", "panel": "session", "unit": "秒", "id": "sPrivateReplyInterval", "default": 3, "default_text": "3"},
     "idle_timeout": {"label": "离线判定（秒）", "desc": "私聊中用户超过该时长未回复，Bot 视为对方已离开（区别于下方群聊的退场静默）", "ctl": "number", "panel": "session", "unit": "秒", "id": "sIdleTimeout", "default": 120, "default_text": "120"},
     "group_msg_buffer_window": {"label": "消息合并窗口（秒）", "desc": "普通消息（没被 @、也不在会话里）等多久没有后续，才作为一批送进模型。同一个人接着说话会重置倒计时，整批最多等 8 秒", "ctl": "number", "panel": "group", "unit": "秒", "id": "sGroupMsgBuffer", "default": 3, "default_text": "3"},
@@ -4439,6 +4615,8 @@ window.FIELD_META = {
     "group_idle_exit_probability": {"label": "空闲退出概率", "desc": "满足静默条件时, 触发退场的概率（0-1, 0.3 = 30% 概率退场）", "ctl": "number", "panel": "group", "unit": "", "id": "sGroupIdleExitProb", "default": 0.3, "default_text": "0.3"},
     "group_idle_exit_min_silence": {"label": "退场静默时间（秒）", "desc": "Bot 是群里最后说话者, 且超过该时长无新消息 → 才考虑退场（下限 30 秒）", "ctl": "number", "panel": "group", "unit": "秒", "id": "sGroupIdleMinSilence", "default": 600, "default_text": "600"},
     "poke_timeout": {"label": "戳一戳超时（秒）", "desc": "同一人同一群戳 Bot 的连击计数保留时长, 超时后重新计数", "ctl": "number", "panel": "group", "unit": "秒", "id": "sPokeTimeout", "default": 30, "default_text": "30"},
+    "quiet_hours": {"label": "静默时段", "desc": "Bot 睡觉的时间, 写 \"1:00-7:00\" 这种格式, 支持跨天。留空 = 不静默。群聊和私聊都生效; 主动开口插件没单独配置时也用它", "ctl": "text", "panel": "group", "unit": "", "id": "sQuietHours", "default": "", "default_text": "空"},
+    "quiet_when_mentioned": {"label": "静默时被点名", "desc": "静默时段被人 @ 或者引用时的反应。wake = 被叫醒就回一句困话; ignore = 一律不回", "ctl": "select", "panel": "group", "unit": "", "id": "sQuietWhenMentioned", "default": "wake", "default_text": "wake"},
     "group_msg_buffer_window_session": {"label": "会话缓冲窗口（秒）", "desc": "会话模式下消息合并的时间窗口", "ctl": "number", "panel": "group", "unit": "秒", "id": "sGroupMsgBufferSession", "default": 5, "default_text": "5"},
     "group_msg_buffer_window_trigger": {"label": "触发缓冲窗口（秒）", "desc": "被触发（@/小a）且还没有上下文时, 等多久再回。超过 8 无效——整批从第一条算起有 8 秒硬顶", "ctl": "number", "panel": "group", "unit": "秒", "id": "sGroupMsgBufferTrigger", "default": 8, "default_text": "8"},
     "agent_group_enable": {"label": "群聊内可派活", "desc": "被 @ 或叫名字、并且是管理员、并且说的是明确的执行指令（不是闲聊）时，交给 agent 多步执行。三个条件缺一不可。", "ctl": "bool", "panel": "group", "unit": "", "id": "sAgentGroupEnable", "default": false, "default_text": "关闭"},
@@ -4508,6 +4686,9 @@ const CFG_OPTIONS = {
   llama_driver: [['llama-server', 'llama-server'], ['ollama', 'Ollama'], ['lmstudio', 'LM Studio']],
   image_llm_driver: [['llama-server', 'llama-server'], ['ollama', 'Ollama'], ['lmstudio', 'LM Studio']],
   command_permission: [['strict', '严格（管理员专用危险指令）'], ['off', '关闭（所有人可执行全部指令）']],
+  /* 静默时段被点名时的反应。这两个值由 bot_core 读，写错等于静默功能失效，
+     所以下拉只给这两项（v3 那边也是同样的两项）。*/
+  quiet_when_mentioned: [['wake', 'wake（被叫醒就回一句困话）'], ['ignore', 'ignore（一律不回）']],
 };
 function cfGet(cfg, k) {
   const p = String(k).split('.');
@@ -5405,42 +5586,24 @@ async function pageConfig(el) {
   }
   pvRender();
 
-  /* ── 引导横幅：只在"真的没配好"时出现（2026-10-24）──────────────
-     判据不看字段是否为空 —— `api_provider` / `model_name` 都有默认值，
-     空不空说明不了什么。真正的门槛是**有没有可用的 Key**：
-       全局 Key（cfg.api_key）· 当前提供商的独立 Key（has_api_key）·
-       或者本来就用本地模型（use_local_llm）。
-     用户在横幅里点「我自己配」后记进 localStorage，不再打扰；
-     配好之后无论有没有关过，都不再显示。 */
+  /* ── 引导横幅（2026-10-24）───────────────────────────────────────
+     判据与仪表盘那一份**共用 setupReady()**（见文件上方）。这里只负责
+     "什么时候画"：本页随时可重画（存完 Key 要立刻收掉横幅），所以每次调用
+     都重新判一次，并用 force 覆盖会话缓存 —— 用户刚保存的值还没被后端读进
+     /config，缓存里是旧的。
+     「开始配置」在本页打开三步向导（仪表盘那份只跳转到本页）。 */
   const setupBox = $('cfgSetup');
-  const setupDismissed = (() => {
-    try { return localStorage.getItem('cfg-setup-dismissed') === '1'; } catch (e) { return false; }
-  })();
-  const setupState = {
-    ready: (() => {
-      const cur = pvList.find(p => String(p.id) === String(cfg.api_provider)) || {};
-      return !!(cfg.api_key || cur.has_api_key || cfg.use_local_llm);
-    })(),
-  };
   const renderSetup = () => {
     if (!setupBox) return;
-    if (setupState.ready || setupDismissed) { setupBox.hidden = true; setupBox.innerHTML = ''; return; }
-    setupBox.hidden = false;
-    setupBox.innerHTML = '<div class="setup-bn">'
-      + '<div class="setup-bn-l"><b>还没有配置模型</b>'
-      + '<span>Bot 能连上 QQ，但收到消息不会回话 —— 三步就能跑通：选提供商 → 填 Key → 选模型。</span></div>'
-      + '<div class="setup-bn-r">'
-      + '<button class="btn primary" data-setup-go>开始配置</button>'
-      + '<button class="btn sm" data-setup-skip>我自己配</button></div></div>';
-    const go = setupBox.querySelector('[data-setup-go]');
-    if (go) go.onclick = () => openWizard(providers, curProv, () => pageConfig(el));
-    const skip = setupBox.querySelector('[data-setup-skip]');
-    if (skip) skip.onclick = () => {
-      try { localStorage.setItem('cfg-setup-dismissed', '1'); } catch (e) {}
-      setupBox.hidden = true;
-    };
+    if (setupDismissed() || _SETUP_STATE.ready) {
+      setupBox.hidden = true; setupBox.innerHTML = ''; return;
+    }
+    setupBanner(setupBox, {
+      onGo: () => openWizard(providers, curProv, () => pageConfig(el)),
+      goText: '开始配置',
+    });
   };
-  renderSetup();
+  setupReady().then(() => renderSetup());
 
   $('cSave').onclick = async () => {
     /* 三类改动合并成一个 payload：
@@ -5478,10 +5641,13 @@ async function pageConfig(el) {
       Object.keys(dirty).forEach(k => delete dirty[k]);
       Object.keys(cfCtx.listDirty).forEach(k => delete cfCtx.listDirty[k]);
       mark();
-      /* 刚存了 Key 或切到本地模型 → 横幅当场收掉，不用刷新页面等它自己发现 */
-      if (('api_key' in payload) || ('use_local_llm' in payload)) {
+      /* 刚存了 Key 或切到本地模型 → 横幅当场收掉，不用刷新页面等它自己发现。
+         同时写回共享缓存：否则回到仪表盘会再挂一次（那边读的是缓存）。 */
+      if (('api_key' in payload) || ('use_local_llm' in payload)
+          || ('providers' in payload)) {
         if (payload.api_key || payload.use_local_llm) {
-          setupState.ready = true;
+          _SETUP_STATE.ready = true;
+          _SETUP_STATE.checked = true;
           renderSetup();
         }
       }
@@ -7120,10 +7286,27 @@ async function pageConsole(el) {
     +     'font-size:var(--z3);padding:var(--s2) 0;outline:none"'
     +     ' placeholder="输入指令，回车执行…" autocomplete="off">'
     +   '<button class="btn primary" id="cxGo">执行</button></div>'
-    + '<div class="hd" style="margin-top:var(--s6)"><span class="lab">输出</span><i class="rule"></i>'
+    + '<div class="hd" style="margin-top:var(--s6)"><span class="lab">指令输出</span><i class="rule"></i>'
     +   '<button class="btn sm" id="cxClear">清空</button></div>'
-    + '<div class="pv-wrap"><pre class="log" id="cxOut" style="padding:var(--s4);white-space:pre-wrap;max-height:46vh;overflow:auto"></pre>'
-    +   '<button class="pv-jump" id="cxJump" hidden title="回到最新"></button></div>';
+    + '<div class="pv-wrap"><pre class="log" id="cxOut" style="padding:var(--s4);white-space:pre-wrap;max-height:34vh;overflow:auto"></pre>'
+    +   '<button class="pv-jump" id="cxJump" hidden title="回到最新"></button></div>'
+    /* 原始日志流：从日志页搬过来的。日志页现在只画事件（消息/决策/工具/出错），
+       调试打印、模块加载、Traceback 这些"给写代码的人看"的行留在这里 ——
+       它和底层指令同属"排障"语境，放一起不用来回切页。 */
+    + '<div class="hd" style="margin-top:var(--s6)"><span class="lab">原始日志</span><i class="rule"></i>'
+    +   '<span class="dim" id="cxLogStats">—</span>'
+    +   '<button class="btn sm" id="cxLogClear">清空日志</button>'
+    +   '<button class="btn sm" id="cxLogReload">刷新</button></div>'
+    + '<div style="display:flex;gap:var(--s3);flex-wrap:wrap;align-items:center;margin-bottom:var(--s3)">'
+    +   '<input id="cxLogSearch" class="fld" style="flex:1;min-width:200px;background:transparent;border:0;'
+    +     'border-bottom:1px solid var(--line2);color:var(--ink);padding:var(--s2) 0;outline:none"'
+    +     ' placeholder="在原始日志里搜（模块名、异常栈、任意关键字）" autocomplete="off">'
+    +   '<label class="dim" style="display:flex;align-items:center;gap:7px;font-size:12px">'
+    +     '<input type="checkbox" id="cxLogAuto" checked style="accent-color:var(--accent)">自动滚动</label>'
+    + '</div>'
+    + '<div class="pv-wrap"><div class="log" id="cxLog" style="max-height:40vh;overflow:auto;'
+    +   'padding:var(--s3) var(--s4)"></div>'
+    +   '<button class="pv-jump" id="cxLogJump" hidden title="回到最新"></button></div>';
   const hist = [];
   /* 输出也走粘底滚动：翻上去看历史时，新输出不会把视口拽回底部 */
   const sb = pvStickScroll($('cxOut'), $('cxJump'));
@@ -7140,15 +7323,84 @@ async function pageConsole(el) {
       push(!!(r && r.ok !== false), (r && (r.output || r.error)) || JSON.stringify(r));
     } catch (e) { push(false, e.message); }
   };
+
+  /* ── 原始日志流（原 pageChatlogs 的逻辑，逐行照搬以免丢功能）── */
+  const logBox = $('cxLog');
+  const lsb = pvStickScroll(logBox, $('cxLogJump'));
+  let logs = [], logSig = '';
+  const renderLogs = () => {
+    const kw = $('cxLogSearch').value.trim().toLowerCase();
+    const rows = logs.filter(x => {
+      if (!kw) return true;
+      return (typeof x === 'string' ? x : JSON.stringify(x)).toLowerCase().indexOf(kw) >= 0;
+    });
+    $('cxLogStats').textContent = rows.length + ' / ' + logs.length + ' 行';
+    const html = rows.length ? rows.map((x, i) => {
+      const isObj = x && typeof x === 'object';
+      const ts = isObj ? (x.time || x.ts || '') : '';
+      const lvl = (isObj ? (x.level || x.lv || 'info') : 'info').toLowerCase();
+      const msg = isObj ? (x.msg || x.message || JSON.stringify(x)) : String(x);
+      return '<div class="ln"><span class="no">' + (i + 1) + '</span>'
+        + '<span class="ts">' + esc(ts) + '</span>'
+        + '<span class="lv ' + (/err/.test(lvl) ? 'err' : /warn/.test(lvl) ? 'warn' : 'ok') + '">'
+        + esc(String(lvl).toUpperCase()) + '</span>'
+        + '<span class="tx">' + esc(msg) + '</span></div>';
+    }).join('') : '<div class="empty">没有日志</div>';
+    /* 自动滚动关掉时也要保住位置（rewrite 内部按 stick 处理） */
+    if (!$('cxLogAuto').checked) {
+      const keep = logBox.scrollTop;
+      logBox.innerHTML = html;
+      logBox.scrollTop = keep;
+      lsb.stick = lsb.near(); lsb.sync();
+    } else lsb.rewrite(html);
+  };
+  const loadLogs = async () => {
+    try {
+      const r = await API('/protocol/logs', { method:'POST', body: JSON.stringify({ limit: 500 }) });
+      logs = (r && r.logs) || [];
+    } catch (e) { logs = ['读取失败：' + e.message]; }
+    logSig = JSON.stringify(logs.length ? logs[logs.length - 1] : '').slice(0, 160);
+    renderLogs();
+  };
+  const pullLogs = async () => {
+    try {
+      const r = await API('/protocol/logs', { method:'POST', body: JSON.stringify({ limit: 500 }) });
+      const next = (r && r.logs) || [];
+      const tail = next.length ? JSON.stringify(next[next.length - 1]).slice(0, 160) : '';
+      const sig = next.length + '|' + tail;
+      if (sig === logSig) return;
+      const prev = logs.length;
+      logSig = sig; logs = next;
+      /* 用户翻上去时把新到的行数记在圆钮上，不打断阅读 */
+      if (!lsb.stick) lsb.unseen += (next.length > prev ? (next.length - prev) : 1);
+      renderLogs();
+    } catch (e) { /* 后端没起时静默，保留上一屏 */ }
+  };
+  if (window.__cxTimer) clearInterval(window.__cxTimer);
+  window.__cxTimer = setInterval(() => {
+    if (!document.body.contains(el)) { clearInterval(window.__cxTimer); window.__cxTimer = null; return; }
+    pullLogs();
+  }, 2500);
+
   /* 版面：输入与输出必须**相邻** —— 输出很长时会顶开中间的说明文字，
-     用户就找不到输入框了。*/
-  reorderByBlocks(el, ['底层指令', '输出']);
+     用户就找不到输入框了。原始日志排在最后。*/
+  reorderByBlocks(el, ['底层指令', '指令输出', '原始日志']);
 
   $('cxGo').onclick = run;
   $('cxIn').addEventListener('keydown', (e) => { if (e.key === 'Enter') run(); });
   $('cxClear').onclick = () => { hist.length = 0; sb.rewrite(''); };
+  $('cxLogSearch').oninput = renderLogs;
+  $('cxLogAuto').onchange = renderLogs;
+  $('cxLogReload').onclick = loadLogs;
+  $('cxLogClear').onclick = async () => {
+    if (!await pvConfirm('清空原始日志？', '日志文件内容会被清空，不可恢复。', '清空')) return;
+    try { await API('/protocol/logs/clear', { method:'POST', body:'{}' }); loadLogs(); }
+    catch (e) { logs = ['清空失败：' + e.message]; renderLogs(); }
+  };
   $('cxIn').focus();
+  await loadLogs();
 }
+
 
 /* ═════════════ 聚焦配置表单（行为 / 通知共用）═════════════
    这两页在旧版里是「从配置里挑一组字段做成小表单 + 保存」。
@@ -7368,106 +7620,173 @@ async function pageMonitor(el) {
 }
 
 
-/* ═════════════ 日志（会话/协议日志）═════════════
-   POST /api/protocol/logs {limit} → {logs:[]}；/protocol/logs/clear 清空 */
+/* ═════════════ 日志（事件视图）═════════════
+   POST /api/events {limit} → {events:[{kind,time,text,tag,tools,dir,scope,who}],
+                              counts:{message,decision,tool,error,debug}, total}
+   一条日志文件里其实混着五种东西：聊天消息、插话决策、工具调用、真错误、
+   调试打印。前四种是用户要知道的"发生了什么"，第五种是给写代码的人看的。
+   所以这一页只画前四种，调试行去「控制台」页看原始日志流。
+
+   ★ 分类在服务端做（webui_server.collect_events）—— 判据是日志文本格式，
+     前端再写一遍正则就是两份规则各算各的，改一处必漏一处。
+   ★ 清空日志这种破坏性动作也跟着原始流搬去了控制台：这一页是"读"的地方，
+     不该混一个会删东西的按钮。 */
+const EVT_KINDS = [
+  ['message', '消息'], ['decision', '决策'], ['tool', '工具'], ['error', '出错']
+];
 async function pageChatlogs(el) {
   el.innerHTML = ''
-    + '<div class="hd"><span class="lab">日志流</span><i class="rule"></i>'
-    +   '<span class="dim" id="clStats">—</span></div>'
-    + '<div style="display:flex;gap:var(--s3);flex-wrap:wrap;align-items:flex-end">'
-    +   '<div class="fld" style="min-width:200px"><label>搜索</label>'
-    +     '<input id="clSearch" placeholder="关键字过滤…" autocomplete="off"></div>'
-    +   '<div class="fld" style="min-width:130px"><label>级别</label>'
-    +     '<select id="clLevel"><option value="">全部</option><option value="info">INFO</option>'
-    +     '<option value="warn">WARN</option><option value="error">ERROR</option></select></div>'
-    +   '<button class="btn" id="clAuto" title="开启时：停在底部就跟着最新日志滚；往上翻自动暂停，回到底部再恢复">自动滚动：开</button>'
-    +   '<button class="btn" id="clCopy">复制全部</button>'
-    +   '<button class="btn" id="clClear">清空日志</button>'
-    +   '<button class="btn" id="clReload">刷新</button>'
+    + '<div class="hd"><span class="lab">事件</span><i class="rule"></i>'
+    +   '<span class="dim" id="evStats">—</span></div>'
+    + '<div class="evt-chips" id="evChips"></div>'
+    + '<div style="display:flex;gap:var(--s3);flex-wrap:wrap;align-items:center;margin-top:var(--s4)">'
+    +   '<input id="evSearch" class="fld" style="flex:1;min-width:180px;background:transparent;border:0;'
+    +     'border-bottom:1px solid var(--line2);color:var(--ink);padding:var(--s2) 0;outline:none"'
+    +     ' placeholder="搜内容、群号、昵称、工具名…" autocomplete="off">'
+    +   '<button class="btn" id="evCopy">复制当前视图</button>'
+    +   '<button class="btn" id="evReload">刷新</button>'
     + '</div>'
-    + '<div class="hd" style="margin-top:var(--s5)"><span class="lab">内容</span><i class="rule"></i></div>'
-    + '<div class="pv-wrap"><div class="log" id="clStream" style="max-height:56vh;overflow:auto"></div>'
-    +   '<button class="pv-jump" id="clJump" hidden title="回到最新"></button></div>';
-  let auto = true, items = [];
-  const stream = $('clStream');
-  /* ★ 粘底滚动（用户反馈：往上翻日志时被自动刷新拽回底部）。
-     auto 是"要不要跟"的总开关；真正的跟不跟还取决于用户是不是停在底部。 */
-  const sb = pvStickScroll(stream, $('clJump'));
-  const render = () => {
-    const kw = $('clSearch').value.trim().toLowerCase();
-    const lv = $('clLevel').value;
-    const rows = items.filter(x => {
-      const s = (typeof x === 'string' ? x : JSON.stringify(x)).toLowerCase();
-      if (kw && s.indexOf(kw) < 0) return false;
-      if (lv && s.indexOf(lv) < 0) return false;
-      return true;
+    + '<div class="pv-wrap" style="margin-top:var(--s4)">'
+    +   '<div class="evt-list" id="evList" style="max-height:52vh;min-height:200px;'
+    +     'overflow:auto;padding-right:var(--s3)"></div>'
+    +   '<button class="pv-jump" id="evJump" hidden title="回到最新"></button></div>'
+    + '<div class="evt-more" id="evMore" hidden></div>';
+
+  let data = { events: [], counts: {}, total: 0 };
+  let only = '';     // '' = 全部；否则某种 kind
+  const list = $('evList');
+  const sb = pvStickScroll(list, $('evJump'));
+
+  const kindLabel = (k) => (EVT_KINDS.find(x => x[0] === k) || ['', '其他'])[1];
+
+  const chips = () => {
+    const c = data.counts || {};
+    const totalShown = data.events.length;
+    $('evChips').innerHTML = [['', '全部', totalShown]]
+      .concat(EVT_KINDS.map(([k, l]) => [k, l, c[k] || 0]))
+      .map(([k, l, n]) => '<button class="evt-chip' + (only === k ? ' on' : '')
+        + '" data-k="' + k + '"><i class="d"></i>' + l
+        + ' <span class="n">' + n + '</span></button>').join('');
+    qsa('.evt-chip', $('evChips')).forEach(b => b.onclick = () => {
+      only = b.dataset.k; render();
     });
-    $('clStats').textContent = rows.length + ' / ' + items.length + ' 条';
-    const html = rows.length ? rows.map((x, i) => {
-      const isObj = x && typeof x === 'object';
-      const ts = isObj ? (x.time || x.ts || '') : '';
-      const lvl = (isObj ? (x.level || x.lv || 'info') : 'info').toLowerCase();
-      const msg = isObj ? (x.msg || x.message || JSON.stringify(x)) : String(x);
-      return '<div class="ln"><span class="no">' + (i + 1) + '</span>'
-        + '<span class="ts">' + esc(ts) + '</span>'
-        + '<span class="lv ' + (/err/.test(lvl) ? 'err' : /warn/.test(lvl) ? 'warn' : 'ok') + '">'
-        + esc(String(lvl).toUpperCase()) + '</span>'
-        + '<span class="tx">' + esc(msg) + '</span></div>';
-    }).join('') : '<div class="empty">没有日志</div>';
-    /* 总开关关掉时不跟底，但**位置也要保住**（rewrite 内部按 stick 处理） */
-    if (!auto) { const keep = stream.scrollTop; stream.innerHTML = html; stream.scrollTop = keep; sb.stick = sb.near(); sb.sync(); }
-    else sb.rewrite(html);
   };
-  const load = async () => {
+
+  const rowHTML = (e) => {
+    const k = e.kind;
+    const kl = kindLabel(k);
+    /* 抬头只写一次标签。日志原文里标签本来就可能等于类别名（工具行 tag="工具"），
+       照搬会显示成「工具 工具」；决策行以前还会把 tag 重复两遍
+       （evt-hd 一次、who 又一次）。判据就一条：内容相同就不画第二遍。 */
+    const tag = String(e.tag || (k === 'message' ? (e.dir === 'out' ? '发出' : '收到') : ''));
+    const tagHTML = (tag && tag !== kl)
+      ? '<span class="evt-tag">' + esc(tag) + '</span>' : '';
+    const who = (k === 'message')
+      ? (e.who ? '<b>' + esc(e.who) + '</b>' : '')
+        + (e.scope ? '<span class="evt-tag">' + esc(e.scope) + '</span>' : '')
+      : '';
+    /* 工具行的正文就是工具名，再画一排同名 chip 也是重复；
+       只有在"正文里除了名字还有别的话"（决策行带理由）时才用 chip 补充。 */
+    const hasTools = Array.isArray(e.tools) && e.tools.length > 0;
+    const textSameAsTools = hasTools
+      && String(e.text || '').trim() === e.tools.join('、');
+    const tools = (hasTools && !textSameAsTools)
+      ? '<div class="evt-tools">' + e.tools.map(t =>
+          '<span class="evt-tool">' + esc(t) + '</span>').join('') + '</div>'
+      : '';
+    const body = (hasTools && textSameAsTools)
+      ? '<div class="evt-tools">' + e.tools.map(t =>
+          '<span class="evt-tool">' + esc(t) + '</span>').join('') + '</div>'
+      : '<div class="evt-x">' + esc(e.text || '') + '</div>';
+    return '<div class="evt k-' + esc(k) + (e.dir === 'out' ? ' out' : '') + '">'
+      + '<span class="evt-t">' + esc(e.time || '') + '</span>'
+      + '<div class="evt-b">'
+      +   '<div class="evt-hd"><span class="evt-k">' + kl + '</span>'
+      +     tagHTML + who + '</div>'
+      +   body
+      +   (textSameAsTools ? '' : tools)
+      + '</div></div>';
+  };
+
+  const render = () => {
+    const kw = $('evSearch').value.trim().toLowerCase();
+    const rows = (data.events || []).filter(e => {
+      if (only && e.kind !== only) return false;
+      if (!kw) return true;
+      const hay = [e.text, e.tag, e.who, e.scope, (e.tools || []).join(' ')]
+        .join(' ').toLowerCase();
+      return hay.indexOf(kw) >= 0;
+    });
+    chips();
+    const c = data.counts || {};
+    $('evStats').textContent = rows.length + ' / ' + (data.events || []).length + ' 条'
+      + (c.debug ? ' · 已隐藏调试 ' + c.debug + ' 行' : '');
+    if (rows.length) {
+      sb.rewrite(rows.map(rowHTML).join(''));
+    } else {
+      const empty = (data.events || []).length
+        ? '没有符合筛选条件的事件'
+        : '还没有事件。Bot 收到消息、做决策、调工具之后会出现在这里。';
+      sb.rewrite('<div class="empty">' + empty + '</div>');
+    }
+    /* 页脚点名调试行的去向。不写这句，用户会以为日志丢了 —— 数一下比解释有用。 */
+    const more = $('evMore');
+    if (c.debug) {
+      more.hidden = false;
+      more.innerHTML = '<span>另有 <b>' + c.debug + '</b> 行调试输出未显示（模块加载、'
+        + '内部流水这类给排查用的内容）</span>'
+        + '<button class="btn sm" id="evToConsole">去控制台看原始日志</button>';
+      const b = $('evToConsole');
+      if (b) b.onclick = () => {
+        const i = PAGES.findIndex(p => p.id === 'console');
+        if (i >= 0) go(i);
+      };
+    } else {
+      more.hidden = true;
+    }
+  };
+
+  const load = async (silent) => {
     try {
-      const r = await API('/protocol/logs', { method:'POST', body: JSON.stringify({ limit: 500 }) });
-      items = (r && r.logs) || [];
-    } catch (e) { items = ['读取失败：' + e.message]; }
+      const r = await API('/events', { method:'POST', body: JSON.stringify({ limit: 600 }) });
+      data = {
+        events: (r && r.events) || [],
+        counts: (r && r.counts) || {},
+        total: (r && r.total) || 0,
+      };
+    } catch (e) {
+      if (!silent) {
+        $('evList').innerHTML = '<div class="errbox">读取 /api/events 失败：' + esc(e.message)
+          + '<br>（后端未启动时属正常）</div>';
+        return;
+      }
+    }
     render();
   };
-  /* ★ 自动刷新（用户反馈 2026-10-11："日志没有自动刷新"）。照抄协议日志页
-     的成熟模式：2.5s 轮询 + 签名比对——只有内容真的变了才重绘，
-     否则会把用户正在看的滚动位置冲掉。切页后 el 脱离文档 → 自检停表。*/
-  let _clSig = '';
-  const pullCl = async () => {
-    try {
-      const r = await API('/protocol/logs', { method:'POST', body: JSON.stringify({ limit: 500 }) });
-      const logs = (r && r.logs) || [];
-      const tail = logs.length ? JSON.stringify(logs[logs.length - 1]).slice(0, 160) : '';
-      const sig = logs.length + '|' + tail;
-      if (sig !== _clSig) {
-        const prev = items.length;
-        _clSig = sig; items = logs;
-        /* 用户翻上去看历史时，把新到的行数记在圆钮上（不打断阅读） */
-        if (!sb.stick) sb.unseen += (logs.length > prev ? (logs.length - prev) : 1);
-        render();
-      }
-    } catch (e) { /* 后端没起时静默，保留上一屏 */ }
-  };
-  if (window.__clTimer) clearInterval(window.__clTimer);
-  window.__clTimer = setInterval(() => {
-    if (!document.body.contains(el)) { clearInterval(window.__clTimer); window.__clTimer = null; return; }
-    pullCl();
-  }, 2500);
-  $('clSearch').oninput = render;
-  $('clLevel').onchange = render;
-  $('clAuto').onclick = () => { auto = !auto; $('clAuto').textContent = '自动滚动：' + (auto ? '开' : '关'); };
-  $('clCopy').onclick = async () => {
-    try { await navigator.clipboard.writeText($('clStream').innerText); $('clCopy').textContent = '已复制'; }
-    catch (e) { $('clCopy').textContent = '复制失败'; }
-    later(el, () => { const b = $('clCopy'); if (b) b.textContent = '复制全部'; }, 1200);
-  };
-  $('clClear').onclick = async () => {
-    if (!await pvConfirm('清空协议日志？', '日志文件内容会被清空，不可恢复。', '清空')) return;
-    try { await API('/protocol/logs/clear', { method:'POST', body:'{}' }); load(); }
-    catch (e) { items = ['清空失败：' + e.message]; render(); }
-  };
-  /* 版面：统计 → 筛选条件 → 操作 → 日志流。筛选紧挨着流，方便边看边改。*/
-  reorderByBlocks(el, ['日志流', '内容']);
 
-  $('clReload').onclick = load;
+  $('evSearch').oninput = render;
+  $('evReload').onclick = () => load();
+  $('evCopy').onclick = async () => {
+    const txt = qsa('.evt', list).map(n => n.innerText.replace(/\n+/g, ' | ')).join('\n');
+    try { await navigator.clipboard.writeText(txt); $('evCopy').textContent = '已复制'; }
+    catch (e) { $('evCopy').textContent = '复制失败'; }
+    later(el, () => { const b = $('evCopy'); if (b) b.textContent = '复制当前视图'; }, 1200);
+  };
+
+  /* 自动刷新：2.5s 一轮，签名不变就不重绘（否则会把用户翻上去的位置冲掉）。
+     切页后 el 脱离文档 → 自检停表，不留野定时器。 */
+  let sig = '';
+  if (window.__evTimer) clearInterval(window.__evTimer);
+  window.__evTimer = setInterval(() => {
+    if (!document.body.contains(el)) { clearInterval(window.__evTimer); window.__evTimer = null; return; }
+    const now = JSON.stringify([(data.events || []).length, (data.counts || {}).debug]);
+    if (now === sig) return;
+    load(true);
+  }, 2500);
   await load();
+  sig = JSON.stringify([(data.events || []).length, (data.counts || {}).debug]);
 }
+
 
 /* ═════════════ 记忆 ═════════════
    GET /api/memory → {data:{memory_total, learned_messages, active_groups, storage_kb, expressions[]}}
