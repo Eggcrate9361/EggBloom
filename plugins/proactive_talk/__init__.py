@@ -51,6 +51,11 @@ DEFAULT_CONFIG = {
     "active_cooldown_min": 30,  # 用户最近发言后多久内不打扰（分钟）
     "speak_chance": 0.35,       # 每次心跳通过闸门的概率 0~1
     "quiet_hours": "",          # 静默时段，如 "2:00-7:00"；空 = 不静默（凌晨也会说话）
+    # ★ 2026-10-24 作息乘子总开关（harness.bio_rhythm，一般精度）。
+    #   quiet_hours 是硬闸，但它默认为空 = 凌晨也照样说话。这个开关给一条
+    #   **软闸**：按时段给 speak_chance 乘子（凌晨 ×0.15、晚上 ×1.2）。
+    #   想恢复"全天一个概率"就设 False。硬闸仍然优先，不受这个开关影响。
+    "bio_rhythm": True,
     "max_bubbles": 4,           # 一次最多发几个气泡
     "persona_extra": "",        # 追加人设（接在默认风格约束后面）
     "recent_window": 6,         # 记录最近几条用户消息作为上下文
@@ -401,8 +406,25 @@ def _evaluate(cfg: dict, state: dict, force: bool = False) -> dict:
         return {"ok": False, "target": target, "blocked_by": f"处于静默时段 {cfg.get('quiet_hours')}"}
 
     chance = float(cfg.get("speak_chance") or 0.35)
+    # ★ 2026-10-24 作息乘子（harness.bio_rhythm，一般精度）：
+    #   quiet_hours 是**硬闸**（配了就完全不开口），但它默认为空 —— 意思是
+    #   "凌晨也照样说话"，这不符合任何人的作息。加一个**软闸**：按时段给
+    #   概率乘子，凌晨 ×0.15、晚上 ×1.2。这样不配 quiet_hours 也有合理形状，
+    #   配了则硬闸仍然优先（乘法在硬闸之后，永不被绕过）。
+    #   乘子已夹在 [0.05, 1.25]，所以 speak_chance=0.9 时也不会乘过 1。
+    #   关掉（bio_rhythm=False）→ 退回"全天一个概率"的旧行为。
+    _bio = 1.0
+    if cfg.get("bio_rhythm", True):
+        try:
+            from harness.bio_rhythm import proactivity_factor
+            _bio = proactivity_factor()
+            chance = min(1.0, chance * _bio)
+        except Exception:
+            _bio = 1.0
     if random.random() >= chance:
-        return {"ok": False, "target": target, "blocked_by": f"概率闸门未通过（chance={chance}）"}
+        return {"ok": False, "target": target,
+                "blocked_by": f"概率闸门未通过（chance={chance:.3f}"
+                              + (f"，作息乘子={_bio:.2f}）" if _bio != 1.0 else "）")}
 
     # ★ 2026-10-21：AI 不可用时要**先挡住**，不要放行到 _ai_text 再失败。
     #   概率闸门在上、AI 检查在下，顺序有讲究：若先查 AI，等于每次心跳都去
@@ -624,6 +646,16 @@ def test_decision(params=None):
     d = _evaluate(cfg, state, force=False)
     d["resolved_target"] = _resolve_target(cfg)
     d["chance"] = cfg.get("speak_chance")
+    # 作息状态一起回给前端：不暴露就没人知道乘子有没有生效，
+    # 而它是"凌晨少说话"这件事的唯一证据。开关关掉时 hint 说明原因。
+    try:
+        from harness.bio_rhythm import bio_state
+        _b = bio_state()
+        if not cfg.get("bio_rhythm", True):
+            _b = dict(_b, hint="作息乘子已关闭（bio_rhythm=False），全天同一概率")
+        d["bio"] = _b
+    except Exception as e:
+        d["bio"] = {"error": str(e)}
     return d
 
 

@@ -12,6 +12,7 @@
   - spill        : 超预算内容落盘 + 内联首尾预览 + 绝对路径 + 读取提示
   - session_log  : 事件溯源会话日志（任务 5.3 试点：仅追加 + 从日志派生 prompt）
   - time_ctx     : 时间上下文分级注入（粗粒度靠前 / 精粒度靠尾，保前缀缓存）
+  - bio_rhythm   : Bot 自己的作息（一般精度：时段 → 精神状态/主动开口乘子）
   - tool_registry: 工具按需加载 + 固定序列化顺序 + MCP 命名空间（省 token 的关键）
   - skill_loader : Skill 三级渐进披露（L1 元数据常驻 / L2 触发时载入 / L3 按需读文件）
   - mcp_hub      : MCP 最小实现（stdio + server__ 命名空间 + 惰性枚举 + 缓存 tools/list）
@@ -33,6 +34,7 @@ from .retention import ItemRetainer, TextRetainer, format_retention_notice
 from .spill import spill_text, SPILL_DIR
 from . import session_log
 from . import time_ctx
+from . import bio_rhythm
 from . import tool_registry
 from . import skill_loader
 from . import mcp_hub
@@ -59,6 +61,7 @@ __all__ = [
     "SPILL_DIR",
     "session_log",
     "time_ctx",
+    "bio_rhythm",
     "tool_registry",
     "skill_loader",
     "mcp_hub",
