@@ -244,8 +244,8 @@
    "default_text": "deepseek-flash"
   },
   "use_local_llm": {
-   "label": "模型",
-   "desc": "该提供商不支持自动拉取模型，请手动输入模型代码（保存时优先使用此输入框的值）",
+   "label": "本地聊天模型",
+   "desc": "本地模式自动管理 GGUF 模型（llama-server / Ollama / LM Studio），无需 API Key；与远程 API 互斥",
    "ctl": "bool",
    "panel": "llm",
    "unit": "",
@@ -409,7 +409,7 @@
   },
   "session_max_rounds": {
    "label": "对话最大轮次",
-   "desc": "一次会话内最多来回对话多少轮，超出后视为本段对话结束",
+   "desc": "仅在「每会话最大回复数」未设置时作为回落值；实际生效的是群聊面板里的「每会话最大回复数」。历史长度由字符预算控制（history_recent_budget_chars / history_ledger_budget_chars），与本项无关",
    "ctl": "number",
    "panel": "session",
    "unit": "",
@@ -526,6 +526,26 @@
    "id": "sPokeTimeout",
    "default": 30,
    "default_text": "30"
+  },
+  "quiet_hours": {
+   "label": "静默时段",
+   "desc": "Bot 睡觉的时间, 写 \"1:00-7:00\" 这种格式, 支持跨天。留空 = 不静默。群聊和私聊都生效; 主动开口插件没单独配置时也用它",
+   "ctl": "text",
+   "panel": "group",
+   "unit": "",
+   "id": "sQuietHours",
+   "default": "",
+   "default_text": "空"
+  },
+  "quiet_when_mentioned": {
+   "label": "静默时被点名",
+   "desc": "静默时段被人 @ 或者引用时的反应。wake = 被叫醒就回一句困话; ignore = 一律不回",
+   "ctl": "select",
+   "panel": "group",
+   "unit": "",
+   "id": "sQuietWhenMentioned",
+   "default": "wake",
+   "default_text": "wake"
   },
   "group_msg_buffer_window_session": {
    "label": "会话缓冲窗口（秒）",

@@ -91,24 +91,51 @@ for fn, panel in FUNC2PANEL.items():
         fid = cm.group(2)
         before, after = b[:cm.start()], b[cm.end():cm.end() + 500]
 
-        def pick(pat):
-            """取这个控件**自己那个 .field 块**里的标签/说明。
+        def pick(pat, section_fallback=False):
+            """取这个控件**自己**的标签/说明。
 
-            ★ 2026-10-24 重写。原实现是"两侧都扫、取字符距离最近的"，
-              在竖排写法（label → desc → input）下**系统性串位**：
-              自己的 label 与控件之间隔着整段 desc，字符距离 60~100；
-              而下一个字段的 label 只隔着几个闭合 div，距离约 45。
-              于是"最近"总是选到**别人的**标签 —— 实测标签整体前移一位：
-                poke_timeout 显示成「会话缓冲窗口（秒）」
-                group_msg_buffer_window_session 显示成「触发缓冲窗口（秒）」
-              群聊面板因此出现两个同名标签，用户分不清哪个是哪个。
+            ★ 2026-10-24 第三次重写。前两版的问题：
 
-              字符距离在这里不是有效判据，**块归属**才是：
-                ① 控件之前、本块之内的第一个 label/desc → 竖排写法
-                   （横排开关写法里控件前面没有 label，会落到 ②）
-                ② 否则取控件之后、且**不跨过下一个 .field** 的第一个 → 横排开关写法
-              这样既不依赖嵌套 div 的配对，也不会串到邻居字段。
+              第一版"两侧都扫、取字符距离最近的" → 竖排写法下自己的 label
+              隔着整段 desc，总是选到**下一个**字段的 label（标签整体前移一位）。
+
+              第二版改成"按 .field 块归属，控件之前优先" → 修好了竖排，
+              却漏了横排开关：横排的标签在控件**后面**，而 toggle-input 的
+              class 里没有 "field"，往前找会落回**上一个字段**的块里。
+              实测 `use_local_llm`（本地模型开关）显示成「模型」，与
+              `model_name` 撞名。
+
+            块归属仍是对的方向，但**方向必须由控件写法决定**，且横排取不到时
+            **不许再往前找上一个字段的 label**（那就是串位的来源）：
+
+                横排开关（toggle-input / checkbox）→ 先找控件之后；没有 field-label
+                  时找它上面最近的 settings-section-label（`sUseLocalLlm` 的标签
+                  「本地聊天模型」就在那儿）；再没有就留空
+                竖排（input / textarea / select）→ 找控件之前、本块之内
+
+            两个方向都限定"不跨过下一个 .field"，所以不会吃到邻居。
             """
+            horizontal = ('toggle-input' in cm.group(0)
+                          or 'type="checkbox"' in cm.group(0))
+            if horizontal:
+                tail = b[cm.end(): cm.end() + 500]
+                nxt = tail.find('class="field"')
+                seg = tail[:nxt] if nxt != -1 else tail
+                m = re.search(pat, seg, re.S)
+                if m:
+                    return m.group(1)
+                if section_fallback:
+                    # 横排开关可以没有 field-label（只有 desc），标签是上面的小节标题
+                    bs = b.rfind('class="field"', 0, cm.start())
+                    head = b[bs:cm.start()] if bs != -1 else b[:cm.start()]
+                    last = None
+                    for sm in re.finditer(
+                            r'class="settings-section-label"[^>]*>(.*?)</div>', head, re.S):
+                        last = sm
+                    if last:
+                        return last.group(1)
+                # ★ 这里**不**回退到"上一个 .field 块内的 label"—— 那是别人的标签
+                return None
             bs = b.rfind('class="field"', 0, cm.start())
             if bs != -1:
                 seg = b[bs:cm.start()]
@@ -121,7 +148,8 @@ for fn, panel in FUNC2PANEL.items():
             m = re.search(pat, seg2, re.S)
             return m.group(1) if m else None
 
-        lab = pick(r'class="field-label"[^>]*>(.*?)</div>')
+        # label 允许回退到小节标题；desc 不允许（小节标题不是说明）
+        lab = pick(r'class="field-label"[^>]*>(.*?)</div>', section_fallback=True)
         dsc = pick(r'class="field-desc"[^>]*>(.*?)</div>')
         label = plain(lab) if lab else ""
         unit = ""
