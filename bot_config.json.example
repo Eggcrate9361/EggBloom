@@ -100,6 +100,8 @@
   "private_reply_interval": 3,
   "group_msg_buffer_window": 3,
   "group_recent_msgs_window": 30,
+  "group_quote_mode": "auto",
+  "group_whitelist": [],
   "group_send_block_threshold": 100,
   "group_send_max_parts": 5,
   "group_session_max_replies": 20,
@@ -167,10 +169,17 @@
     "太迟了 消息已送达我脑子里"
   ],
   "recall_feedback_cooldown": 60,
+  "recall_private_enable": true,
+  "recall_private_cooldown": 60,
+  "recall_private_post_messages": [],
   "image_cache_enable": true,
   "image_reply_mode": "native",
   "reply_vision_max_images": 3,
   "self_learning_enable": true,
+  "self_learn_min_count": 2,
+  "self_learn_allow_qqs": [],
+  "self_learn_ignore_qqs": [],
+  "self_learn_exclude_ai_names": true,
   "private_memory_enable": true,
   "slang_injector_enable": true,
   "nsfw_enabled": true,
@@ -270,6 +279,5 @@
   "llama_port": 0,
   "llama_model_name": "models",
   "command_permission": "strict",
-  "command_admins": [],
-  "log_level": "INFO"
+  "command_admins": []
 }
