@@ -1839,7 +1839,7 @@ function renderSessionPanel(root){
       <div class="field-desc">一次会话持续多久后视为结束（连续对话可延续，超时则清空上下文重新开始）</div>
       <input class="input" id="sSessionTtl" type="number" min="0"></div>
     <div class="field"><div class="field-label">对话最大轮次</div>
-      <div class="field-desc">一次会话内最多来回对话多少轮，超出后视为本段对话结束</div>
+      <div class="field-desc">仅在「每会话最大回复数」未设置时作为回落值；实际生效的是群聊面板里的「每会话最大回复数」。历史长度由字符预算控制（history_recent_budget_chars / history_ledger_budget_chars），与本项无关</div>
       <input class="input" id="sSessionMaxRounds" type="number" min="0"></div>
     <div class="field"><div class="field-label">私聊回复间隔（秒）</div>
       <div class="field-desc">私聊长回复分多条发送时，每条之间的最小间隔</div>
