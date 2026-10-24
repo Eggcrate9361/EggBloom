@@ -713,6 +713,27 @@ with sync_playwright() as pw:
     ck("★ 日志级别提交进了 save 请求",
        bool(saved_lv) and saved_lv[0].get("log_level") == "DEBUG", saved_lv)
 
+    # ── 群聊分条（2026-10-24 补齐的两个键）──────────────────────────
+    # 这两个键此前只存在于 example 和 bot_core 兜底里，配置页没有入口：
+    # example 写 5、兜底 3、DEFAULT_CONFIG 里没有 → 同一件事三个数。
+    # 现在三处统一为 5，并加了入口。断言到"值进了 save 请求"。
+    config_calls.clear()
+    pg.evaluate("""() => {
+      const m = window.FIELD_META.fields['group_send_max_parts'];
+      if (m) window.__cfGo(m.panel);
+    }""")
+    pg.wait_for_timeout(1300)
+    ck("★ 单次回复最多拆几条渲染在群聊面板",
+       pg.evaluate("()=>{const e=document.querySelector('#cfArea [data-k=\\'group_send_max_parts\\']');"
+                   "return !!e && /拆几条/.test(e.closest('.cf-fld').textContent);}"))
+    pg.fill('#cfArea [data-k="group_send_max_parts"]', "7")
+    pg.wait_for_timeout(300)
+    pg.click("#cSave")
+    pg.wait_for_timeout(900)
+    saved_p = [c[1] for c in config_calls if c[0] == "save"]
+    ck("★ 分条上限提交进了 save 请求",
+       bool(saved_p) and saved_p[0].get("group_send_max_parts") == 7, saved_p)
+
     pg.screenshot(path=str(OUT / "_v4_config.png"), full_page=True)
 
     print("\n=== ★ 配置页的「接入与诊断」动作（旧版有 23 个按钮，不能丢）===")

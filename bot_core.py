@@ -413,7 +413,11 @@ MSG_SPLIT_LEN = _config.get("msg_split_len", 2000)
 # 语义正好相反：字数越多反而越不该分段。这里改成"越多越整块"，并提到 100。
 GROUP_SEND_BLOCK_THRESHOLD = _config.get("group_send_block_threshold", 100)
 # 单次回复最多拆成几条（防刷屏）。超过就把尾部并成一条。
-GROUP_SEND_MAX_PARTS = _config.get("group_send_max_parts", 3)
+# ★ 2026-10-24：兜底值 3 → 5，与 1.5.7 设计意图和 example 对齐。
+#   此前三处不一致：example 写 5、这里兜底 3、DEFAULT_CONFIG 里没有这个键
+#   → 用户复制 example 得 5，不复制得 3，而配置页上根本没有这一项。
+#   同一件事三个数，正是这仓库最高频的 bug 形态。
+GROUP_SEND_MAX_PARTS = _config.get("group_send_max_parts", 5)
 
 PERSONALITY_FILE = os.path.join(SCRIPT_DIR, "personality.txt")
 # 数据文件放在用户目录下，避免 PyInstaller dist 重建时丢失
@@ -441,6 +445,9 @@ _RELOADABLE_GLOBALS = [
     "PRIVATE_REPLY_INTERVAL", "ONE_BOT_URL", "ONE_BOT_TOKEN", "BOT_QQ",
     "TARGET_QQS", "DEEPSEEK_API_KEY", "DEEPSEEK_URL", "GROUP_IDS",
     "BOT_GROUP_NICK", "STARTUP_COOLDOWN", "MSG_SPLIT_LEN",
+    # 群聊分条上限：与 MSG_SPLIT_LEN 同属"一条回复拆几条发"，那个能热重载
+    # 这个不能，改完配置不生效 —— 同一功能域两个行为。
+    "GROUP_SEND_MAX_PARTS", "GROUP_SEND_BLOCK_THRESHOLD",
 ]
 
 
@@ -475,6 +482,8 @@ def reload_config():
             "DEEPSEEK_API_KEY": "api_key", "DEEPSEEK_URL": "api_url",
             "GROUP_IDS": "group_ids", "BOT_GROUP_NICK": "bot_group_nick",
             "STARTUP_COOLDOWN": "startup_cooldown", "MSG_SPLIT_LEN": "msg_split_len",
+            "GROUP_SEND_MAX_PARTS": "group_send_max_parts",
+            "GROUP_SEND_BLOCK_THRESHOLD": "group_send_block_threshold",
         }
         cfg_key = mapping.get(key, "").lower()
         if not cfg_key:

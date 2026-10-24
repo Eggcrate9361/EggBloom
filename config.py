@@ -137,6 +137,16 @@ DEFAULT_CONFIG = {
     "bot_nicknames": [],
     "startup_cooldown": 60,
     "msg_split_len": 2000,
+    # ── 群聊分条（2026-10-24 补进 DEFAULT_CONFIG）────────────────────
+    # 这两个键此前只存在于 bot_core 的 _config.get 兜底和 example 里，
+    # DEFAULT_CONFIG 没有 → 同一件事三个数：example 5 / 兜底 3 / 这里没有。
+    # 现在以 5 为唯一值（1.5.7 报告写的也是 5），兜底同步改成 5。
+    # 另外它们此前不在 _RELOADABLE_GLOBALS 里，同功能域的 msg_split_len
+    # 却能热重载 —— 改完配置不生效，等于没有入口。
+    #   group_send_max_parts        单次回复最多拆成几条，超过尾部并成一条
+    #   group_send_block_threshold  有效字 ≤ 此值 → 拆多条；> 此值 → 整块发
+    "group_send_max_parts": 5,
+    "group_send_block_threshold": 100,
     "session_ttl": 300,
     "session_max_rounds": 30,
     "meme_cooldown": 60,

@@ -1887,6 +1887,12 @@ function renderGroupPanel(root){
     <div class="field"><div class="field-label">戳一戳超时（秒）</div>
       <div class="field-desc">同一人同一群戳 Bot 的连击计数保留时长, 超时后重新计数</div>
       <input class="input" id="sPokeTimeout" type="number" min="0"></div>
+    <div class="field"><div class="field-label">单次回复最多拆几条</div>
+      <div class="field-desc">一条回复最多分成几条发，超过就把尾部并成一条（防刷屏）。改完即时生效，不用重启</div>
+      <input class="input" id="sGroupSendMaxParts" type="number" min="2" max="10"></div>
+    <div class="field"><div class="field-label">整块发送字数阈值</div>
+      <div class="field-desc">有效字（符号不计）不超过这个数 → 拆成多条连发；超过 → 整块一次发完。改完即时生效</div>
+      <input class="input" id="sGroupSendBlockThreshold" type="number" min="0"></div>
     <div class="field"><div class="field-label">静默时段</div>
       <div class="field-desc">Bot 睡觉的时间, 写 "1:00-7:00" 这种格式, 支持跨天。留空 = 不静默。群聊和私聊都生效; 主动开口插件没单独配置时也用它</div>
       <input class="input" id="sQuietHours" type="text" placeholder="留空 = 不静默"></div>
@@ -2377,6 +2383,7 @@ async function loadSettingsData(){
     t('sGroupIdleExitEnable', c.group_idle_exit_enable);
     t('sAgentGroupEnable', c.agent_group_enable); t('sAgentPrivateEnable', c.agent_private_enable);
     s('sGroupIdleExitProb', c.group_idle_exit_probability); s('sGroupIdleMinSilence', c.group_idle_exit_min_silence); s('sPokeTimeout', c.poke_timeout); s('sGroupMsgBufferSession', c.group_msg_buffer_window_session); s('sGroupMsgBufferTrigger', c.group_msg_buffer_window_trigger);
+    s('sGroupSendMaxParts', c.group_send_max_parts ?? 5); s('sGroupSendBlockThreshold', c.group_send_block_threshold ?? 100);
       const allowEn = $('sGroupToolAllowEnable');
       const allowRaw = c.group_tool_allowlist;
       const hasAllow = Array.isArray(allowRaw) && allowRaw.length > 0;
@@ -2513,6 +2520,8 @@ function collectSettings(){
     group_idle_exit_probability: num('sGroupIdleExitProb'),
     group_idle_exit_min_silence: num('sGroupIdleMinSilence'),
     poke_timeout: (()=>{ const v=parseFloat(val('sPokeTimeout')); return isNaN(v)||v<0 ? undefined : v; })(),
+    group_send_max_parts: (()=>{ const v=parseInt(val('sGroupSendMaxParts'),10); return isNaN(v)||v<2 ? undefined : v; })(),
+    group_send_block_threshold: (()=>{ const v=parseFloat(val('sGroupSendBlockThreshold')); return isNaN(v)||v<0 ? undefined : v; })(),
     group_msg_buffer_window_session: (()=>{ const v=parseFloat(val('sGroupMsgBufferSession')); return isNaN(v)||v<0 ? undefined : v; })(),
     group_msg_buffer_window_trigger: (()=>{ const v=parseFloat(val('sGroupMsgBufferTrigger')); return isNaN(v)||v<0 ? undefined : v; })(),
     group_tool_allowlist: chk('sGroupToolAllowEnable') ? (window.__groupToolSelected ? window.__groupToolSelected() : []) : [],

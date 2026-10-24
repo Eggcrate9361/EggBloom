@@ -537,6 +537,26 @@
    "default": 30,
    "default_text": "30"
   },
+  "group_send_max_parts": {
+   "label": "单次回复最多拆几条",
+   "desc": "一条回复最多分成几条发，超过就把尾部并成一条（防刷屏）。改完即时生效，不用重启",
+   "ctl": "number",
+   "panel": "group",
+   "unit": "",
+   "id": "sGroupSendMaxParts",
+   "default": 5,
+   "default_text": "5"
+  },
+  "group_send_block_threshold": {
+   "label": "整块发送字数阈值",
+   "desc": "有效字（符号不计）不超过这个数 → 拆成多条连发；超过 → 整块一次发完。改完即时生效",
+   "ctl": "number",
+   "panel": "group",
+   "unit": "",
+   "id": "sGroupSendBlockThreshold",
+   "default": 100,
+   "default_text": "100"
+  },
   "quiet_hours": {
    "label": "静默时段",
    "desc": "Bot 睡觉的时间, 写 \"1:00-7:00\" 这种格式, 支持跨天。留空 = 不静默。群聊和私聊都生效; 主动开口插件没单独配置时也用它",

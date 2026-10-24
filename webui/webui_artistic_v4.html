@@ -4616,6 +4616,8 @@ window.FIELD_META = {
     "group_idle_exit_probability": {"label": "空闲退出概率", "desc": "满足静默条件时, 触发退场的概率（0-1, 0.3 = 30% 概率退场）", "ctl": "number", "panel": "group", "unit": "", "id": "sGroupIdleExitProb", "default": 0.3, "default_text": "0.3"},
     "group_idle_exit_min_silence": {"label": "退场静默时间（秒）", "desc": "Bot 是群里最后说话者, 且超过该时长无新消息 → 才考虑退场（下限 30 秒）", "ctl": "number", "panel": "group", "unit": "秒", "id": "sGroupIdleMinSilence", "default": 600, "default_text": "600"},
     "poke_timeout": {"label": "戳一戳超时（秒）", "desc": "同一人同一群戳 Bot 的连击计数保留时长, 超时后重新计数", "ctl": "number", "panel": "group", "unit": "秒", "id": "sPokeTimeout", "default": 30, "default_text": "30"},
+    "group_send_max_parts": {"label": "单次回复最多拆几条", "desc": "一条回复最多分成几条发，超过就把尾部并成一条（防刷屏）。改完即时生效，不用重启", "ctl": "number", "panel": "group", "unit": "", "id": "sGroupSendMaxParts", "default": 5, "default_text": "5"},
+    "group_send_block_threshold": {"label": "整块发送字数阈值", "desc": "有效字（符号不计）不超过这个数 → 拆成多条连发；超过 → 整块一次发完。改完即时生效", "ctl": "number", "panel": "group", "unit": "", "id": "sGroupSendBlockThreshold", "default": 100, "default_text": "100"},
     "quiet_hours": {"label": "静默时段", "desc": "Bot 睡觉的时间, 写 \"1:00-7:00\" 这种格式, 支持跨天。留空 = 不静默。群聊和私聊都生效; 主动开口插件没单独配置时也用它", "ctl": "text", "panel": "group", "unit": "", "id": "sQuietHours", "default": "", "default_text": "空"},
     "quiet_when_mentioned": {"label": "静默时被点名", "desc": "静默时段被人 @ 或者引用时的反应。wake = 被叫醒就回一句困话; ignore = 一律不回", "ctl": "select", "panel": "group", "unit": "", "id": "sQuietWhenMentioned", "default": "wake", "default_text": "wake"},
     "group_msg_buffer_window_session": {"label": "会话缓冲窗口（秒）", "desc": "会话模式下消息合并的时间窗口", "ctl": "number", "panel": "group", "unit": "秒", "id": "sGroupMsgBufferSession", "default": 5, "default_text": "5"},
