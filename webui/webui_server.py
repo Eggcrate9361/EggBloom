@@ -1077,32 +1077,147 @@ def _collect_logs(limit=200):
     return out
 
 # ── 事件分类（2026-10-24）────────────────────────────────────────────
-# 日志文件里混着三种东西：用户看得懂的事件、给人排查用的调试行、以及聊天记录。
-# 日志页只该显示第一种，第二种去「终端」页看。分类在**服务端**做，
-# 因为判据是日志文本的格式，前端再写一遍就是两份规则各算各的。
-_EVT_TOOL_KEYS = ("工具调用", "[工具轮次]", "[工具]", "已执行工具")
-_EVT_DECISION_KEYS = ("决策放行", "决策结论", "决策插件", "typed 决策",
-                      "[观察]", "建议插话", "判定不接", "沉默")
-_EVT_ERR_RE = re.compile(r"(异常|失败|Traceback|Error|error:)", re.I)
+# 日志页要回答"发生了什么"。日志文件里混着五种东西：用户看得懂的事件、
+# 给人排查用的调试行、以及聊天记录。分类在**服务端**做，因为判据是日志
+# 文本的格式，前端再写一遍就是两份规则各算各的。
+#
+# ★ 2026-10-24 晚重写。第一版凭**关键词表**猜（"决策放行"/"建议插话"/
+#   "工具调用"…），实测在 25186 行真实日志里命中 0 次 —— 那些字样是我想象的，
+#   bot 实际打的是 `[事件] 收到:` / `[不回]` / `[发送]` 这套标签。
+#   结果是除了 error 全判成 debug，页面只剩错误（用户实拍）。
+#
+# 现在的判据，按优先级：
+#   1. level 字段 —— log_levels.classify 已经算好的权威分级，不重算
+#   2. 行首标签 —— bot 自己给日志分的类（[发送]/[事件]/[Agent]…）
+#   3. 内容特征 —— 只在标签说不清时用
+# 另外有一张**噪音表**：心跳、启动冷却、初始化这类行占了日志一半以上，
+# 不先挡掉，"消息"分类会被 30 秒一次的心跳淹掉。
+
+# 对"发生了什么"没有信息量的行 → debug（去控制台看原始日志）
+_EVT_NOISE_RE = re.compile(
+    r"post_type=meta_event"            # 30 秒一次的心跳，量最大
+    r"|启动冷却中|启动冷却完毕"
+    r"|昵称缓存总计"
+    r"|记忆系统初始化|后台初始化中|记忆系统初始化完成"
+    r"|工具注册表就绪|已接入主链|服务已注入|插件工具已接入"
+    r"|工作型工具已接入"
+)
+
+# 行首标签 → 事件类别（标签名不带括号，与 log_levels.leading_tag 对齐）
+_EVT_TAG_KINDS = {
+    "发送": "message", "发图": "message",
+    "事件": "message",          # 收到消息/戳一戳等协议事件
+    "不回": "decision", "不参与": "decision",
+    "Agent": "tool", "harness": "tool", "工具": "tool",
+}
+
+# 内容特征（标签说不清时才用）
+_EVT_DECISION_RE = re.compile(r"不参与|判定不接|建议插话|插话|触发|沉默|跳过回复")
+_EVT_TOOL_RE = re.compile(r"工具调用|已执行工具|工具轮次")
+# 真正发出去的内容（没有 [发送] 标签，但语义就是发出）：
+#   `私聊戳一戳回复: 大半夜戳我…` / `发送图片成功: xxx.gif → (...)`
+#   / `私聊戳一戳表情包: 炸毛`
+_EVT_OUT_RE = re.compile(r"^(发送图片(成功|失败)|私聊\S*.*(回复|表情包)|群\S*.*(回复|表情包))")
+# 收到的一批消息被合并（`群[829854136] 合并消息: [小明] [引用:小红] [图片]`）
+# 这是"有人说话了"的记录，算消息而不是调试。
+_EVT_MERGE_RE = re.compile(r"合并消息")
 
 
 def _classify_event(e):
-    """把一条记录归成 message / decision / tool / error / debug。"""
+    """把一条记录归成 message / decision / tool / cost / error / debug。
+
+    cost 是"这一轮模型花了多少"（AI 回复 (4411 tokens, ￥0.002205…)），
+    单独一类而不是塞进 message：它是成本记录，不是消息内容。
+    """
     if not isinstance(e, dict):
         return "debug"
-    # 聊天记录（[CHAT] 打出来的）自带 direction，最可信，先判
+    # [CHAT] 记录自带 direction，最可信（目前只进 stdout，日志文件里没有）
     if str(e.get("direction") or "") in ("in", "out"):
         return "message"
     text = str(e.get("text") or e.get("msg") or "")
     if not text:
         return "debug"
-    if any(k in text for k in _EVT_TOOL_KEYS):
-        return "tool"
-    if any(k in text for k in _EVT_DECISION_KEYS):
-        return "decision"
-    if (e.get("level") == "err") or _EVT_ERR_RE.search(text):
+    # level 由 _collect_logs 用 log_levels.classify 补好；万一某个调用方
+    # 没带上（测试、将来的新数据源），这里自己算一次，不静默按 info 处理 ——
+    # 那会让 OneBot API 失败、[CRASH] 这类真错误漏成 debug。
+    lv = str(e.get("level") or "")
+    if not lv:
+        lv = log_levels.classify(text)
+    # 噪音先挡：心跳与初始化占了日志一半以上
+    if _EVT_NOISE_RE.search(text):
+        return "debug"
+    # level 是权威分级（log_levels.classify），不要再凭文本猜一遍
+    if lv == "err":
         return "error"
+    if lv == "ai" or text.startswith("AI 回复") or text.startswith("AI ("):
+        return "cost"
+    if lv == "send":
+        return "message"
+    tag = log_levels.leading_tag(text)
+    if tag in _EVT_TAG_KINDS:
+        return _EVT_TAG_KINDS[tag]
+    if _EVT_OUT_RE.match(text) or _EVT_MERGE_RE.search(text):
+        return "message"
+    if _EVT_DECISION_RE.search(text):
+        return "decision"
+    if _EVT_TOOL_RE.search(text):
+        return "tool"
     return "debug"
+
+
+# `[事件] 收到: post_type=message msg_type=private uid=(/ω＼)(3150007406) gid=`
+_EVT_RECV_RE = re.compile(r"收到:\s*post_type=(\w+)(?:\s+msg_type=\S*)?\s+uid=(\S+)")
+# `[发送] 私聊 → (/ω＼)(3150007406): retcode=0` / `[发送] 群[123] → ...`
+_EVT_SEND_RE = re.compile(r"(私聊|群\[[^\]]*\]|群)\s*→\s*(\S+)")
+# `[事件] 戳一戳: user_id=(/ω＼)(3150007406) group_id=私聊`
+# `[事件] 反戳 send_poke user=(/ω＼)(3150007406) group=私聊 retcode=0`
+_EVT_POKE_RE = re.compile(r"(?:user_id|user)=(\S+)(?:\s+group_id=|\s+group=)(\S+)")
+
+
+def _split_who(token):
+    """'(/ω＼)(3150007406)' → ('(/ω＼)', '')；'10001:' → ('10001', '')。
+
+    昵称本身可能带括号（"(/ω＼)"），所以不能按第一个左括号切。
+    只在**结尾**是 (纯数字) 时认为那是 QQ 号，剥掉留给名字。
+    """
+    t = str(token or "").strip().rstrip(":").strip()
+    m = re.match(r"^(.*?)\s*\(\d{5,}\)$", t)
+    if m and m.group(1).strip():
+        return m.group(1).strip(), ""
+    return t, ""
+
+
+def _who_scope(text):
+    """从真实日志行里取 (谁, 在哪)。取不到返回 ('', '')，不猜。"""
+    m = _EVT_RECV_RE.search(text)
+    if m:
+        who, _ = _split_who(m.group(2))
+        gid = ""
+        mg = re.search(r"gid=(\S*)", text)
+        if mg:
+            gid = (mg.group(1) or "").strip()
+        if "msg_type=private" in text or not gid:
+            scope = "私聊"
+        else:
+            scope = "群 " + gid
+        return who, scope
+    m = _EVT_SEND_RE.search(text)
+    if m:
+        who, _ = _split_who(m.group(2))
+        tgt = m.group(1)
+        if tgt == "私聊":
+            scope = "私聊"
+        elif tgt.startswith("群["):
+            scope = tgt.replace("群[", "群 ", 1).rstrip("]")
+        else:
+            scope = "群"
+        return who, scope
+    m = _EVT_POKE_RE.search(text)
+    if m:
+        who, _ = _split_who(m.group(1))
+        scope = "私聊" if m.group(2).strip() in ("私聊", "") else "群 " + m.group(2).strip()
+        return who, scope
+    return "", ""
 
 
 _EVT_TAG_RE = re.compile(r"^\s*(?:群\[\d+\]|私聊\[\d+\]|\[群:\d+\])?\s*\[([^\]]{1,12})\]\s*")
@@ -1112,18 +1227,23 @@ _EVT_TOOLNAMES_RE = re.compile(r"['\"]([A-Za-z0-9_]+)['\"]")
 def _norm_event(e, kind):
     """转成前端直接能画的形状。
 
-    决策/工具这两类在日志里是「群[829854136] [决策放行] 无触发消息…」这种
-    带前缀带标签的一行长文。前端再去正则拆一遍就是把格式知识写两份，
-    所以在这里一次拆好：tag=标签，text=去掉前缀与标签后的正文。
+    日志行形如 `[23:44:23] [事件] 收到: post_type=notice uid=(/ω＼)(3150007406)`，
+    带时间前缀和方括号标签。前端再去正则拆一遍就是把格式知识写两份，
+    所以在这里一次拆好：tag=标签，text=去掉前缀与标签后的正文，
+    message 类另外拆出 who / scope / dir（前端要画"谁 · 在哪说"）。
     """
     text = str(e.get("text") or e.get("msg") or "")
     out = {"kind": kind,
            "time": str(e.get("time") or e.get("ts") or ""),
            "text": text}
     if kind == "message":
-        out["dir"] = "in" if str(e.get("direction")) == "in" else "out"
-        out["scope"] = ("私聊 " if str(e.get("type")) == "private" else "群 ") + str(e.get("target") or "")
-        out["who"] = str(e.get("sender") or "")
+        # 方向：发出类（[发送]/[发图]/发送图片成功/回复与表情包）算 out，其余算 in
+        out["dir"] = "out" if (str(e.get("level")) == "send"
+                               or text.lstrip("[").startswith(("发送", "发图"))
+                               or _EVT_OUT_RE.match(text)) else "in"
+        who, scope = _who_scope(text)
+        out["who"] = who
+        out["scope"] = scope
         return out
     tagged = _EVT_TAG_RE.match(text)
     if tagged:
@@ -1139,9 +1259,10 @@ def _norm_event(e, kind):
 
 
 def collect_events(limit=400):
-    """日志页的数据源：剥掉调试行，只留消息/决策/工具/错误，并带上被隐藏的条数。"""
+    """日志页的数据源：剥掉调试行，只留消息/决策/工具/AI/错误，并带上被隐藏的条数。"""
     rows = _collect_logs(limit)
-    events, counts = [], {"message": 0, "decision": 0, "tool": 0, "error": 0, "debug": 0}
+    events, counts = [], {"message": 0, "decision": 0, "tool": 0,
+                          "cost": 0, "error": 0, "debug": 0}
     for e in rows:
         kind = _classify_event(e)
         counts[kind] = counts.get(kind, 0) + 1

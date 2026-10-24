@@ -478,11 +478,13 @@ input,select,textarea{font:inherit;color:inherit}
 .evt.k-message .evt-b::after{background:var(--ink3)}
 .evt.k-decision .evt-b::after{background:var(--accent)}
 .evt.k-tool .evt-b::after{background:var(--ai)}
+.evt.k-cost .evt-b::after{background:var(--ok)}
 .evt.k-error .evt-b::after{background:var(--err)}
 .evt-hd{display:flex;align-items:baseline;gap:var(--s3);flex-wrap:wrap;margin-bottom:3px}
 .evt-k{font-family:var(--f-m);font-size:12px;letter-spacing:.14em;color:var(--ink4)}
 .evt.k-decision .evt-k{color:var(--accent)}
 .evt.k-tool .evt-k{color:var(--ai)}
+.evt.k-cost .evt-k{color:var(--ok)}
 .evt.k-error .evt-k{color:var(--err)}
 .evt-tag{font-size:12px;color:var(--ink4);letter-spacing:.02em}
 .evt-who{font-size:12px;color:var(--ink3);letter-spacing:.02em;min-width:0}
@@ -7641,7 +7643,8 @@ async function pageMonitor(el) {
    ★ 清空日志这种破坏性动作也跟着原始流搬去了控制台：这一页是"读"的地方，
      不该混一个会删东西的按钮。 */
 const EVT_KINDS = [
-  ['message', '消息'], ['decision', '决策'], ['tool', '工具'], ['error', '出错']
+  ['message', '消息'], ['decision', '决策'], ['tool', '工具'],
+  ['cost', 'AI'], ['error', '出错']
 ];
 async function pageChatlogs(el) {
   el.innerHTML = ''

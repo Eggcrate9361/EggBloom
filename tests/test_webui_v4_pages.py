@@ -100,9 +100,12 @@ EVENTS = {
          "tag": "决策放行"},
         {"kind": "tool", "time": "16:01:13", "text": "search_web、fetch_page",
          "tag": "工具", "tools": ["search_web", "fetch_page"]},
+        {"kind": "cost", "time": "16:01:13",
+         "text": "AI 回复 (4411 tokens, ￥0.002205, 场景 private)"},
     ],
-    "counts": {"message": 2, "decision": 1, "tool": 1, "error": 0, "debug": 2},
-    "total": 6,
+    "counts": {"message": 2, "decision": 1, "tool": 1, "cost": 1, "error": 0,
+               "debug": 2},
+    "total": 7,
 }
 
 GROUPS = {"ok": True, "groups": [
@@ -534,24 +537,29 @@ with sync_playwright() as pw:
     pg.evaluate("() => go(9)")
     pg.wait_for_timeout(1100)
     ev_rows = pg.eval_on_selector_all("#evList .evt", "e => e.map(x=>x.className)")
-    ck("★ 日志页画的是事件行", len(ev_rows) >= 3, ev_rows)
-    ck("★ 事件行带四类之一的 kind 标记",
-       all(("k-message" in c) or ("k-decision" in c) or ("k-tool" in c) or ("k-error" in c)
+    ck("★ 日志页画的是事件行", len(ev_rows) >= 4, ev_rows)
+    ck("★ 事件行带五类之一的 kind 标记",
+       all(("k-message" in c) or ("k-decision" in c) or ("k-tool" in c)
+           or ("k-cost" in c) or ("k-error" in c)
            for c in ev_rows), ev_rows)
     ev_text = pg.inner_text("#evList")
     ck("★ 消息写明「谁 · 在哪说 + 说了什么」",
        "今天去不去" in ev_text and "小明" in ev_text, ev_text[:260])
     ck("★ 决策写明结论（建议插话）", "建议插话" in ev_text, ev_text[:260])
     ck("★ 工具调用写明工具名", "search_web" in ev_text and "fetch_page" in ev_text, ev_text[:260])
+    ck("★ AI 行写明 token 与花费", "4411 tokens" in ev_text and "￥" in ev_text,
+       ev_text[:300])
     ck("★ 调试行不出现在事件流里", "loaded module" not in ev_text, ev_text[:300])
     ck("★ 页脚点名被隐藏的调试行数",
        "2" in pg.inner_text("#evMore") and "调试" in pg.inner_text("#evMore"),
        pg.inner_text("#evMore"))
-    # 分类筛选
-    pg.click('[data-k="tool"]')
-    pg.wait_for_timeout(300)
-    only_tool = pg.eval_on_selector_all("#evList .evt", "e => e.map(x=>x.className)")
-    ck("★ 点「工具」只留工具事件", len(only_tool) == 1 and "k-tool" in only_tool[0], only_tool)
+    # 分类筛选：五类各自点一次，只能留下自己那一类
+    for k, cls in (("tool", "k-tool"), ("cost", "k-cost"), ("decision", "k-decision")):
+        pg.click(f'[data-k="{k}"]')
+        pg.wait_for_timeout(300)
+        only = pg.eval_on_selector_all("#evList .evt", "e => e.map(x=>x.className)")
+        ck(f"★ 点「{k}」只留 {k} 事件",
+           len(only) >= 1 and all(cls in c for c in only), only)
     pg.click('[data-k=""]')
     pg.wait_for_timeout(300)
 
