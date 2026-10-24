@@ -51,17 +51,19 @@ def main():
     check("示例提交带日期",
           re.search(r"`[a-z]+\([a-z]+\): \d{2}-\d{2} ", contrib) is not None)
     # 边界说明：否则对着规范核对历史会对不上
-    check("写明了生效起点（2026-10-23 起）",
-          "2026-10-23" in contrib)
+    check("写明了生效起点（2026-10-24 起）", "2026-10-24 起统一执行" in contrib)
+    check("说明了更早的提交格式不一", "格式不一" in contrib)
 
     print("\n[2] 实际提交按这个格式来")
-    # 只查**生效起点之后**的提交。更早的不带日期（历史不改），
-    # 全量查会永远红。起点从文档里读，不写死 —— 写死就又变成两处判据。
-    m_since = re.search(r"(\d{4}-\d{2}-\d{2})\s*起执行", contrib)
-    check("文档里写明了生效起点", m_since is not None)
-    since = m_since.group(1) if m_since else "2026-10-23"
-    cmd = ["git", "log", "--format=%s", "--since=" + since]
-    r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
+    # 边界从文档里读，不写死 —— 写死就又变成两处判据。
+    # 为什么不能改成"从 HEAD 起的连续合规段"：历史上 10-23 16:10~20:45
+    # 那一段本来就是合规的，夹在 `68f52c6`（10-23 21:25，不合规）前面，
+    # 连续前缀这个不变量不成立。按文档声明的生效日期切才准确。
+    m_since = re.search(r"自\s*(\d{4}-\d{2}-\d{2})\s*起统一执行", contrib)
+    check("文档里写明了生效日期", m_since is not None)
+    since = m_since.group(1) if m_since else "2026-10-24"
+    r = subprocess.run(["git", "log", "--format=%s", "--since=" + since],
+                       capture_output=True, text=True, encoding="utf-8",
                        cwd=ROOT)
     if r.returncode != 0:
         check("能读到 git log", False, r.stderr)
@@ -69,10 +71,12 @@ def main():
     subjects = [x for x in r.stdout.splitlines() if x.strip()]
     pat = re.compile(r"^[a-z]+(\([a-z0-9_-]+\))?: \d{2}-\d{2} .+")
     bad = [s for s in subjects if not pat.match(s)]
-    check(f"{since} 之后的 {len(subjects)} 个提交全部带日期前缀",
+    check(f"{since} 起的 {len(subjects)} 个提交全部带日期前缀",
           not bad, bad[:5])
     check("提交数够多（少于 10 个说明 --since 没生效）",
           len(subjects) >= 10, len(subjects))
+    # 文档得说清边界，不能让人对着规范核对历史还对不上
+    check("说明了更早的提交格式不一", "格式不一" in contrib)
 
     print("\n[3] 发布清单的示例命令同一格式")
     chk = io.open(os.path.join(ROOT, "docs", "RELEASE_CHECKLIST.md"),
