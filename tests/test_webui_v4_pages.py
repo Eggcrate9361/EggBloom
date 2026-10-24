@@ -479,16 +479,24 @@ with sync_playwright() as pw:
     pg.wait_for_timeout(1300)
     cf = pg.inner_text(".panel")
     ck("标题是「配置中心」", "配置中心" in pg.inner_text("#ttl"), pg.inner_text("#ttl"))
-    # ★ 设置项现在按 v3 的**面板**归位并带中文标签（不再按 key 前缀分 8 组）。
-    #   面板标签的覆盖度由 scripts/audit_config_parity.py 逐项核对，
-    #   这里只锁"面板存在 + 当前面板字段带中文标签 + 其他键仍可编辑"三件事。
-    tabs = pg.eval_on_selector_all(".cf-tab", "e=>e.map(x=>x.textContent)")
-    ck("★ 设置项按 v3 面板分组（中文面板名）",
-       all(any(w in "".join(tabs) for w in [k]) for k in ("基础", "对话大脑", "群聊",
-                                                          "表情包", "撤回反馈", "退场语",
-                                                          "权限", "自动通过")), tabs)
-    ck("★ 当前面板字段带中文标签而不是裸键名",
-       pg.evaluate("()=>{const f=document.querySelector('#cfPanel .cf-fld');"
+    # ★ 2026-10-24：配置页改成 6 个分组（接入/说话/群聊/互动/功能/界面），
+    #   原来的 15 个面板标签变成组内小节。覆盖度仍由 audit_config_parity.py 核对，
+    #   这里只锁「分组存在 + 小节标题是中文面板名 + 字段带中文标签」。
+    groups = pg.eval_on_selector_all(".cfg-grp b", "e=>e.map(x=>x.textContent)")
+    ck("★ 配置页分成 6 个分组", groups == ["接入", "说话", "群聊", "互动", "功能", "界面"], groups)
+    seen = []
+    for _g in ["connect", "talk", "grouptalk", "interact", "feature"]:
+        pg.evaluate("(g)=>{const b=[...document.querySelectorAll('.cfg-grp')]"
+                    ".find(x=>x.dataset.grp===g); if(b) b.click();}", _g)
+        pg.wait_for_timeout(120)
+        seen += pg.evaluate("()=>window.__cfPanelLabels()")
+    ck("★ 组内小节标题是中文面板名",
+       all(w in seen for w in ["基础", "对话大脑", "群聊", "表情包", "撤回反馈",
+                               "退场语", "权限", "自动通过"]), seen)
+    pg.evaluate("()=>window.__cfGo('basic')")
+    pg.wait_for_timeout(200)
+    ck("★ 当前小节字段带中文标签而不是裸键名",
+       pg.evaluate("()=>{const f=document.querySelector('#cfArea .cf-fld');"
                    "return !!f && !!f.querySelector('.cf-lab') && !!f.querySelector('[data-k],[data-sw]');}"))
     nctl = pg.eval_on_selector_all(".panel [data-k]", "e => e.length")
     names = pg.eval_on_selector_all(".panel [data-k]", "e => e.map(x=>x.dataset.k)")
@@ -550,8 +558,7 @@ with sync_playwright() as pw:
     pg.evaluate("""(k) => {
       const m = window.FIELD_META.fields[k];
       if (!m) return;
-      const t = [...document.querySelectorAll('.cf-tab')].find(x => x.dataset.cfTab === m.panel);
-      if (t) t.click();
+      window.__cfGo(m.panel);
     }""", "ai_temperature")
     pg.wait_for_timeout(350)
     ck("字段已归入带中文标签的面板（温度）",
@@ -570,6 +577,11 @@ with sync_playwright() as pw:
     print("\n=== ★ 配置页的「接入与诊断」动作（旧版有 23 个按钮，不能丢）===")
     pg.evaluate("() => go(7)")
     pg.wait_for_timeout(1300)
+    # 2026-10-24：这些按钮属于「接入」分组，切到别的组时整块隐藏（不再永远堆在页面顶部）。
+    # 所以检查前先切回接入；只切组不重载页面。
+    pg.evaluate("()=>{const b=[...document.querySelectorAll('.cfg-grp')]"
+                ".find(x=>x.dataset.grp==='connect'); if(b) b.click();}")
+    pg.wait_for_timeout(250)
     btn_ids = ["cWizard", "cTest", "cKeyClear", "cScan", "cLsStart", "cLsStop",
                "cLsTest", "cLsOpen", "cImgTest", "cImgStart", "cImgStop", "cImgOpen"]
     miss = [b for b in btn_ids if pg.eval_on_selector_all(f"#{b}", "e => e.length") == 0]

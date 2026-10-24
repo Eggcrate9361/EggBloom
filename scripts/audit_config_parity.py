@@ -135,28 +135,48 @@ def main():
         pg.wait_for_timeout(1400)
 
         check("页面无 JS 报错", not errs, errs[:3])
-        tabs = pg.eval_on_selector_all(".cf-tab", "els=>els.map(e=>e.dataset.cfTab)")
-        check("★ v3 的 %d 个面板全部出现" % len(want_panels),
-              all(p in tabs for p in want_panels), sorted(set(want_panels) - set(tabs)))
-
-        # 逐个面板点一遍，累计字段数 + 控件形态
-        total, shapes = 0, {}
-        for p in tabs:
-            pg.evaluate("(p)=>{[...document.querySelectorAll('.cf-tab')].find(t=>t.dataset.cfTab===p).click()}", p)
-            pg.wait_for_timeout(140)
-            total += pg.eval_on_selector_all("#cfPanel .cf-fld", "e=>e.length")
-            shapes[p] = pg.evaluate("""()=>({
-              sw: document.querySelectorAll('#cfPanel .sw').length,
-              edl: document.querySelectorAll('#cfPanel .edl-row').length,
-              lines: document.querySelectorAll('#cfPanel [data-kind="lines"]').length,
-              sel: document.querySelectorAll('#cfPanel select').length,
-              num: document.querySelectorAll('#cfPanel input[type=number]').length,
-              raw: document.querySelectorAll('#cfPanel textarea[data-k]:not([data-kind])').length
-            })""")
+        # ★ 2026-10-24：配置页从 15 个平级标签改成 6 个分组 + 组内小节。
+        #   判据跟着改：每个面板要能在**它所属分组**里找到对应的小节标题。
+        groups = pg.eval_on_selector_all(".cfg-grp", "els=>els.map(e=>e.dataset.grp)")
+        check("★ 配置页有 %d 个分组" % 6, len(groups) == 6, groups)
+        seen_panels, total, shapes = [], 0, {}
+        for g in groups:
+            pg.evaluate("(g)=>{[...document.querySelectorAll('.cfg-grp')]"
+                        ".find(t=>t.dataset.grp===g).click()}", g)
+            pg.wait_for_timeout(160)
+            secs = pg.evaluate("""()=>[...document.querySelectorAll('.cfg-sec[data-sec]')].map(s=>({
+              panel: s.dataset.sec,
+              title: (s.querySelector('.cfg-sec-hd b')||{}).textContent || '',
+            }))""")
+            for s in secs:
+                if s["panel"] != "ui":
+                    seen_panels.append(s["panel"])
+                    shapes[s["panel"]] = pg.evaluate("""(p)=>{const s=document.querySelector(
+                        '.cfg-sec[data-sec="'+p+'"]'); if(!s) return {};
+                      return {
+                        sw: s.querySelectorAll('.sw').length,
+                        edl: s.querySelectorAll('.edl-row').length,
+                        lines: s.querySelectorAll('[data-kind="lines"]').length,
+                        sel: s.querySelectorAll('select').length,
+                        num: s.querySelectorAll('input[type=number]').length,
+                        raw: s.querySelectorAll('textarea[data-k]:not([data-kind])').length
+                      }; }""", s["panel"])
+                    total += pg.eval_on_selector_all(
+                        '.cfg-sec[data-sec="%s"] .cf-fld' % s["panel"], "e=>e.length")
+        check("★ v3 的 %d 个面板全部有归属" % len(want_panels),
+              all(p in seen_panels for p in want_panels),
+              sorted(set(want_panels) - set(seen_panels)))
+        check("★ 没有面板被两个分组同时收录",
+              len(seen_panels) == len(set(seen_panels)),
+              [x for x in seen_panels if seen_panels.count(x) > 1])
         check("★ 字段总数 %d ≥ v3 登记的 %d" % (total, want_fields), total >= want_fields,
               "实际 %d" % total)
         check("布尔项渲染为方块开关（不是下拉）", sum(v["sw"] for v in shapes.values()) >= 30,
               sum(v["sw"] for v in shapes.values()))
+        pg.evaluate("()=>window.__cfGo('group')")
+        pg.wait_for_timeout(200)
+        n_reset = pg.eval_on_selector_all("#cfArea [data-reset]", "e=>e.length")
+        check("★ 字段能点回默认值（群聊组 %d 个）" % n_reset, n_reset >= 5, n_reset)
         check("退场语/撤回反馈是划线列表（.edl-row）", sum(v["edl"] for v in shapes.values()) >= 4,
               sum(v["edl"] for v in shapes.values()))
         check("每行一条的文本框存在", sum(v["lines"] for v in shapes.values()) >= 5,
@@ -167,7 +187,7 @@ def main():
 
         # 划线语义：停用条目带 .off。退场面板有两组列表（短退场语 2 条 + 空闲退场语 1 条），
         # 第一组里第 2 条 fixture 就是 disabled:true
-        pg.evaluate("()=>{[...document.querySelectorAll('.cf-tab')].find(t=>t.textContent.includes('退场语')).click()}")
+        pg.evaluate("()=>window.__cfGo('exit')")
         pg.wait_for_timeout(300)
         offs = pg.evaluate("()=>[...document.querySelectorAll('.edl-row')].map(r=>r.classList.contains('off'))")
         check("★ 停用的退场语显示为划线（.off）", offs[:2] == [False, True] and len(offs) == 3, offs)
@@ -188,23 +208,24 @@ def main():
         check("改动计数随列表变化", before != after, "%s → %s" % (before, after))
 
         # 开关与数字框
-        pg.evaluate("()=>{[...document.querySelectorAll('.cf-tab')].find(t=>t.textContent.includes('功能开关')).click()}")
+        pg.evaluate("()=>window.__cfGo('switches')")
         pg.wait_for_timeout(320)
-        sw = pg.evaluate("""()=>{const b=document.querySelector('#cfPanel .sw');const k=b.dataset.sw;
+        sw = pg.evaluate("""()=>{const b=document.querySelector('#cfArea .sw');const k=b.dataset.sw;
             const was=b.getAttribute('aria-checked');b.click();
             return {k,was,now:b.getAttribute('aria-checked'),
                     dirty:document.getElementById('cDirty').textContent};}""")
         check("开关点击翻转 aria-checked 且计入改动", sw["was"] != sw["now"] and "改动" in sw["dirty"], sw)
 
         # 嵌套键（de_ai.enabled）走的是另一条路径：必须组装成 {de_ai:{enabled:…}}
-        pg.evaluate("()=>{[...document.querySelectorAll('.cf-tab')].find(t=>t.textContent.includes('去 AI')).click()}")
+        pg.evaluate("()=>window.__cfGo('deai')")
         pg.wait_for_timeout(320)
-        pg.evaluate("()=>document.querySelector('#cfPanel .sw').click()")
+        pg.evaluate("()=>{const b=document.querySelector('#cfArea [data-sw=\\'de_ai.enabled\\']');"
+                    "if(b) b.click();}")
         pg.wait_for_timeout(220)
         # 数字框：会话面板的对话超时
-        pg.evaluate("()=>{[...document.querySelectorAll('.cf-tab')].find(t=>t.textContent.includes('会话')).click()}")
+        pg.evaluate("()=>window.__cfGo('session')")
         pg.wait_for_timeout(320)
-        pg.fill("#cfPanel input[type=number]", "4242")
+        pg.fill("#cfArea input[type=number]", "4242")
         pg.wait_for_timeout(240)
 
         pg.click("#cSave")

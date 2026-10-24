@@ -158,7 +158,9 @@
    "ctl": "text",
    "panel": "basic",
    "unit": "",
-   "id": "sBotQq"
+   "id": "sBotQq",
+   "default": "",
+   "default_text": "空"
   },
   "bot_group_nick": {
    "label": "Bot 昵称",
@@ -166,7 +168,9 @@
    "ctl": "text",
    "panel": "basic",
    "unit": "",
-   "id": "sBotNick"
+   "id": "sBotNick",
+   "default": "AAA",
+   "default_text": "AAA"
   },
   "startup_cooldown": {
    "label": "启动冷却（秒）",
@@ -174,7 +178,9 @@
    "ctl": "number",
    "panel": "basic",
    "unit": "秒",
-   "id": "sStartupCooldown"
+   "id": "sStartupCooldown",
+   "default": 60,
+   "default_text": "60"
   },
   "target_qqs": {
    "label": "目标 QQ（每行一个）",
@@ -182,7 +188,9 @@
    "ctl": "lines",
    "panel": "basic",
    "unit": "",
-   "id": "sTargetQqs"
+   "id": "sTargetQqs",
+   "default": [],
+   "default_text": "空"
   },
   "group_ids": {
    "label": "群 ID（每行一个）",
@@ -190,7 +198,9 @@
    "ctl": "lines",
    "panel": "basic",
    "unit": "",
-   "id": "sGroupIds"
+   "id": "sGroupIds",
+   "default": [],
+   "default_text": "空"
   },
   "api_provider": {
    "label": "提供商",
@@ -198,7 +208,9 @@
    "ctl": "select",
    "panel": "llm",
    "unit": "",
-   "id": "sProvider"
+   "id": "sProvider",
+   "default": "deepseek",
+   "default_text": "deepseek"
   },
   "api_url": {
    "label": "API URL",
@@ -206,7 +218,8 @@
    "ctl": "text",
    "panel": "llm",
    "unit": "",
-   "id": "sApiUrl"
+   "id": "sApiUrl",
+   "default": "https://api.deepseek.com/chat/completions"
   },
   "api_key": {
    "label": "API Key",
@@ -226,7 +239,9 @@
    "_panels": [
     "llm",
     "llm"
-   ]
+   ],
+   "default": "deepseek-flash",
+   "default_text": "deepseek-flash"
   },
   "use_local_llm": {
    "label": "模型",
@@ -338,7 +353,9 @@
    "ctl": "number",
    "panel": "llm",
    "unit": "",
-   "id": "sAiTemp"
+   "id": "sAiTemp",
+   "default": 0.7,
+   "default_text": "0.7"
   },
   "ai_max_tokens": {
    "label": "最大令牌数",
@@ -346,7 +363,9 @@
    "ctl": "number",
    "panel": "llm",
    "unit": "",
-   "id": "sAiMaxTokens"
+   "id": "sAiMaxTokens",
+   "default": 800,
+   "default_text": "800"
   },
   "ai_top_p": {
    "label": "Top P",
@@ -354,7 +373,9 @@
    "ctl": "number",
    "panel": "llm",
    "unit": "",
-   "id": "sAiTopP"
+   "id": "sAiTopP",
+   "default": 0.9,
+   "default_text": "0.9"
   },
   "ai_frequency_penalty": {
    "label": "频率惩罚",
@@ -362,7 +383,9 @@
    "ctl": "number",
    "panel": "llm",
    "unit": "",
-   "id": "sAiFreqPenalty"
+   "id": "sAiFreqPenalty",
+   "default": 0.0,
+   "default_text": "0.0"
   },
   "ai_presence_penalty": {
    "label": "存在惩罚",
@@ -370,7 +393,9 @@
    "ctl": "number",
    "panel": "llm",
    "unit": "",
-   "id": "sAiPresencePenalty"
+   "id": "sAiPresencePenalty",
+   "default": 0.0,
+   "default_text": "0.0"
   },
   "session_ttl": {
    "label": "对话超时（秒）",
@@ -378,7 +403,9 @@
    "ctl": "number",
    "panel": "session",
    "unit": "秒",
-   "id": "sSessionTtl"
+   "id": "sSessionTtl",
+   "default": 300,
+   "default_text": "300"
   },
   "session_max_rounds": {
    "label": "对话最大轮次",
@@ -386,7 +413,9 @@
    "ctl": "number",
    "panel": "session",
    "unit": "",
-   "id": "sSessionMaxRounds"
+   "id": "sSessionMaxRounds",
+   "default": 30,
+   "default_text": "30"
   },
   "private_reply_interval": {
    "label": "私聊回复间隔（秒）",
@@ -394,7 +423,9 @@
    "ctl": "number",
    "panel": "session",
    "unit": "秒",
-   "id": "sPrivateReplyInterval"
+   "id": "sPrivateReplyInterval",
+   "default": 3,
+   "default_text": "3"
   },
   "idle_timeout": {
    "label": "离线判定（秒）",
@@ -402,7 +433,9 @@
    "ctl": "number",
    "panel": "session",
    "unit": "秒",
-   "id": "sIdleTimeout"
+   "id": "sIdleTimeout",
+   "default": 120,
+   "default_text": "120"
   },
   "group_msg_buffer_window": {
    "label": "消息合并窗口（秒）",
@@ -410,7 +443,9 @@
    "ctl": "number",
    "panel": "group",
    "unit": "秒",
-   "id": "sGroupMsgBuffer"
+   "id": "sGroupMsgBuffer",
+   "default": 3,
+   "default_text": "3"
   },
   "group_recent_msgs_window": {
    "label": "引用回抓窗口（秒）",
@@ -418,7 +453,9 @@
    "ctl": "number",
    "panel": "group",
    "unit": "秒",
-   "id": "sGroupRecentMsgs"
+   "id": "sGroupRecentMsgs",
+   "default": 30,
+   "default_text": "30"
   },
   "group_session_max_replies": {
    "label": "每会话最大回复数",
@@ -426,7 +463,9 @@
    "ctl": "number",
    "panel": "group",
    "unit": "",
-   "id": "sGroupMaxReplies"
+   "id": "sGroupMaxReplies",
+   "default": 20,
+   "default_text": "20"
   },
   "group_session_idle_timeout": {
    "label": "会话维持时长（秒）",
@@ -434,7 +473,9 @@
    "ctl": "number",
    "panel": "group",
    "unit": "秒",
-   "id": "sGroupIdleTimeout"
+   "id": "sGroupIdleTimeout",
+   "default": 300,
+   "default_text": "300"
   },
   "group_last_exit_cooldown": {
    "label": "退场冷却（秒）",
@@ -442,7 +483,9 @@
    "ctl": "number",
    "panel": "group",
    "unit": "秒",
-   "id": "sGroupExitCooldown"
+   "id": "sGroupExitCooldown",
+   "default": 3000,
+   "default_text": "3000"
   },
   "group_idle_exit_enable": {
    "label": "启用空闲退出",
@@ -450,7 +493,9 @@
    "ctl": "bool",
    "panel": "group",
    "unit": "",
-   "id": "sGroupIdleExitEnable"
+   "id": "sGroupIdleExitEnable",
+   "default": true,
+   "default_text": "开启"
   },
   "group_idle_exit_probability": {
    "label": "空闲退出概率",
@@ -458,7 +503,9 @@
    "ctl": "number",
    "panel": "group",
    "unit": "",
-   "id": "sGroupIdleExitProb"
+   "id": "sGroupIdleExitProb",
+   "default": 0.3,
+   "default_text": "0.3"
   },
   "group_idle_exit_min_silence": {
    "label": "退场静默时间（秒）",
@@ -466,7 +513,9 @@
    "ctl": "number",
    "panel": "group",
    "unit": "秒",
-   "id": "sGroupIdleMinSilence"
+   "id": "sGroupIdleMinSilence",
+   "default": 600,
+   "default_text": "600"
   },
   "poke_timeout": {
    "label": "戳一戳超时（秒）",
@@ -474,7 +523,9 @@
    "ctl": "number",
    "panel": "group",
    "unit": "秒",
-   "id": "sPokeTimeout"
+   "id": "sPokeTimeout",
+   "default": 30,
+   "default_text": "30"
   },
   "group_msg_buffer_window_session": {
    "label": "会话缓冲窗口（秒）",
@@ -482,7 +533,9 @@
    "ctl": "number",
    "panel": "group",
    "unit": "秒",
-   "id": "sGroupMsgBufferSession"
+   "id": "sGroupMsgBufferSession",
+   "default": 5,
+   "default_text": "5"
   },
   "group_msg_buffer_window_trigger": {
    "label": "触发缓冲窗口（秒）",
@@ -490,7 +543,9 @@
    "ctl": "number",
    "panel": "group",
    "unit": "秒",
-   "id": "sGroupMsgBufferTrigger"
+   "id": "sGroupMsgBufferTrigger",
+   "default": 8,
+   "default_text": "8"
   },
   "agent_group_enable": {
    "label": "群聊内可派活",
@@ -498,7 +553,9 @@
    "ctl": "bool",
    "panel": "group",
    "unit": "",
-   "id": "sAgentGroupEnable"
+   "id": "sAgentGroupEnable",
+   "default": false,
+   "default_text": "关闭"
   },
   "agent_private_enable": {
    "label": "私聊内可派活",
@@ -506,7 +563,9 @@
    "ctl": "bool",
    "panel": "group",
    "unit": "",
-   "id": "sAgentPrivateEnable"
+   "id": "sAgentPrivateEnable",
+   "default": false,
+   "default_text": "关闭"
   },
   "meme_enable": {
    "label": "启用表情包",
@@ -514,7 +573,9 @@
    "ctl": "bool",
    "panel": "meme",
    "unit": "",
-   "id": "sMemeEnable"
+   "id": "sMemeEnable",
+   "default": true,
+   "default_text": "开启"
   },
   "meme_cooldown": {
    "label": "冷却（秒）",
@@ -522,7 +583,9 @@
    "ctl": "number",
    "panel": "meme",
    "unit": "秒",
-   "id": "sMemeCooldown"
+   "id": "sMemeCooldown",
+   "default": 60,
+   "default_text": "60"
   },
   "meme_idle_exit_enable": {
    "label": "启用空闲退出",
@@ -530,7 +593,9 @@
    "ctl": "bool",
    "panel": "meme",
    "unit": "",
-   "id": "sMemeIdleExitEnable"
+   "id": "sMemeIdleExitEnable",
+   "default": true,
+   "default_text": "开启"
   },
   "meme_auto_detect_emotion": {
    "label": "自动检测情绪",
@@ -538,7 +603,9 @@
    "ctl": "bool",
    "panel": "meme",
    "unit": "",
-   "id": "sMemeAutoEmotion"
+   "id": "sMemeAutoEmotion",
+   "default": true,
+   "default_text": "开启"
   },
   "recall_feedback_enable": {
    "label": "启用群聊撤回反馈",
@@ -546,7 +613,9 @@
    "ctl": "bool",
    "panel": "recall",
    "unit": "",
-   "id": "sRecallEnable"
+   "id": "sRecallEnable",
+   "default": true,
+   "default_text": "开启"
   },
   "recall_feedback_cooldown": {
    "label": "冷却（秒）",
@@ -554,7 +623,9 @@
    "ctl": "number",
    "panel": "recall",
    "unit": "秒",
-   "id": "sRecallCooldown"
+   "id": "sRecallCooldown",
+   "default": 60,
+   "default_text": "60"
   },
   "recall_private_enable": {
    "label": "启用私聊撤回反馈",
@@ -562,7 +633,9 @@
    "ctl": "bool",
    "panel": "recall",
    "unit": "",
-   "id": "sRecallPrivateEnable"
+   "id": "sRecallPrivateEnable",
+   "default": true,
+   "default_text": "开启"
   },
   "recall_private_cooldown": {
    "label": "冷却（秒）",
@@ -570,7 +643,9 @@
    "ctl": "number",
    "panel": "recall",
    "unit": "秒",
-   "id": "sRecallPrivateCooldown"
+   "id": "sRecallPrivateCooldown",
+   "default": 60,
+   "default_text": "60"
   },
   "image_cache_enable": {
    "label": "图片缓存",
@@ -578,7 +653,9 @@
    "ctl": "bool",
    "panel": "switches",
    "unit": "",
-   "id": "sImageCacheEnable"
+   "id": "sImageCacheEnable",
+   "default": true,
+   "default_text": "开启"
   },
   "self_learning_enable": {
    "label": "自学习",
@@ -586,7 +663,9 @@
    "ctl": "bool",
    "panel": "switches",
    "unit": "",
-   "id": "sSelfLearningEnable"
+   "id": "sSelfLearningEnable",
+   "default": true,
+   "default_text": "开启"
   },
   "private_memory_enable": {
    "label": "私聊记忆",
@@ -594,7 +673,9 @@
    "ctl": "bool",
    "panel": "switches",
    "unit": "",
-   "id": "sPrivateMemoryEnable"
+   "id": "sPrivateMemoryEnable",
+   "default": true,
+   "default_text": "开启"
   },
   "slang_injector_enable": {
    "label": "俚语注入",
@@ -602,7 +683,9 @@
    "ctl": "bool",
    "panel": "switches",
    "unit": "",
-   "id": "sSlangInjectorEnable"
+   "id": "sSlangInjectorEnable",
+   "default": true,
+   "default_text": "开启"
   },
   "nsfw_enabled": {
    "label": "NSFW 内容",
@@ -610,7 +693,9 @@
    "ctl": "bool",
    "panel": "switches",
    "unit": "",
-   "id": "sNsfwEnable"
+   "id": "sNsfwEnable",
+   "default": true,
+   "default_text": "开启"
   },
   "private_reply_max_length": {
    "label": "私聊回复最大长度（字）",
@@ -618,7 +703,9 @@
    "ctl": "number",
    "panel": "length",
    "unit": "字",
-   "id": "sPrivateReplyMaxLen"
+   "id": "sPrivateReplyMaxLen",
+   "default": 500,
+   "default_text": "500"
   },
   "group_reply_max_length": {
    "label": "群聊回复最大长度（字）",
@@ -626,7 +713,9 @@
    "ctl": "number",
    "panel": "length",
    "unit": "字",
-   "id": "sGroupReplyMaxLen"
+   "id": "sGroupReplyMaxLen",
+   "default": 800,
+   "default_text": "800"
   },
   "msg_split_len": {
    "label": "超长消息切分阈值（字）",
@@ -634,7 +723,9 @@
    "ctl": "number",
    "panel": "length",
    "unit": "字",
-   "id": "sMsgSplitLen"
+   "id": "sMsgSplitLen",
+   "default": 2000,
+   "default_text": "2000"
   },
   "group_trigger_words": {
    "label": "触发词（每行一个）",
@@ -642,7 +733,11 @@
    "ctl": "lines",
    "panel": "trigger",
    "unit": "",
-   "id": "sTriggerWords"
+   "id": "sTriggerWords",
+   "default": [
+    "小a"
+   ],
+   "default_text": "小a"
   },
   "group_trigger_include_bot_nick": {
    "label": "包含 Bot 昵称",
@@ -650,7 +745,9 @@
    "ctl": "bool",
    "panel": "trigger",
    "unit": "",
-   "id": "sTriggerBotNick"
+   "id": "sTriggerBotNick",
+   "default": true,
+   "default_text": "开启"
   },
   "group_trigger_include_text_at": {
    "label": "包含纯文本 @",
@@ -658,7 +755,9 @@
    "ctl": "bool",
    "panel": "trigger",
    "unit": "",
-   "id": "sTriggerTextAt"
+   "id": "sTriggerTextAt",
+   "default": true,
+   "default_text": "开启"
   },
   "group_trigger_include_quote": {
    "label": "包含引用消息",
@@ -666,7 +765,9 @@
    "ctl": "bool",
    "panel": "trigger",
    "unit": "",
-   "id": "sTriggerQuote"
+   "id": "sTriggerQuote",
+   "default": true,
+   "default_text": "开启"
   },
   "command_permission": {
    "label": "权限模式",
@@ -690,7 +791,9 @@
    "ctl": "lines",
    "panel": "perm",
    "unit": "",
-   "id": "sAdminQqs"
+   "id": "sAdminQqs",
+   "default": [],
+   "default_text": "空"
   },
   "admin_commands_enable": {
    "label": "启用群管理指令",
@@ -698,7 +801,9 @@
    "ctl": "bool",
    "panel": "perm",
    "unit": "",
-   "id": "sAdminCmdsEnable"
+   "id": "sAdminCmdsEnable",
+   "default": true,
+   "default_text": "开启"
   },
   "auto_accept.enabled": {
    "label": "总开关（自动同意）",
@@ -814,7 +919,32 @@
    "ctl": "editable",
    "panel": "recall",
    "mount": "recallPreList",
-   "key": "recall_feedback_pre_messages"
+   "key": "recall_feedback_pre_messages",
+   "default": [
+    "？",
+    "你撤回了一条消息",
+    "还好你撤了 我差点就回了",
+    "撤回了？行 那我也不用回了",
+    "还没看呢 你就撤了",
+    "手速可以啊 我还没来得及回",
+    "撤了就撤了吧 反正我也没打算回",
+    "哎哟 差点就点发送了",
+    "你撤回的速度比我打字快",
+    "还好还好 还没发出去",
+    "撤回+1 这条我当没看见",
+    "不回了不回了 你都撤了我还回啥",
+    "撤得好 我正愁怎么接",
+    "你撤回 我省事",
+    "这波属于是你跑得快",
+    "撤都撤了 那就算了",
+    "还没读呢就撤了 算你识相",
+    "行吧 本AI的回复可以省了",
+    "撤回=跳过 这局不算",
+    "差点白打字了 幸好你撤了",
+    "你撤你的 我当无事发生",
+    "撤回成功 已为你拦截一条AI回复"
+   ],
+   "default_text": "22 项"
   },
   "recall_feedback_post_messages": {
    "label": "撤回后反馈",
@@ -822,7 +952,30 @@
    "ctl": "editable",
    "panel": "recall",
    "mount": "recallPostList",
-   "key": "recall_feedback_post_messages"
+   "key": "recall_feedback_post_messages",
+   "default": [
+    "看到了 晚了",
+    "看到了哦 不说",
+    "太慢了 我已经看到了",
+    "来不及了 嘿嘿",
+    "撤回慢了 已截获",
+    "晚了 我看到了",
+    "回复已经发出去了 哈哈",
+    "不好意思 你撤的时候我已经看到了",
+    "看到了 不过我不说",
+    "来不及啦 我已经读过了",
+    "晚啦 眼睛比你手快",
+    "撤回无效 本人已阅",
+    "看到了看到了 别费劲了",
+    "我看到了 你撤了个寂寞",
+    "撤晚了 我已经知道了",
+    "不巧 我刚好在看",
+    "被我看到了吧 嘿嘿",
+    "你撤回的速度还是不够快啊",
+    "看到了 但我会装作没看到",
+    "太迟了 消息已送达我脑子里"
+   ],
+   "default_text": "20 项"
   },
   "recall_private_post_messages": {
    "label": "私聊撤回反馈",
@@ -830,7 +983,16 @@
    "ctl": "editable",
    "panel": "recall",
    "mount": "recallPrivateList",
-   "key": "recall_private_post_messages"
+   "key": "recall_private_post_messages",
+   "default": [
+    "撤回了？我还没看到",
+    "什么情况 手滑了？",
+    "你撤回的速度比打字快多了",
+    "心虚了吧",
+    "好家伙 说撤就撤",
+    "别撤回啊 发都发了"
+   ],
+   "default_text": "6 项"
   },
   "custom_exit_phrases_short": {
    "label": "短退场语",
@@ -838,7 +1000,9 @@
    "ctl": "editable",
    "panel": "exit",
    "mount": "exitShortList",
-   "key": "custom_exit_phrases_short"
+   "key": "custom_exit_phrases_short",
+   "default": [],
+   "default_text": "空"
   },
   "custom_exit_phrases_idle": {
    "label": "空闲退场语",
@@ -846,7 +1010,10 @@
    "ctl": "editable",
    "panel": "exit",
    "mount": "exitIdleList",
-   "key": "custom_exit_phrases_idle"
+   "key": "custom_exit_phrases_idle",
+   "default": [],
+   "default_text": "空",
+   "restart": true
   },
   "group_quote_mode": {
    "label": "群引用回复",
@@ -868,7 +1035,9 @@
      "off",
      "从不引用"
     ]
-   ]
+   ],
+   "default": "auto",
+   "default_text": "auto"
   },
   "bot_nicknames": {
    "label": "Bot 昵称（每行一个）",
@@ -876,7 +1045,9 @@
    "ctl": "lines",
    "panel": "trigger",
    "unit": "",
-   "id": "sBotNicknames"
+   "id": "sBotNicknames",
+   "default": [],
+   "default_text": "空"
   }
  },
  "actions": {

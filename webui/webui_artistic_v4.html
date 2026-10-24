@@ -1707,6 +1707,48 @@ html[data-page="agent"] .deco::after{animation:decoSlideX 4.4s linear infinite}
 /* ① 面板标签：一条横排的机械刻度，当前项用金色粗线下压 */
 .cf-tabs{display:flex;flex-wrap:wrap;gap:var(--s2) var(--s5);
   border-bottom:1px solid var(--line2);padding-bottom:var(--s3);margin-bottom:var(--s5)}
+/* ── 配置页骨架（2026-10-24 重排）──────────────────────────────
+   顶栏固定：搜索 + 改动计数 + 保存。分组按钮是两层文字（组名 + 一句人话），
+   不做图标 —— 这套像素字体系里图标比文字更难认。 */
+.cfg-bar{display:flex;align-items:center;justify-content:space-between;gap:var(--s5);
+  flex-wrap:wrap;padding-bottom:var(--s3);margin-bottom:var(--s4);
+  border-bottom:1px solid var(--line2)}
+.cfg-bar-l{display:flex;align-items:baseline;gap:var(--s3);min-width:0}
+.cfg-bar-l b{font-family:var(--f-m);font-size:14px;letter-spacing:.22em;color:var(--ink)}
+.cfg-bar-r{display:flex;align-items:center;gap:var(--s3);flex-wrap:wrap}
+.cfg-bar-r input{width:min(300px,42vw);height:28px;padding:0 10px;background:var(--panel);
+  border:1px solid var(--line3);color:var(--ink);font-size:12px;letter-spacing:.04em}
+.cfg-bar-r input:focus{outline:none;border-color:var(--accent)}
+.cfg-groups{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:1px;
+  background:var(--line);border:1px solid var(--line);margin-bottom:var(--s5)}
+.cfg-grp{display:flex;flex-direction:column;gap:3px;text-align:left;padding:10px 12px 11px;
+  background:var(--bg);border:0;cursor:pointer;position:relative;
+  transition:background 140ms var(--ez)}
+.cfg-grp b{font-family:var(--f-m);font-size:12px;letter-spacing:.16em;color:var(--ink3);font-weight:400}
+.cfg-grp span{font-size:9px;color:var(--ink4);line-height:1.4;letter-spacing:.02em}
+.cfg-grp:hover b{color:var(--ink)}
+.cfg-grp.on{background:var(--panel)}
+.cfg-grp.on b{color:var(--c10)}
+.cfg-grp.on::after{content:'';position:absolute;left:0;right:0;top:0;height:2px;background:var(--c10)}
+@media (max-width:1080px){.cfg-groups{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media (max-width:640px){.cfg-groups{grid-template-columns:repeat(2,minmax(0,1fr))}}
+/* 小节：一条细标题 + 字段；节与节之间只用留白和一根线分隔，不加卡片边框 */
+.cfg-sec{margin-bottom:var(--s6)}
+.cfg-sec-hd{display:flex;align-items:baseline;gap:var(--s3);padding-bottom:6px;
+  border-bottom:1px solid var(--line2);margin-bottom:var(--s2)}
+.cfg-sec-hd b{font-size:12px;color:var(--ink);letter-spacing:.08em;font-weight:400}
+.cfg-sec-hd i{font-style:normal;font-family:var(--f-m);font-size:9px;color:var(--ink4);letter-spacing:.14em}
+.cfg-empty{padding:var(--s5) 0;color:var(--ink4);font-size:11px;letter-spacing:.04em}
+/* 字段底部一行：默认值（可点恢复）+ 键名 */
+.cf-meta{display:flex;align-items:center;gap:var(--s3);flex-wrap:wrap;margin-top:1px}
+.cf-key{font-family:var(--f-m);font-size:9px;color:var(--ink4);opacity:.55;letter-spacing:.08em}
+.cf-def{font-family:inherit;font-size:9px;color:var(--ink3);background:transparent;
+  border:1px solid var(--line3);padding:2px 6px;cursor:pointer;letter-spacing:.04em;
+  transition:color 120ms var(--ez),border-color 120ms var(--ez)}
+.cf-def:hover{color:var(--c10);border-color:var(--c10)}
+/* 「需重启」标记：红棕，跟在标签后面；不用图标，这套字体系里文字更清楚 */
+.cf-restart{font-style:normal;font-size:9px;letter-spacing:.1em;color:#a4472f;
+  border:1px solid #a4472f;padding:1px 4px;margin-left:6px;vertical-align:1px}
 .cf-tab{font-family:var(--f-m);font-size:12px;letter-spacing:.16em;color:var(--ink3);
   padding:6px 2px 7px;border-bottom:3px solid transparent;cursor:pointer;
   transition:color 140ms var(--ez),border-color 140ms var(--ez);white-space:nowrap}
@@ -4337,15 +4379,15 @@ window.FIELD_META = {
     "de_ai.ban_filler": {"label": "清理套话/路标词", "desc": "", "ctl": "bool", "panel": "deai", "unit": "", "id": "sDeAiBanFiller", "nested": "de_ai", "sub": "ban_filler"},
     "de_ai.ban_sycophancy": {"label": "清理谄媚口吻", "desc": "", "ctl": "bool", "panel": "deai", "unit": "", "id": "sDeAiBanSyco", "nested": "de_ai", "sub": "ban_sycophancy"},
     "de_ai.max_sentence_len": {"label": "超长句拆分阈值（字，0=不拆）", "desc": "", "ctl": "number", "panel": "deai", "unit": "字，0=不拆", "id": "sDeAiMaxLen", "nested": "de_ai", "sub": "max_sentence_len"},
-    "bot_qq": {"label": "Bot QQ", "desc": "Bot 的 QQ 号", "ctl": "text", "panel": "basic", "unit": "", "id": "sBotQq"},
-    "bot_group_nick": {"label": "Bot 昵称", "desc": "群聊中识别 Bot 的昵称", "ctl": "text", "panel": "basic", "unit": "", "id": "sBotNick"},
-    "startup_cooldown": {"label": "启动冷却（秒）", "desc": "Bot 启动后忽略消息的冷却时间", "ctl": "number", "panel": "basic", "unit": "秒", "id": "sStartupCooldown"},
-    "target_qqs": {"label": "目标 QQ（每行一个）", "desc": "", "ctl": "lines", "panel": "basic", "unit": "", "id": "sTargetQqs"},
-    "group_ids": {"label": "群 ID（每行一个）", "desc": "", "ctl": "lines", "panel": "basic", "unit": "", "id": "sGroupIds"},
-    "api_provider": {"label": "提供商", "desc": "切换后自动填充 API 地址并拉取模型列表；每个提供商可保存独立 Key（在「多提供商管理」里编辑）", "ctl": "select", "panel": "llm", "unit": "", "id": "sProvider"},
-    "api_url": {"label": "API URL", "desc": "Chat Completions 完整地址，切换提供商时会自动覆盖", "ctl": "text", "panel": "llm", "unit": "", "id": "sApiUrl"},
+    "bot_qq": {"label": "Bot QQ", "desc": "Bot 的 QQ 号", "ctl": "text", "panel": "basic", "unit": "", "id": "sBotQq", "default": "", "default_text": "空"},
+    "bot_group_nick": {"label": "Bot 昵称", "desc": "群聊中识别 Bot 的昵称", "ctl": "text", "panel": "basic", "unit": "", "id": "sBotNick", "default": "AAA", "default_text": "AAA"},
+    "startup_cooldown": {"label": "启动冷却（秒）", "desc": "Bot 启动后忽略消息的冷却时间", "ctl": "number", "panel": "basic", "unit": "秒", "id": "sStartupCooldown", "default": 60, "default_text": "60"},
+    "target_qqs": {"label": "目标 QQ（每行一个）", "desc": "", "ctl": "lines", "panel": "basic", "unit": "", "id": "sTargetQqs", "default": [], "default_text": "空"},
+    "group_ids": {"label": "群 ID（每行一个）", "desc": "", "ctl": "lines", "panel": "basic", "unit": "", "id": "sGroupIds", "default": [], "default_text": "空"},
+    "api_provider": {"label": "提供商", "desc": "切换后自动填充 API 地址并拉取模型列表；每个提供商可保存独立 Key（在「多提供商管理」里编辑）", "ctl": "select", "panel": "llm", "unit": "", "id": "sProvider", "default": "deepseek", "default_text": "deepseek"},
+    "api_url": {"label": "API URL", "desc": "Chat Completions 完整地址，切换提供商时会自动覆盖", "ctl": "text", "panel": "llm", "unit": "", "id": "sApiUrl", "default": "https://api.deepseek.com/chat/completions"},
     "api_key": {"label": "API Key", "desc": "Key 只写不回显：保存后写入 Windows 凭据管理器，页面不再显示；切换提供商自动使用对应 Key", "ctl": "text", "panel": "llm", "unit": "", "id": "sApiKey"},
-    "model_name": {"label": "模型", "desc": "该提供商不支持自动拉取模型，请手动输入模型代码（保存时优先使用此输入框的值）", "ctl": "select", "panel": "llm", "unit": "", "id": "sModel", "_panels": ["llm", "llm"]},
+    "model_name": {"label": "模型", "desc": "该提供商不支持自动拉取模型，请手动输入模型代码（保存时优先使用此输入框的值）", "ctl": "select", "panel": "llm", "unit": "", "id": "sModel", "_panels": ["llm", "llm"], "default": "deepseek-flash", "default_text": "deepseek-flash"},
     "use_local_llm": {"label": "模型", "desc": "该提供商不支持自动拉取模型，请手动输入模型代码（保存时优先使用此输入框的值）", "ctl": "bool", "panel": "llm", "unit": "", "id": "sUseLocalLlm"},
     "llama_driver": {"label": "LLaMA 驱动程序", "desc": "选择你本机已安装的 LLaMA 运行时", "ctl": "select", "panel": "llm", "unit": "", "id": "sLlamaDriver"},
     "llama_exe_path": {"label": "llama-server 路径", "desc": "仅 llama-server 需要填写可执行文件路径；留空使用内置默认路径", "ctl": "text", "panel": "llm", "unit": "", "id": "sLlamaExePath"},
@@ -4359,52 +4401,52 @@ window.FIELD_META = {
     "image_llm_model_path": {"label": "生图模型文件路径", "desc": "仅 llama-server 需要填写完整 .gguf 路径", "ctl": "text", "panel": "llm", "unit": "", "id": "sImageLlamaModelPath"},
     "image_llm_port": {"label": "生图服务端口", "desc": "生图提示词模型的本地监听端口", "ctl": "number", "panel": "llm", "unit": "", "id": "sImageLlamaPort"},
     "image_llm_model_name": {"label": "生图模型名称", "desc": "调用时使用的模型 ID；留空则自动按驱动程序推断", "ctl": "text", "panel": "llm", "unit": "", "id": "sImageLlamaModelName"},
-    "ai_temperature": {"label": "温度", "desc": "0 = 固定，2 = 非常随机", "ctl": "number", "panel": "llm", "unit": "", "id": "sAiTemp"},
-    "ai_max_tokens": {"label": "最大令牌数", "desc": "", "ctl": "number", "panel": "llm", "unit": "", "id": "sAiMaxTokens"},
-    "ai_top_p": {"label": "Top P", "desc": "", "ctl": "number", "panel": "llm", "unit": "", "id": "sAiTopP"},
-    "ai_frequency_penalty": {"label": "频率惩罚", "desc": "", "ctl": "number", "panel": "llm", "unit": "", "id": "sAiFreqPenalty"},
-    "ai_presence_penalty": {"label": "存在惩罚", "desc": "", "ctl": "number", "panel": "llm", "unit": "", "id": "sAiPresencePenalty"},
-    "session_ttl": {"label": "对话超时（秒）", "desc": "一次会话持续多久后视为结束（连续对话可延续，超时则清空上下文重新开始）", "ctl": "number", "panel": "session", "unit": "秒", "id": "sSessionTtl"},
-    "session_max_rounds": {"label": "对话最大轮次", "desc": "一次会话内最多来回对话多少轮，超出后视为本段对话结束", "ctl": "number", "panel": "session", "unit": "", "id": "sSessionMaxRounds"},
-    "private_reply_interval": {"label": "私聊回复间隔（秒）", "desc": "私聊长回复分多条发送时，每条之间的最小间隔", "ctl": "number", "panel": "session", "unit": "秒", "id": "sPrivateReplyInterval"},
-    "idle_timeout": {"label": "离线判定（秒）", "desc": "私聊中用户超过该时长未回复，Bot 视为对方已离开（区别于下方群聊的退场静默）", "ctl": "number", "panel": "session", "unit": "秒", "id": "sIdleTimeout"},
-    "group_msg_buffer_window": {"label": "消息合并窗口（秒）", "desc": "普通消息（没被 @、也不在会话里）等多久没有后续，才作为一批送进模型。同一个人接着说话会重置倒计时，整批最多等 8 秒", "ctl": "number", "panel": "group", "unit": "秒", "id": "sGroupMsgBuffer"},
-    "group_recent_msgs_window": {"label": "引用回抓窗口（秒）", "desc": "记录多久内的群消息，用于 Bot 回复时回看上下文 / 处理引用消息", "ctl": "number", "panel": "group", "unit": "秒", "id": "sGroupRecentMsgs"},
-    "group_session_max_replies": {"label": "每会话最大回复数", "desc": "被 @ 或提及后进入会话模式，Bot 最多连续回复多少轮", "ctl": "number", "panel": "group", "unit": "", "id": "sGroupMaxReplies"},
-    "group_session_idle_timeout": {"label": "会话维持时长（秒）", "desc": "会话模式保持多长时间（期间 Bot 持续参与群里互动）", "ctl": "number", "panel": "group", "unit": "秒", "id": "sGroupIdleTimeout"},
-    "group_last_exit_cooldown": {"label": "退场冷却（秒）", "desc": "两次「退场语」之间的最小间隔，避免反复退场", "ctl": "number", "panel": "group", "unit": "秒", "id": "sGroupExitCooldown"},
-    "group_idle_exit_enable": {"label": "启用空闲退出", "desc": "Bot 说完话后没人理, 超过下方静默时间后发一句「退场语」", "ctl": "bool", "panel": "group", "unit": "", "id": "sGroupIdleExitEnable"},
-    "group_idle_exit_probability": {"label": "空闲退出概率", "desc": "满足静默条件时, 触发退场的概率（0-1, 0.3 = 30% 概率退场）", "ctl": "number", "panel": "group", "unit": "", "id": "sGroupIdleExitProb"},
-    "group_idle_exit_min_silence": {"label": "退场静默时间（秒）", "desc": "Bot 是群里最后说话者, 且超过该时长无新消息 → 才考虑退场（下限 30 秒）", "ctl": "number", "panel": "group", "unit": "秒", "id": "sGroupIdleMinSilence"},
-    "poke_timeout": {"label": "戳一戳超时（秒）", "desc": "同一人同一群戳 Bot 的连击计数保留时长, 超时后重新计数", "ctl": "number", "panel": "group", "unit": "秒", "id": "sPokeTimeout"},
-    "group_msg_buffer_window_session": {"label": "会话缓冲窗口（秒）", "desc": "会话模式下消息合并的时间窗口", "ctl": "number", "panel": "group", "unit": "秒", "id": "sGroupMsgBufferSession"},
-    "group_msg_buffer_window_trigger": {"label": "触发缓冲窗口（秒）", "desc": "被触发（@/小a）且还没有上下文时, 等多久再回。超过 8 无效——整批从第一条算起有 8 秒硬顶", "ctl": "number", "panel": "group", "unit": "秒", "id": "sGroupMsgBufferTrigger"},
-    "agent_group_enable": {"label": "群聊内可派活", "desc": "被 @ 或叫名字、并且是管理员、并且说的是明确的执行指令（不是闲聊）时，交给 agent 多步执行。三个条件缺一不可。", "ctl": "bool", "panel": "group", "unit": "", "id": "sAgentGroupEnable"},
-    "agent_private_enable": {"label": "私聊内可派活", "desc": "同上，但只在私聊。默认关闭：派活得到的是任务汇报式回答，会把聊天的人格顶掉。带图的消息不走这条路。", "ctl": "bool", "panel": "group", "unit": "", "id": "sAgentPrivateEnable"},
-    "meme_enable": {"label": "启用表情包", "desc": "", "ctl": "bool", "panel": "meme", "unit": "", "id": "sMemeEnable"},
-    "meme_cooldown": {"label": "冷却（秒）", "desc": "", "ctl": "number", "panel": "meme", "unit": "秒", "id": "sMemeCooldown"},
-    "meme_idle_exit_enable": {"label": "启用空闲退出", "desc": "", "ctl": "bool", "panel": "meme", "unit": "", "id": "sMemeIdleExitEnable"},
-    "meme_auto_detect_emotion": {"label": "自动检测情绪", "desc": "", "ctl": "bool", "panel": "meme", "unit": "", "id": "sMemeAutoEmotion"},
-    "recall_feedback_enable": {"label": "启用群聊撤回反馈", "desc": "", "ctl": "bool", "panel": "recall", "unit": "", "id": "sRecallEnable"},
-    "recall_feedback_cooldown": {"label": "冷却（秒）", "desc": "", "ctl": "number", "panel": "recall", "unit": "秒", "id": "sRecallCooldown"},
-    "recall_private_enable": {"label": "启用私聊撤回反馈", "desc": "", "ctl": "bool", "panel": "recall", "unit": "", "id": "sRecallPrivateEnable"},
-    "recall_private_cooldown": {"label": "冷却（秒）", "desc": "", "ctl": "number", "panel": "recall", "unit": "秒", "id": "sRecallPrivateCooldown"},
-    "image_cache_enable": {"label": "图片缓存", "desc": "生图/表情图是否落缓存，减少重复上传", "ctl": "bool", "panel": "switches", "unit": "", "id": "sImageCacheEnable"},
-    "self_learning_enable": {"label": "自学习", "desc": "从对话中学习新知识/用语，增强后续回复", "ctl": "bool", "panel": "switches", "unit": "", "id": "sSelfLearningEnable"},
-    "private_memory_enable": {"label": "私聊记忆", "desc": "记住私聊中聊过的事，跨会话关联上下文", "ctl": "bool", "panel": "switches", "unit": "", "id": "sPrivateMemoryEnable"},
-    "slang_injector_enable": {"label": "俚语注入", "desc": "回复时注入网络热词/黑话，让口气更像真人网友", "ctl": "bool", "panel": "switches", "unit": "", "id": "sSlangInjectorEnable"},
-    "nsfw_enabled": {"label": "NSFW 内容", "desc": "是否允许 Bot 参与/回复成人向话题，关闭则回避", "ctl": "bool", "panel": "switches", "unit": "", "id": "sNsfwEnable"},
-    "private_reply_max_length": {"label": "私聊回复最大长度（字）", "desc": "私聊单条回复的最大字数，超出会按句子拆分多条发送", "ctl": "number", "panel": "length", "unit": "字", "id": "sPrivateReplyMaxLen"},
-    "group_reply_max_length": {"label": "群聊回复最大长度（字）", "desc": "群聊单条回复的最大字数，防止刷屏霸版", "ctl": "number", "panel": "length", "unit": "字", "id": "sGroupReplyMaxLen"},
-    "msg_split_len": {"label": "超长消息切分阈值（字）", "desc": "Bot 输出的消息超过该字数时按句子拆分多条发送（0 = 不拆分）", "ctl": "number", "panel": "length", "unit": "字", "id": "sMsgSplitLen"},
-    "group_trigger_words": {"label": "触发词（每行一个）", "desc": "", "ctl": "lines", "panel": "trigger", "unit": "", "id": "sTriggerWords"},
-    "group_trigger_include_bot_nick": {"label": "包含 Bot 昵称", "desc": "", "ctl": "bool", "panel": "trigger", "unit": "", "id": "sTriggerBotNick"},
-    "group_trigger_include_text_at": {"label": "包含纯文本 @", "desc": "", "ctl": "bool", "panel": "trigger", "unit": "", "id": "sTriggerTextAt"},
-    "group_trigger_include_quote": {"label": "包含引用消息", "desc": "", "ctl": "bool", "panel": "trigger", "unit": "", "id": "sTriggerQuote"},
+    "ai_temperature": {"label": "温度", "desc": "0 = 固定，2 = 非常随机", "ctl": "number", "panel": "llm", "unit": "", "id": "sAiTemp", "default": 0.7, "default_text": "0.7"},
+    "ai_max_tokens": {"label": "最大令牌数", "desc": "", "ctl": "number", "panel": "llm", "unit": "", "id": "sAiMaxTokens", "default": 800, "default_text": "800"},
+    "ai_top_p": {"label": "Top P", "desc": "", "ctl": "number", "panel": "llm", "unit": "", "id": "sAiTopP", "default": 0.9, "default_text": "0.9"},
+    "ai_frequency_penalty": {"label": "频率惩罚", "desc": "", "ctl": "number", "panel": "llm", "unit": "", "id": "sAiFreqPenalty", "default": 0.0, "default_text": "0.0"},
+    "ai_presence_penalty": {"label": "存在惩罚", "desc": "", "ctl": "number", "panel": "llm", "unit": "", "id": "sAiPresencePenalty", "default": 0.0, "default_text": "0.0"},
+    "session_ttl": {"label": "对话超时（秒）", "desc": "一次会话持续多久后视为结束（连续对话可延续，超时则清空上下文重新开始）", "ctl": "number", "panel": "session", "unit": "秒", "id": "sSessionTtl", "default": 300, "default_text": "300"},
+    "session_max_rounds": {"label": "对话最大轮次", "desc": "一次会话内最多来回对话多少轮，超出后视为本段对话结束", "ctl": "number", "panel": "session", "unit": "", "id": "sSessionMaxRounds", "default": 30, "default_text": "30"},
+    "private_reply_interval": {"label": "私聊回复间隔（秒）", "desc": "私聊长回复分多条发送时，每条之间的最小间隔", "ctl": "number", "panel": "session", "unit": "秒", "id": "sPrivateReplyInterval", "default": 3, "default_text": "3"},
+    "idle_timeout": {"label": "离线判定（秒）", "desc": "私聊中用户超过该时长未回复，Bot 视为对方已离开（区别于下方群聊的退场静默）", "ctl": "number", "panel": "session", "unit": "秒", "id": "sIdleTimeout", "default": 120, "default_text": "120"},
+    "group_msg_buffer_window": {"label": "消息合并窗口（秒）", "desc": "普通消息（没被 @、也不在会话里）等多久没有后续，才作为一批送进模型。同一个人接着说话会重置倒计时，整批最多等 8 秒", "ctl": "number", "panel": "group", "unit": "秒", "id": "sGroupMsgBuffer", "default": 3, "default_text": "3"},
+    "group_recent_msgs_window": {"label": "引用回抓窗口（秒）", "desc": "记录多久内的群消息，用于 Bot 回复时回看上下文 / 处理引用消息", "ctl": "number", "panel": "group", "unit": "秒", "id": "sGroupRecentMsgs", "default": 30, "default_text": "30"},
+    "group_session_max_replies": {"label": "每会话最大回复数", "desc": "被 @ 或提及后进入会话模式，Bot 最多连续回复多少轮", "ctl": "number", "panel": "group", "unit": "", "id": "sGroupMaxReplies", "default": 20, "default_text": "20"},
+    "group_session_idle_timeout": {"label": "会话维持时长（秒）", "desc": "会话模式保持多长时间（期间 Bot 持续参与群里互动）", "ctl": "number", "panel": "group", "unit": "秒", "id": "sGroupIdleTimeout", "default": 300, "default_text": "300"},
+    "group_last_exit_cooldown": {"label": "退场冷却（秒）", "desc": "两次「退场语」之间的最小间隔，避免反复退场", "ctl": "number", "panel": "group", "unit": "秒", "id": "sGroupExitCooldown", "default": 3000, "default_text": "3000"},
+    "group_idle_exit_enable": {"label": "启用空闲退出", "desc": "Bot 说完话后没人理, 超过下方静默时间后发一句「退场语」", "ctl": "bool", "panel": "group", "unit": "", "id": "sGroupIdleExitEnable", "default": true, "default_text": "开启"},
+    "group_idle_exit_probability": {"label": "空闲退出概率", "desc": "满足静默条件时, 触发退场的概率（0-1, 0.3 = 30% 概率退场）", "ctl": "number", "panel": "group", "unit": "", "id": "sGroupIdleExitProb", "default": 0.3, "default_text": "0.3"},
+    "group_idle_exit_min_silence": {"label": "退场静默时间（秒）", "desc": "Bot 是群里最后说话者, 且超过该时长无新消息 → 才考虑退场（下限 30 秒）", "ctl": "number", "panel": "group", "unit": "秒", "id": "sGroupIdleMinSilence", "default": 600, "default_text": "600"},
+    "poke_timeout": {"label": "戳一戳超时（秒）", "desc": "同一人同一群戳 Bot 的连击计数保留时长, 超时后重新计数", "ctl": "number", "panel": "group", "unit": "秒", "id": "sPokeTimeout", "default": 30, "default_text": "30"},
+    "group_msg_buffer_window_session": {"label": "会话缓冲窗口（秒）", "desc": "会话模式下消息合并的时间窗口", "ctl": "number", "panel": "group", "unit": "秒", "id": "sGroupMsgBufferSession", "default": 5, "default_text": "5"},
+    "group_msg_buffer_window_trigger": {"label": "触发缓冲窗口（秒）", "desc": "被触发（@/小a）且还没有上下文时, 等多久再回。超过 8 无效——整批从第一条算起有 8 秒硬顶", "ctl": "number", "panel": "group", "unit": "秒", "id": "sGroupMsgBufferTrigger", "default": 8, "default_text": "8"},
+    "agent_group_enable": {"label": "群聊内可派活", "desc": "被 @ 或叫名字、并且是管理员、并且说的是明确的执行指令（不是闲聊）时，交给 agent 多步执行。三个条件缺一不可。", "ctl": "bool", "panel": "group", "unit": "", "id": "sAgentGroupEnable", "default": false, "default_text": "关闭"},
+    "agent_private_enable": {"label": "私聊内可派活", "desc": "同上，但只在私聊。默认关闭：派活得到的是任务汇报式回答，会把聊天的人格顶掉。带图的消息不走这条路。", "ctl": "bool", "panel": "group", "unit": "", "id": "sAgentPrivateEnable", "default": false, "default_text": "关闭"},
+    "meme_enable": {"label": "启用表情包", "desc": "", "ctl": "bool", "panel": "meme", "unit": "", "id": "sMemeEnable", "default": true, "default_text": "开启"},
+    "meme_cooldown": {"label": "冷却（秒）", "desc": "", "ctl": "number", "panel": "meme", "unit": "秒", "id": "sMemeCooldown", "default": 60, "default_text": "60"},
+    "meme_idle_exit_enable": {"label": "启用空闲退出", "desc": "", "ctl": "bool", "panel": "meme", "unit": "", "id": "sMemeIdleExitEnable", "default": true, "default_text": "开启"},
+    "meme_auto_detect_emotion": {"label": "自动检测情绪", "desc": "", "ctl": "bool", "panel": "meme", "unit": "", "id": "sMemeAutoEmotion", "default": true, "default_text": "开启"},
+    "recall_feedback_enable": {"label": "启用群聊撤回反馈", "desc": "", "ctl": "bool", "panel": "recall", "unit": "", "id": "sRecallEnable", "default": true, "default_text": "开启"},
+    "recall_feedback_cooldown": {"label": "冷却（秒）", "desc": "", "ctl": "number", "panel": "recall", "unit": "秒", "id": "sRecallCooldown", "default": 60, "default_text": "60"},
+    "recall_private_enable": {"label": "启用私聊撤回反馈", "desc": "", "ctl": "bool", "panel": "recall", "unit": "", "id": "sRecallPrivateEnable", "default": true, "default_text": "开启"},
+    "recall_private_cooldown": {"label": "冷却（秒）", "desc": "", "ctl": "number", "panel": "recall", "unit": "秒", "id": "sRecallPrivateCooldown", "default": 60, "default_text": "60"},
+    "image_cache_enable": {"label": "图片缓存", "desc": "生图/表情图是否落缓存，减少重复上传", "ctl": "bool", "panel": "switches", "unit": "", "id": "sImageCacheEnable", "default": true, "default_text": "开启"},
+    "self_learning_enable": {"label": "自学习", "desc": "从对话中学习新知识/用语，增强后续回复", "ctl": "bool", "panel": "switches", "unit": "", "id": "sSelfLearningEnable", "default": true, "default_text": "开启"},
+    "private_memory_enable": {"label": "私聊记忆", "desc": "记住私聊中聊过的事，跨会话关联上下文", "ctl": "bool", "panel": "switches", "unit": "", "id": "sPrivateMemoryEnable", "default": true, "default_text": "开启"},
+    "slang_injector_enable": {"label": "俚语注入", "desc": "回复时注入网络热词/黑话，让口气更像真人网友", "ctl": "bool", "panel": "switches", "unit": "", "id": "sSlangInjectorEnable", "default": true, "default_text": "开启"},
+    "nsfw_enabled": {"label": "NSFW 内容", "desc": "是否允许 Bot 参与/回复成人向话题，关闭则回避", "ctl": "bool", "panel": "switches", "unit": "", "id": "sNsfwEnable", "default": true, "default_text": "开启"},
+    "private_reply_max_length": {"label": "私聊回复最大长度（字）", "desc": "私聊单条回复的最大字数，超出会按句子拆分多条发送", "ctl": "number", "panel": "length", "unit": "字", "id": "sPrivateReplyMaxLen", "default": 500, "default_text": "500"},
+    "group_reply_max_length": {"label": "群聊回复最大长度（字）", "desc": "群聊单条回复的最大字数，防止刷屏霸版", "ctl": "number", "panel": "length", "unit": "字", "id": "sGroupReplyMaxLen", "default": 800, "default_text": "800"},
+    "msg_split_len": {"label": "超长消息切分阈值（字）", "desc": "Bot 输出的消息超过该字数时按句子拆分多条发送（0 = 不拆分）", "ctl": "number", "panel": "length", "unit": "字", "id": "sMsgSplitLen", "default": 2000, "default_text": "2000"},
+    "group_trigger_words": {"label": "触发词（每行一个）", "desc": "", "ctl": "lines", "panel": "trigger", "unit": "", "id": "sTriggerWords", "default": ["小a"], "default_text": "小a"},
+    "group_trigger_include_bot_nick": {"label": "包含 Bot 昵称", "desc": "", "ctl": "bool", "panel": "trigger", "unit": "", "id": "sTriggerBotNick", "default": true, "default_text": "开启"},
+    "group_trigger_include_text_at": {"label": "包含纯文本 @", "desc": "", "ctl": "bool", "panel": "trigger", "unit": "", "id": "sTriggerTextAt", "default": true, "default_text": "开启"},
+    "group_trigger_include_quote": {"label": "包含引用消息", "desc": "", "ctl": "bool", "panel": "trigger", "unit": "", "id": "sTriggerQuote", "default": true, "default_text": "开启"},
     "command_permission": {"label": "权限模式", "desc": "", "ctl": "select", "panel": "perm", "unit": "", "id": "sCmdPermMode"},
     "command_admins": {"label": "额外管理员 QQ（每行一个）", "desc": "除 target_qqs（私聊白名单）与 Bot 本人外，追加可执行管理员指令的 QQ", "ctl": "lines", "panel": "perm", "unit": "", "id": "sCmdAdmins"},
-    "admin_qqs": {"label": "群管理白名单 QQ（每行一个）", "desc": "可在群里 @Bot 执行踢人/禁言/改名片等管理指令的 QQ；留空 = 仅 Bot 本人 + 上方管理员", "ctl": "lines", "panel": "perm", "unit": "", "id": "sAdminQqs"},
-    "admin_commands_enable": {"label": "启用群管理指令", "desc": "", "ctl": "bool", "panel": "perm", "unit": "", "id": "sAdminCmdsEnable"},
+    "admin_qqs": {"label": "群管理白名单 QQ（每行一个）", "desc": "可在群里 @Bot 执行踢人/禁言/改名片等管理指令的 QQ；留空 = 仅 Bot 本人 + 上方管理员", "ctl": "lines", "panel": "perm", "unit": "", "id": "sAdminQqs", "default": [], "default_text": "空"},
+    "admin_commands_enable": {"label": "启用群管理指令", "desc": "", "ctl": "bool", "panel": "perm", "unit": "", "id": "sAdminCmdsEnable", "default": true, "default_text": "开启"},
     "auto_accept.enabled": {"label": "总开关（自动同意）", "desc": "", "ctl": "bool", "panel": "autoaccept", "unit": "", "id": "sAutoAcceptEnabled", "nested": "auto_accept", "sub": "enabled"},
     "auto_accept.friend": {"label": "自动同意好友申请", "desc": "", "ctl": "bool", "panel": "autoaccept", "unit": "", "id": "sAutoAcceptFriend", "nested": "auto_accept", "sub": "friend"},
     "auto_accept.group_add": {"label": "自动同意加群申请", "desc": "", "ctl": "bool", "panel": "autoaccept", "unit": "", "id": "sAutoAcceptGroupAdd", "nested": "auto_accept", "sub": "group_add"},
@@ -4416,13 +4458,13 @@ window.FIELD_META = {
     "auto_accept.allowlist": {"label": "白名单 QQ/群（每行一个，空 = 全部通过）", "desc": "", "ctl": "lines", "panel": "autoaccept", "unit": "", "id": "sAutoAcceptAllowlist", "nested": "auto_accept", "sub": "allowlist"},
     "auto_accept.denylist": {"label": "黑名单 QQ/群（每行一个，直接拒绝）", "desc": "", "ctl": "lines", "panel": "autoaccept", "unit": "", "id": "sAutoAcceptDenylist", "nested": "auto_accept", "sub": "denylist"},
     "group_tool_allowlist": {"label": "群聊工具白名单", "desc": "勾选允许在群聊使用的工具", "ctl": "toolcheck", "panel": "group", "mount": "sGroupToolList", "key": "group_tool_allowlist"},
-    "recall_feedback_pre_messages": {"label": "撤回前反馈", "desc": "Bot 的 AI 回复被撤回截断时的反馈语", "ctl": "editable", "panel": "recall", "mount": "recallPreList", "key": "recall_feedback_pre_messages"},
-    "recall_feedback_post_messages": {"label": "撤回后反馈", "desc": "Bot 已回复后被撤回时的反馈语", "ctl": "editable", "panel": "recall", "mount": "recallPostList", "key": "recall_feedback_post_messages"},
-    "recall_private_post_messages": {"label": "私聊撤回反馈", "desc": "私聊撤回时的反馈语", "ctl": "editable", "panel": "recall", "mount": "recallPrivateList", "key": "recall_private_post_messages"},
-    "custom_exit_phrases_short": {"label": "短退场语", "desc": "每行一条，Bot 主动离开时随机发送", "ctl": "editable", "panel": "exit", "mount": "exitShortList", "key": "custom_exit_phrases_short"},
-    "custom_exit_phrases_idle": {"label": "空闲退场语", "desc": "长时间无人对话时触发", "ctl": "editable", "panel": "exit", "mount": "exitIdleList", "key": "custom_exit_phrases_idle"},
-    "group_quote_mode": {"label": "群引用回复", "desc": "回复时是否引用它正在回的那条消息：off=不引用 / auto=只在对象明确时引用（合并多条历史、或对方本来就发了引用）/ always=每条都引用", "ctl": "select", "panel": "group", "unit": "", "id": "sGroupQuoteMode", "options": [["auto", "自动（推荐）"], ["always", "每条都引用"], ["off", "从不引用"]]},
-    "bot_nicknames": {"label": "Bot 昵称（每行一个）", "desc": "Bot 的全部称呼：群友叫其中任何一个都算在叫它。第一个当作网名用；留空则用群名片，再空才兜底 小a。大小写/全角/@ 不敏感", "ctl": "lines", "panel": "trigger", "unit": "", "id": "sBotNicknames"},
+    "recall_feedback_pre_messages": {"label": "撤回前反馈", "desc": "Bot 的 AI 回复被撤回截断时的反馈语", "ctl": "editable", "panel": "recall", "mount": "recallPreList", "key": "recall_feedback_pre_messages", "default": ["？", "你撤回了一条消息", "还好你撤了 我差点就回了", "撤回了？行 那我也不用回了", "还没看呢 你就撤了", "手速可以啊 我还没来得及回", "撤了就撤了吧 反正我也没打算回", "哎哟 差点就点发送了", "你撤回的速度比我打字快", "还好还好 还没发出去", "撤回+1 这条我当没看见", "不回了不回了 你都撤了我还回啥", "撤得好 我正愁怎么接", "你撤回 我省事", "这波属于是你跑得快", "撤都撤了 那就算了", "还没读呢就撤了 算你识相", "行吧 本AI的回复可以省了", "撤回=跳过 这局不算", "差点白打字了 幸好你撤了", "你撤你的 我当无事发生", "撤回成功 已为你拦截一条AI回复"], "default_text": "22 项"},
+    "recall_feedback_post_messages": {"label": "撤回后反馈", "desc": "Bot 已回复后被撤回时的反馈语", "ctl": "editable", "panel": "recall", "mount": "recallPostList", "key": "recall_feedback_post_messages", "default": ["看到了 晚了", "看到了哦 不说", "太慢了 我已经看到了", "来不及了 嘿嘿", "撤回慢了 已截获", "晚了 我看到了", "回复已经发出去了 哈哈", "不好意思 你撤的时候我已经看到了", "看到了 不过我不说", "来不及啦 我已经读过了", "晚啦 眼睛比你手快", "撤回无效 本人已阅", "看到了看到了 别费劲了", "我看到了 你撤了个寂寞", "撤晚了 我已经知道了", "不巧 我刚好在看", "被我看到了吧 嘿嘿", "你撤回的速度还是不够快啊", "看到了 但我会装作没看到", "太迟了 消息已送达我脑子里"], "default_text": "20 项"},
+    "recall_private_post_messages": {"label": "私聊撤回反馈", "desc": "私聊撤回时的反馈语", "ctl": "editable", "panel": "recall", "mount": "recallPrivateList", "key": "recall_private_post_messages", "default": ["撤回了？我还没看到", "什么情况 手滑了？", "你撤回的速度比打字快多了", "心虚了吧", "好家伙 说撤就撤", "别撤回啊 发都发了"], "default_text": "6 项"},
+    "custom_exit_phrases_short": {"label": "短退场语", "desc": "每行一条，Bot 主动离开时随机发送", "ctl": "editable", "panel": "exit", "mount": "exitShortList", "key": "custom_exit_phrases_short", "default": [], "default_text": "空"},
+    "custom_exit_phrases_idle": {"label": "空闲退场语", "desc": "长时间无人对话时触发", "ctl": "editable", "panel": "exit", "mount": "exitIdleList", "key": "custom_exit_phrases_idle", "default": [], "default_text": "空", "restart": true},
+    "group_quote_mode": {"label": "群引用回复", "desc": "回复时是否引用它正在回的那条消息：off=不引用 / auto=只在对象明确时引用（合并多条历史、或对方本来就发了引用）/ always=每条都引用", "ctl": "select", "panel": "group", "unit": "", "id": "sGroupQuoteMode", "options": [["auto", "自动（推荐）"], ["always", "每条都引用"], ["off", "从不引用"]], "default": "auto", "default_text": "auto"},
+    "bot_nicknames": {"label": "Bot 昵称（每行一个）", "desc": "Bot 的全部称呼：群友叫其中任何一个都算在叫它。第一个当作网名用；留空则用群名片，再空才兜底 小a。大小写/全角/@ 不敏感", "ctl": "lines", "panel": "trigger", "unit": "", "id": "sBotNicknames", "default": [], "default_text": "空"},
   }
 };
 /* ══ FIELD_META_END */
@@ -4475,6 +4517,30 @@ function cfPanelsWithFields() {
   const n = {};
   Object.keys(FIELD_META.fields).forEach(k => { n[FIELD_META.fields[k].panel] = (n[FIELD_META.fields[k].panel] || 0) + 1; });
   return FIELD_META.panels.filter(p => n[p[0]]);
+}
+/* ── 配置页分组（2026-10-24 重排）────────────────────────────────
+   原来 15 个面板平级排成一行标签，用户不知道该点哪个：
+   「会话」和「群聊」和「触发」和「退场语」的边界只有写代码的人清楚，
+   「去 AI 味」「协议风险」是内部说法，「提供商管理」和「对话大脑」又各占一屏。
+   现在按**用户想干什么**分成 6 组，组内小节竖着堆，不再加第三层导航：
+     接入 → 换模型、填 Key、连协议、机器人账号
+     说话 → 模型参数、语气、去 AI 味、回复长度
+     群聊 → 应答时机、触发词、退场、权限
+     互动 → 表情包、撤回反馈
+     功能 → 总开关、自动通过、会话与记忆
+     界面 → 版本配色、原始配置
+   分组只是导航层，字段归属仍以 FIELD_META 的 panel 为准。 */
+const CFG_GROUPS = [
+  ['connect',  '接入', ['basic'],                        '模型 · Key · 协议'],
+  ['talk',     '说话', ['llm', 'deai', 'length'],        '参数 · 语气 · 长度'],
+  ['grouptalk','群聊', ['group', 'trigger', 'exit', 'perm'], '时机 · 触发 · 退场'],
+  ['interact', '互动', ['meme', 'recall'],               '表情 · 撤回'],
+  ['feature',  '功能', ['switches', 'autoaccept', 'session'], '开关 · 自动通过'],
+  ['look',     '界面', ['ui'],                           '版本 · 配色'],
+];
+function cfGroupOf(panel) {
+  const g = CFG_GROUPS.find(x => x[2].indexOf(panel) !== -1);
+  return g ? g[0] : 'feature';
 }
 function cfFieldHTML(k, m, cfg, ctx) {
   const v = cfGet(cfg, k);
@@ -4542,8 +4608,43 @@ function cfFieldHTML(k, m, cfg, ctx) {
     ctl = '<input data-k="' + esc(k) + '" value="' + esc(v == null ? '' : String(v)) + '"'
       + (masked ? ' data-masked="1"' : '') + ' spellcheck="false">';
   }
-  return '<div class="cf-fld"><div>' + lab + '</div><div class="cf-ctl">' + ctl
-    + '<div class="cf-desc" style="opacity:.5">' + esc(k) + '</div></div></div>';
+  /* 默认值与「需重启」标记：都来自 _fieldmeta.json（由
+     scripts/patch_field_defaults.py 从 config.DEFAULT_CONFIG 与
+     bot_core 的模块级常量表生成），前端不硬编码。 */
+  const restartTag = m.restart
+    ? '<em class="cf-restart" title="这一项被读成模块级常量，热重载刷不到，改完要重启后端">需重启</em>' : '';
+  const defHtml = (m.default_text !== undefined)
+    ? '<button type="button" class="cf-def" data-reset="' + esc(k) + '"'
+      + ' title="点这里把这一项改回默认值（' + esc(m.default_text) + '）">默认 ' + esc(m.default_text) + ' ↺</button>'
+    : '';
+  return '<div class="cf-fld"><div>' + lab + restartTag + '</div><div class="cf-ctl">' + ctl
+    + '<div class="cf-meta">' + defHtml
+    + '<span class="cf-key">' + esc(k) + '</span></div></div></div>';
+}
+/* 搜索态：跨全部分组平铺匹配项，按原面板归属分节。
+   95 个字段靠翻分组找太慢；搜索命中中文说明，不只匹配键名。 */
+function cfRenderSearch(host, cfg, ctx, kw) {
+  const q = String(kw || '').toLowerCase();
+  const hit = {};
+  Object.keys(FIELD_META.fields).forEach(k => {
+    const m = FIELD_META.fields[k];
+    const hay = (k + ' ' + (m.label || '') + ' ' + (m.desc || '')).toLowerCase();
+    if (hay.indexOf(q) === -1) return;
+    (hit[m.panel] = hit[m.panel] || []).push([k, m]);
+  });
+  const panels = FIELD_META.panels.map(p => p[0]).filter(p => hit[p]);
+  if (!panels.length) {
+    host.innerHTML = '<div class="cfg-empty">没有匹配「' + esc(kw) + '」的配置项。'
+      + '换个词，或清空搜索框回到分组。</div>';
+    return;
+  }
+  host.innerHTML = panels.map(p => {
+    const label = (FIELD_META.panels.find(x => x[0] === p) || [p, p])[1];
+    return '<div class="cfg-sec" data-sec="' + esc(p) + '">'
+      + '<div class="cfg-sec-hd"><b>' + esc(label) + '</b><i>' + hit[p].length + ' 项匹配</i></div>'
+      + hit[p].map(x => cfFieldHTML(x[0], x[1], cfg, ctx)).join('') + '</div>';
+  }).join('');
+  qsa('.cfg-sec[data-sec]', host).forEach(sec => cfBindArea(sec, cfg, ctx));
 }
 /* ctx = {cfg, dirty, mark, lists, listDirty, active} */
 function cfRenderArea(host, cfg, ctx) {
@@ -4556,23 +4657,34 @@ function cfRenderArea(host, cfg, ctx) {
        否则"加一条退场语 → repaint"刚追加的行立刻被旧配置抹掉（实测：计数变了、行数不变）。
        已经在 ctx.lists 里的（含未保存的新增/勾停用）保留，保存时统一收集。 */
   });
-  const panels = cfPanelsWithFields();
-  panels.push(['ui', '界面']);                          /* 手工面板：版本 + 配色 */
-  if (!ctx.active || !panels.some(p => p[0] === ctx.active)) ctx.active = panels[0][0];
-  host.innerHTML = '<div class="cf-tabs">' + panels.map(p => {
-    const n = p[0] === 'ui' ? '' : Object.keys(FIELD_META.fields)
-      .filter(k => FIELD_META.fields[k].panel === p[0]).length;
-    return '<button type="button" class="cf-tab' + (p[0] === ctx.active ? ' on' : '')
-      + '" data-cf-tab="' + esc(p[0]) + '">' + esc(p[1]) + '<i>' + n + '</i></button>';
-  }).join('') + '</div><div id="cfPanel"></div>';
-  qsa('[data-cf-tab]', host).forEach(b => {
-    b.onclick = () => { ctx.active = b.dataset.cfTab; cfRenderArea(host, cfg, ctx); };
+  /* ⑥ 组内容：小节竖着堆，节内是字段。不再有 15 个平级标签。 */
+  const grp = CFG_GROUPS.find(g => g[0] === ctx.group) || CFG_GROUPS[0];
+  let secHtml = '';
+  let fieldCount = 0;
+  grp[2].forEach(p => {
+    if (p === 'ui') {
+      secHtml += '<div class="cfg-sec" data-sec="ui">'
+        + '<div class="cfg-sec-hd"><b>界面</b><i>版本与配色</i></div>'
+        + '<div id="cfPanel"></div></div>';
+      return;
+    }
+    const metas = Object.keys(FIELD_META.fields)
+      .map(k => [k, FIELD_META.fields[k]]).filter(x => x[1].panel === p);
+    if (!metas.length) return;
+    const label = (FIELD_META.panels.find(x => x[0] === p) || [p, p])[1];
+    fieldCount += metas.length;
+    secHtml += '<div class="cfg-sec" data-sec="' + esc(p) + '">'
+      + '<div class="cfg-sec-hd"><b>' + esc(label) + '</b><i>' + metas.length + ' 项</i></div>'
+      + metas.map(x => cfFieldHTML(x[0], x[1], cfg, ctx)).join('')
+      + '</div>';
   });
-;
+  host.innerHTML = (fieldCount === 0 && grp[0] !== 'look'
+      ? '<div class="cfg-sec"><div class="cfg-empty">这一组暂时没有可改的项</div></div>'
+      : secHtml);
 
   const metas = Object.keys(FIELD_META.fields)
-    .map(k => [k, FIELD_META.fields[k]]).filter(x => x[1].panel === ctx.active);
-  if (ctx.active === 'ui') {
+    .map(k => [k, FIELD_META.fields[k]]).filter(x => x[1].panel === (ctx.active || ''));
+  if (ctx.group === 'look') {
     /* 界面面板：版本与配色都用**卡片直选**（原生 select 太丑，用户点名）*/
     const cur = window.__pvUiVer || 'v4';
     const PALS = [['a', '晨白', '#f4f1e8'], ['r', '绯白', '#f8f4f0'],
@@ -4614,11 +4726,45 @@ function cfRenderArea(host, cfg, ctx) {
     });
     return;
   }
-  $('cfPanel').innerHTML = metas.map(x => cfFieldHTML(x[0], x[1], cfg, ctx)).join('');
-  cfBindArea($('cfPanel'), cfg, ctx);
+  /* 各小节分别绑定：原来整块 cfPanel 一次绑，现在一节一个容器 */
+  qsa('.cfg-sec[data-sec]', host).forEach(sec => cfBindArea(sec, cfg, ctx));
 }
 function cfBindArea(host, cfg, ctx) {
-  const repaint = () => cfRenderArea($('cfArea'), cfg, ctx);
+  const repaint = () => (ctx.keyword
+    ? cfRenderSearch($('cfArea'), cfg, ctx, ctx.keyword)
+    : cfRenderArea($('cfArea'), cfg, ctx));
+  /* ⓪ 恢复默认：把控件写回默认值并计入改动。
+     按控件类型分开处理 —— 布尔是 aria-checked + 文案，列表是 ctx.lists，
+     其余是 input.value。写错类型会让"恢复了但没保存"。 */
+  qsa('[data-reset]', host).forEach(btn => {
+    btn.onclick = () => {
+      const k = btn.dataset.reset;
+      const m = FIELD_META.fields[k] || {};
+      if (!('default' in m)) return;
+      const dv = m.default;
+      if (m.ctl === 'bool') {
+        const sw = host.querySelector('[data-sw="' + CSS.escape(k) + '"]');
+        const on = !!dv;
+        if (sw) sw.setAttribute('aria-checked', on ? 'true' : 'false');
+        const t = host.querySelector('[data-sw-t="' + CSS.escape(k) + '"]');
+        if (t) t.textContent = on ? '开启' : '关闭';
+        ctx.dirty[k] = on;
+      } else if (m.ctl === 'editable') {
+        ctx.lists[k] = cfNormList(dv);
+        ctx.listDirty[k] = true;
+        repaint();
+      } else {
+        const el = host.querySelector('[data-k="' + CSS.escape(k) + '"]');
+        if (el) {
+          if (m.ctl === 'lines') el.value = (Array.isArray(dv) ? dv : []).join('\n');
+          else if (Array.isArray(dv) || (dv && typeof dv === 'object')) el.value = JSON.stringify(dv);
+          else el.value = dv == null ? '' : String(dv);
+        }
+        ctx.dirty[k] = dv;
+      }
+      ctx.mark();
+    };
+  });
   /* ① 开关 */
   qsa('[data-sw]', host).forEach(btn => {
     btn.onclick = () => {
@@ -4788,6 +4934,18 @@ async function pageConfig(el) {
     + '</option>').join('');
 
   el.innerHTML = ''
+    /* ── 顶栏：搜索 + 改动计数 + 保存。原来"保存"夹在页面中段，
+         改完上面还要往下滚才能保存；现在固定在顶部跟着走。 ── */
+    + '<div class="cfg-bar">'
+    +   '<div class="cfg-bar-l"><b id="cfgCount"></b><span class="dim" id="cfgHint"></span></div>'
+    +   '<div class="cfg-bar-r">'
+    +     '<input id="cfgSearch" placeholder="搜配置项，可搜中文说明" autocomplete="off">'
+    +     '<span class="dim" id="cDirty">无改动</span>'
+    +     '<button class="btn primary" id="cSave" disabled>保存改动</button>'
+    +   '</div>'
+    + '</div>'
+    + '<div class="cfg-groups" id="cfgGroups"></div>'
+    + '<div id="cfgConnect">'
     + '<div class="hd"><span class="lab">快速切换模型</span><i class="rule"></i></div>'
     + '<div style="display:flex;gap:var(--s5);flex-wrap:wrap;align-items:flex-end">'
     +   '<div class="fld" style="min-width:180px"><label>提供商</label>'
@@ -4836,12 +4994,10 @@ async function pageConfig(el) {
     +   '<button class="btn sm" data-pv="custom_exit_phrases_short">短消息退场语</button>'
     + '</div>'
 
-    + '<div class="hd" style="margin-top:var(--s6)"><span class="lab">配置项 '
-    +   keys.length + ' 项</span><i class="rule"></i>'
-    +   '<span class="dim" id="cDirty">无改动</span>'
-    +   '<button class="btn primary" id="cSave" disabled>保存改动</button></div>'
-    /* ↓ 元数据面板区（v3 的 15 个设置面板 / 99 个字段，带中文标签与说明）
-         排在"原始键值"区之前 —— 有标签的才是主入口。 */
+    /* ↑ 以上是「接入」组的内容（模型切换 / 多提供商 / 诊断 / 预览）。
+       它整块收在 #cfgConnect 里，切到别的分组时整块隐藏，
+       而不是像以前那样永远堆在页面最上面 —— 那些内容占了首屏三屏。 */
+    + '</div>'
     + '<div id="cfArea"></div>'
     /* 「其他配置项」默认**收起**：它是页面级区块（不随 tab 切换隐藏），
        常驻展开的话每个 tab 底下都挂着同一坨（用户反馈"所有页都有一个其他"）。*/
@@ -4865,7 +5021,7 @@ async function pageConfig(el) {
   const dirty = {};
   /* 元数据区上下文：与"其他配置项"共用 dirty/mark，保存时一起提交 */
   const cfCtx = {
-    cfg, dirty, lists: {}, listDirty: {}, active: null,
+    cfg, dirty, lists: {}, listDirty: {}, active: null, group: 'connect',
     mark: () => mark(),
   };
   /* 列表字段初值（退场语 / 撤回反馈：[{text,disabled}]）*/
@@ -4951,7 +5107,61 @@ async function pageConfig(el) {
   draw('');
   $('cFilter').oninput = (e) => draw(e.target.value.trim());
   /* 元数据面板区渲染（tabs + 字段）*/
-  cfRenderArea($('cfArea'), cfg, cfCtx);
+  /* ── 分组导航（2026-10-24）────────────────────────────────────
+     六个分组按钮 + 一个搜索框。切组只换内容区，不重载页面。
+     「接入」组是原来那一整块（模型 / 提供商 / 诊断 / 预览），
+     它在 #cfgConnect 里，切到别的组时整块隐藏。 */
+  const showGroup = (gid, keyword) => {
+    cfCtx.group = gid;
+    cfCtx.keyword = keyword || '';
+    const grp = CFG_GROUPS.find(g => g[0] === gid) || CFG_GROUPS[0];
+    cfCtx.active = grp[2].indexOf('ui') !== -1 ? 'ui' : grp[2][0];
+    const bar = $('cfgGroups');
+    if (bar) {
+      bar.innerHTML = CFG_GROUPS.map(g =>
+        '<button type="button" class="cfg-grp' + (g[0] === gid ? ' on' : '')
+        + '" data-grp="' + g[0] + '"><b>' + esc(g[1]) + '</b><span>' + esc(g[3]) + '</span></button>'
+      ).join('');
+      qsa('[data-grp]', bar).forEach(b => b.onclick = () => {
+        const kw = ($('cfgSearch') || {}).value || '';
+        if (kw.trim()) { $('cfgSearch').value = ''; }   /* 换了组就退出搜索状态 */
+        showGroup(b.dataset.grp);
+      });
+    }
+    const conn = $('cfgConnect');
+    /* 接入组的内容是页面里原有的那一整块；其余分组看字段区。
+       搜索状态下两处都让位给结果列表。 */
+    const searching = !!(keyword && keyword.trim());
+    if (conn) conn.hidden = searching || gid !== 'connect';
+    const hint = $('cfgHint');
+    const cnt = $('cfgCount');
+    if (cnt) cnt.textContent = Object.keys(FIELD_META.fields).length + ' 项';
+    if (hint) hint.textContent = searching ? '搜索中' : '分 ' + CFG_GROUPS.length + ' 组';
+    if (searching) cfRenderSearch($('cfArea'), cfg, cfCtx, keyword.trim());
+    else cfRenderArea($('cfArea'), cfg, cfCtx);
+  };
+  showGroup('connect');
+  /* 给测试与脚本用的导航入口（2026-10-24 分组重排后新增）。
+     旧版靠点 `.cf-tab` 切面板；现在面板是分组内的小节，没有独立按钮，
+     所以留一个按面板名跳转的函数，避免测试去猜 DOM 结构。 */
+  window.__cfGo = (panel) => {
+    const g = CFG_GROUPS.find(x => x[2].indexOf(panel) !== -1);
+    if (!g) return false;
+    const btn = [...document.querySelectorAll('.cfg-grp')].find(b => b.dataset.grp === g[0]);
+    if (btn) btn.click();
+    return true;
+  };
+  window.__cfGroups = () => CFG_GROUPS.map(g => g[0]);
+  window.__cfPanelLabels = () =>
+    [...document.querySelectorAll('.cfg-sec-hd b')].map(e => e.textContent);
+  const se = $('cfgSearch');
+  if (se) {
+    let timer = null;
+    se.addEventListener('input', () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => showGroup(cfCtx.group, se.value), 160);
+    });
+  }
 
   const say = (ok, t) => { $('cMsg').innerHTML = '<div class="sig ' + (ok ? 'ok' : 'err')
     + '"><i></i>' + esc(t) + '</div>'; };
@@ -5158,7 +5368,17 @@ async function pageConfig(el) {
       const r = await API('/config', { method:'POST', body: JSON.stringify(payload) });
       if (r && (r.ok === false || r.error)) { say(false, r.error || '保存失败'); $('cSave').disabled = false; return; }
       await API('/config/reload', { method:'POST', body:'{}' }).catch(() => {});
-      say(true, '已保存 ' + n + ' 项' + (nList ? '（含 ' + nList + ' 组列表）' : '') + '并热重载');
+      /* 保存后才需要知道"要不要重启"：只有被读成模块级常量、又不在热重载名单里的键
+         才真正需要（这些键在 _fieldmeta.json 里带 restart:true，由脚本从代码生成）。
+         大部分键改完即时生效，不能笼统地说"请重启"，那会让用户白重启。 */
+      const needRestart = Object.keys(payload).filter(k => {
+        const m = FIELD_META.fields[k];
+        return m && m.restart;
+      });
+      say(true, '已保存 ' + n + ' 项' + (nList ? '（含 ' + nList + ' 组列表）' : '')
+        + (needRestart.length
+            ? '；其中 ' + needRestart.length + ' 项要重启后端才生效：' + needRestart.join('、')
+            : '并已热重载，无需重启'));
       /* 同步基线：否则"已保存"之后仍显示有改动，还会重复提交 */
       Object.keys(payload).forEach(k => cfSet(cfgOriginal, k, payload[k]));
       Object.keys(dirty).forEach(k => delete dirty[k]);
