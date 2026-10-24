@@ -506,6 +506,10 @@ with sync_playwright() as pw:
     masked = pg.eval_on_selector_all('.panel [data-k][data-masked="1"]', "e => e.map(x=>x.dataset.k)")
     ck("★ 敏感字段标了 data-masked", bool(masked), masked)
 
+    # 引导横幅：夹具里 api_key 有值 → 已配好，横幅必须收起来（不能打扰配好的人）
+    ck("★ 已配置模型时不显示引导横幅",
+       pg.eval_on_selector("#cfgSetup", "e=>e.hidden") is True)
+
     print("\n=== ★ 只读键不能有可编辑入口（providers 含掩码 Key）===")
     editable = pg.eval_on_selector_all(".panel [data-k]", "e => e.map(x=>x.dataset.k)")
     ck("`providers` 不在可编辑控件里", "providers" not in editable, editable[:12])

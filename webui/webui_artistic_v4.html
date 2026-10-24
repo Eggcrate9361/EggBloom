@@ -433,6 +433,15 @@ input,select,textarea{font:inherit;color:inherit}
    点卡=选用（回填 api_url/提供商并保存），Edit=弹窗编辑（含每提供商专属 Key），
    Del=删除。当前生效提供商描金边。 */
 .pv-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:var(--s3)}
+/* 未配置模型的引导横幅：整宽一条，颜色用强调金，不用红色（不是错误，只是没开始） */
+.setup-bn{display:flex;align-items:center;justify-content:space-between;gap:var(--s5);
+  flex-wrap:wrap;padding:var(--s4) var(--s5);margin-bottom:var(--s4);
+  border:1px solid var(--accent-dim);background:var(--panel);position:relative}
+.setup-bn::before{content:'';position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--c10)}
+.setup-bn-l{display:flex;flex-direction:column;gap:5px;min-width:0;padding-left:var(--s3)}
+.setup-bn-l b{font-family:var(--f-m);font-size:12px;letter-spacing:.16em;color:var(--c10);font-weight:400}
+.setup-bn-l span{font-size:11px;color:var(--ink3);line-height:1.6;letter-spacing:.02em;max-width:70ch}
+.setup-bn-r{display:flex;align-items:center;gap:var(--s2);flex-wrap:wrap}
 /* #pvCards 自身就是这个 grid 容器；常用/其他的小节标题与内层网格必须整行跨列，
    否则它们会被当成栅格项并排（实测：常用与"其他"左右分栏、卡片被拉得很高）。 */
 #pvCards>.pv-sec-hd,#pvCards>.pv-cards,#pvCards>.pv-empty{grid-column:1/-1}
@@ -4945,6 +4954,9 @@ async function pageConfig(el) {
     + '</option>').join('');
 
   el.innerHTML = ''
+    /* 未配置模型时的引导横幅（内容由 renderSetup 填，见下）。放在最顶上，
+       因为配置向导按钮原来在「对话大脑」面板中下部，首屏看不到。 */
+    + '<div id="cfgSetup" hidden></div>'
     /* ── 顶栏：搜索 + 改动计数 + 保存。原来"保存"夹在页面中段，
          改完上面还要往下滚才能保存；现在固定在顶部跟着走。 ── */
     + '<div class="cfg-bar">'
@@ -5393,6 +5405,43 @@ async function pageConfig(el) {
   }
   pvRender();
 
+  /* ── 引导横幅：只在"真的没配好"时出现（2026-10-24）──────────────
+     判据不看字段是否为空 —— `api_provider` / `model_name` 都有默认值，
+     空不空说明不了什么。真正的门槛是**有没有可用的 Key**：
+       全局 Key（cfg.api_key）· 当前提供商的独立 Key（has_api_key）·
+       或者本来就用本地模型（use_local_llm）。
+     用户在横幅里点「我自己配」后记进 localStorage，不再打扰；
+     配好之后无论有没有关过，都不再显示。 */
+  const setupBox = $('cfgSetup');
+  const setupDismissed = (() => {
+    try { return localStorage.getItem('cfg-setup-dismissed') === '1'; } catch (e) { return false; }
+  })();
+  const setupState = {
+    ready: (() => {
+      const cur = pvList.find(p => String(p.id) === String(cfg.api_provider)) || {};
+      return !!(cfg.api_key || cur.has_api_key || cfg.use_local_llm);
+    })(),
+  };
+  const renderSetup = () => {
+    if (!setupBox) return;
+    if (setupState.ready || setupDismissed) { setupBox.hidden = true; setupBox.innerHTML = ''; return; }
+    setupBox.hidden = false;
+    setupBox.innerHTML = '<div class="setup-bn">'
+      + '<div class="setup-bn-l"><b>还没有配置模型</b>'
+      + '<span>Bot 能连上 QQ，但收到消息不会回话 —— 三步就能跑通：选提供商 → 填 Key → 选模型。</span></div>'
+      + '<div class="setup-bn-r">'
+      + '<button class="btn primary" data-setup-go>开始配置</button>'
+      + '<button class="btn sm" data-setup-skip>我自己配</button></div></div>';
+    const go = setupBox.querySelector('[data-setup-go]');
+    if (go) go.onclick = () => openWizard(providers, curProv, () => pageConfig(el));
+    const skip = setupBox.querySelector('[data-setup-skip]');
+    if (skip) skip.onclick = () => {
+      try { localStorage.setItem('cfg-setup-dismissed', '1'); } catch (e) {}
+      setupBox.hidden = true;
+    };
+  };
+  renderSetup();
+
   $('cSave').onclick = async () => {
     /* 三类改动合并成一个 payload：
        ① dirty        —— 输入框/数字框/每行一条文本框/开关
@@ -5429,6 +5478,13 @@ async function pageConfig(el) {
       Object.keys(dirty).forEach(k => delete dirty[k]);
       Object.keys(cfCtx.listDirty).forEach(k => delete cfCtx.listDirty[k]);
       mark();
+      /* 刚存了 Key 或切到本地模型 → 横幅当场收掉，不用刷新页面等它自己发现 */
+      if (('api_key' in payload) || ('use_local_llm' in payload)) {
+        if (payload.api_key || payload.use_local_llm) {
+          setupState.ready = true;
+          renderSetup();
+        }
+      }
     } catch (e) { say(false, e.message); $('cSave').disabled = false; }
   };
   $('cReload').onclick = async () => {
