@@ -433,6 +433,17 @@ input,select,textarea{font:inherit;color:inherit}
    点卡=选用（回填 api_url/提供商并保存），Edit=弹窗编辑（含每提供商专属 Key），
    Del=删除。当前生效提供商描金边。 */
 .pv-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:var(--s3)}
+/* #pvCards 自身就是这个 grid 容器；常用/其他的小节标题与内层网格必须整行跨列，
+   否则它们会被当成栅格项并排（实测：常用与"其他"左右分栏、卡片被拉得很高）。 */
+#pvCards>.pv-sec-hd,#pvCards>.pv-cards,#pvCards>.pv-empty{grid-column:1/-1}
+#pvCards>.pv-cards{gap:var(--s3)}
+/* 分区标题（常用 / 其他提供商）：一条细线 + 数量 + 右侧展开按钮 */
+.pv-sec-hd{display:flex;align-items:baseline;gap:var(--s3);margin:var(--s4) 0 var(--s3)}
+.pv-sec-hd b{font-size:12px;color:var(--ink);font-weight:400;letter-spacing:.08em}
+.pv-sec-hd i{font-style:normal;font-family:var(--f-m);font-size:9px;color:var(--ink4);letter-spacing:.14em}
+.pv-sec-hd .btn{margin-left:auto}
+.pv-empty{font-size:11px;color:var(--ink3);line-height:1.6;margin:var(--s3) 0 var(--s4);
+  padding-left:var(--s3);border-left:2px solid var(--line3);max-width:64ch}
 .pv-card{position:relative;display:flex;flex-direction:column;gap:6px;text-align:left;
   border:1px solid var(--line2);background:var(--panel);padding:var(--s3) var(--s4);
   cursor:pointer;color:var(--ink2);font-family:inherit;transition:border-color 140ms var(--ez)}
@@ -5174,20 +5185,48 @@ async function pageConfig(el) {
   const pvHost = $('pvCards');
   const pvModelsOf = (p) => (p.models || [])
     .map(m => (typeof m === 'string' ? m : (m && (m.id || m.name)) || '')).filter(Boolean);
+  /* 常用 / 展开全部（2026-10-24）。
+     目录里有 18 个提供商，全平铺是一面墙，而普通用户只会在 1~2 个之间换。
+     "常用"的判据用**用户自己的数据**，不写死厂商名单：
+       正在用的（pvActive）· 配过独立 Key 的（has_api_key）· 用过的（last_model）
+     一个都没有时（新装）直接把全部展开，并给一句说明，不留空白区。 */
+  let pvShowAll = (() => { try { return localStorage.getItem('pv-show-all') === '1'; } catch (e) { return false; } })();
+  const pvIsFav = (p) => String(p.id) === pvActive || !!p.has_api_key || !!p.last_model;
+  const pvCardHTML = (p) => {
+    const ms = pvModelsOf(p);
+    return '<div class="pv-card' + (String(p.id) === pvActive ? ' on' : '') + '" data-pv-id="' + esc(String(p.id)) + '">'
+      + '<div class="pv-nm">' + esc(p.name || p.id) + '</div>'
+      + '<div class="pv-url" title="' + esc(p.base_url || '') + '">' + esc(p.base_url || '(未填地址)') + '</div>'
+      + '<div class="pv-meta"><span>' + ms.length + ' 模型</span>'
+      + '<span class="pv-key' + (p.has_api_key ? '' : ' no') + '">'
+      + (p.has_api_key ? '独立 Key' : '沿用全局 Key') + '</span></div>'
+      + '<div class="pv-acts"><button class="btn sm" data-pv-edit="' + esc(String(p.id)) + '">Edit</button>'
+      + '<button class="btn sm" data-pv-del="' + esc(String(p.id)) + '">Del</button></div></div>';
+  };
   function pvRender() {
     if (!pvHost) return;
-    pvHost.innerHTML = pvList.map(p => {
-      const ms = pvModelsOf(p);
-      return '<div class="pv-card' + (String(p.id) === pvActive ? ' on' : '') + '" data-pv-id="' + esc(String(p.id)) + '">'
-        + '<div class="pv-nm">' + esc(p.name || p.id) + '</div>'
-        + '<div class="pv-url" title="' + esc(p.base_url || '') + '">' + esc(p.base_url || '(未填地址)') + '</div>'
-        + '<div class="pv-meta"><span>' + ms.length + ' 模型</span>'
-        + '<span class="pv-key' + (p.has_api_key ? '' : ' no') + '">'
-        + (p.has_api_key ? '独立 Key' : '沿用全局 Key') + '</span></div>'
-        + '<div class="pv-acts"><button class="btn sm" data-pv-edit="' + esc(String(p.id)) + '">Edit</button>'
-        + '<button class="btn sm" data-pv-del="' + esc(String(p.id)) + '">Del</button></div></div>';
-    }).join('')
-      + '<button type="button" class="pv-card pv-add" data-pv-add>+ 添加提供商</button>';
+    const favs = pvList.filter(pvIsFav);
+    const rest = pvList.filter(p => !pvIsFav(p));
+    let html = '';
+    if (favs.length) {
+      html += '<div class="pv-sec-hd"><b>常用</b><i>' + favs.length + ' 个</i>'
+        + (rest.length
+            ? '<button type="button" class="btn sm" data-pv-toggle>'
+              + (pvShowAll ? '收起其他' : '展开其他 ' + rest.length + ' 个') + '</button>'
+            : '')
+        + '</div><div class="pv-cards">' + favs.map(pvCardHTML).join('') + '</div>';
+      if (pvShowAll && rest.length) {
+        html += '<div class="pv-sec-hd"><b>其他提供商</b><i>' + rest.length + ' 个</i></div>'
+          + '<div class="pv-cards">' + rest.map(pvCardHTML).join('')
+          + '<button type="button" class="pv-card pv-add" data-pv-add>+ 添加提供商</button></div>';
+      }
+    } else {
+      html += '<div class="pv-empty">还没选过提供商。下面是全部 ' + pvList.length
+        + ' 个，点一个就能用（模型与 Key 在下一步填）。</div>'
+        + '<div class="pv-cards">' + pvList.map(pvCardHTML).join('')
+        + '<button type="button" class="pv-card pv-add" data-pv-add>+ 添加提供商</button></div>';
+    }
+    pvHost.innerHTML = html;
     qsa('[data-pv-id]', pvHost).forEach(c => c.onclick = (e) => {
       if (e.target.closest('[data-pv-edit],[data-pv-del]')) return;
       pvApply(c.dataset.pvId);
@@ -5196,6 +5235,12 @@ async function pageConfig(el) {
     qsa('[data-pv-del]', pvHost).forEach(b => b.onclick = () => pvDel(b.dataset.pvDel));
     const add = pvHost.querySelector('[data-pv-add]');
     if (add) add.onclick = () => pvModal(null);
+    const tg = pvHost.querySelector('[data-pv-toggle]');
+    if (tg) tg.onclick = () => {
+      pvShowAll = !pvShowAll;
+      try { localStorage.setItem('pv-show-all', pvShowAll ? '1' : '0'); } catch (e) {}
+      pvRender();
+    };
   }
   async function pvSaveProviders(msg) {
     /* 整组写回：掩码 Key（GET 回传的占位符）不能当真实 Key 提交；has_api_key 是展示字段 */
