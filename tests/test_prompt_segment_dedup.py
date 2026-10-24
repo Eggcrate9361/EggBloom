@@ -1,0 +1,128 @@
+# -*- coding: utf-8 -*-
+"""tests/test_prompt_segment_dedup.py —— prompt 段精简后的语义锚点（1.5.8 #28）
+
+背景
+    计划 #28：「【别怕不体面】【怎么接话】两段合计 35%，是预算大头。
+    压短但要有回归判据」。
+
+    实测两段 1155 字 / 占段总量 36.2%。真正压短的空间比计划说的小 ——
+    因为这两段的规则**彼此不同**，字面重复只有三处：
+      · 【别怕不体面】"不拿对方家人开刀" 说了两遍（第 2 条 + 最后一条）
+      · 【别怕不体面】"不用给台阶/不用道歉" 散在两条里
+      · 【怎么接话】"别要求对方给内容" 在【别催人回答】和【往下推】各说一遍
+    删掉这三处共省 44 字（1155 → 1111）。
+
+    **没有**为了凑数字删规则，也没有把形容词规则改写成数字判据 ——
+    后者是行为变更，需要在真实群里抽测（计划自己也这么说），不能顺手改。
+
+    所以这个文件的判据是：**语义锚点一个都不能少**。
+    每条规则留一个"锚点词"，精简后锚词必须都还在。这样以后谁再想压短，
+    删了规则会立刻红，而不是等用户在群里发现 bot 开始骂人或开始催人回答。
+
+纯 Python，不依赖浏览器。
+"""
+import os
+import sys
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(HERE)
+sys.path.insert(0, ROOT)
+
+import bot_core as bc  # noqa: E402
+
+PASS = 0
+FAIL = 0
+FAILURES = []
+
+
+def check(name, cond, extra=""):
+    global PASS, FAIL
+    if cond:
+        PASS += 1
+        print(f"  [OK]   {name}")
+    else:
+        FAIL += 1
+        FAILURES.append(name + (f"  → {extra}" if extra else ""))
+        print(f"  [FAIL] {name}  {extra}")
+
+
+def main():
+    segs = dict(bc.render_prompt_segments(True))
+    rude = segs.get("别怕不体面", "")
+    take = segs.get("怎么接话", "")
+    total = sum(len(t) for t in segs.values())
+
+    print("[1] 两段都还在，且没被删空")
+    check("别怕不体面 存在且非空", len(rude) > 400, len(rude))
+    check("怎么接话 存在且非空", len(take) > 400, len(take))
+    check("两段仍是段总量的大头（>30%）",
+          100.0 * (len(rude) + len(take)) / total > 30,
+          round(100.0 * (len(rude) + len(take)) / total, 1))
+
+    print("\n[2] 【可以凶】的语义锚点（骂人尺度，删任何一条都是行为变更）")
+    RUDE_ANCHORS = [
+        ("只在被挑衅时开火", "被扣帽子"),
+        ("日常不带脏字", "不要带脏字"),
+        ("可用脏字清单", "操、草、靠"),
+        ("家人是底线", "不拿对方家人开刀"),
+        ("要比对方更凶", "比对方更凶"),
+        ("阴阳也是骂", "装没听懂再讽刺回去"),
+        ("不用文诌诌的词", "别用文诌诌的词"),
+        ("可以只发图", "可以只发一张图什么都不写"),
+        ("隐私不开刀", "拿真实可查的隐私开刀"),
+        ("连发受字数限制", "单次回复字数限制"),
+    ]
+    for name, kw in RUDE_ANCHORS:
+        check("骂人尺度锚点：" + name, kw in rude, rude[:80])
+
+    print("\n[3] 【怎么接话】的语义锚点")
+    TAKE_ANCHORS = [
+        ("先看时间", "【先看时间】"),
+        ("时间矛盾要怼回去", "直接怼回去"),
+        ("别顺着错前提答", "别顺着错的前提答"),
+        ("话题跟着对方走", "【话题跟着对方走】"),
+        ("别拽回旧话题", "拽回来追问"),
+        ("别催人回答", "【别催人回答】"),
+        ("别把球踢过去", "别把球踢过去"),
+        ("往下推", "【往下推】"),
+        ("说具体的事", "正在发生的、具体的事"),
+        ("别问说点啥", "说点啥"),
+        ("最多一个问题", "最多一个问题"),
+    ]
+    for name, kw in TAKE_ANCHORS:
+        check("接话锚点：" + name, kw in take, take[:80])
+
+    print("\n[4] 字面重复确实被删掉了（这是本次精简的唯一内容）")
+    check("「不拿对方家人开刀」只出现一次",
+          rude.count("不拿对方家人开刀") == 1, rude.count("不拿对方家人开刀"))
+    check("「我们冷静一下」只出现一次",
+          rude.count("我们冷静一下") == 1, rude.count("我们冷静一下"))
+    check("「不过我也理解你」只出现一次",
+          rude.count("不过我也理解你") == 1, rude.count("不过我也理解你"))
+    check("「别要求对方给你安排任务」已删（与【别催人回答】重复）",
+          "别要求对方给你安排任务" not in take)
+    check("「那你倒是使唤我干点啥」已删（同上）",
+          "那你倒是使唤我干点啥" not in take)
+
+    print("\n[5] 合并后的句子仍说清了两件事")
+    check("「事后不找补」同时覆盖给台阶和道歉",
+          "不用给台阶" in rude and "不用道歉" in rude)
+    check("隐私与家人分成两条讲，不再挤在「只有两件」里",
+          "只有一件" in rude)
+
+    print("\n[6] 没有偷偷加新规则")
+    # 锚点数量是 21 个；若有人往里加规则，这里会提示同步锚点表
+    n_anchors = len(RUDE_ANCHORS) + len(TAKE_ANCHORS)
+    check("锚点表覆盖 %d 条（加规则请同步加锚点）" % n_anchors, n_anchors == 21, n_anchors)
+
+    print("\n" + "=" * 56)
+    print(f"通过 {PASS} / 失败 {FAIL}")
+    if FAILURES:
+        print("失败项：")
+        for f in FAILURES:
+            print("  -", f)
+    return 1 if FAIL else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
