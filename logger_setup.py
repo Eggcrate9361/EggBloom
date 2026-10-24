@@ -37,12 +37,23 @@ def get_logger(name="eggbloom", log_dir=None, max_bytes=5 * 1024 * 1024, backup_
         _configured.add(name)
         return logger
 
-    # 从配置获取日志级别
+    # 从配置获取日志级别。
+    # ★ 2026-10-24：这里原来是 `from config import get_log_level` 包在
+    #   `except Exception: level = logging.INFO` 里，而 config.py 那时**没有
+    #   这个函数** —— ImportError 被吞，日志级别恒为 INFO，没有一处报错。
+    #   用户改配置毫无反应，也不知道为什么。
+    #   现在 config.get_log_level 已补齐，这里只兜"config 整个导入失败"
+    #   （比如打包路径异常），并且兜底时**要说出来**，不再吞。
     try:
         from config import get_log_level
         level = get_log_level()
-    except Exception:
+    except Exception as _e:
         level = logging.INFO
+        try:
+            logging.getLogger("eggbloom").warning(
+                "读不到配置里的日志级别（%s），已按 INFO 处理", _e)
+        except Exception:
+            pass
 
     logger.setLevel(level)
 

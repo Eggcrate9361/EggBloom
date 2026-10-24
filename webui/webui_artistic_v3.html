@@ -1687,6 +1687,14 @@ function renderBasicPanel(root){
       <textarea class="input" id="sTargetQqs" rows="3" placeholder="10003"></textarea></div>
     <div class="field"><div class="field-label">群 ID（每行一个）</div>
       <textarea class="input" id="sGroupIds" rows="3" placeholder="20001"></textarea></div>
+    <div class="field"><div class="field-label">日志级别</div>
+      <select class="input" id="sLogLevel">
+        <option value="DEBUG">DEBUG（最详细，排查问题用）</option>
+        <option value="INFO">INFO（默认）</option>
+        <option value="WARNING">WARNING（只要警告与错误）</option>
+        <option value="ERROR">ERROR（只要错误）</option>
+      </select>
+      <div class="field-desc">写入日志文件与终端的最低级别。调成 DEBUG 会明显变详细，日志文件也会更快轮转。改了要重启后端才生效</div></div>
   `;
 }
 function renderLLMPanel(root){
@@ -2325,6 +2333,7 @@ async function loadSettingsData(){
     s('sBotQq', c.bot_qq); s('sBotNick', c.bot_group_nick);
     s('sStartupCooldown', c.startup_cooldown); s('sTargetQqs', (c.target_qqs||[]).join('\n'));
     s('sGroupIds', (c.group_ids||[]).join('\n'));
+    s('sLogLevel', c.log_level || 'INFO');
 
     const providerEl = $('sProvider');
     if(providerEl){
@@ -2474,6 +2483,7 @@ function collectSettings(){
     bot_qq: val('sBotQq'), bot_group_nick: val('sBotNick'),
     startup_cooldown: num('sStartupCooldown'),
     target_qqs: splitLines('sTargetQqs'), group_ids: splitLines('sGroupIds'),
+    log_level: val('sLogLevel') || 'INFO',
     api_provider: currentProviderId, api_url: val('sApiUrl'),
     use_local_llm: chk('sUseLocalLlm'),
     llama_driver: val('sLlamaDriver'),

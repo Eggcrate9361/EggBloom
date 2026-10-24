@@ -685,6 +685,34 @@ with sync_playwright() as pw:
        bool(saved_q) and saved_q[0].get("quiet_hours") == "1:00-7:00"
        and saved_q[0].get("quiet_when_mentioned") == "ignore", saved_q)
 
+    # ── 日志级别（2026-10-24 补的读取方）────────────────────────────
+    # 这个键的读取方 logger_setup.get_logger 早就写好了，但 config.py 里
+    # 没有 get_log_level 函数，ImportError 被吞 → 日志级别恒为 INFO。
+    # 断言到"下拉能选、值进 save"这一层：只渲染不保存等于还是改不了。
+    config_calls.clear()
+    pg.evaluate("() => go(7)")
+    pg.wait_for_timeout(1300)
+    pg.evaluate("""() => {
+      const m = window.FIELD_META.fields['log_level'];
+      if (m) window.__cfGo(m.panel);
+    }""")
+    pg.wait_for_timeout(350)
+    ck("★ 日志级别字段渲染在基础面板",
+       pg.evaluate("()=>{const e=document.querySelector('#cfArea [data-k=\\'log_level\\']');"
+                   "return !!e && /日志/.test(e.closest('.cf-fld').textContent);}"))
+    opts = pg.eval_on_selector_all(
+        '#cfArea [data-k="log_level"] option', "e=>e.map(x=>x.value)")
+    # 第一项是 v4 通用的「-- 未设置 --」占位（空值），不是第五个级别
+    ck("★ 日志级别下拉只有 logging 认的四个值",
+       [o for o in opts if o] == ["DEBUG", "INFO", "WARNING", "ERROR"], opts)
+    pg.select_option('#cfArea [data-k="log_level"]', "DEBUG")
+    pg.wait_for_timeout(300)
+    pg.click("#cSave")
+    pg.wait_for_timeout(900)
+    saved_lv = [c[1] for c in config_calls if c[0] == "save"]
+    ck("★ 日志级别提交进了 save 请求",
+       bool(saved_lv) and saved_lv[0].get("log_level") == "DEBUG", saved_lv)
+
     pg.screenshot(path=str(OUT / "_v4_config.png"), full_page=True)
 
     print("\n=== ★ 配置页的「接入与诊断」动作（旧版有 23 个按钮，不能丢）===")

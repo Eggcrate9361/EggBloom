@@ -4580,6 +4580,7 @@ window.FIELD_META = {
     "startup_cooldown": {"label": "启动冷却（秒）", "desc": "Bot 启动后忽略消息的冷却时间", "ctl": "number", "panel": "basic", "unit": "秒", "id": "sStartupCooldown", "default": 60, "default_text": "60"},
     "target_qqs": {"label": "目标 QQ（每行一个）", "desc": "", "ctl": "lines", "panel": "basic", "unit": "", "id": "sTargetQqs", "default": [], "default_text": "空"},
     "group_ids": {"label": "群 ID（每行一个）", "desc": "", "ctl": "lines", "panel": "basic", "unit": "", "id": "sGroupIds", "default": [], "default_text": "空"},
+    "log_level": {"label": "日志级别", "desc": "写入日志文件与终端的最低级别。调成 DEBUG 会明显变详细，日志文件也会更快轮转。改了要重启后端才生效", "ctl": "select", "panel": "basic", "unit": "", "id": "sLogLevel", "default": "INFO", "default_text": "INFO"},
     "api_provider": {"label": "提供商", "desc": "切换后自动填充 API 地址并拉取模型列表；每个提供商可保存独立 Key（在「多提供商管理」里编辑）", "ctl": "select", "panel": "llm", "unit": "", "id": "sProvider", "default": "deepseek", "default_text": "deepseek"},
     "api_url": {"label": "API URL", "desc": "Chat Completions 完整地址，切换提供商时会自动覆盖", "ctl": "text", "panel": "llm", "unit": "", "id": "sApiUrl", "default": "https://api.deepseek.com/chat/completions"},
     "api_key": {"label": "API Key", "desc": "Key 只写不回显：保存后写入 Windows 凭据管理器，页面不再显示；切换提供商自动使用对应 Key", "ctl": "text", "panel": "llm", "unit": "", "id": "sApiKey"},
@@ -4689,6 +4690,12 @@ const CFG_OPTIONS = {
   /* 静默时段被点名时的反应。这两个值由 bot_core 读，写错等于静默功能失效，
      所以下拉只给这两项（v3 那边也是同样的两项）。*/
   quiet_when_mentioned: [['wake', 'wake（被叫醒就回一句困话）'], ['ignore', 'ignore（一律不回）']],
+  /* 日志级别：logger_setup 读 config.get_log_level()，值必须是 logging 认的
+     四个名字，写错会按 INFO 走（并在日志里点名）。所以下拉只给这四项。 */
+  log_level: [['DEBUG', 'DEBUG（最详细，排查问题用）'],
+              ['INFO', 'INFO（默认）'],
+              ['WARNING', 'WARNING（只要警告与错误）'],
+              ['ERROR', 'ERROR（只要错误）']],
 };
 function cfGet(cfg, k) {
   const p = String(k).split('.');

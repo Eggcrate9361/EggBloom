@@ -279,5 +279,6 @@
   "llama_port": 0,
   "llama_model_name": "models",
   "command_permission": "strict",
-  "command_admins": []
+  "command_admins": [],
+  "log_level": "INFO"
 }

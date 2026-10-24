@@ -1,6 +1,7 @@
 ﻿# -*- coding: utf-8 -*-
 """config.py - Configuration with env override, API provider selection"""
 import json
+import logging
 import os
 import sys
 
@@ -409,6 +410,20 @@ DEFAULT_CONFIG = {
     "ui_language": "zh",
     "ui_theme": "default",
 
+    # ── 日志级别（2026-10-24 补进 DEFAULT_CONFIG）──────────────────────
+    # 这个键的读取方 logger_setup.get_logger 早就写好了：
+    #     from config import get_log_level; level = get_log_level()
+    # 但 config.py 里**从来没有这个函数**，ImportError 被 `except Exception:
+    # level = logging.INFO` 吞掉 —— 于是无论怎么配，日志级别都是 INFO，
+    # 而且没有一处报错、没有一句提示。属于"静默降级"那一类 bug：
+    # 用户以为调了 DEBUG，实际什么都没发生。
+    #
+    # 现在补齐函数，并把键加回 example（上一轮刚因为"没有读取方"删掉它，
+    # 这次的修法是把读取方补上，不是把键继续藏起来）。
+    # 取值：DEBUG / INFO / WARNING / ERROR，大小写不敏感；非法值回 INFO
+    # 并在日志里点名，不静默。
+    "log_level": "INFO",
+
     # 向量嵌入默认路径（可由 bot_config.json 覆盖，避免硬编码）
     "embed_exe": "",
     "embed_model_path": "",
@@ -659,3 +674,42 @@ def clear_provider_api_key(provider_id):
         return bool(delete_cred(provider_cred_name(pid)))
     except Exception:
         return False
+
+
+# ── 日志级别（2026-10-24）────────────────────────────────────────────
+# logger_setup.get_logger 里一直写着 `from config import get_log_level`，
+# 但这个函数此前不存在，ImportError 被 except 吞掉 → 日志级别恒为 INFO。
+# 补齐它，并让非法值**发声**：静默回退正是这个 bug 的成因。
+_LOG_LEVELS = {
+    "DEBUG": logging.DEBUG,
+    "INFO": logging.INFO,
+    "WARNING": logging.WARNING,
+    "ERROR": logging.ERROR,
+}
+
+
+def get_log_level():
+    """配置里的日志级别 → logging 常量。读不到/非法 → INFO（并在日志里点名）。
+
+    大小写与前后空白不敏感（"debug" / " Debug " 都算 DEBUG）。
+    空串视为未配置 → INFO，不报错：那是默认状态，不是错误。
+    """
+    try:
+        raw = str(load_config().get("log_level") or "").strip()
+    except Exception:
+        return logging.INFO
+    if not raw:
+        return logging.INFO
+    lv = _LOG_LEVELS.get(raw.upper())
+    if lv is not None:
+        return lv
+    # 非法值：回 INFO，但要说出来。否则用户以为调成了 DEBUG，
+    # 实际什么都没变 —— 这正是这个函数补上之前发生的事。
+    try:
+        import logger_setup
+        logger_setup.get_logger("eggbloom").warning(
+            "配置里的 log_level=%r 不是合法值（DEBUG/INFO/WARNING/ERROR），"
+            "已按 INFO 处理", raw)
+    except Exception:
+        pass
+    return logging.INFO

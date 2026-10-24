@@ -202,6 +202,16 @@
    "default": [],
    "default_text": "空"
   },
+  "log_level": {
+   "label": "日志级别",
+   "desc": "写入日志文件与终端的最低级别。调成 DEBUG 会明显变详细，日志文件也会更快轮转。改了要重启后端才生效",
+   "ctl": "select",
+   "panel": "basic",
+   "unit": "",
+   "id": "sLogLevel",
+   "default": "INFO",
+   "default_text": "INFO"
+  },
   "api_provider": {
    "label": "提供商",
    "desc": "切换后自动填充 API 地址并拉取模型列表；每个提供商可保存独立 Key（在「多提供商管理」里编辑）",
