@@ -36,6 +36,30 @@ DEFAULT_CONFIG = {
     "temperature_range": 0.6,    # 情绪影响温度的最大偏移量
 }
 
+# 日内基线（2026-10-24）：按时段给一个"默认心情"，情绪衰减后落到这里而不是 0。
+#
+# 幅度上限刻意压在 2 以内 —— `_format` 里 score >= 2 就变 happy，<= -1 变 sad。
+# 所以值域写在这两个阈值之内，基线**只改倾向、不改标签**：
+# 同样的对话，晚上更容易被逗乐，凌晨更容易显得没精神，但不会"每晚八点准时开心"。
+# 想更明显就把值加大，但超过 2 就会变成按点切换情绪，那比没有基线更假。
+_CIRCADIAN_BASELINE = {
+    "凌晨": -0.8,   # 困，反应钝
+    "清晨": -0.4,   # 刚醒，还没热起来
+    "上午": 0.3,
+    "中午": -0.2,   # 饭后犯困
+    "下午": 0.2,
+    "傍晚": 0.6,
+    "晚上": 1.2,    # 一天里状态最好的时候
+    "深夜": 0.0,    # 该睡了，情绪回到中性偏低
+}
+
+# 基线的硬夹上下限（开区间，不含端点）——与 `_format` 的判定阈值对应：
+#   happy 需要 score >= 2，sad 需要 score <= -1。
+# 因此单独一条基线 + 零事件必须仍落在 (-1, 2) 内，否则"基线"就变成了
+# "按点切换情绪标签"。用户改了配置也越不过这道夹。
+_BASELINE_CEIL = 1.9
+_BASELINE_FLOOR = -0.9
+
 MOOD_LABELS = {
     "very_happy": "开心到飞起",
     "happy": "心情不错",
@@ -101,7 +125,7 @@ class MoodEngine:
     # ── 读取 ──
 
     def get_mood(self, group_id: str = "") -> dict:
-        """返回某群的当前情绪（含自然衰减后的实时值）
+        """返回某群的当前情绪（含自然衰减后的实时值 + 日内基线）
 
         ★ 2026-10-21 修复：这里原先有两条早退路径返回
         `{"label": "平静", "score": 0, "boost": 0.0}` —— 既缺 `text` 字段，
@@ -113,25 +137,37 @@ class MoodEngine:
           · 即使补上 text，`label == "neutral"` 也判不中「平静」，
             平静时会绕过提前返回、硬塞一句「【当前心情】平静」进提示词。
         统一走 `_format(0.0)`，只有一条出口，结构天然一致。
+
+        ★ 2026-10-24：三条出口统一走 `_effective()`，日内基线只在读取时叠加。
+          早退路径也必须叠 —— 否则"这个群还没有情绪记录"时基线失效，
+          而这恰恰是新群/重启后最常见的情况。
         """
         if not self.config.get("mood_enabled", True):
-            return self._format(0.0)
+            return self._format(self._effective(0.0))
         gid = str(group_id or "default")
         m = self.moods.get(gid)
         if not m:
-            return self._format(0.0)
-        score = self._decay_score(m)
-        return self._format(score)
+            return self._format(self._effective(0.0))
+        return self._format(self._effective(self._decay_score(m)))
+
+    def _effective(self, score: float) -> float:
+        """瞬时情绪 + 日内基线。**只用于读取**，绝不写回 self.moods。"""
+        return float(score) + self._baseline_score()
 
     def get_all(self) -> dict:
         out = {}
         for gid, m in self.moods.items():
-            score = self._decay_score(m)
-            out[gid] = self._format(score)
+            out[gid] = self._format(self._effective(self._decay_score(m)))
         return out
 
     def _decay_score(self, m: dict) -> float:
-        """随时间回归中性：score 按比例向 0 衰减"""
+        """随时间回归中性：score 按比例向 0 衰减
+
+        ★ 注意：这里返回的是**瞬时情绪**，不含日内基线。
+          基线只在读取路径（get_mood / get_all）上叠加，绝不写回 score ——
+          否则基线会被 update() 当成已发生的事件存下来，下次再叠一遍，
+          一天下来分数会单调爬升或下滑（典型的"派生值被当状态存"错误）。
+        """
         score = float(m.get("score", 0))
         updated = float(m.get("updated", time.time()))
         elapsed = max(0.0, time.time() - updated)
@@ -140,6 +176,39 @@ class MoodEngine:
             return score
         ratio = 1.0 - min(1.0, elapsed / decay_sec)
         return score * ratio
+
+    def _baseline_score(self) -> float:
+        """日内情绪基线（2026-10-24）。
+
+        在这之前情绪衰减永远回到 0 —— 意思是"一天里任何时候平静起来都一模一样"。
+        真人不是这样：晚上精神好，凌晨容易低落。差别不大，但连续几十轮下来
+        "它每个时段都一个样"是能被感觉到的。
+
+        幅度刻意压在 (-1, 2) 区间内：这个区间对应 label=neutral，
+        所以基线**不会强制切换情绪标签**，只是让情绪更容易往某个方向偏。
+        基线一旦大到能把 neutral 顶成 happy/sad，就会变成"每天晚上八点准时开心"，
+        比没有基线更假。
+
+        不进 prompt 的额外成本：neutral 时 get_prompt_block 返回空串，
+        所以大部分时候它一个字都不加。
+        """
+        table = self.config.get("circadian_baseline")
+        if not isinstance(table, dict):
+            table = _CIRCADIAN_BASELINE
+        try:
+            from harness.time_ctx import period_of
+            period = period_of(time.time())[0]
+        except Exception:
+            return 0.0
+        try:
+            v = float(table.get(period, 0.0))
+        except (TypeError, ValueError):
+            return 0.0
+        # ★ 结构保证：单独一条基线（没有任何对话事件）不得把情绪推出 neutral。
+        #   `_format` 的阈值是 >=2 → happy、<=-1 → sad，所以把基线夹在开区间内，
+        #   "0 + 基线"必然仍是 neutral。写死了这条，才谈得上"只改倾向不改标签" ——
+        #   光靠默认值自觉是不够的，用户随时可以在配置里把晚上改成 5。
+        return max(_BASELINE_FLOOR, min(_BASELINE_CEIL, v))
 
     def _format(self, score: float) -> dict:
         if score >= 6:
