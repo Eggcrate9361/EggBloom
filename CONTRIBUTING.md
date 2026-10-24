@@ -109,15 +109,16 @@ def calculate_tokens(messages: list[dict], model: str = "deepseek-chat") -> int:
 
 ### Git Commit Message
 
-遵循 [Conventional Commits](https://www.conventionalcommits.org/)：
+格式是 Conventional Commits 加一个日期前缀：
 
 ```
-<type>(<scope>): <subject>
+<type>(<scope>): <MM-DD> <做了什么>
 
 <body>
-
-<footer>
 ```
+
+`<MM-DD>` 是改动发生日期（月-日），放在 subject 最前面。
+例：`fix(group): 10-24 静默时段只管得住主动开口，管不住群里被 @`
 
 **Type**：
 - `feat`：新功能
@@ -132,13 +133,17 @@ def calculate_tokens(messages: list[dict], model: str = "deepseek-chat") -> int:
 
 **示例**：
 ```
-feat(protocol): add LLOneBot auto-detect support
+fix(config): 10-24 日志级别配了不生效，因为读取方根本不存在
 
-- Scan common install directories for llbot.exe
-- Add version compatibility check
+logger_setup.get_logger 里写着 from config import get_log_level，
+但 config.py 里从来没有这个函数，ImportError 被 except 吞掉，
+日志级别恒为 INFO，没有一处报错。
 
-Closes #123
+补齐 get_log_level()，非法值回 INFO 但在日志里点名。
 ```
+
+这条格式从 2026-10-23 起执行。更早的提交不带日期（`81a663a` 之前），
+历史不改，只要求新增的提交按这个来。
 
 ---
 

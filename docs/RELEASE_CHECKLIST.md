@@ -121,7 +121,7 @@ git diff --stat                 # 改了哪些行
 ```bash
 # 1. 版本号（package.json 与 pyproject.toml）→ 2. commit → 3. 打包
 git add -A
-git commit -m "chore(release): <version>"
+git commit -m "chore(release): <MM-DD> <version>"
 python scripts/pack_all.py            # Lite 走 git archive HEAD，不 commit 会缺文件
 ```
 
