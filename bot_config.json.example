@@ -114,6 +114,8 @@
   "group_idle_exit_enable": true,
   "group_idle_exit_probability": 0.3,
   "group_idle_exit_min_silence": 120,
+  "quiet_hours": "",
+  "quiet_when_mentioned": "wake",
   "meme_enable": true,
   "meme_idle_exit_enable": true,
   "meme_auto_detect_emotion": true,

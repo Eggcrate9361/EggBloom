@@ -26,39 +26,119 @@ import time
 
 _WEEKDAYS = ("一", "二", "三", "四", "五", "六", "日")
 
-# 时段定义（左闭右开）：(起始小时, 名称, 语气提示)
+# 时段定义（左闭右开）：(起始小时, 名称, 语气提示, 这会儿在做什么)
+#
+# ★ 第 4 列「在做什么」（2026-10-24）：
+#   此前 Bot 只有"现在几点"，没有"我这会儿在干嘛"。被问「你在干嘛」时它只能现编，
+#   而现编又撞上【诚实铁律】的"不编造"—— 两条规则互相打脸。
+#   活动作为**时段的属性**放在这里，而不是另开一张表：一个概念一个源。
+#   （曾考虑新建 harness/activity.py，但那必然要重复一遍小时边界，
+#   正是 MEMORY.md 里「两套判据事故」的形状。）
+#
+#   为什么不额外伤缓存：`coarse_text` 本来就含时段名，时段一变它就变；
+#   活动跟着时段变，变化频率完全相同 → 前缀缓存断裂次数 +0。
 _PERIODS = (
-    (0, "凌晨", "（大部分人在睡觉，能在线的是夜猫子）"),
-    (5, "清晨", "（刚天亮，说话轻一点）"),
-    (8, "上午", "（正常工作/上课时间）"),
-    (11, "中午", "（午饭时间）"),
-    (14, "下午", "（下午工作/上课时间，容易犯困）"),
-    (17, "傍晚", "（下班/放学时间）"),
-    (19, "晚上", "（休闲时间，人在线概率高）"),
-    (23, "深夜", "（该睡了，语气可以软一点）"),
+    (0, "凌晨", "（大部分人在睡觉，能在线的是夜猫子）", "躺着，快睡了"),
+    (5, "清晨", "（刚天亮，说话轻一点）", "刚醒，还没完全起来"),
+    (8, "上午", "（正常工作/上课时间）", "在上课或者看书"),
+    (11, "中午", "（午饭时间）", "在吃饭"),
+    (14, "下午", "（下午工作/上课时间，容易犯困）", "在写东西，或者摸鱼"),
+    (17, "傍晚", "（下班/放学时间）", "刚下课，在外面晃"),
+    (19, "晚上", "（休闲时间，人在线概率高）", "在自己待着"),
+    (23, "深夜", "（该睡了，语气可以软一点）", "准备睡了，但还醒着"),
 )
+
+
+def _entry_of(ts):
+    """返回命中的 _PERIODS 条目（4 元组）。"""
+    hour = datetime.datetime.fromtimestamp(ts).hour
+    entry = _PERIODS[0]
+    for row in _PERIODS:
+        if hour >= row[0]:
+            entry = row
+        else:
+            break
+    return entry
 
 
 def period_of(ts):
     """返回 (时段名, 语气提示)。"""
-    hour = datetime.datetime.fromtimestamp(ts).hour
-    name, hint = _PERIODS[0][1], _PERIODS[0][2]
-    for h, n, x in _PERIODS:
-        if hour >= h:
-            name, hint = n, x
-        else:
-            break
-    return name, hint
+    row = _entry_of(ts)
+    return row[1], row[2]
+
+
+def activity_of(ts):
+    """这会儿在做什么（一句人话，已含"在"或动作本身）。
+
+    凌晨被 @ 时模型知道自己在睡觉，就不会答"我在写代码"。
+    只描述**状态**，不描述内容 —— 编具体内容（"在看某本书第三章"）仍然是编造。
+    """
+    return _entry_of(time.time() if ts is None else ts)[3]
+
+
+# ── 静默时段（"睡觉"的硬闸）───────────────────────────────────────
+# 为什么放在这里、而不是留在 proactive_talk：
+#   quiet_hours 原本只是主动开口插件的一个配置项，于是它只挡得住"Bot 自己想说话"，
+#   挡不住"群里有人 @ 它，它答"。用户在本机运行版里早就配了 1:00-7:00 静默，
+#   意图明确，但群聊回复链（bot_core）从不读这个键 —— 凌晨两点被 @ 照样答。
+#   一个概念两处判据，且只有一处生效。
+#
+#   现在解析逻辑只有这一份，谁要判断都问这里：
+#     · proactive_talk 主动开口     → 硬闸，命中直接不开口
+#     · bot_core     群聊/私聊回复  → 硬闸，命中不回复（被点名则另算）
+#
+#   "睡觉"和"不回复"不是一回事：群里被 @ 属于叫醒，真人也可能回一句
+#   "这么晚了还不睡"。所以这里只回答"是不是静默时段"，命中后干什么由调用方定。
+
+def parse_window(spec):
+    """把 '23:00-7:00' 解析成 (start_min, end_min)，支持跨天。失败 → None。
+
+    空串 → None（= 没配），不是"全天静默"。这个区别必须保留：
+    把空串当成一个有效窗口，等于让没配置过的人永远静默。
+    """
+    spec = (spec or "").strip()
+    if not spec:
+        return None
+    try:
+        a, b = spec.split("-", 1)
+        sh, sm = [int(x) for x in a.strip().split(":")]
+        eh, em = [int(x) for x in b.strip().split(":")]
+        if not (0 <= sh <= 24 and 0 <= eh <= 24 and 0 <= sm < 60 and 0 <= em < 60):
+            return None
+        return sh * 60 + sm, eh * 60 + em
+    except Exception:
+        return None
+
+
+def in_quiet_hours(spec, ts=None):
+    """现在是否落在静默时段。空/解析失败 → False（宁可不静默，不要误静默）。"""
+    win = parse_window(spec)
+    if not win:
+        return False
+    ts = time.time() if ts is None else ts
+    dt = datetime.datetime.fromtimestamp(ts)
+    cur = dt.hour * 60 + dt.minute
+    start, end = win
+    if start == end:
+        return False          # 起止相同 = 零长度窗口，不静默
+    if start < end:
+        return start <= cur < end
+    return cur >= start or cur < end     # 跨天（如 23:00-7:00）
 
 
 def coarse_text(ts=None):
-    """粗粒度：仅日期 + 时段（小时级）。变化慢 → 可放靠前位置。"""
+    """粗粒度：仅日期 + 时段（小时级）。变化慢 → 可放靠前位置。
+
+    ★ 2026-10-24：末尾带「这会儿在做什么」。它跟时段同步变化，
+      与时段名同一刷新节奏，不额外增加缓存断裂。
+    """
     if ts is None:
         ts = time.time()
     dt = datetime.datetime.fromtimestamp(ts)
     period, hint = period_of(ts)
     return (f"【现在】{dt.year}年{dt.month}月{dt.day}日"
-            f" 星期{_WEEKDAYS[dt.weekday()]}，{period}{hint}")
+            f" 星期{_WEEKDAYS[dt.weekday()]}，{period}{hint}。"
+            f"你{activity_of(ts)}。")
 
 
 def fine_text(ts=None):

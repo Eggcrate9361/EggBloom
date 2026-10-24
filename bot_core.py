@@ -257,6 +257,30 @@ def _inject_ego_context(dynamic_parts, inject_text: str, tag: str = "EGO"):
     if not inject_text or dynamic_parts is None:
         return
     dynamic_parts.append(f"【{tag}上下文】以下是关于当前对话对象的长期状态提示，回复时自然地融会贯通，不要生硬复述：\n{inject_text}")
+
+
+def _inject_sleep_state(dynamic_parts, is_group: bool = True):
+    """静默时段里被叫醒 → 告诉模型"你在睡觉"。
+
+    ★ 为什么群聊私聊都调这一个函数：两处各写一遍提示词，改一处漏一处
+      （本仓库已经因为"同一个概念两处定义"吃过三次亏）。
+    ★ 为什么进 dynamic_parts 而不是 static：它随 quiet_hours 命中的时段变化，
+      进了 static 会让整段前缀在 1:00/7:00 两个时刻断裂并重算缓存。
+      放尾部只影响最后几十个 token。
+    """
+    try:
+        from harness.time_ctx import in_quiet_hours as _iqh
+        if not _iqh(_config.get("quiet_hours")):
+            return
+    except Exception:
+        return
+    if dynamic_parts is None:
+        return
+    dynamic_parts.append(
+        "【你正在睡觉】这个点你已经睡了，是被叫醒的。"
+        "回复要短，一两句就够，语气带着困意、有点迟钝。"
+        "可以顺口嫌对方这么晚还不睡，但不要长篇大论，"
+        "也不要装作刚从别的事情里回来的样子。")
 # ── frozen 模式（PyInstaller 打包）检测 —— 必须在任何路径计算之前 ──
 if getattr(sys, 'frozen', False):
     SCRIPT_DIR = os.path.dirname(sys.executable)
@@ -8760,6 +8784,9 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
 
     # 群聊动态信息（群成员/时间线）→ 放到 dynamic_parts
     if is_group and group_id:
+        # ── 静默时段被叫醒 → 明确告诉模型"你在睡觉"（2026-10-24）──
+        # 判据与话术都在 _inject_sleep_state 里，私聊走同一个函数。
+        _inject_sleep_state(dynamic_parts, is_group=True)
         timeline = GROUP_TIMELINE.get(group_id, [])
         if timeline:
             # T2-2 时间线去重 + 限 6 条：同一句话重复提到只留一条
@@ -8858,6 +8885,11 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
                     dynamic_parts.append(_recall)
             except Exception:
                 pass
+    # ── 静默时段（私聊）：一对一没有"点名"这个动作，来了就是叫醒 ──
+    # 群聊那侧在 `if is_group` 分支里调同一个函数；这里补上私聊，
+    # 之前它只判断了群聊，私聊凌晨会被当成白天一样长篇大论地回。
+    if not is_group:
+        _inject_sleep_state(dynamic_parts, is_group=False)
     # ── P4·S4：能力档位（只在偏离默认时注入；准静态 → stable_parts）──
     if group_id:
         try:
@@ -9864,6 +9896,39 @@ def process_buffered_message(group_id):
         remaining = int(STARTUP_COOLDOWN - (time.time() - startup_time))
         log(f"群[{group_id}] 开机冷却中（{remaining}s/{STARTUP_COOLDOWN}s），跳过回复")
         return
+
+    # ── 静默时段（Bot 在"睡觉"，2026-10-24）──────────────────────────
+    # `quiet_hours` 此前只被 proactive_talk 读取 —— 管得住"自己想说话"，
+    # 管不住"有人 @ 我，我答"。用户早就配了 1:00-7:00，凌晨被 @ 照样回。
+    #
+    # 这里的口径（判据集中在 harness.time_ctx.in_quiet_hours，不另写一份）：
+    #   · 没被点名（@ / 「小a」/ Bot 昵称 / 引用我）→ 完全不回，也不进决策器
+    #   · 被点名 + quiet_when_mentioned="wake"（默认）→ 照常走，只是下面注入
+    #     【你正在睡觉】让回复变短、带困意；真人不装死，但也不会长篇大论
+    #   · 被点名 + "ignore" → 一律不回
+    # 放在开机冷却之后、一切 AI 调用之前：省的是一次真实请求，不是等它生成完再丢。
+    _quiet_hit = False
+    try:
+        from harness.time_ctx import in_quiet_hours as _iqh
+        _quiet_hit = _iqh(_config.get("quiet_hours"))
+    except Exception:
+        _quiet_hit = False
+    if _quiet_hit:
+        _mention = (buffer.get("is_at_bot", False)
+                    or buffer.get("has_xiao_a", False)
+                    or buffer.get("has_bot_nick", False)
+                    or buffer.get("has_text_at", False)
+                    or (buffer.get("has_quote", False) and buffer.get("quote_me", False)))
+        _mode_q = str(_config.get("quiet_when_mentioned", "wake") or "wake").lower()
+        if not _mention:
+            log(f"群[{group_id}] 静默时段 {_config.get('quiet_hours')} 且没被点名，不回")
+            return
+        if _mode_q == "ignore":
+            log(f"群[{group_id}] 静默时段 {_config.get('quiet_hours')}，"
+                f"被点名但 quiet_when_mentioned=ignore，不回")
+            return
+        log(f"群[{group_id}] 静默时段 {_config.get('quiet_hours')} 被点名，"
+            f"叫醒回复（话会短）")
     
     # 使用缓冲区中保存的 @、「小a」和 Bot 昵称标记
     is_at_bot = buffer.get("is_at_bot", False)

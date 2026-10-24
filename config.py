@@ -257,6 +257,21 @@ DEFAULT_CONFIG = {
     "group_idle_exit_probability": 0.3,
     "group_idle_exit_min_silence": 600,
 
+    # ── Bot 自己的作息：静默时段（"睡觉"，2026-10-24）────────────────
+    # 这个键原先**只存在于 proactive_talk 插件自己的 data/config.json 里**，
+    # 于是它只管得住"Bot 自己想说话"，管不住"群里有人 @ 它，它答"。
+    # 用户本机早就配了 1:00-7:00，意图明确，但群聊回复链从不读它 ——
+    # 凌晨两点被 @ 照样答。现在提到主配置，群聊/私聊/主动开口共用一份判据。
+    #
+    # 格式 "起始-结束"，24 小时制，支持跨天（"23:00-7:00"）。
+    # 空串 = 不静默（默认，保持老行为不变）。
+    "quiet_hours": "",
+    # 静默时段里被 @ / 引用 / 叫名字时的处理：
+    #   "wake"   被点名就回（真人被叫醒也会应一句），但话短、带着困意
+    #   "ignore" 一律不回，彻底睡死
+    # 默认 wake：完全 ignore 会让人以为 Bot 挂了；叫醒才是真人的反应。
+    "quiet_when_mentioned": "wake",
+
     # Agent 入口（2026-10-24 补进 DEFAULT_CONFIG）
     # ★ 这两个键此前**只存在于 bot_core 的 _config.get 兜底和 example 里**，
     #   DEFAULT_CONFIG 没有 → 配置对象里缺这两个名字 → 设置页拿不到值，

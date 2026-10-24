@@ -1879,6 +1879,12 @@ function renderGroupPanel(root){
     <div class="field"><div class="field-label">戳一戳超时（秒）</div>
       <div class="field-desc">同一人同一群戳 Bot 的连击计数保留时长, 超时后重新计数</div>
       <input class="input" id="sPokeTimeout" type="number" min="0"></div>
+    <div class="field"><div class="field-label">静默时段</div>
+      <div class="field-desc">Bot 睡觉的时间, 写 "1:00-7:00" 这种格式, 支持跨天。留空 = 不静默。群聊和私聊都生效; 主动开口插件没单独配置时也用它</div>
+      <input class="input" id="sQuietHours" type="text" placeholder="留空 = 不静默"></div>
+    <div class="field"><div class="field-label">静默时被点名</div>
+      <div class="field-desc">静默时段被人 @ 或者引用时的反应。wake = 被叫醒就回一句困话; ignore = 一律不回</div>
+      <select class="input" id="sQuietWhenMentioned"><option value="wake">wake（被叫醒就回）</option><option value="ignore">ignore（一律不回）</option></select></div>
     <div class="field"><div class="field-label">会话缓冲窗口（秒）</div>
       <div class="field-desc">会话模式下消息合并的时间窗口</div>
       <input class="input" id="sGroupMsgBufferSession" type="number" min="0"></div>
@@ -2358,6 +2364,7 @@ async function loadSettingsData(){
     s('sGroupMsgBuffer', c.group_msg_buffer_window); s('sGroupRecentMsgs', c.group_recent_msgs_window);
     s('sGroupMaxReplies', c.group_session_max_replies); s('sGroupIdleTimeout', c.group_session_idle_timeout);
     s('sGroupExitCooldown', c.group_last_exit_cooldown);
+    s('sQuietHours', c.quiet_hours); s('sQuietWhenMentioned', c.quiet_when_mentioned || 'wake');
     t('sGroupIdleExitEnable', c.group_idle_exit_enable);
     t('sAgentGroupEnable', c.agent_group_enable); t('sAgentPrivateEnable', c.agent_private_enable);
     s('sGroupIdleExitProb', c.group_idle_exit_probability); s('sGroupIdleMinSilence', c.group_idle_exit_min_silence); s('sPokeTimeout', c.poke_timeout); s('sGroupMsgBufferSession', c.group_msg_buffer_window_session); s('sGroupMsgBufferTrigger', c.group_msg_buffer_window_trigger);
@@ -2489,6 +2496,7 @@ function collectSettings(){
     group_msg_buffer_window: num('sGroupMsgBuffer'), group_recent_msgs_window: num('sGroupRecentMsgs'),
     group_session_max_replies: num('sGroupMaxReplies'), group_session_idle_timeout: num('sGroupIdleTimeout'),
     group_last_exit_cooldown: num('sGroupExitCooldown'),
+    quiet_hours: val('sQuietHours'), quiet_when_mentioned: val('sQuietWhenMentioned') || 'wake',
     group_idle_exit_enable: chk('sGroupIdleExitEnable'),
     agent_group_enable: chk('sAgentGroupEnable'),
     agent_private_enable: chk('sAgentPrivateEnable'),

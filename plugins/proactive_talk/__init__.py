@@ -83,6 +83,18 @@ def _load_config() -> dict:
                 cfg.update(json.load(f))
     except Exception:
         pass
+    # ★ 2026-10-24：quiet_hours 现在有两个来源 —— 主配置 bot_config.json 与
+    #   本插件 data/config.json。主配置那份是给群聊回复链用的（凌晨别被叫醒），
+    #   这里必须跟它对齐，否则会出现"私聊静默 1:00-7:00、群聊静默 2:00-8:00"
+    #   这种同一件事两套时段。
+    #   规则：插件自己显式配了非空值 → 用插件的（尊重单插件覆盖）；
+    #         插件没配（空串/缺键）→ 继承主配置。默认两边都是空，行为不变。
+    if not str(cfg.get("quiet_hours") or "").strip():
+        try:
+            from config import load_config
+            cfg["quiet_hours"] = str(load_config().get("quiet_hours") or "")
+        except Exception:
+            pass
     return cfg
 
 
@@ -107,36 +119,34 @@ def _log(msg: str, level: str = "info"):
 
 
 def _period(now: datetime) -> str:
-    h = now.hour
-    if h < 5:
-        return "凌晨"
-    if h < 9:
-        return "早上"
-    if h < 12:
-        return "上午"
-    if h < 14:
-        return "中午"
-    if h < 18:
-        return "下午"
-    if h < 23:
-        return "晚上"
-    return "深夜"
+    """时段名。★ 2026-10-24：改为直接问 time_ctx，不再自带一份边界表。
+
+    原先这里写了一套 `h<5 凌晨 / h<9 早上 / h<12 上午 …` 的边界，与
+    `harness.time_ctx._PERIODS` 是**两套判据**。实测 24 小时里有 7 个小时
+    两边名字不同（05~08 清晨 vs 早上、11 中午 vs 上午、17~18 傍晚 vs 下午/晚上），
+    结果是同一时刻群聊 prompt 说「清晨」、私聊开口 prompt 说「早上」，
+    而 bio_rhythm 又按「清晨」算乘子 —— 三处各说各的。
+
+    现在只认 time_ctx 一份。取不到就退回空串，不猜。
+    """
+    try:
+        from harness.time_ctx import period_of
+        return period_of(now.timestamp())[0]
+    except Exception:
+        return ""
 
 
 def _in_quiet_hours(spec: str, now: datetime) -> bool:
-    """quiet_hours 形如 '23:00-7:00'，支持跨天。空串 = 不静默。"""
-    spec = (spec or "").strip()
-    if not spec:
-        return False
+    """quiet_hours 形如 '23:00-7:00'，支持跨天。空串 = 不静默。
+
+    ★ 2026-10-24：解析逻辑移到 `harness.time_ctx.in_quiet_hours`。
+      群聊回复链现在也要用同一个判断（凌晨别被叫起来回话），
+      两处各写一份解析就是又一组"两套判据"。这里保留函数名只为
+      兼容既有测试与调用点，实现只剩转发。
+    """
     try:
-        a, b = spec.split("-", 1)
-        sh, sm = [int(x) for x in a.strip().split(":")]
-        eh, em = [int(x) for x in b.strip().split(":")]
-        cur = now.hour * 60 + now.minute
-        start, end = sh * 60 + sm, eh * 60 + em
-        if start <= end:
-            return start <= cur < end
-        return cur >= start or cur < end
+        from harness.time_ctx import in_quiet_hours
+        return in_quiet_hours(spec, now.timestamp())
     except Exception:
         return False
 
