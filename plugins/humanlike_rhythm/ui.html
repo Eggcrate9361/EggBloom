@@ -72,14 +72,6 @@
           <div class="card-value" id="cfgMax">--</div>
         </div>
         <div class="card">
-          <div class="card-label">显示输入中</div>
-          <div class="card-value" id="cfgTyping">--</div>
-        </div>
-        <div class="card">
-          <div class="card-label">逐句延迟</div>
-          <div class="card-value" id="cfgPer">--</div>
-        </div>
-        <div class="card">
           <div class="card-label">已延迟次数</div>
           <div class="card-value" id="cfgDelayed">--</div>
         </div>
@@ -96,8 +88,6 @@
       if ($('cfgEnabled')) $('cfgEnabled').textContent = p.已启用 ? '启用' : '禁用';
       if ($('cfgMin')) $('cfgMin').textContent = String(p.最小延迟 ?? '--');
       if ($('cfgMax')) $('cfgMax').textContent = String(p.最大延迟 ?? '--');
-      if ($('cfgTyping')) $('cfgTyping').textContent = p.显示输入中 ? '是' : '否';
-      if ($('cfgPer')) $('cfgPer').textContent = p.逐句延迟 ? '是' : '否';
       if ($('cfgDelayed')) $('cfgDelayed').textContent = String(p.已延迟次数 ?? '--');
     }).catch(()=>{});
   </script>

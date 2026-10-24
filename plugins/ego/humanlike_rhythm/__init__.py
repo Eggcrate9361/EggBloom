@@ -27,8 +27,14 @@ PLUGIN_META = {
         "enabled": {"type": "bool", "default": True},
         "min_delay": {"type": "float", "default": 0.2},
         "max_delay": {"type": "float", "default": 1.2},
-        "typing_indicator": {"type": "bool", "default": False},
-        "per_sentence_delay": {"type": "bool", "default": True},
+        # ★ 2026-10-24 删掉两项假配置：
+        #   typing_indicator / per_sentence_delay 在这里声明过，但**全仓库没有任何
+        #   读取方** —— before_reply 只做 random.uniform(min,max) 后 sleep，
+        #   两者都不参与。UI 上却各占一张卡片，看起来像能调，实际拨不动。
+        #   真正的打字节奏在 bot_core：reply_typing_speed（字/秒，默认 6.0）
+        #   算首句前的停顿，句间延迟按句长 0.3~1.0 秒。要调那个，不在这个插件里。
+        #   删掉声明是本模块能做的全部 —— 与其留一个永远为 False 的开关，
+        #   不如让它根本不存在，用户就不会以为自己调过。
     },
 }
 
