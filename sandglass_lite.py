@@ -409,6 +409,98 @@ def _trust_scores(line_nums) -> dict:
     return out
 
 
+# ══════════════════════════════════════════════════════════════
+# 时间衰减（2026-10-24 · 1.5.8 计划 #29「记忆加遗忘」）
+# ══════════════════════════════════════════════════════════════
+# 问题
+#   打分公式是 density × trust + sim_bonus，**没有任何时间因素**。
+#   于是三个月前的一条记忆和今天写的记忆，只要关键词匹配，分数一模一样。
+#   后果不是"老记忆冒出来"这么温和 —— 是记忆库随使用时间单调增长，
+#   而检索质量不随之下降也不上升，等于**没有遗忘机制**：该淡掉的还在前排。
+#
+# 为什么用半衰期而不是硬截止
+#   硬截止（超过 N 天直接不注入）会误杀**长期事实**：人格、关系、约定、
+#   "他对花生过敏"这类，写完可能几个月不会再被提到，但一旦提到就必须准。
+#   人也不是这样忘事的 —— 久不用的是"调取变慢"，不是"删除"。
+#   所以衰减有下限（_AGE_FLOOR），最多打对折，不归零。
+#
+# 时间取哪个
+#   优先 trust.updated_at（最近一次被检索/被反馈），没有则退回行自身的 ts
+#   （写入时间）。这两者都在库里现成，不必新增字段。
+_AGE_HALFLIFE_DAYS = 30.0   # 半衰期：30 天前的记忆分数减半
+_AGE_FLOOR = 0.5            # 衰减下限：再老也只减半（保护长期事实）
+_AGE_MAX_DAYS = 3650.0      # 超过 10 年按 10 年算（防脏数据把因子压穿下限）
+
+
+def age_factor(days_ago) -> float:
+    """记忆年龄 → 衰减因子 ∈ [_AGE_FLOOR, 1.0]。
+
+    days_ago <= 0（未来的时钟/脏数据）→ 1.0，不放大。
+    """
+    try:
+        d = float(days_ago)
+    except (TypeError, ValueError):
+        return 1.0
+    if d <= 0:
+        return 1.0
+    d = min(d, _AGE_MAX_DAYS)
+    f = 0.5 ** (d / _AGE_HALFLIFE_DAYS)
+    return max(_AGE_FLOOR, f)
+
+
+def _trust_recency(line_nums) -> dict:
+    """读这些行**最近一次被检索/反馈**距今天数。缺库/缺行 → {}（调用方自行退回 ts）。"""
+    out = {}
+    if not line_nums:
+        return out
+    try:
+        import sqlite3
+        import datetime as _dt
+        if not os.path.isfile(_TRUST_DB):
+            return out
+        conn = sqlite3.connect(_TRUST_DB, timeout=3)
+        try:
+            nums = [int(x) for x in line_nums][:500]
+            q = ",".join("?" * len(nums))
+            now = _dt.datetime.now()
+            for ln, upd in conn.execute(
+                    f"SELECT line_num, updated_at FROM trust WHERE line_num IN ({q})", nums):
+                try:
+                    # SQLite 的 datetime('now') 是 UTC；本地时钟比它快 8 小时，
+                    # 直接相减会得到负天数 → 负值会被 age_factor 夹成 1.0（不衰减），
+                    # 方向上是"宁可少衰减"，不会误杀。这里仍显式夹住。
+                    t = _dt.datetime.strptime(str(upd)[:19], "%Y-%m-%d %H:%M:%S")
+                    out[int(ln)] = (now - t).total_seconds() / 86400.0
+                except Exception:
+                    continue
+        finally:
+            conn.close()
+    except Exception:
+        pass
+    return out
+
+
+def _line_age_days(ts) -> float:
+    """行自身时间戳距今天数。取不到 → None（调用方不衰减，别猜）。"""
+    try:
+        import datetime as _dt
+        s = str(ts or "").strip()
+        if not s:
+            return None
+        # 沙漏行首时间戳形如 2026-10-24 11:20:33 或 10-24 11:20
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%m-%d %H:%M"):
+            try:
+                t = _dt.datetime.strptime(s[:19] if len(s) > 19 else s, fmt)
+                if fmt == "%m-%d %H:%M":
+                    t = t.replace(year=_dt.datetime.now().year)
+                return (_dt.datetime.now() - t).total_seconds() / 86400.0
+            except ValueError:
+                continue
+        return None
+    except Exception:
+        return None
+
+
 def trust_bump(line_nums, helpful: bool = True) -> None:
     """反馈信任分（好评/差评）。失败静默。"""
     try:
@@ -468,11 +560,19 @@ def _score_candidates(candidates, q_tokens, query):
     """密度 × 信任 + simhash 近似加成 → [(score, item), ...] 降序。
 
     与上游 search_router._score_candidates 同公式，保证注入侧阈值语义不变。
+
+    ★ 2026-10-24 加时间衰减（1.5.8 #29）：整式乘一个 age_factor ∈ [0.5, 1]。
+      为什么不放在 trust 里而是单独一层：trust 是"这条记忆靠不靠谱"（质量），
+      衰减是"这条记忆多久没被用"（新鲜度），两件事。混在一个数里就没法单独调。
+      乘法而不是加法：加法会被 density 主导而失效（density 通常 0.1~0.5，
+      加个 0.5 的衰减量比原分还大）。乘法保序 —— 同年龄下排序不变，
+      只是整体按年龄压，τ 闸的语义因此保持。
     """
     q_fp = _simhash(query)
     if q_fp == -1:
         q_fp = 0
     trust = _trust_scores([c[0] for c in candidates])
+    recency = _trust_recency([c[0] for c in candidates])
     scored = []
     for item in candidates:
         ln = item[0]
@@ -482,7 +582,12 @@ def _score_candidates(candidates, q_tokens, query):
         t = trust.get(ln, 0.5)
         fp = _simhash(text[:500])
         sim_bonus = 0.0 if fp == -1 else min(1.0 / (1 + _hamming(q_fp, fp) / 128), 0.5)
-        scored.append((density * t + sim_bonus, item))
+        # 年龄：优先"最近一次被检索/反馈"，退回"写入时间"，都没有 → 不衰减
+        d = recency.get(ln)
+        if d is None:
+            d = _line_age_days(item[1] if len(item) > 1 else "")
+        base = density * t + sim_bonus
+        scored.append((base * age_factor(d) if d is not None else base, item))
     scored.sort(key=lambda x: -x[0])
     return scored
 
