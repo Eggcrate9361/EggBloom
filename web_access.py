@@ -418,26 +418,44 @@ def _so_search(query: str, limit: int = 8):
 # 结果清洗与合并（2026-10-23）
 # ══════════════════════════════════════════════════════════════
 #: 搜索引擎自家的域名。它们是搜索页本身，不是结果，抓进来只会是导航。
+#: 按**域名后缀**匹配（`host == s` 或 `host.endswith("." + s)`），
+#: 不做整条 URL 的子串匹配 —— 后者会误伤 `example.com/?ref=bing.com` 这种，
+#: 而前者天然覆盖所有子域。
+#: ★ 2026-10-25 加 "360.com"：原来只有 "360.cn"，于是 `hao.360.com`、
+#:   `ranks.hao.360.com` 这类 360 自家导航/榜单页全都漏进结果里，
+#:   还占掉了抓正文的名额（实测一条查询的第 3 位就是 ranks.hao.360.com）。
 _SELF_HOSTS = (
     "bing.com", "microsoft.com", "google.com", "duckduckgo.com",
-    "so.com", "360.cn", "sogou.com", "baidu.com", "javascript:",
-    "void(0)", "/s?q=", "/search?", "/link?url=",
+    "so.com", "360.cn", "360.com", "sogou.com", "baidu.com",
 )
+#: 搜索页自身的路径 / 查询特征。这些不是域名，仍按整条 URL 匹配。
+_SELF_PATH_HINTS = ("javascript:", "void(0)", "/s?q=", "/search?", "/link?url=")
 
 
 def _is_usable_url(url: str) -> bool:
     """这个 URL 值不值得抓正文。
 
-    ★ 2026-10-23：360 搜出来的是**相对路径**（`/s?q=aibot官网入口&src=related`），
-      原实现直接把它丢给 `_fetch_html`，`urllib` 会报 unknown url type，
-      然后被 except 吞掉 —— 看起来是"抓取失败"，实际是根本没构成请求。
-      跳转链接（`sogou.com/link?url=`）也是同理：抓到的是中转页不是目标页。
+    判两件事：
+      1. 是绝对 http(s) 地址（`javascript:`、相对路径一律不行）
+      2. 不是搜索引擎自己的页面（搜索页、跳转壳、导航页）
+    域名按后缀匹配：`www.bing.com` / `cn.bing.com` 都命中 "bing.com"。
     """
     u = str(url or "").strip()
     if not u.startswith(("http://", "https://")):
         return False
     low = u.lower()
-    return not any(s in low for s in _SELF_HOSTS)
+    if any(h in low for h in _SELF_PATH_HINTS):
+        return False
+    try:
+        host = urllib.parse.urlparse(low).hostname or ""
+    except Exception:
+        return False
+    if not host:
+        return False
+    for s in _SELF_HOSTS:
+        if host == s or host.endswith("." + s):
+            return False
+    return True
 
 
 def _url_key(url: str) -> str:
@@ -808,26 +826,46 @@ def _attach_contents(items, max_pages: int = 3, timeout: int = 8):
         return items
 
     def _one(url):
+        """返回 (正文, 失败原因)。原因非空才记一行 —— 静默失败没法排查。
+
+        实测（2026-10-25，5 个查询共 15 条）：只有 7 条抓到正文（47%）。
+        B站、知乎整类抓不到（反爬）；360 自家导航页能抓到但没正文。
+        原来这些都返回空串、不留痕迹，看起来像"没配这个功能"。
+        """
         try:
             html = _fetch_html(url, timeout=timeout)
             if not html:
-                return ""
+                return "", "抓不到页面"
             # 正文由 _block_text 挑块，这里不再单独去 nav/aside ——
             # 去标签的责任已经收进 _DROP_TAGS，两处都做会漏掉新的标签名
-            return _block_text(html)
-        except Exception:
-            return ""
+            txt = _block_text(html)
+            return txt, ("" if txt else "页面无正文块")
+        except Exception as e:
+            return "", type(e).__name__
 
     try:
         from concurrent.futures import ThreadPoolExecutor
         with ThreadPoolExecutor(max_workers=len(targets)) as ex:
-            texts = list(ex.map(_one, [u for _i, u in targets]))
+            got = list(ex.map(_one, [u for _i, u in targets]))
     except Exception:
-        texts = [_one(u) for _i, u in targets]
+        got = [_one(u) for _i, u in targets]
 
-    for (idx, _u), t in zip(targets, texts):
+    fails = []
+    for (idx, _u), (t, why) in zip(targets, got):
         if t:
             items[idx]["content"] = t
+        else:
+            host = ""
+            try:
+                host = urllib.parse.urlparse(items[idx].get("url") or "").hostname or ""
+            except Exception:
+                pass
+            fails.append(f"{host}（{why}）")
+    if fails:
+        # 一行汇总，不逐条刷屏。这条日志的意义：抓正文这套机制坏了能看见，
+        # 而不是等模型回答偏了再回头猜。
+        print(f"[web_access] 正文抓取失败 {len(fails)}/{len(targets)}："
+              + "、".join(fails[:3]))
     return items
 
 

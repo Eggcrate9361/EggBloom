@@ -71,6 +71,67 @@ class TestNormalizeQuery(unittest.TestCase):
         self.assertNotIn("有什 新", out)
 
 
+class TestAttachContents(unittest.TestCase):
+    """给排在前面的结果抓正文。
+
+    2026-10-25 实测：5 个查询共 15 条结果，只有 7 条抓到（47%）。
+    B站、知乎整类抓不到（反爬）。原来这些失败**不留任何痕迹** ——
+    返回空串就跳过，看起来像"没配这个功能"，坏了也没人知道。
+    """
+
+    def setUp(self):
+        self._orig_fetch = wa._fetch_html
+        self._orig_block = wa._block_text
+        wa._fetch_html = lambda url, timeout=15, headers=None: ""
+
+    def tearDown(self):
+        wa._fetch_html = self._orig_fetch
+        wa._block_text = self._orig_block
+
+    def _capture(self, fn):
+        import io
+        from contextlib import redirect_stdout
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            out = fn()
+        return out, buf.getvalue()
+
+    def test_attaches_content_to_its_own_item(self):
+        """正文挂在结果自己身上，不是回一串无归属的文本。"""
+        wa._fetch_html = lambda url, timeout=15, headers=None: "<html>x</html>"
+        wa._block_text = lambda html: "这是一段抓到的正文内容"
+        items = [sc.make(url="https://a.example/1", title="A", snippet="s1"),
+                 sc.make(url="https://b.example/2", title="B", snippet="s2")]
+        out, log = self._capture(lambda: wa._attach_contents(items, max_pages=2))
+        self.assertEqual(out[0]["content"], "这是一段抓到的正文内容")
+        self.assertEqual(out[1]["content"], "这是一段抓到的正文内容")
+        self.assertEqual(log.strip(), "", "全部成功时不该打日志")
+
+    def test_failure_is_logged_with_host(self):
+        """抓不到页面时必须留一行日志 —— 静默失败没法排查。"""
+        items = [sc.make(url="https://www.bilibili.com/video/BV1x",
+                         title="B站", snippet="s")]
+        out, log = self._capture(lambda: wa._attach_contents(items, max_pages=1))
+        self.assertEqual(out[0].get("content") or "", "")
+        self.assertIn("正文抓取失败", log)
+        self.assertIn("bilibili.com", log, log)
+        self.assertIn("抓不到页面", log, log)
+
+    def test_no_text_blocks_logged_differently(self):
+        """抓到了页面但抽不出正文，原因要和"抓不到"分开 —— 排查方向不一样。"""
+        wa._fetch_html = lambda url, timeout=15, headers=None: "<html></html>"
+        wa._block_text = lambda html: ""
+        items = [sc.make(url="https://a.example/1", title="A", snippet="s")]
+        out, log = self._capture(lambda: wa._attach_contents(items, max_pages=1))
+        self.assertIn("页面无正文块", log, log)
+
+    def test_unusable_url_not_counted(self):
+        """不该抓的 URL（360 导航页）不进目标，也不该算作失败。"""
+        items = [sc.make(url="https://ranks.hao.360.com/x", title="360导航", snippet="s")]
+        out, log = self._capture(lambda: wa._attach_contents(items, max_pages=3))
+        self.assertEqual(log.strip(), "", "过滤掉的不算失败")
+
+
 class TestUsableUrl(unittest.TestCase):
     """抓正文之前先筛 URL。360 返回相对路径，旧实现直接喂 urllib 就报错。"""
 
@@ -86,6 +147,24 @@ class TestUsableUrl(unittest.TestCase):
 
     def test_reject_javascript(self):
         self.assertFalse(wa._is_usable_url("javascript:void(0)"))
+
+    def test_reject_360_own_pages(self):
+        """★ 2026-10-25：原来只过滤 360.cn，360.com 的导航/榜单页全漏进来。
+
+        实测一条查询的第 3 位就是 `ranks.hao.360.com` —— 它不是结果，
+        是 360 自己的榜单页，还占掉一个抓正文的名额。
+        """
+        for u in ("https://ranks.hao.360.com/abc",
+                  "https://hao.360.com/?src=x",
+                  "https://www.360.com/x"):
+            self.assertFalse(wa._is_usable_url(u), u)
+
+    def test_host_match_not_substring(self):
+        """按域名后缀匹配，不是整条 URL 子串 —— 否则路径里带 bing.com 会被误杀。"""
+        self.assertTrue(wa._is_usable_url("https://example.com/?ref=bing.com"),
+                        "路径里出现 bing.com 不代表这是 Bing 的页面")
+        # 子域仍然要拦
+        self.assertFalse(wa._is_usable_url("https://cn.bing.com/search?q=x"))
 
     def test_accept_normal(self):
         for u in ("https://ys.mihoyo.com/main/",
