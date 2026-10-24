@@ -111,10 +111,18 @@ BING_FIXTURE = """
 SO_FIXTURE = """
 <html><body>
 <ul>
-  <li class="res-list"><h3><a href="https://zhuanlan.zhihu.com/p/456">机械键盘怎么选</a></h3>
-    <p class="res-desc">从轴体到键帽，这份选购指南覆盖了入门玩家最关心的几个点。</p></li>
-  <li class="res-list"><h3><a href="/s?q=广告&src=related">相对路径的结果要跳过</a></h3>
-    <p class="res-desc">这条链接是相对路径，抓不到目标页，不该进结果列表里。</p></li>
+  <li class="res-list" data-result-type="normal" data-result-pos="1">
+    <h3 class="res-title"><a href="https://www.so.com/link?m=AAAABBBBCCCC" data-mdurl="https://zhuanlan.zhihu.com/p/456" rel="noopener" target="_blank"><em>机械键盘</em>怎么选</a></h3>
+    <p class="res-desc">从轴体到键帽，这份<em>选购指南</em>覆盖了入门玩家最关心的几个点。</p></li>
+  <li class="res-list" data-result-type="normal" data-result-pos="2">
+    <h3 class="res-title"><a href="https://www.so.com/link?m=DDDDEEEEFFFF" rel="noopener" target="_blank">只有跳转壳、没有 data-mdurl 的块</a></h3>
+    <p class="res-desc">这种块不返回结果，因为解跳转壳拿到的是广告兜底页。</p></li>
+  <li class="res-list" data-result-type="normal" data-result-pos="3">
+    <h3 class="res-title"><a href="https://www.so.com/link?m=GGGGHHHH" data-mdurl="https://image.so.com/i?src=360pic_text" target="_blank">360 站内图片页</a></h3>
+    <p class="res-desc">data-mdurl 指向 360 自己家的页面，仍然要过滤掉。</p></li>
+  <li class="res-list" data-result-type="normal" data-result-pos="5">
+    <h3 class="res-title"><a href="https://www.so.com/link?m=IIIIJJJJ" data-mdurl="https://www.9game.cn/news/12002327.html" target="_blank">好玩的胖鱼游戏有哪些</a></h3>
+    <p class="res-desc">人气最高的胖鱼游戏榜单介绍。</p></li>
 </ul></body></html>
 """
 
@@ -187,15 +195,43 @@ class TestParseBing(unittest.TestCase):
 
 class TestParseSo(unittest.TestCase):
     def test_parses_blocks(self):
+        """真实 360 结构：href 是跳转壳，真实地址在 data-mdurl。
+
+        ★ 2026-10-24：夹具换成真实 SERP 形状。旧夹具写的是直链
+          （`href="https://zhuanlan.zhihu.com/p/456"`），而 360 实际返回
+          的全是 `so.com/link?m=…` —— 夹具验的是想象，真实链路 0 条通过。
+        """
         res = wa._parse_so(SO_FIXTURE)
-        self.assertEqual(len(res), 1, [x["url"] for x in res])
+        self.assertEqual(len(res), 2, [x["url"] for x in res])
+        urls = [x["url"] for x in res]
+        # 用的是 data-mdurl，不是 href 的跳转壳
+        self.assertIn("https://zhuanlan.zhihu.com/p/456", urls)
+        self.assertFalse(any("so.com/link" in u for u in urls), urls)
+
+    def test_inline_em_not_split(self):
+        """<em> 是引擎高亮，不能把词拆成「机械 键盘」。"""
+        res = wa._parse_so(SO_FIXTURE)
         self.assertIn("机械键盘", res[0]["title"])
         self.assertIn("选购指南", res[0]["snippet"])
 
-    def test_relative_url_dropped(self):
-        """相对路径抓不到目标页，只会浪费时间。"""
+    def test_no_mdurl_dropped(self):
+        """没有 data-mdurl 的块跳过：解跳转壳拿到的是广告兜底页。"""
         res = wa._parse_so(SO_FIXTURE)
-        self.assertFalse(any(x["url"].startswith("/") for x in res))
+        self.assertFalse(any("没有 data-mdurl" in x["title"] for x in res),
+                         [x["title"] for x in res])
+
+    def test_self_host_dropped(self):
+        """data-mdurl 指向 360 自家页面时仍要过滤。"""
+        res = wa._parse_so(SO_FIXTURE)
+        self.assertFalse(any("so.com" in x["url"] for x in res),
+                         [x["url"] for x in res])
+
+    def test_rank_uses_result_pos(self):
+        """名次用 data-result-pos，不是枚举序号 —— 跳过广告后序号会虚高。"""
+        res = wa._parse_so(SO_FIXTURE)
+        # 第 4 条挂着 data-result-pos="5"（前面有个广告位被跳过）
+        self.assertEqual([x["_rank_in_source"] for x in res], [1, 5],
+                         [(x["title"], x["_rank_in_source"]) for x in res])
 
     def test_empty(self):
         self.assertEqual(wa._parse_so(""), [])
@@ -583,6 +619,39 @@ class TestSearchWebWiring(unittest.TestCase):
         out = wa.search_web("原神")
         self.assertIn("兜底", out)
 
+    def test_thin_goes_to_deepseek(self):
+        """★ 自家结果「偏薄」也要兜底，不只是「空」才兜底。
+
+        2026-10-24 修之前：只有一条结果都没有才兜底。于是 quality_of 算出
+        thin、甚至把「结果质量：偏薄」写进了给模型的话里，路由却完全不看它
+        —— 实测搜「养大肥鱼 很火 游戏」，自家返回「养」的汉语字典（0.60），
+        DeepSeek 能给出正确的游戏条目，但兜底一次都没被调用。
+        """
+        called = []
+        # 一条低分结果：判 thin
+        self._bing_returns(sc.make(url="https://dict.example/z", title="养 _ 养 怎么读",
+                                   snippet="养字的意思 1.抚育，供给生活品", source="bing",
+                                   rank_in_source=1, score=0.6))
+        wa._search_via_deepseek = lambda q, nq: (
+            called.append(1),
+            ([sc.make(url="https://game.example/1", title="大肥鱼养成游戏重磅更新",
+                      snippet="30多万人玩过的大肥鱼养成游戏迎来首次更新", source="ds",
+                      score=2.4)], True))[1]
+        out = wa.search_web("养大肥鱼 很火 游戏")
+        self.assertEqual(called, [1], "thin 必须触发兜底")
+        self.assertIn("大肥鱼养成游戏", out, "应当采用兜底结果，而不是那条字典页")
+        self.assertNotIn("汉语字典", out)
+
+    def test_thin_keeps_own_when_deepseek_unavailable(self):
+        """兜底这条路没走通（没 key/网络错）→ 保留自家 thin 结果，不能什么都不给。"""
+        self._bing_returns(sc.make(url="https://dict.example/z", title="养 _ 养 怎么读",
+                                   snippet="养字的意思 1.抚育，供给生活品", source="bing",
+                                   rank_in_source=1, score=0.6))
+        wa._search_via_deepseek = lambda q, nq: ([], False)
+        out = wa.search_web("养大肥鱼 很火 游戏")
+        self.assertIn("怎么读", out)
+        self.assertNotIn("未找到相关结果", out)
+
     def test_both_empty_says_so(self):
         wa._parse_bing = lambda html, limit=8: []
         wa._parse_so = lambda html, limit=8: []
@@ -599,6 +668,9 @@ class TestSearchWebWiring(unittest.TestCase):
             sc.make(url="https://b.com/1", title="从 360 拿到的一条结果标题",
                     snippet="这条摘要内容够长可以进结果列表", source="so",
                     rank_in_source=1)]
+        # ★ 2026-10-24：这条结果是 thin（1 条、分低），路由会去问兜底。
+        #   兜底也拿不到 → 必须**保留自家那份**，不能因为追求质量什么都不给。
+        wa._search_via_deepseek = lambda q, nq: ([], False)
         out = wa.search_web("原神")
         self.assertIn("360", out)
 

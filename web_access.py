@@ -60,13 +60,28 @@ def _fetch_html(url: str, timeout: int = 15, headers: Optional[dict] = None) -> 
 
 
 def _strip_tags(text: str) -> str:
-    """剥掉真实标签。单独抽出来，是因为它要被调用两次（解码前后各一次）。"""
+    """剥掉真实标签。单独抽出来，是因为它要被调用两次（解码前后各一次）。
+
+    ★ 2026-10-24：内联高亮标签单独处理。搜索结果里 `<em>`/`<b>` 是引擎
+      给的**高亮**，长在词内部：
+
+          <em>原神</em>官方网站     →  原神 官方网站   （错，词被拆开）
+          <em>原神</em>官方网站     →  原神官方网站     （对）
+
+      原来所有标签一律换成空格，模型看到的是「核 你有约…核装备与核工程 学院
+      召开 心理委员 培训会」这种被切碎的句子。块级标签本来就该换空格
+      （它们是天然分隔），内联的不该。
+      `<a>` 不列入内联：链接是结构边界，相邻两个链接不能粘成一个词。
+    """
     text = re.sub(r'<!--.*?-->', ' ', text, flags=re.DOTALL)
     text = re.sub(r'<!\[CDATA\[.*?\]\]>', ' ', text, flags=re.DOTALL)
     # 内联 SVG 整段丢掉。图标、logo 都是内联 SVG，它们的 `<path d="M4.89...">`
     # 属性值里没有尖括号问题，但**量极大**（B站首页光图标路径就上万字符），
     # 而且一个字的信息都没有 —— 不先单独整段吃掉，剥标签只会留下一堆坐标数字。
     text = re.sub(r'<svg\b.*?</svg>', ' ', text, flags=re.DOTALL | re.IGNORECASE)
+    # 内联标签删掉（不换空格），避免把词拆开
+    text = re.sub(r'</?(?:em|b|i|strong|mark|font|span|u|sup|sub)\b[^>]*>',
+                  '', text, flags=re.IGNORECASE)
     return re.sub(r'<[^>]+>', ' ', text)
 
 
@@ -324,10 +339,31 @@ def _duckduckgo_search(query: str, limit: int = 8):
 def _parse_so(html: str, limit: int = 8):
     """360 搜索 HTML → [SearchResult]。**纯函数，不联网**。
 
-    ★ 2026-10-23 重写，同 _parse_bing：按块解析，不再回平行列表。
-      360 的坑是**链接可能是相对路径**（`/s?q=...`），原实现直接丢给
-      urllib，报 unknown url type 后被 except 吞掉 —— 看起来"抓取失败"，
-      实际是根本没构成请求。所以这里显式筛。
+    ★ 2026-10-24 重写。前两版都取 `<a href>`，而 360 的 href **全是跳转壳**
+      （`https://www.so.com/link?m=…`），`_is_usable_url` 的 `_SELF_HOSTS`
+      里有 "so.com"，于是每一条都被过滤 —— 实测 7 个结果块、0 条通过，
+      这个引擎等于不存在。
+
+      真实目标地址在锚点的 **`data-mdurl`** 属性里：
+
+          <h3 class="res-title">
+            <a href="https://www.so.com/link?m=…"
+               data-mdurl="https://ys.mihoyo.com/?from_channel=adbdpz" …>
+
+      这个做法参考了两个开源实现（2026-10-24 查证）：
+        · dsh-web-search-so360 —— "优先读锚点上的 data-mdurl（360 内嵌的
+          真实目标地址），缺失时回退抓取 /link?m=… 中转页并解析其 JS 跳转"
+        · TongYi-Lite 的 websearch_direct 记录 —— "360 结果块内嵌
+          data-mdurl 真实 URL"；并实测百度会进惩罚态、搜狗连发 4~5 次触发
+          反爬，只有 360 与必应 CN 能稳定连发
+
+      **不实现"回退解跳转壳"**：实测把 `/link?m=…` 请求下来，页内
+      `location.replace` 指向的是 `https://hao.360.com/?src=hj_so`（广告兜底页），
+      不是目标文章。解出来是假地址，比没有更糟 —— 多一次请求还污染结果。
+      缺 data-mdurl 的块直接跳过（实测 49 个块里 38 个有，每查询至少 3 条）。
+
+      位置分用 `data-result-pos`（引擎给的真实名次），不是枚举顺序 ——
+      跳过若干块之后，枚举序号会让后面的结果冒充第 1 名。
     """
     if not html:
         return []
@@ -338,27 +374,34 @@ def _parse_so(html: str, limit: int = 8):
         # 360 改版后有时用 h3 直接包结果，退一步按 h3 切
         chunks = re.split(r'<h3[^>]*>', html)[1:]
 
-    for ch in chunks[:max(limit * 2, 12)]:
-        m_link = re.search(r'<a[^>]+href="([^"]+)"', ch)
-        if not m_link:
+    for ch in chunks[:max(limit * 3, 16)]:
+        # 真实地址优先取 data-mdurl；没有就是广告位/站内页，跳过
+        m_md = re.search(r'data-mdurl="([^"]+)"', ch)
+        url = m_md.group(1).replace("&amp;", "&") if m_md else ""
+        if not url:
             continue
-        href = m_link.group(1)
-        # 相对路径 / 跳转壳一律跳过：抓不到目标页，只会浪费时间
-        if not _is_usable_url(href):
+        # 站内页（image.so.com / hao.360.com 之类）仍然滤掉
+        if not _is_usable_url(url):
             continue
-        m_title = re.search(r'<a[^>]*>(.*?)</a>', ch, re.DOTALL)
+        m_title = re.search(r'<h3[^>]*>(.*?)</h3>', ch, re.DOTALL)
+        if not m_title:
+            m_title = re.search(r'<a[^>]*>(.*?)</a>', ch, re.DOTALL)
         title = _clean_text(m_title.group(1)) if m_title else ""
-        m_sn = re.search(r'<p[^>]*class="[^"]*(?:res-desc|res-rich)[^"]*"[^>]*>(.*?)</p>',
+        m_sn = re.search(r'<p[^>]*class="[^"]*(?:res-desc|res-rich|mh-txt)[^"]*"[^>]*>(.*?)</p>',
                          ch, re.DOTALL)
         if not m_sn:
             m_sn = re.search(r'<p[^>]*>(.*?)</p>', ch, re.DOTALL)
         snippet = _clean_text(m_sn.group(1)) if m_sn else ""
         if not title and len(snippet) < 20:
             continue
+        # 名次用引擎给的 data-result-pos，不是枚举序号：
+        # 跳过广告之后枚举序号会让第 4 名冒充第 1 名，位置分就虚高了
+        m_pos = re.search(r'data-result-pos="(\d+)"', ch)
+        pos = int(m_pos.group(1)) if m_pos else (len(out) + 1)
         out.append(search_core.make(
-            url=href, title=title, snippet=snippet,
+            url=url, title=title, snippet=snippet,
             date=search_core.parse_date(snippet), source="so",
-            rank_in_source=len(out) + 1,
+            rank_in_source=pos,
         ))
         if len(out) >= limit:
             break
@@ -927,17 +970,26 @@ def search_web(query: str, retries: int = 2) -> str:
     items = _own_search(query, nq)
     text = _render(items, nq, query, "own") if items else ""
 
-    # 自家没结果（或结果全部没有可读内容）→ 才走 DeepSeek
-    if not text:
+    # ── 自家结果「能用」才停手 ──
+    # ★ 2026-10-24 修。原来只判 `if not text` —— 也就是**只有一条结果都没有**
+    #   才兜底。而 _render 对质量差的结果照样产出非空文本，只在末尾附一句
+    #   「结果质量：偏薄」。于是 quality_of 算出了 thin、甚至把理由写进了给
+    #   模型的话里，路由决策却完全不看它 —— 同一件事两处判据，互不相认。
+    #
+    #   实测后果：搜「养大肥鱼 很火 游戏」，自家返回「养」的汉语字典（0.60 分，
+    #   判 thin），DeepSeek 兜底能给出「大肥鱼养成游戏」「干饭大肥鱼」，
+    #   但兜底一次都没被调用。6 个查询 6 次全走自家。
+    #
+    #   现在：verdict 不是 good 就走兜底。兜底拿不到结果时**保留自家那份**
+    #   —— thin 的结果也比"没搜到"有用，不能因为追求质量反而什么都不给。
+    verdict = search_core.quality_of(items).get("verdict") if items else "empty"
+    if verdict != "good":
         ds_items, handled = _search_via_deepseek(query, nq)
         if handled and ds_items:
-            items = ds_items
-            text = _render(items, nq, query, "ds")
-        elif handled and not ds_items:
-            # 两边都没结果才说没查到
-            result = f"搜索「{nq}」未找到相关结果。"
-            _set_cache(query, result)
-            return result
+            ds_text = _render(ds_items, nq, query, "ds")
+            if ds_text:
+                _set_cache(query, ds_text)
+                return ds_text
 
     if not text:
         result = f"搜索「{nq}」未找到相关结果。"
