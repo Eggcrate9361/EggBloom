@@ -77,9 +77,13 @@ REAL = {
     "message_merge":
         "群[829854136] 合并消息: [小明] [引用:小红] [图片]",
     "decision_no_interrupt":
-        "群[_test_pacing_] [观察] 暂不插话，300s 后再看一眼 · 测试",
+        "群[_test_pacing_] [观察] 暂不插话，300s 后再看一眼 · 氛围不适合",
     "decision_skip":
-        "群[333] 不参与：测试",
+        "群[829854136] [跳过] 无触发条件，忽略消息 · 决策理由：氛围不适合: 今天吃啥",
+    "decision_approve":
+        "群[829854136] [决策放行] 无触发消息，决策插件建议插话: 今天吃啥",
+    "decision_typed":
+        "群[829854136] [typed 决策] sandglass 建议插话",
     "tool_catalog":
         "sandglass_recent、sandglass_search",
     "cost_ai":
@@ -129,6 +133,8 @@ def main():
         ("message_merge", "message"),
         ("decision_no_interrupt", "decision"),
         ("decision_skip", "decision"),
+        ("decision_approve", "decision"),
+        ("decision_typed", "decision"),
         ("cost_ai", "cost"),
         ("error_onebot", "error"),
         ("error_crash", "error"),
