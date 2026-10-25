@@ -84,8 +84,14 @@ def main():
           '"/api/events"' not in get_block)
 
     print("\n[3] 前端错误提示不把责任推给别处")
-    seg = html[html.find("读取事件失败"):][:500] if "读取事件失败" in html else ""
-    check("事件页的失败提示存在", bool(seg))
+    # 文案会随页面重做而变（2026-10-25 日志页改成轮次视图时改过一次），
+    # 所以不锚定整句，改成找「日志页那个 catch 里的 errbox」。
+    seg = ""
+    for mm in re.finditer(r"errbox\">([^<]{0,80})", html):
+        if "失败" in mm.group(1):
+            seg = mm.group(1)
+            break
+    check("事件页的失败提示存在", bool(seg), "没找到任何 errbox 失败提示")
     check("提示里没有「后端未启动时属正常」这种归因",
           "后端未启动" not in seg, seg[:120])
 

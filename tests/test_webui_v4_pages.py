@@ -108,6 +108,32 @@ EVENTS = {
     "total": 7,
 }
 
+# 日志页现在吃 /api/rounds（服务端 webui_server.collect_rounds 的形状）。
+# 一轮问答：问 → 处理 → 决策 → 工具与记录 → 回复。成本行服务端已丢弃。
+ROUNDS = {
+    "rounds": [
+        {"time": "16:01:10", "scope": "829854136", "who": "小明",
+         "ask": "养大肥鱼是什么", "route": "进入 AI 聊天流程",
+         "decisions": [],
+         "tools": [{"name": "search_web", "q": "养大肥鱼", "note": "自家搜索命中"}],
+         "reply": "DeepSeek 的桌面宠物，不是真鱼"},
+        {"time": "16:01:14", "scope": "829854136", "who": "小明",
+         "ask": "那你在干嘛", "route": "进入 AI 聊天流程",
+         "decisions": ["群[829854136] [观察] 暂不插话，300s 后再看一眼"],
+         "tools": [], "reply": "吃饭啊，刚坐下"},
+        {"time": "16:01:20", "scope": "pm", "who": "/ω＼",
+         "ask": "你看现在养大肥鱼很火诶", "route": "进入 AI 聊天流程",
+         "decisions": [],
+         "tools": [{"name": "search_web", "q": "养大肥鱼 很火 游戏", "note": "走 DeepSeek 兜底"}],
+         "reply": "哦那个啊，我前两天还搜过"},
+    ],
+    "scopes": [
+        {"key": "pm", "label": "私聊", "count": 1},
+        {"key": "829854136", "label": "群 829854136", "count": 2},
+    ],
+    "total": 3,
+}
+
 GROUPS = {"ok": True, "groups": [
     {"group_id": "123456", "group_name": "核院 2026 级", "member_count": 128,
      "bot_role": "admin", "bot_is_admin": True, "bot_card": "水星",
@@ -224,6 +250,9 @@ with sync_playwright() as pw:
             return r.fulfill(status=200, content_type="application/json", body=json.dumps(LOGS))
         if u.rstrip("/").endswith("/api/events"):
             return r.fulfill(status=200, content_type="application/json", body=json.dumps(EVENTS))
+        # 轮次视图（2026-10-25 重做的日志页）
+        if u.rstrip("/").endswith("/api/rounds"):
+            return r.fulfill(status=200, content_type="application/json", body=json.dumps(ROUNDS))
         # 配置页的「接入与诊断」动作
         # 控制台 / 记忆 / 生图 / 表情包
         if "/api/command" in u:
@@ -533,35 +562,44 @@ with sync_playwright() as pw:
     ck("★ 已配置模型时不显示引导横幅",
        pg.eval_on_selector("#cfgSetup", "e=>e.hidden") is True)
 
-    print("\n=== ★ 日志页：事件视图（不是原始日志行）===")
+    print("\n=== ★ 日志页：按一轮问答展示，并按会话分开（2026-10-25 重做）===")
     pg.evaluate("() => go(9)")
-    pg.wait_for_timeout(1100)
+    pg.wait_for_timeout(1200)
     ev_rows = pg.eval_on_selector_all("#evList .evt", "e => e.map(x=>x.className)")
-    ck("★ 日志页画的是事件行", len(ev_rows) >= 4, ev_rows)
-    ck("★ 事件行带五类之一的 kind 标记",
-       all(("k-message" in c) or ("k-decision" in c) or ("k-tool" in c)
-           or ("k-cost" in c) or ("k-error" in c)
-           for c in ev_rows), ev_rows)
+    ck("★ 每轮一条", len(ev_rows) == 3, ev_rows)
     ev_text = pg.inner_text("#evList")
-    ck("★ 消息写明「谁 · 在哪说 + 说了什么」",
-       "今天去不去" in ev_text and "小明" in ev_text, ev_text[:260])
-    ck("★ 决策写明结论（建议插话）", "建议插话" in ev_text, ev_text[:260])
-    ck("★ 工具调用写明工具名", "search_web" in ev_text and "fetch_page" in ev_text, ev_text[:260])
-    ck("★ AI 行写明 token 与花费", "4411 tokens" in ev_text and "￥" in ev_text,
+    ck("★ 有「问」", "问" in ev_text and "养大肥鱼是什么" in ev_text, ev_text[:200])
+    ck("★ 有「回」", "回" in ev_text and "不是真鱼" in ev_text, ev_text[:200])
+    ck("★ 有处理方式", "进入 AI 聊天流程" in ev_text, ev_text[:200])
+    ck("★ 有决策", "暂不插话" in ev_text, ev_text[:260])
+    ck("★ 工具带关键词与结果", "search_web" in ev_text and "自家搜索命中" in ev_text,
        ev_text[:300])
-    ck("★ 调试行不出现在事件流里", "loaded module" not in ev_text, ev_text[:300])
-    ck("★ 页脚点名被隐藏的调试行数",
-       "2" in pg.inner_text("#evMore") and "调试" in pg.inner_text("#evMore"),
-       pg.inner_text("#evMore"))
-    # 分类筛选：五类各自点一次，只能留下自己那一类
-    for k, cls in (("tool", "k-tool"), ("cost", "k-cost"), ("decision", "k-decision")):
-        pg.click(f'[data-k="{k}"]')
-        pg.wait_for_timeout(300)
-        only = pg.eval_on_selector_all("#evList .evt", "e => e.map(x=>x.className)")
-        ck(f"★ 点「{k}」只留 {k} 事件",
-           len(only) >= 1 and all(cls in c for c in only), only)
+    ck("★ 不出现 token 计费", "tokens" not in ev_text and "￥" not in ev_text,
+       ev_text[:300])
+    ck("★ 每轮都标出是谁在说", "小明" in ev_text and "/ω＼" in ev_text, ev_text[:260])
+    # 会话分开：全部 / 私聊 / 各群
+    chip_keys = pg.eval_on_selector_all("#evChips .evt-chip", "e=>e.map(x=>x.dataset.k)")
+    ck("★ chip 有「全部」与「私聊」两个", "" in chip_keys and "pm" in chip_keys, chip_keys)
+    ck("★ chip 还按群分开", "829854136" in chip_keys, chip_keys)
+    pg.click('[data-k="829854136"]')
+    pg.wait_for_timeout(350)
+    only_grp = pg.inner_text("#evList")
+    ck("★ 点群聊 chip 只留该群", "养大肥鱼是什么" in only_grp
+       and "你看现在养大肥鱼很火诶" not in only_grp, only_grp[:200])
+    pg.click('[data-k="pm"]')
+    pg.wait_for_timeout(350)
+    only_pm = pg.inner_text("#evList")
+    ck("★ 点私聊 chip 只留私聊", "你看现在养大肥鱼很火诶" in only_pm
+       and "养大肥鱼是什么" not in only_pm, only_pm[:200])
     pg.click('[data-k=""]')
-    pg.wait_for_timeout(300)
+    pg.wait_for_timeout(350)
+    # 搜索
+    pg.fill("#evSearch", "吃饭")
+    pg.wait_for_timeout(350)
+    ck("★ 搜索能筛轮次", "吃饭啊" in pg.inner_text("#evList")
+       and "不是真鱼" not in pg.inner_text("#evList"), pg.inner_text("#evList")[:200])
+    pg.fill("#evSearch", "")
+    pg.wait_for_timeout(350)
 
     print("\n=== ★ 控制台：原始日志流搬到了这里 ===")
     pg.evaluate("() => go(11)")

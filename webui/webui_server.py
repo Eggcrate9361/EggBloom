@@ -1294,6 +1294,269 @@ def collect_events(limit=400):
     return {"events": events, "counts": counts, "total": len(rows)}
 
 
+# ══════════════════════════════════════════════════════════════
+# 轮次视图（2026-10-25）
+# ══════════════════════════════════════════════════════════════
+# 用户要的是「这一轮里发生了什么」，而事件视图给的是「这一行日志算什么类型」——
+# 用户问的话、决策、工具调用、工具返回、bot 的回复散落在不同类型里，
+# 中间夹着心跳和调试，拼不起来。轮次视图按一次问答切分，按会话分开。
+
+# `[11:44:45] 正文`
+_RND_TS = re.compile(r"^\[(\d{2}:\d{2}:\d{2})\]\s?(.*)$")
+# `[事件] 收到: post_type=message msg_type=group uid=小明(10001) gid=829854136`
+_RND_EVT = re.compile(
+    r"\[事件\]\s*收到:\s*post_type=(\w+)\s+msg_type=(\S*)\s+uid=(\S*)\s+gid=(\S*)")
+# 私聊用户消息：`收到: 你在干嘛呢`（可能带 `[引用]` 前缀）
+_RND_ASK_PM = re.compile(r"^收到:\s*(?:\[引用\]\s*)?(.+)$", re.S)
+# 私聊引用消息：`私聊[(/ω＼)(3150007406)] 引用消息: 你看现在…`
+_RND_ASK_QUOTE = re.compile(r"^(?:私聊|群)\[(.+?)\]\s*引用消息:\s*(.+)$", re.S)
+# 群聊合并后的批次：`群[829854136] 合并消息: [(/ω＼)] @AAA 你想不想养大肥鱼`
+_RND_ASK_GRP = re.compile(r"^群\[(\d+)\]\s*合并消息:\s*(.+)$", re.S)
+_RND_ROUTE = re.compile(r"^→\s*(?:进入AI聊天流程|群回复流程|AI聊天流程)")
+_RND_TOOLS = re.compile(r"^工具调用:\s*\[(.+)\]")
+_RND_SEARCH = re.compile(r"^搜索「(.+?)」\s*→\s*(.*)$")
+_RND_TOOLREC = re.compile(r"^→\s*([A-Za-z_][A-Za-z0-9_]*):\s*(.*)$")
+_RND_DECISION = re.compile(r"\[(跳过|观察|决策放行|不参与)\]|暂不插话")
+_RND_REPLY_PM = re.compile(r"^(?:私聊|群)\[.*?\]?\s*AI回复\((.+?)\):\s*(.+)$", re.S)
+_RND_REPLY_GRP = re.compile(r"^群回复:\s*(.+)$", re.S)
+_RND_SEND = re.compile(r"^\[发送\]\s*(私聊|群\[(\d+)\])\s*→\s*([^:]*):.*?句=(.*)$", re.S)
+_RND_COST = re.compile(r"^AI 回复 \(")
+
+
+def _read_log_rows(max_lines=6000):
+    """读原始日志，保留续行。
+
+    回复正文里有换行（`log(f"...{reply[:80]}")` 把多行内容直接写进日志），
+    被拆成没有时间戳的物理行。不拼回去，回复就只有第一行。
+    """
+    rows = []
+    for lf in _log_paths():
+        try:
+            if not lf.exists():
+                continue
+            for line in lf.read_text(encoding="utf-8", errors="replace").splitlines():
+                m = _RND_TS.match(line)
+                if m:
+                    rows.append([m.group(1), m.group(2)])
+                elif line.strip() and rows:
+                    rows[-1][1] += "\n" + line.rstrip()
+        except Exception:
+            continue
+    return rows[-max_lines:]
+
+
+def _rnd_scope_from_event(text):
+    """从 `[事件] 收到: …` 行取 (scope_key, who)。scope_key = 'pm' 或群号。"""
+    m = _RND_EVT.search(text)
+    if not m:
+        return None, None
+    msg_type, uid, gid = m.group(2), m.group(3), m.group(4)
+    if gid and gid != "gid=" and not gid.startswith("="):
+        return gid, uid
+    if msg_type == "private" or not gid:
+        return "pm", uid
+    return None, None
+
+
+def _rnd_who_nick(uid):
+    """uid 形如 `(/ω＼)(3150007406)` / `小明(10001)` / `小明`，取昵称部分。
+
+    注意 `(/ω＼)` 这种昵称**自己带括号**且在最前：直接 split("(") 会得到空串，
+    只能退化成整串。所以先剥首尾括号，再取最后一段之前的文字。
+    """
+    s = str(uid or "").strip()
+    if not s:
+        return ""
+    m = re.match(r"^\((.*)\)\s*\(\d{5,}\)$", s)
+    if m:
+        return m.group(1).strip() or s
+    if "(" in s:
+        head = s.split("(", 1)[0].strip()
+        if head:
+            return head
+    return s
+
+
+def _rnd_same_minute(t1, t2):
+    """两个 `HH:MM:SS` 是否相差在 5 秒内（同一条消息的两次记录）。"""
+    try:
+        def sec(x):
+            p = [int(v) for v in str(x).split(":")]
+            return p[0] * 3600 + p[1] * 60 + p[2]
+        return abs(sec(t1) - sec(t2)) <= 5
+    except Exception:
+        return False
+
+
+def collect_rounds(limit=120):
+    """按「一轮问答」重组日志，供日志页直接画。
+
+    返回 {"rounds": [...], "scopes": [{"key","label","count"}], "total"}
+
+    每轮：
+        time     这一轮开始的时间
+        scope    'pm' 或群号
+        who      对方昵称
+        ask      对方说的话
+        route    走哪条流程（进入AI聊天流程 / 跳过原因…）
+        decisions  决策记录列表
+        tools    [{"name","q","note"}]  工具调用与记录
+        reply    bot 的回复（多行）
+    刻意**不**收录 token 计费行（用户明确要求日志里不出现成本信息）。
+    """
+    rows = _read_log_rows(6000)
+    rounds = []
+    cur = None
+    last_scope = ("pm", "")
+    last_who = ""
+
+    def flush():
+        nonlocal cur
+        if cur is not None:
+            rounds.append(cur)
+            cur = None
+
+    for t, text in rows:
+        s = text.strip()
+        if not s:
+            continue
+
+        # ── 会话作用域（原始事件行）──
+        sc, who = _rnd_scope_from_event(s)
+        if sc:
+            last_scope = (sc, _rnd_who_nick(who))
+            continue
+
+        # ── 新的用户消息 = 新一轮 ──
+        new_ask, new_scope, new_who = None, None, None
+        m = _RND_ASK_PM.match(s)
+        if m and not s.startswith("[事件]"):
+            new_ask = m.group(1).strip()
+        else:
+            m = _RND_ASK_QUOTE.match(s)
+            if m:
+                new_ask, new_who = m.group(2).strip(), _rnd_who_nick(m.group(1))
+                new_scope = "pm" if m.group(1).startswith("(") or "(" in m.group(1) else None
+            else:
+                m = _RND_ASK_GRP.match(s)
+                if m:
+                    new_ask, new_scope = m.group(2).strip(), m.group(1)
+                    if new_ask.startswith("["):
+                        end = new_ask.find("]")
+                        if end > 0:
+                            new_who = new_ask[1:end].strip()
+                            new_ask = new_ask[end + 1:].strip()
+        if new_ask:
+            # 同一条消息会被记两次：先 `私聊[x] 引用消息: …`，再 `收到: [引用] …`。
+            # 两者只差一秒、正文相同 —— 合并成一轮，不然日志页出现两条一样的问话。
+            if (cur is not None and cur.get("ask") == new_ask
+                    and cur.get("scope") in (new_scope or cur.get("scope"))
+                    and _rnd_same_minute(t, cur.get("time"))):
+                cur["route"] = cur.get("route", "")
+                continue
+            flush()
+            cur = {"time": t, "scope": new_scope or last_scope[0],
+                   "who": new_who or last_scope[1], "ask": new_ask[:200],
+                   "route": "", "decisions": [], "tools": [], "reply": ""}
+            continue
+
+        if cur is None:
+            continue
+
+        # ── 成本行：用户不要求在日志里出现，直接跳过 ──
+        if _RND_COST.match(s):
+            continue
+
+        # ── 流程 ──
+        m = _RND_ROUTE.match(s)
+        if m:
+            cur["route"] = "进入 AI 聊天流程"
+            continue
+
+        # ── 工具名 ──
+        m = _RND_TOOLS.match(s)
+        if m:
+            names = [x.strip().strip("'\"") for x in m.group(1).split(",") if x.strip()]
+            for n in names:
+                if not any(x.get("name") == n for x in cur["tools"]):
+                    cur["tools"].append({"name": n, "q": "", "note": ""})
+            continue
+
+        # ── 搜索：关键词 + 走了哪条路 ──
+        m = _RND_SEARCH.match(s)
+        if m:
+            q, how = m.group(1).strip(), m.group(2).strip()
+            item = next((x for x in cur["tools"] if x["name"] == "search_web"
+                         and not x["q"]), None)
+            if item is None:
+                item = {"name": "search_web", "q": q, "note": ""}
+                cur["tools"].append(item)
+            item["q"] = q
+            item["note"] = how[:60]
+            continue
+
+        # ── 工具返回记录 ──
+        m = _RND_TOOLREC.match(s)
+        if m:
+            name, body = m.group(1), m.group(2)
+            item = next((x for x in cur["tools"] if x["name"] == name and not x["note"]), None)
+            if item is None:
+                item = {"name": name, "q": "", "note": ""}
+                cur["tools"].append(item)
+            # 只留一句梗概：剥掉 `action= (第1轮) → ` 这种程序噪声，取正文首段
+            note = re.sub(r"^action\s*=\s*.*?→\s*", "", body).strip()
+            note = note.split("\n")[0].strip()
+            item["note"] = note[:60]
+            continue
+
+        # ── 决策 ──
+        if _RND_DECISION.search(s):
+            # 别让别的会话的决策粘到本轮：日志里混着测试群的记录
+            gm = re.search(r"群\[([^\]]+)\]", s)
+            if gm and str(cur.get("scope")) != gm.group(1):
+                continue
+            cur["decisions"].append(s[:120])
+            continue
+
+        # ── bot 回复 ──
+        m = _RND_REPLY_PM.match(s)
+        if m:
+            cur["reply"] = m.group(2).strip()[:400]
+            continue
+        m = _RND_REPLY_GRP.match(s)
+        if m:
+            cur["reply"] = m.group(1).strip()[:400]
+            continue
+
+        # ── 发送记录（群聊没有「AI回复」行，回复靠这些拼）──
+        m = _RND_SEND.match(s)
+        if m:
+            piece = m.group(4).strip()
+            if piece and not cur["reply"]:
+                cur["reply"] = piece
+            elif piece:
+                cur["reply"] += "\n" + piece
+            if m.group(1) == "私聊":
+                cur["scope"] = "pm"
+            continue
+
+    flush()
+    rounds = [r for r in rounds if r.get("ask") or r.get("reply")]
+
+    # 会话列表：私聊在前，群按最近活跃排序
+    agg = {}
+    for r in rounds:
+        k = str(r.get("scope") or "pm")
+        agg.setdefault(k, 0)
+        agg[k] += 1
+    scopes = [{"key": "pm", "label": "私聊", "count": agg.get("pm", 0)}]
+    for k, n in sorted(agg.items(), key=lambda kv: -kv[1]):
+        if k == "pm":
+            continue
+        scopes.append({"key": k, "label": f"群 {k}", "count": n})
+    return {"rounds": rounds[-limit:], "scopes": scopes, "total": len(rounds)}
+
+
 def _log_paths():
     """日志文件候选列表（按优先级）。**唯一一份** —— 事件视图、原始流、
     轮次视图都读这几处，不能再各写一遍。"""
@@ -2583,6 +2846,17 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/events":
             limit = int(data.get("limit", 400)) if isinstance(data, dict) else 400
             self._send_json(200, collect_events(limit))
+            return
+
+        # ── 轮次视图（2026-10-25）：按一次问答重组，供日志页画对话流 ──
+        if path == "/api/rounds":
+            limit = int(data.get("limit", 120)) if isinstance(data, dict) else 120
+            scope = str(data.get("scope") or "") if isinstance(data, dict) else ""
+            out = collect_rounds(limit)
+            if scope:
+                out["rounds"] = [r for r in out["rounds"]
+                                 if str(r.get("scope") or "pm") == scope]
+            self._send_json(200, out)
             return
 
         if path == "/api/imagegen/generate":

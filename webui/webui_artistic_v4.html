@@ -7685,8 +7685,16 @@ const EVT_KINDS = [
   ['cost', 'AI'], ['error', '出错']
 ];
 async function pageChatlogs(el) {
+  /* 日志页 = 一轮一轮的对话，不是一堆日志行（2026-10-25 重做）。
+     用户原话：「日志要用户问，怎么处理，决策判断，工具调用，工具调用记录，回复，
+     而且日志页没有分私聊和各群聊」「不用在日志写太多信息，工具失败就失败，
+     token计费不用在日志出现」。
+
+     数据来自 /api/rounds（服务端已经把日志重组好）：
+       时间 / 会话 / 谁 / 问什么 / 走哪条流程 / 决策 / 工具与记录 / 回复
+     成本行由服务端直接丢掉，前端不画。 */
   el.innerHTML = ''
-    + '<div class="hd"><span class="lab">事件</span><i class="rule"></i>'
+    + '<div class="hd"><span class="lab">对话</span><i class="rule"></i>'
     +   '<span class="dim" id="evStats">—</span></div>'
     + '<div class="evt-chips" id="evChips"></div>'
     + '<div style="display:flex;gap:var(--s3);flex-wrap:wrap;align-items:center;margin-top:var(--s4)">'
@@ -7702,140 +7710,99 @@ async function pageChatlogs(el) {
     +   '<button class="pv-jump" id="evJump" hidden title="回到最新"></button></div>'
     + '<div class="evt-more" id="evMore" hidden></div>';
 
-  let data = { events: [], counts: {}, total: 0 };
-  let only = '';     // '' = 全部；否则某种 kind
+  let rounds = [], scopes = [], only = '', kw = '';
   const list = $('evList');
   const sb = pvStickScroll(list, $('evJump'));
+  const esc = window.esc || (s => String(s == null ? '' : s).replace(/[&<>"]/g,
+    c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])));
 
-  const kindLabel = (k) => (EVT_KINDS.find(x => x[0] === k) || ['', '其他'])[1];
+  const scopeLabel = (k) => (scopes.find(s => s.key === k) || {}).label || ('群 ' + k);
+  const hit = (r) => {
+    if (!kw) return true;
+    const s = kw.toLowerCase();
+    return [r.ask, r.reply, r.who, scopeLabel(r.scope),
+            (r.tools || []).map(t => t.name + ' ' + (t.q || '') + ' ' + (t.note || '')).join(' ')]
+      .join(' ').toLowerCase().includes(s);
+  };
+  const inScope = (r) => only === '' || String(r.scope || 'pm') === only;
 
   const chips = () => {
-    const c = data.counts || {};
-    const totalShown = data.events.length;
-    $('evChips').innerHTML = [['', '全部', totalShown]]
-      .concat(EVT_KINDS.map(([k, l]) => [k, l, c[k] || 0]))
-      .map(([k, l, n]) => '<button class="evt-chip' + (only === k ? ' on' : '')
-        + '" data-k="' + k + '"><i class="d"></i>' + l
-        + ' <span class="n">' + n + '</span></button>').join('');
-    qsa('.evt-chip', $('evChips')).forEach(b => b.onclick = () => {
-      only = b.dataset.k; render();
-    });
+    const shown = rounds.filter(r => inScope(r) && hit(r));
+    $('evChips').innerHTML = [['', '全部', shown.length]]
+      .concat(scopes.map(s => [s.key, s.label,
+        rounds.filter(r => String(r.scope || 'pm') === s.key && hit(r)).length]))
+      .map(([k, l, n]) => '<button class="evt-chip' + (only === k ? ' on' : '') + '" data-k="' + k + '">'
+        + '<i class="d"></i>' + l + ' <span class="n">' + n + '</span></button>').join('');
+    qsa('.evt-chip', $('evChips')).forEach(b => b.onclick = () => { only = b.dataset.k; render(); });
+    $('evStats').textContent = shown.length + ' 轮 · ' + scopes.length + ' 个会话';
   };
 
-  const rowHTML = (e) => {
-    const k = e.kind;
-    const kl = kindLabel(k);
-    /* 抬头只写一次标签。日志原文里标签本来就可能等于类别名（工具行 tag="工具"），
-       照搬会显示成「工具 工具」；决策行以前还会把 tag 重复两遍
-       （evt-hd 一次、who 又一次）。判据就一条：内容相同就不画第二遍。 */
-    const tag = String(e.tag || (k === 'message' ? (e.dir === 'out' ? '发出' : '收到') : ''));
-    const tagHTML = (tag && tag !== kl)
-      ? '<span class="evt-tag">' + esc(tag) + '</span>' : '';
-    const who = (k === 'message')
-      ? (e.who ? '<b>' + esc(e.who) + '</b>' : '')
-        + (e.scope ? '<span class="evt-tag">' + esc(e.scope) + '</span>' : '')
-      : '';
-    /* 工具行的正文就是工具名，再画一排同名 chip 也是重复；
-       只有在"正文里除了名字还有别的话"（决策行带理由）时才用 chip 补充。 */
-    const hasTools = Array.isArray(e.tools) && e.tools.length > 0;
-    const textSameAsTools = hasTools
-      && String(e.text || '').trim() === e.tools.join('、');
-    const tools = (hasTools && !textSameAsTools)
-      ? '<div class="evt-tools">' + e.tools.map(t =>
-          '<span class="evt-tool">' + esc(t) + '</span>').join('') + '</div>'
-      : '';
-    const body = (hasTools && textSameAsTools)
-      ? '<div class="evt-tools">' + e.tools.map(t =>
-          '<span class="evt-tool">' + esc(t) + '</span>').join('') + '</div>'
-      : '<div class="evt-x">' + esc(e.text || '') + '</div>';
-    return '<div class="evt k-' + esc(k) + (e.dir === 'out' ? ' out' : '') + '">'
-      + '<span class="evt-t">' + esc(e.time || '') + '</span>'
-      + '<div class="evt-b">'
-      +   '<div class="evt-hd"><span class="evt-k">' + kl + '</span>'
-      +     tagHTML + who + '</div>'
-      +   body
-      +   (textSameAsTools ? '' : tools)
-      + '</div></div>';
+  const rowHTML = (r) => {
+    const sc = only === '' ? scopeLabel(r.scope) : '';
+    let h = '<div class="evt k-message" style="margin:0 0 var(--s4) 0">'
+      + '<div class="evt-hd"><span class="evt-k">' + esc(r.time || '') + '</span>'
+      + (sc ? '<span class="evt-tag">' + esc(sc) + '</span>' : '')
+      + '<span class="evt-who"><b>' + esc(r.who || '') + '</b></span></div>'
+      + '<div class="evt-b" style="margin-top:4px">'
+      +   '<div class="evt-x"><b>问</b> ' + esc(r.ask || '') + '</div>';
+    if (r.route) h += '<div class="evt-x" style="color:var(--ink4)">处理：' + esc(r.route) + '</div>';
+    (r.decisions || []).forEach(d => {
+      h += '<div class="evt-x" style="color:var(--accent)">决策：' + esc(d) + '</div>';
+    });
+    (r.tools || []).forEach(t => {
+      const q = t.q ? '「' + esc(t.q) + '」' : '';
+      const note = t.note ? ' <span class="evt-tag">' + esc(t.note) + '</span>' : '';
+      h += '<div class="evt-x" style="color:var(--ai)">工具 ' + esc(t.name) + ' ' + q + note + '</div>';
+    });
+    if (r.reply) {
+      h += '<div class="evt-x" style="color:var(--ok);margin-top:4px"><b>回</b> '
+        + esc(r.reply).replace(/\n/g, '<br>') + '</div>';
+    } else {
+      h += '<div class="evt-x" style="color:var(--ink4)">（没有回复记录）</div>';
+    }
+    return h + '</div></div>';
   };
 
   const render = () => {
-    const kw = $('evSearch').value.trim().toLowerCase();
-    const rows = (data.events || []).filter(e => {
-      if (only && e.kind !== only) return false;
-      if (!kw) return true;
-      const hay = [e.text, e.tag, e.who, e.scope, (e.tools || []).join(' ')]
-        .join(' ').toLowerCase();
-      return hay.indexOf(kw) >= 0;
-    });
+    const shown = rounds.filter(r => inScope(r) && hit(r));
+    $('evList').innerHTML = shown.length
+      ? shown.map(rowHTML).join('')
+      : '<div class="empty">这个会话还没有记录</div>';
     chips();
-    const c = data.counts || {};
-    $('evStats').textContent = rows.length + ' / ' + (data.events || []).length + ' 条'
-      + (c.debug ? ' · 已隐藏调试 ' + c.debug + ' 行' : '');
-    if (rows.length) {
-      sb.rewrite(rows.map(rowHTML).join(''));
-    } else {
-      const empty = (data.events || []).length
-        ? '没有符合筛选条件的事件'
-        : '还没有事件。Bot 收到消息、做决策、调工具之后会出现在这里。';
-      sb.rewrite('<div class="empty">' + empty + '</div>');
-    }
-    /* 页脚点名调试行的去向。不写这句，用户会以为日志丢了 —— 数一下比解释有用。 */
-    const more = $('evMore');
-    if (c.debug) {
-      more.hidden = false;
-      more.innerHTML = '<span>另有 <b>' + c.debug + '</b> 行调试输出未显示（模块加载、'
-        + '内部流水这类给排查用的内容）</span>'
-        + '<button class="btn sm" id="evToConsole">去控制台看原始日志</button>';
-      const b = $('evToConsole');
-      if (b) b.onclick = () => {
-        const i = PAGES.findIndex(p => p.id === 'console');
-        if (i >= 0) go(i);
-      };
-    } else {
-      more.hidden = true;
-    }
+    if (sb && sb.refresh) sb.refresh();
   };
 
   const load = async (silent) => {
     try {
-      const r = await API('/events', { method:'POST', body: JSON.stringify({ limit: 600 }) });
-      data = {
-        events: (r && r.events) || [],
-        counts: (r && r.counts) || {},
-        total: (r && r.total) || 0,
-      };
+      const r = await API('/rounds', { method: 'POST', body: JSON.stringify({ limit: 150 }) });
+      rounds = (r && r.rounds) || [];
+      scopes = (r && r.scopes) || [];
+      if (only && !scopes.some(s => s.key === only)) only = '';
+      render();
     } catch (e) {
-      if (!silent) {
-        $('evList').innerHTML = '<div class="errbox">读取事件失败：' + esc(e.message)
-          + '<br>这条提示只说明请求没成功，不代表后端没启动 —— '
-          + '顶栏「BOT 运行」在走就说明后端活着。</div>';
-        return;
-      }
+      if (!silent) $('evList').innerHTML = '<div class="errbox">读取对话记录失败：' + esc(e.message) + '</div>';
     }
-    render();
   };
 
-  $('evSearch').oninput = render;
   $('evReload').onclick = () => load();
-  $('evCopy').onclick = async () => {
-    const txt = qsa('.evt', list).map(n => n.innerText.replace(/\n+/g, ' | ')).join('\n');
-    try { await navigator.clipboard.writeText(txt); $('evCopy').textContent = '已复制'; }
-    catch (e) { $('evCopy').textContent = '复制失败'; }
-    later(el, () => { const b = $('evCopy'); if (b) b.textContent = '复制当前视图'; }, 1200);
+  $('evCopy').onclick = () => {
+    const shown = rounds.filter(r => inScope(r) && hit(r));
+    const txt = shown.map(r =>
+      [r.time + ' ' + scopeLabel(r.scope) + ' ' + (r.who || ''),
+       '问: ' + (r.ask || ''), r.route ? '处理: ' + r.route : '',
+       ...(r.decisions || []).map(d => '决策: ' + d),
+       ...(r.tools || []).map(t => '工具 ' + t.name + (t.q ? ' 「' + t.q + '」' : '') + (t.note ? ' ' + t.note : '')),
+       r.reply ? '回: ' + r.reply : ''].filter(Boolean).join('\n')).join('\n\n');
+    if (window.copyText) copyText(txt).then(ok => say(ok, ok ? '已复制 ' + shown.length + ' 轮' : '复制失败'));
   };
+  const se = $('evSearch');
+  if (se) se.addEventListener('input', () => { kw = se.value.trim(); render(); });
 
-  /* 自动刷新：2.5s 一轮，签名不变就不重绘（否则会把用户翻上去的位置冲掉）。
-     切页后 el 脱离文档 → 自检停表，不留野定时器。 */
-  let sig = '';
-  if (window.__evTimer) clearInterval(window.__evTimer);
   window.__evTimer = setInterval(() => {
-    if (!document.body.contains(el)) { clearInterval(window.__evTimer); window.__evTimer = null; return; }
-    const now = JSON.stringify([(data.events || []).length, (data.counts || {}).debug]);
-    if (now === sig) return;
+    if (!document.body.contains($('evList'))) { clearInterval(window.__evTimer); return; }
     load(true);
-  }, 2500);
+  }, 5000);
   await load();
-  sig = JSON.stringify([(data.events || []).length, (data.counts || {}).debug]);
 }
 
 
