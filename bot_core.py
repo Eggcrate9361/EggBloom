@@ -10289,6 +10289,10 @@ def process_buffered_message(group_id):
                     "bot_qq": BOT_QQ,
                     "bot_name": _bot_nicknames()[0],
                     "bot_nicknames": _bot_nicknames(),
+                    # ★ 2026-10-25：漏传这个，观察窗口第二次决策就会再次返回
+                    #   observe（缓存键靠它区分），排一个又一个观察 —— 无限观察。
+                    #   决策插件那边 1797 行专门写过注释提醒，宿主这侧当时没跟上。
+                    "observe_retry": bool(buffer.get("observe_retry")),
                 }
                 intervention = pm.execute_hooks("before_reply", message=merged_text, group_id=group_id, context=_plugin_ctx)
                 # ── typed 并列派发 → **并入同一个 intervention 列表** ──
@@ -10308,11 +10312,26 @@ def process_buffered_message(group_id):
                     override_reply = None
                     override_priority = None
                     inject_parts = []
+                    _obs_after = 0        # 决策插件请求的观察秒数（>0 = 别急着回）
+                    _obs_reason = ""
                     for plugin_name, result in intervention:
                         action = result.get("action")
                         priority = pm.get_meta(plugin_name).get("priority", 50)
                         if action == "skip":
                             skip_reasons.append(f"{plugin_name}:{result.get('reason','')}")
+                        elif action == "observe":
+                            # ★ 2026-10-25：这条分支以前不存在。
+                            #   `observe` 只在"无触发预决策"（10037 附近）那条路上被
+                            #   消费，走到这里（in_session / @ / 引用 / 已建缓冲区等
+                            #   情况）就被直接丢掉 —— 决策器说"25 秒后再看"，
+                            #   宿主却当它没说过，照常注入 ego 上下文、照常搜索、照常回复。
+                            #   线上实证（群 829854136 11:46 `#sl`）：
+                            #   interventions 里明明有 observe，日志下一条却是
+                            #   [插件注入] / [近况注入] / 搜索 / 回复。
+                            #   一个说法有两处消费者，其中一处漏了一种取值 ——
+                            #   本仓库最高频的 bug 形态，这次又踩了。
+                            _obs_after = int(result.get("after") or 0)
+                            _obs_reason = str(result.get("reason") or "")[:150]
                         elif action == "inject":
                             content = result.get("content", "")
                             prompt_blocks = result.get("prompt_blocks") or []
@@ -10330,6 +10349,16 @@ def process_buffered_message(group_id):
                     if override_reply:
                         plugin_reply = override_reply
                         plugin_intervened = True
+                    # ── 观察优先于注入（2026-10-25）──
+                    # 裁决顺序：skip > override > observe > inject。
+                    # 决策器说"这会儿别接、25 秒后再看"时，ego 那份人格注入就算
+                    # 准备好了也不该继续用 —— 否则等于"判了不接，还是接了"。
+                    if _obs_after > 0 and not plugin_skip and not plugin_reply:
+                        if group_id in GROUP_OBSERVE:
+                            log(f"群[{group_id}] [观察] 已有观察窗口，不重复排: {merged_text[:40]}")
+                        else:
+                            _schedule_observe(group_id, merged_text, _obs_after, _obs_reason)
+                        return
                     if inject_parts:
                         inject_parts.sort(key=lambda x: x[0])
                         merged_inject = "\n".join(part for _, part in inject_parts)
