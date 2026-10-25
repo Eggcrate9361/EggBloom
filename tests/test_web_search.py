@@ -658,6 +658,44 @@ class TestBlockText(unittest.TestCase):
         self.assertIn("维护", got)
 
 
+class TestQueryVariants(unittest.TestCase):
+    """砍短重试：不够好时先去掉尾部修饰词再免费搜一遍。
+
+    2026-10-25 实测这是「问题与答案不符合」的主要机制 —— 用户的口语修饰词
+    会把实体淹掉，引擎去买不相干的东西：
+
+        恋人不行 这个动画 好看吗   0.99 → 李荣浩《恋人》MV
+        恋人不行                  1.87 → 我怎么可能成为你的恋人（正确）
+        推荐几个便宜好用的键盘      0.93 → 人民日报推荐100本书单
+        便宜好用的键盘             1.68 → 什么值得买键盘推荐（正确）
+    """
+
+    def test_longest_first(self):
+        """从长到短，第一个是原句 —— 好结果不该被砍。"""
+        v = wa._query_variants("养大肥鱼 很火 游戏")
+        self.assertEqual(v, ["养大肥鱼 很火 游戏", "养大肥鱼 很火", "养大肥鱼"])
+
+    def test_only_trims_tail(self):
+        """只砍尾，不重排、不改写。"""
+        for q in ("恋人不行 这个动画 好看吗", "核科学技术学院 心理委员 培训"):
+            for v in wa._query_variants(q):
+                self.assertTrue(q.startswith(v), (q, v))
+
+    def test_single_word_unchanged(self):
+        """没有空格的中文串不砍 —— 砍哪一刀都可能把实体劈开。"""
+        self.assertEqual(wa._query_variants("养大肥鱼"), ["养大肥鱼"])
+        self.assertEqual(wa._query_variants("核科学技术学院心理委员"), ["核科学技术学院心理委员"])
+
+    def test_never_leaves_one_char(self):
+        """最后不能只剩单字：实测「帮」这种单字查询必然返回字典释义。"""
+        for q in ("帮 我 查 天气", "养 大 肥 鱼"):
+            for v in wa._query_variants(q):
+                self.assertGreaterEqual(len(v), 2, v)
+
+    def test_empty(self):
+        self.assertEqual(wa._query_variants(""), [])
+
+
 class TestSearchWebWiring(unittest.TestCase):
     """主从接线：自家优先、DeepSeek 兜底。"""
 

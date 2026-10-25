@@ -964,6 +964,31 @@ def _search_via_deepseek(query: str, nq: str):
     return ds_search.to_core_list(results, source="ds"), True
 
 
+def _query_variants(nq):
+    """由长到短的查询变体，用于「不够好就砍短再试」。
+
+    只**砍尾部**，不重排、不改写、不同义替换 —— 检索里唯一能确定安全的
+    操作就是去掉词，任何改写都可能引入原本没有的意思。
+
+    「养大肥鱼 很火 游戏」→ ['养大肥鱼 很火 游戏', '养大肥鱼 很火', '养大肥鱼']
+
+    没有空格的中文串只返回自己（砍哪一刀都可能把实体劈开）。
+    实测查询都是工具调用时按空格分开传进来的，所以这条路用得很少。
+    """
+    parts = [p for p in re.split(r"\s+", str(nq or "").strip()) if p]
+    if len(parts) <= 1:
+        return [nq] if nq else []
+    out = []
+    for i in range(len(parts), 0, -1):
+        v = " ".join(parts[:i])
+        # 剩一个词就停：再砍下去只剩单字，检索必然跑偏（实测「帮」返回字典释义）
+        if len(v) < 2:
+            break
+        if v not in out:
+            out.append(v)
+    return out
+
+
 def _render(items, nq, query, via):
     """统一的输出拼装。via 只用于日志，不进给模型的文本。"""
     key_note = "" if nq == query else f"（检索词：{nq}）"
@@ -1004,9 +1029,43 @@ def search_web(query: str, retries: int = 2) -> str:
 
     nq = normalize_query(query)
 
-    # ── 主路径：自家抓取 ──
-    items = _own_search(query, nq)
-    text = _render(items, nq, query, "own") if items else ""
+    # ── 主路径：自家抓取（不够好就先砍短再免费试一次）──
+    #
+    # ★ 2026-10-25 加「砍短重试」。实测这是「问题与答案不符合」的主要机制：
+    #   用户的口语修饰词会把实体淹掉，引擎于是去买不相干的东西。
+    #
+    #     恋人不行 这个动画 好看吗   0.99 → 李荣浩《恋人》MV
+    #     恋人不行                  1.87 → 我怎么可能成为你的恋人（正确）
+    #     推荐几个便宜好用的键盘      0.93 → 人民日报推荐100本书单
+    #     便宜好用的键盘             1.68 → 什么值得买键盘推荐（正确）
+    #     养大肥鱼 很火 游戏          1.72 → 桌宠页
+    #     养大肥鱼                  1.95 → b站养deepseek大肥鱼（正确）
+    #
+    #   「这个动画」「推荐几个」这类词在检索里是噪声：它们描述的是**用户想
+    #   要什么形式**，不是**要找什么东西**。Bing 不会区分，只能按字面匹配。
+    #
+    #   所以：从尾部逐个砍词，每砍一次免费搜一遍，一旦够好就停。
+    #   代价是多的抓取请求（每次 ~300ms），比直接走 DeepSeek（¥0.005）便宜；
+    #   而且只有**判不够好**时才砍，好结果不受影响。
+    items, nq_used, verdict = [], nq, "empty"
+    best = None          # (分数, items, nq) —— 全都不够好时留最好的那份
+    for _v in _query_variants(nq):
+        _items = _own_search(query, _v)
+        if not _items:
+            continue
+        _vq = search_core.quality_of(_items)
+        _score = _vq.get("top_score") or 0.0
+        if best is None or _score > best[0]:
+            best = (_score, _items, _v)
+        if _vq.get("verdict") == "good":
+            items, nq_used, verdict = _items, _v, "good"
+            break
+    if verdict != "good" and best is not None:
+        # 没有变体够格 —— 用分数最高的那份（可能是缩短过的，也可能就是原句）
+        _score, items, nq_used = best
+        verdict = search_core.quality_of(items).get("verdict") or "thin"
+
+    text = _render(items, nq_used, query, "own") if items else ""
 
     # ── 自家结果「能用」才停手 ──
     # ★ 2026-10-24 修。原来只判 `if not text` —— 也就是**只有一条结果都没有**
@@ -1014,13 +1073,8 @@ def search_web(query: str, retries: int = 2) -> str:
     #   「结果质量：偏薄」。于是 quality_of 算出了 thin、甚至把理由写进了给
     #   模型的话里，路由决策却完全不看它 —— 同一件事两处判据，互不相认。
     #
-    #   实测后果：搜「养大肥鱼 很火 游戏」，自家返回「养」的汉语字典（0.60 分，
-    #   判 thin），DeepSeek 兜底能给出「大肥鱼养成游戏」「干饭大肥鱼」，
-    #   但兜底一次都没被调用。6 个查询 6 次全走自家。
-    #
     #   现在：verdict 不是 good 就走兜底。兜底拿不到结果时**保留自家那份**
     #   —— thin 的结果也比"没搜到"有用，不能因为追求质量反而什么都不给。
-    verdict = search_core.quality_of(items).get("verdict") if items else "empty"
     if verdict != "good":
         ds_items, handled = _search_via_deepseek(query, nq)
         if handled and ds_items:
