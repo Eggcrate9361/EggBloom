@@ -14,6 +14,7 @@ web_search 联网兜底插件
 import sys
 import os
 import json
+import re
 
 # 确保能导入根目录下的 web_access.py
 PLUGIN_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -121,6 +122,33 @@ def _matches_any(text: str, keywords):
     return any(k in text for k in keywords)
 
 
+# 群聊消息进入插件时带着 `[昵称] 正文` 的行前缀（主链 12031 拼的，给主模型看
+# 谁在说话）。这个前缀对**主模型**有用，对**检索词**是纯噪声。
+#
+# 线上实证（群 829854136，11:49）：
+#     群友原话  现在能证明你是人机了吧
+#     检索词    [碱式碳酸大脑] 现在能证明你是人机了吧
+#     返回      Yahoo 的 The race to tell humans from AI agents 等英文报道
+# 昵称占了检索词里唯一具体的名词位置，搜索引擎就把"碱式碳酸大脑"当成主题词。
+#
+# 只剥**行首的昵称前缀**，不动正文里方的方括号（`[图片]`、`[表情]` 之类
+# 由其他层处理；这里改了会影响模型看到的原文）。
+_NICK_PREFIX_RE = re.compile(r"^\s*\[[^\[\]\n]{1,30}\]\s*")
+
+
+def _strip_nick_prefixes(message: str) -> str:
+    """把多行合并消息里每行的 `[昵称]` 前缀去掉，用于构造检索词。
+
+    多行时保留分行（多条消息一起搜，语义更完整），只清前缀。
+    """
+    out = []
+    for line in (message or "").replace("\r\n", "\n").split("\n"):
+        line = _NICK_PREFIX_RE.sub("", line).strip()
+        if line:
+            out.append(line)
+    return "\n".join(out).strip()
+
+
 def _needs_search(message: str) -> bool:
     """判断这条消息是否该联网查证。
 
@@ -156,14 +184,19 @@ def before_reply(message: str = "", group_id: str = "", context: dict = None, **
     if not msg:
         return None
 
+    # 判定用原文，检索用去前缀后的文本。
+    # 判定不能改用清理后的文本：清理只删前缀，不影响关键词命中，但保留原文
+    # 更符合"这条消息本身要不要查"的语义，改动面也最小。
+    query = _strip_nick_prefixes(msg) or msg
+
     if not _needs_search(msg):
         return None
 
     try:
-        search_result = search_web(msg)
+        search_result = search_web(query)
     except Exception as e:
         print(f"[web_search] 搜索失败: {e}")
-        search_result = f"搜索「{msg}」失败，请稍后再试。"
+        search_result = f"搜索「{query}」失败，请稍后再试。"
 
     return {
         "action": "inject",
@@ -175,7 +208,7 @@ def before_reply(message: str = "", group_id: str = "", context: dict = None, **
         ),
         "meta": {
             "trigger": "web_search",
-            "query": msg,
+            "query": query,
         },
     }
 
