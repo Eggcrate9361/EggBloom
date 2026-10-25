@@ -139,7 +139,7 @@ python scripts/pack_all.py            # Lite 走 git archive HEAD，不 commit �
 - [ ] Tag：`v<version>`（与 `package.json` 一致）
 - [ ] Release notes 直接取 `CHANGELOG.md` 对应段落
 - [ ] 只附 `EggBloom-Standard.zip` + `EggBloom-Lite.zip` + `SHA256SUMS.txt`
-      （**Full 不对外分发**：内含 283 张二次创作动漫表情包，版权与内容都不适合上公开仓库）
+      （**Full 不对外分发**：内含全量二次创作动漫表情包，版权与内容都不适合上公开仓库）
 - [ ] 不要附 `bot_config.json`、`data/`、任何日志
 
 ---
