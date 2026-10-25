@@ -2761,6 +2761,20 @@ class Handler(BaseHTTPRequestHandler):
                             except Exception:
                                 pass
                 update["providers"] = cleaned_providers
+            # ★ 2026-10-25：不允许把 model_name 写成空串。
+            #   配置页的「保存」会把表单里所有字段整组提交，而模型下拉在
+            #   「该提供商还没拉过模型目录」时值是空的 → 一次普通保存就把
+            #   model_name 清成 ''，之后所有请求都发 model="" 。
+            #   实测配置里就出现过 model_name='' 而 api_provider='aliyun'，
+            #   症状是「切换了模型但测试/回复用的不是它」。
+            #   清空 model_name 没有任何正当用途（等于把 bot 打瘸），所以直接挡。
+            if "model_name" in update and not str(update.get("model_name") or "").strip():
+                _keep = str(cfg.get("model_name") or "").strip()
+                if _keep:
+                    update["model_name"] = _keep
+                    print(f"[config] 忽略空的 model_name（保留 {_keep}）")
+                else:
+                    update.pop("model_name", None)
             cfg.update(update)
             if data.get("api_key") and not _is_redacted_key(data.get("api_key")):
                 # 新 key 写入凭据管理器，不落盘明文
@@ -4225,15 +4239,27 @@ _PROTO_PROBE = {"at": 0.0, "ok": False, "url": ""}
 
 
 def probe_protocol_online(timeout=0.4, ttl=3.0):
-    """协议层是否真的在线（OneBot /get_status 返回 online）。带 3s 缓存。
+    """协议层是否真的在线（OneBot /get_status 返回 online）。带缓存。
 
     为什么缓存：`/api/bot/status` 被前端按秒轮询，探测虽快（本机 ~1ms），
     但没必要每秒打三次。
     为什么不用 `mgr._running`：那是"有没有从本界面点过启动"，外部启动的
     NapCat 不经过它 —— 会误判成未启用。
+
+    ★ 2026-10-25：**配了地址就只探那一个，不再盲扫 4 个端口。**
+      原来无论配没配 onebot_url，都会把 3000~3003 全探一遍，每个 0.4s
+      超时 —— 协议没起来时首屏白等 1.6s。实测 `/api/protocol/status`
+      首次调用 1.716s，全是这四枪打空的。
+      用户配置里 `onebot_url` 本来就是 `http://127.0.0.1:3000`，
+      盲扫纯属多余。没配地址时才扫（给完全没配的新用户兜底）。
+
+      顺带：失败结果的缓存时间拉长到 10s。协议没起来是常态（正在启动、
+      或者用户压根没开），没必要每 3 秒重新打空一遍。
     """
     now = time.time()
-    if now - _PROTO_PROBE["at"] < ttl:
+    # 在线用短 TTL（要能尽快发现掉线），离线用长 TTL（别反复打空）
+    _ttl = ttl if _PROTO_PROBE["ok"] else max(ttl, 10.0)
+    if now - _PROTO_PROBE["at"] < _ttl:
         return _PROTO_PROBE["ok"], _PROTO_PROBE["url"]
     ok, url = False, ""
     try:
@@ -4244,10 +4270,9 @@ def probe_protocol_online(timeout=0.4, ttl=3.0):
                 cands.append(ob.rstrip("/"))
         except Exception:
             pass
-        for p in (3000, 3001, 3002, 3003):
-            u = f"http://127.0.0.1:{p}"
-            if u not in cands:
-                cands.append(u)
+        if not cands:
+            # 没配地址才盲扫；配了就只认那一个
+            cands = [f"http://127.0.0.1:{p}" for p in (3000, 3001, 3002, 3003)]
         for u in cands:
             try:
                 with _local_open(u + "/get_status", timeout=timeout) as r:

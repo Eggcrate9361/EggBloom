@@ -5458,9 +5458,29 @@ async function pageConfig(el) {
       const r = await API('/config', { method: 'POST', body: JSON.stringify({ providers: body }) });
       if (r && (r.ok === false || r.error)) { say(false, (r && r.error) || '保存提供商失败'); return false; }
       await API('/config/reload', { method: 'POST', body: '{}' }).catch(() => {});
+      /* ★ 2026-10-25：保存后必须回读一次 /config。
+         原来直接用 pvList 里的对象重绘，而本地那份 has_api_key 已经在
+         编辑时被 delete 掉了 → 卡片一定显示「沿用全局 Key」，
+         哪怕独立 Key 已经存进凭据管理器（实测凭据里确实有
+         EggBloom.MODEL_API_KEY_aliyun，界面却说沿用全局）。
+         要等整页刷新才恢复正常。has_api_key 是**服务端算出来的**字段，
+         前端不该自己维护 —— 回读一次，以服务端为准。 */
+      await pvReloadFromServer();
       if (msg) say(true, msg);
       return true;
     } catch (e) { say(false, e.message); return false; }
+  }
+  async function pvReloadFromServer() {
+    try {
+      const r = await API('/config');
+      const cf = (r && r.config) || null;
+      if (!cf) return;
+      if (Array.isArray(cf.providers)) {
+        pvList = cf.providers.map(p => Object.assign({}, p));
+      }
+      if (cf.api_provider) pvActive = String(cf.api_provider);
+      pvRender();
+    } catch (e) { /* 回读失败就保持当前视图，不打断用户 */ }
   }
   async function pvApply(pid) {
     const p = pvList.find(x => String(x.id) === String(pid));
@@ -5486,6 +5506,10 @@ async function pageConfig(el) {
           + (id === lm ? ' selected' : '') + '>' + esc(id) + '</option>').join('');
         $('cModel').innerHTML = ms || '<option value="">（还没有模型目录）</option>';
       }
+      /* 通用字段也跟一份：它在另一个面板里显示「当前模型」，
+         不同步的话两个控件会各存一个值（2026-10-25 就是这里分叉的） */
+      const sm = document.querySelector('[data-k="model_name"]');
+      if (sm && lm) sm.value = lm;
       pvRender();
       say(true, '已切换到 ' + (p.name || p.id) + '（地址已回填'
         + (lm ? (' · 模型 ' + lm) : ' · 请再选模型') + '）');
@@ -5725,6 +5749,12 @@ $('cModelGo').onclick = async () => {
       const r = await API('/config/model', { method:'POST',
         body: JSON.stringify({ api_provider: pid, model_name: m }) });
       say(!!r.success, r.success ? ('已切换到 ' + pid + ' / ' + m) : (r.error || '切换失败'));
+      if (r && r.success) {
+        /* 同步到通用字段与本地缓存，避免「切换了但测试还是旧模型」 */
+        const sm = document.querySelector('[data-k="model_name"]'); if (sm) sm.value = m;
+        cfg.model_name = m; cfgOriginal.model_name = m;
+        cfg.api_provider = pid; cfgOriginal.api_provider = pid;
+      }
     } catch (e) { say(false, e.message); }
     $('cModelGo').disabled = false; $('cModelGo').textContent = '切换并热重载';
   };
@@ -5754,9 +5784,16 @@ $('cModelGo').onclick = async () => {
          「按 provider 解析 Key」的口径完全对齐。 */
       const pid = $('cProv').value || curProv;
       const p = providers.find(x => String(x.id) === String(pid)) || {};
+      /* ★ 2026-10-25：模型取 `$('cModel')` 下拉的现值，它才是「接入」面板里
+         真正被切换动作写入的那个控件；`[data-k="model_name"]` 是另一个面板的
+         通用字段，切换提供商时不会跟着变。
+         实测症状：卡片上「已切换到 ALIYUN / QWEN-FLASH」，点测试却回
+         「连接成功 · MINIMAX-M2.5」—— 测的是上一个提供商的残留模型。
+         同一件事两个控件各存一份，读取端挑了错的那个。 */
+      const curModel = ($('cModel') && $('cModel').value) || editorVal('model_name') || cfg.model_name;
       const pl = { api_provider: pid,
                    api_url: p.base_url || cfg.api_url,
-                   model_name: editorVal('model_name') || cfg.model_name };
+                   model_name: curModel };
       const k = realKey(); if (k) pl.api_key = k;
       const r = await API('/llm/test', { method:'POST', body: JSON.stringify(pl) });
       const ok = !!(r && r.ok);
