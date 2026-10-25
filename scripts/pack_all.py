@@ -57,6 +57,26 @@ RUNTIME_FILES = ("bot_config.json", "plugin_state.json", "last_port.txt", "secre
                  "local_config.json", "machine_config.json",
                  "slang_dict.json", "slang_replies.json", "slang_conflicts.json")
 
+#: 包根必须存在的许可文件（相对 app 根）。缺一个就拒绝出包 —— MIT 要求
+#: "版权声明与许可声明随所有副本"，但 sync-dist 只按扩展名搬根文件，LICENSE 没有扩展名。
+LICENSE_FILES = ("LICENSE", "THIRD_PARTY.md",
+                 "licenses/LiGGUF.txt", "licenses/bge-small-zh-v1.5.txt",
+                 "licenses/README.md")
+LICENSE_ROOT_FILES = ("LICENSE", "THIRD_PARTY.md")
+
+
+def stage_licenses(app_dir: pathlib.Path, repo: pathlib.Path) -> list:
+    """把许可文件复制进暂存树，返回缺失项（空列表 = 通过）。"""
+    app_dir.mkdir(parents=True, exist_ok=True)
+    for name in LICENSE_ROOT_FILES:
+        src = repo / name
+        if src.is_file():
+            shutil.copy2(src, app_dir / name)
+    src_dir = repo / "licenses"
+    if src_dir.is_dir():
+        shutil.copytree(src_dir, app_dir / "licenses", dirs_exist_ok=True)
+    return [n for n in LICENSE_FILES if not (app_dir / n).is_file()]
+
 
 def _is_runtime(rel):
     parts = rel.replace("\\", "/").split("/")
@@ -133,6 +153,12 @@ def dir_size_mb(p):
 
 
 def main():
+    # Windows 控制台默认 GBK：日志里的 ⚠ 与中文会抛 UnicodeEncodeError（打包直接中断）
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, OSError):
+            pass
     ap = argparse.ArgumentParser()
     ap.add_argument("--repo", default=r"D:\git\EggBloom", help="源码库根")
     ap.add_argument("--base", default=r"E:\EggBloom水星", help="发行工作区（含 build/ 与 dist/）")
@@ -190,6 +216,19 @@ def main():
             run(["powershell", "-ExecutionPolicy", "Bypass", "-File",
                  repo / "scripts" / "sync-dist.ps1", "-DistPath", root])
 
+    # ── 1b) 许可文件：补复制 + 硬校验（缺项直接退出，不压缩）────────────
+    for name in ("standard", "full"):
+        if only and name not in only:
+            continue
+        app = build / name / f"EggBloom-{name.capitalize()}" / "resources" / "app"
+        if not app.exists():
+            continue
+        missing = stage_licenses(app, repo)
+        if missing:
+            log(f"  !! {name}: 缺许可文件 {missing} → 拒绝出包")
+            return 4
+        log(f"  [lic] {name}: LICENSE / THIRD_PARTY.md / licenses 齐")
+
     # ── 2) Standard 修剪 memes ──────────────────────────────────────────────
     if not only or "standard" in only:
         log("\n[2] Standard：挑一小把表情包（默认 20 张 / ≤3MB，文件名不带 QQ 号）")
@@ -227,6 +266,10 @@ def main():
             f"source_commit={commit}\n"
             f"sync_date={stamp}\n",
             encoding="utf-8", newline="\n")
+        missing = stage_licenses(lite_root, repo)
+        if missing:
+            log(f"  !! lite: 缺许可文件 {missing} → 拒绝出包")
+            return 4
         log("  文件数 =", sum(len(f) for _r, _d, f in os.walk(lite_root)))
 
     # ── 4) 压缩 → .zip.new → 校验 → 替换 ───────────────────────────────────

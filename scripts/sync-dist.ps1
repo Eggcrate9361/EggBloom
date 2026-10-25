@@ -120,8 +120,13 @@ Write-Host ""
 #   （2026-10-08 实测：确认框换皮后发行包 main.js 还停在 2026-09-05）。
 $rootExts = @(".py", ".json", ".html", ".txt", ".md", ".toml", ".yaml", ".yml", ".png", ".js")
 
+# 无扩展名的根文件：$rootExts 白名单覆盖不到，单独列
+$rootAlways = @("LICENSE")
+
 # 整目录复制（docs 也带上：发行副本里能直接看到权威文档，不必回源码库翻）
 $dirItems = @("plugins", "protocols", "webui", "components", "memes", "docs", "harness", "skills",
+              # 许可正文：LICENSE 没有扩展名，靠上面的 $rootAlways；licenses/ 整目录带
+              "licenses",
               # README 的主视觉图在 assets/ 下；不同步的话包里的 README 就是一张破图
               "assets")
 # 注：nexsandglass/ 已于 2026-10-19 移除（沙漏改走自研 sandglass_lite.py，在根目录、
@@ -233,7 +238,7 @@ function Invoke-Robo([string]$src, [string]$dst) {
 # ── 1) 根目录文件 ─────────────────────────────────────────────────────
 Write-Host "[根目录文件]" -ForegroundColor Green
 $rootFiles = Get-ChildItem -Path $SourceDir -File -Force |
-    Where-Object { $rootExts -contains $_.Extension.ToLower() -and $excludeFiles -notcontains $_.Name }
+    Where-Object { ($rootExts -contains $_.Extension.ToLower() -or $rootAlways -contains $_.Name) -and $excludeFiles -notcontains $_.Name }
 $rootChanged = 0
 $rootSame = 0
 foreach ($f in $rootFiles) {
