@@ -289,6 +289,9 @@ input,select,textarea{font:inherit;color:inherit}
 .log .lv.ai{color:var(--ai)}
 .log .lv.sys{color:var(--sys)}
 .log .lv.info{color:var(--ink4)}
+/* 来源徽标：core / app / data / temp（2026-10-25，日志并流后需要分得清出处）*/
+.log .tx .src{font-style:normal;margin-right:6px;padding:0 4px;border:1px solid var(--line2);
+  border-radius:3px;color:var(--ink4);font-size:9px;letter-spacing:.04em;vertical-align:1px}
 .log .tx{padding-left:var(--s3);color:var(--ink2);white-space:pre-wrap;word-break:break-word}
 /* 正文只在「需要抬头看」的级别上着色；info 保持中性，否则整页花掉 */
 .log .tx.lv-err{color:var(--err)}
@@ -7388,12 +7391,19 @@ async function pageConsole(el) {
       const isObj = x && typeof x === 'object';
       const ts = isObj ? (x.time || x.ts || '') : '';
       const lvl = (isObj ? (x.level || x.lv || 'info') : 'info').toLowerCase();
-      const msg = isObj ? (x.msg || x.message || JSON.stringify(x)) : String(x);
+      const src = isObj ? String(x.source || x.src || '') : '';
+      /* 服务端并流后的行用 text；PROTO_LOG 也是 text。原来只认 msg/message，
+         结果整行被 JSON.stringify 出来 —— 2026-10-25 一并修掉。 */
+      const msg = isObj ? (x.text || x.msg || x.message || JSON.stringify(x)) : String(x);
+      const kind = /err/.test(lvl) ? 'err' : /warn/.test(lvl) ? 'warn'
+        : /send/.test(lvl) ? 'send' : /ai/.test(lvl) ? 'ai'
+        : /sys/.test(lvl) ? 'sys' : 'ok';
       return '<div class="ln"><span class="no">' + (i + 1) + '</span>'
         + '<span class="ts">' + esc(ts) + '</span>'
-        + '<span class="lv ' + (/err/.test(lvl) ? 'err' : /warn/.test(lvl) ? 'warn' : 'ok') + '">'
-        + esc(String(lvl).toUpperCase()) + '</span>'
-        + '<span class="tx">' + esc(msg) + '</span></div>';
+        + '<span class="lv ' + kind + '">' + esc(String(lvl).toUpperCase()) + '</span>'
+        + '<span class="tx lv-' + kind + '">'
+        + (src ? '<i class="src" title="日志来源">' + esc(src) + '</i>' : '')
+        + esc(msg) + '</span></div>';
     }).join('') : '<div class="empty">没有日志</div>';
     /* 自动滚动关掉时也要保住位置（rewrite 内部按 stick 处理） */
     if (!$('cxLogAuto').checked) {

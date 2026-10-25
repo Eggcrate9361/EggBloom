@@ -1301,8 +1301,7 @@ def collect_events(limit=400):
 # 用户问的话、决策、工具调用、工具返回、bot 的回复散落在不同类型里，
 # 中间夹着心跳和调试，拼不起来。轮次视图按一次问答切分，按会话分开。
 
-# `[11:44:45] 正文`
-_RND_TS = re.compile(r"^\[(\d{2}:\d{2}:\d{2})\]\s?(.*)$")
+# `[11:44:45] 正文` —— 解析在 `_parse_log_row`（三种时间戳写法都在那里）
 # `[事件] 收到: post_type=message msg_type=group uid=小明(10001) gid=829854136`
 _RND_EVT = re.compile(
     r"\[事件\]\s*收到:\s*post_type=(\w+)\s+msg_type=(\S*)\s+uid=(\S*)\s+gid=(\S*)")
@@ -1375,26 +1374,153 @@ def _rnd_event_row(t, scope, who, ask, route):
 
 
 
-def _read_log_rows(max_lines=6000):
-    """读原始日志，保留续行。
+def _read_log_rows(max_lines=6000, with_meta=False):
+    """读原始日志：先解析、再排序、后截断。
 
     回复正文里有换行（`log(f"...{reply[:80]}")` 把多行内容直接写进日志），
     被拆成没有时间戳的物理行。不拼回去，回复就只有第一行。
+
+    2026-10-25 改（原先是"按文件顺序追加、最后切尾"）：多文件时时间倒序、
+    跨文件重复行各留一份、外部 logger 的日期前缀也没人认。现在：
+
+      · 三种时间戳都认：`[HH:MM:SS]` / `YYYY-MM-DD HH:MM:SS,mmm` / `HH:MM:SS`。
+        没有日期的行以**该文件 mtime 的日期**为基准，再按文件内的时钟回绕
+        逐日递增（跑过夜的日志里 `23:59` 后面是 `00:00`，不认回绕的话
+        不同天的同一时刻会被排到一起，日志页的轮次被打散）。
+      · 行首的 `[INFO]` / `ERROR` / `INFO:` 级别前缀抽进 `level`，正文不再重复。
+      · 连续重复的方括号标签折叠成一个（`[事件] [事件] 正文` → `[事件] 正文`）。
+      · 跨文件完全相同的 `(日期, 时间, 正文)` 只留一条。
+      · 排序键 `(日期, 时间)`，稳定排序：同一秒内保持文件内的原始顺序。
+      · 续行仍并回上一条。
+
+    默认返回 `[[时间, 正文], …]`（轮次/事件视图沿用）；
+    `with_meta=True` 返回 `[[时间, 正文, 级别, 来源], …]`，给原始日志流用。
     """
     rows = []
     for lf in _log_paths():
         try:
             if not lf.exists():
                 continue
+            src = _log_label(lf)
+            try:
+                base = datetime.datetime.fromtimestamp(lf.stat().st_mtime).date()
+            except Exception:
+                base = datetime.date.today()
+            local = []
             for line in lf.read_text(encoding="utf-8", errors="replace").splitlines():
-                m = _RND_TS.match(line)
-                if m:
-                    rows.append([m.group(1), m.group(2)])
-                elif line.strip() and rows:
-                    rows[-1][1] += "\n" + line.rstrip()
+                row = _parse_log_row(line, None, src)
+                if row is not None:
+                    local.append(row)
+                elif line.strip() and local:
+                    local[-1]["text"] += "\n" + line.rstrip()
+            _assign_dates(local, base)
+            rows.extend(local)
         except Exception:
             continue
-    return rows[-max_lines:]
+
+    rows.sort(key=lambda r: (r["date"], r["time"]))
+
+    seen = set()
+    uniq = []
+    for r in rows:
+        key = (r["date"], r["time"], r["text"])
+        if key in seen:
+            continue
+        seen.add(key)
+        uniq.append(r)
+    rows = uniq[-max_lines:]
+
+    if with_meta:
+        return [[r["time"], r["text"], r["level"], r["source"]] for r in rows]
+    return [[r["time"], r["text"]] for r in rows]
+
+
+# 时钟回绕的判定阈值：倒退超过 6 小时才算跨天（同一次收发里线程交错
+# 造成的倒退只有几秒，不能当成新的一天）。
+_ROW_DAY_WRAP_SEC = 6 * 3600
+
+
+def _hms_seconds(t):
+    try:
+        h, m, s = [int(v) for v in str(t).split(":")]
+        return h * 3600 + m * 60 + s
+    except Exception:
+        return None
+
+
+def _assign_dates(local, base_date):
+    """给没有日期前缀的行按文件顺序分配日期（就地改写）。
+
+    `base_date` 是文件 mtime 的日期，也就是**最后一行**所在的那天。
+    先数出文件里跨了几次天，再让第一行从 `base_date - 天数` 起，
+    每遇一次回绕加一天；这样排序后仍是文件顺序，不会被翻过来。
+    """
+    wrap = 0
+    prev = None
+    for r in local:
+        if r["date"]:
+            prev = None
+            continue
+        s = _hms_seconds(r["time"])
+        if s is None:
+            continue
+        if prev is not None and s < prev - _ROW_DAY_WRAP_SEC:
+            wrap += 1
+        prev = s
+
+    cur = base_date - datetime.timedelta(days=wrap)
+    prev = None
+    for r in local:
+        if r["date"]:
+            prev = None
+            continue
+        s = _hms_seconds(r["time"])
+        if s is not None and prev is not None and s < prev - _ROW_DAY_WRAP_SEC:
+            cur = cur + datetime.timedelta(days=1)
+        r["date"] = cur.strftime("%Y-%m-%d")
+        prev = s
+
+
+# 行首时间戳的三种写法（2026-10-25）
+_ROW_TS_BRACKET = re.compile(r"^\[(\d{2}:\d{2}:\d{2})\]\s?(.*)$")
+_ROW_TS_FULL = re.compile(
+    r"^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})(?:[.,]\d+)?\s*(.*)$")
+_ROW_TS_BARE = re.compile(r"^(\d{2}:\d{2}:\d{2})\s+(.*)$")
+# `[INFO] xxx` / `ERROR: xxx` —— 只认这几个词，别把 `[事件]` 当级别
+_ROW_LEVEL = re.compile(
+    r"^(?:\[(CRITICAL|FATAL|ERROR|WARNING|WARN|INFO|DEBUG)\]"
+    r"|(CRITICAL|FATAL|ERROR|WARNING|WARN|INFO|DEBUG):)\s*")
+_ROW_LEVEL_KIND = {"CRITICAL": "err", "FATAL": "err", "ERROR": "err",
+                   "WARNING": "warn", "WARN": "warn",
+                   "INFO": "info", "DEBUG": "debug"}
+# 连续重复的标签：`[事件] [事件] [事件] 正文`
+_ROW_DUP_TAG = re.compile(r"^(\[[^\]\n]{1,20}\])(?:\s*\1)+")
+
+
+def _parse_log_row(line, base_date, source):
+    """一行 → {date,time,text,level,source}；不是新行（续行）时返回 None。"""
+    date = base_date
+    m = _ROW_TS_BRACKET.match(line)
+    if m:
+        t, body = m.group(1), m.group(2)
+    else:
+        m = _ROW_TS_FULL.match(line)
+        if m:
+            date, t, body = m.group(1), m.group(2), m.group(3)
+        else:
+            m = _ROW_TS_BARE.match(line)
+            if not m:
+                return None
+            t, body = m.group(1), m.group(2)
+
+    level = ""
+    lv = _ROW_LEVEL.match(body)
+    if lv:
+        level = _ROW_LEVEL_KIND.get((lv.group(1) or lv.group(2)).upper(), "")
+        body = body[lv.end():]
+    body = _ROW_DUP_TAG.sub(r"\1", body).strip()
+    return {"date": date, "time": t, "text": body,
+            "level": level, "source": source}
 
 
 def _rnd_scope_from_event(text):
@@ -1685,42 +1811,56 @@ def collect_rounds(limit=120):
     return {"rounds": rounds[-limit:], "scopes": scopes, "total": len(rounds)}
 
 
+# 日志来源 → 文件名 → 前端徽标用的标签（2026-10-25）
+# `data/logs/qq_bot.log` 是 utils.log / logger_setup 写的统一日志文件，
+# 原来不在候选里 —— 所以 Sandglass、ai_client 这些模块的行在原始日志流里看不到。
+_LOG_SOURCES = [
+    ("core", PROJECT / "core_log.txt"),
+    ("app", PROJECT / "qq_bot.log"),
+    ("app", Path.home() / "AppData/Local/EggBloom_v3/qq_bot.log"),
+    ("temp", Path.home() / "AppData/Local/Temp/botcore_final.log"),
+    ("temp", Path.home() / "AppData/Local/Temp/eggbloom_bot.log"),
+    ("data", PROJECT / "data" / "logs" / "qq_bot.log"),
+]
+
+
 def _log_paths():
     """日志文件候选列表（按优先级）。**唯一一份** —— 事件视图、原始流、
     轮次视图都读这几处，不能再各写一遍。"""
-    return [
-        PROJECT / "core_log.txt",
-        PROJECT / "qq_bot.log",
-        Path.home() / "AppData/Local/EggBloom_v3/qq_bot.log",
-        Path.home() / "AppData/Local/Temp/botcore_final.log",
-        Path.home() / "AppData/Local/Temp/eggbloom_bot.log",
-    ]
+    return [p for _, p in _LOG_SOURCES]
+
+
+def _log_label(path):
+    """文件 → 来源标签（core / app / temp / data）。未知路径记 `log`。"""
+    try:
+        ap = Path(path).resolve()
+    except Exception:
+        return "log"
+    for label, p in _LOG_SOURCES:
+        try:
+            if p.resolve() == ap:
+                return label
+        except Exception:
+            continue
+    return "log"
 
 
 def get_chat_logs(limit=200):
-    logs = []
+    """原始日志流：与轮次/事件同源（`_read_log_rows`），带级别与来源。
+
+    级率先用行首的 `[INFO]` / `ERROR` 前缀；没有前缀再交给
+    `log_levels.classify`。`[CHAT]` 记录只写 stdout、日志文件里没有，
+    所以这里不再单独分支（原分支从未在真实文件上命中过）。
+    """
+    out = []
     try:
-        log_paths = _log_paths()
-        for lf in log_paths:
-            if not lf.exists():
-                continue
-            for line in lf.read_text(encoding="utf-8", errors="replace").splitlines():
-                line = line.strip()
-                if not line:
-                    continue
-                if "[CHAT]" in line:
-                    try:
-                        data = json.loads(line.split("[CHAT]", 1)[1].strip())
-                        logs.append(data)
-                    except Exception:
-                        pass
-                elif len(line) > 8 and line[2] == ':':
-                    logs.append({"text": line, "time": line[:8], "direction": "log"})
-                elif line.startswith('[') and len(line) > 10 and line[3] == ':' and line[6] == ':' and line[1:3].isdigit() and line[4:6].isdigit() and line[7:9].isdigit():
-                    logs.append({"text": line[10:].strip(), "time": line[1:9], "direction": "log"})
+        for t, text, lvl, src in _read_log_rows(limit, with_meta=True):
+            out.append({"text": text, "time": t, "direction": "log",
+                        "level": lvl or log_levels.classify(text),
+                        "source": src})
     except Exception:
         pass
-    return logs[-limit:]
+    return out[-limit:]
 
 # Tools catalog (群聊工具白名单用)
 _TOOL_CATALOG = [
