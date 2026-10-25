@@ -7676,7 +7676,7 @@ def _send_poke_back(user_id, group_id=None):
 
 
 def _handle_poke_event(ev):
-    """notice.notify.poke 事件：群戳 → 触发会话 + AI 回复；私戳 → AI 回复 + 登记私聊活跃会话。"""
+    """notice.notify.poke 事件：群戳 → 进群回复流水线；私戳 → AI 回复 + 登记私聊活跃会话。"""
     poke_uid = str(ev.get("user_id", ""))
     poke_gid = ev.get("group_id")
     # 防御：若事件带 target_id 且目标不是 Bot，忽略（群友互戳不触发）
@@ -7691,22 +7691,14 @@ def _handle_poke_event(ev):
     # 反戳：先戳回去，让对方知道 Bot 反应了
     _send_poke_back(poke_uid, poke_gid)
     if poke_gid:
-        # 群戳一戳 → AI 回复（戳本身自带一次回应）
+        # 群戳一戳 → 进群回复流水线（2026-10-25）。
+        # 旧版这里自己拼 prompt、同步调模型、发送、再发一张表情包，全程不碰
+        # 缓冲区 —— 同一秒内"戳 + 消息"会并行生成两条；主循环还被这 9 秒占住
+        # （真机 17:05:22→17:05:31），事件收取跟着滞后。
+        # 现在只做两件事：记一次计数（分级文案用）、把"被戳"当成一条入站事件。
         gid_str = str(poke_gid)
-        # ★ 只认戳的人（2026-10-11 用户拍板）：戳解锁的是"戳的人的追问通道"，
-        # 不是全场插嘴许可。in_session 是**绕过决策器的快速通道**（7375），
-        # 不加 owner 限制，任何一次戳都等于给全群发 @ 待遇——"一窝蜂混乱"的引擎。
-        # owner 标记由入口闸门（8846 附近）消费：非戳主的无触发消息照旧出局。
-        with _session_lock:
-            _poke_cap = _config.get("poke_session_replies", 2)
-            _existing = GROUP_SESSION.get(gid_str)
-            if not _existing or _existing.get("remaining", 0) < _poke_cap:
-                GROUP_SESSION[gid_str] = {"remaining": _poke_cap,
-                                          "last_msg_time": time.time(),
-                                          "poke_owner": str(poke_uid)}
-        log(f"群[{gid_str}] 戳一戳解锁追问通道(仅戳主 {poke_uid}，额度{_poke_cap})")
         poke_nick = resolve_qq_nick(poke_uid) or poke_uid
-        # 戳一戳计数（同一人同一群，30秒内重置）
+        # 戳一戳计数（同一人同一群，poke_timeout 内累计）
         _poke_key = f"{gid_str}_{poke_uid}"
         _poke_count = POKE_COUNTS.get(_poke_key, {"count": 0, "time": 0})
         if time.time() - _poke_count["time"] > _config.get("poke_timeout", 30):
@@ -7715,59 +7707,14 @@ def _handle_poke_event(ev):
         _poke_count["time"] = time.time()
         POKE_COUNTS[_poke_key] = _poke_count
         poke_n = _poke_count["count"]
-        # 群聊上下文（最近5条消息）
-        _timeline = GROUP_TIMELINE.get(gid_str, [])
-        _ctx_lines = [f"{t[2] or t[1]}: {t[3][:50]}" for t in _timeline[-5:] if t[3]]
-        _ctx = "\n".join(_ctx_lines) if _ctx_lines else "（无近期消息）"
-        # 戳一戳分级 prompt
-        if poke_n == 1:
-            poke_vibe = "TA第1次戳你，随口回应就行，可以装没注意到或者好奇问一句。"
-        elif poke_n <= 3:
-            poke_vibe = f"TA已经连续戳了你{poke_n}次。表现出被打扰了但还没真生气，比如吐槽一句、反问干嘛。"
-        elif poke_n <= 8:
-            poke_vibe = f"TA疯了一样戳你第{poke_n}次了！炸毛、威胁、撒娇都行，但要有情绪起伏，别重复上一句的说法。"
-        else:
-            poke_vibe = f"TA已经戳了你{poke_n}次根本停不下来！用崩溃/抓狂/摆烂的语气，像真的要被烦死了。"
-        poke_prompt = (
-            f"你是{_bot_nicknames()[0]}，18岁男生，毒舌带撒娇，网上放得开。现在「{poke_nick}」在群里反复戳你。\n"
-            f"【群聊近况】\n{_ctx}\n"
-            f"【当前情况】{poke_vibe}\n"
-            f"要求：\n"
-            f"- 回复15-25字，简短但有性格\n"
-            f"- 禁止用「别戳了」「干嘛」「再戳要XX了」这种模板句式\n"
-            f"- 根据群聊上下文接梗或吐槽，和当前聊天内容产生关联\n"
-            f"- 每次回复句式和用词必须不同，像真人聊天一样自然\n"
-            f"- 可以用颜文字但不要每次都用\n"
-            f"- 不要加前缀、引用标记"
-        )
-        try:
-            reply = call_deepseek(poke_prompt, [], group_id=gid_str, is_group=True)
-            if reply:
-                from meme_engine import parse_meme_intent as _pmi
-                reply = _pmi(reply)[0] or reply
-                track_bot_reply(gid_str, reply)
-                # ★ 单一大脑修复（2026-10-11）：戳一戳回复必须写进群聊历史。
-                # 旧版只 track_bot_reply(去重用)+发送，**不入 group_chat_history** →
-                # 主链下一轮看不到"我刚说过什么"，于是自相矛盾（23:11说玩过、
-                # 23:17说没玩过）。把这次互动按 user戳/assistant答 两轮补进历史，
-                # 让戳路径和主链共享同一份记忆，不再各说各话。
-                gh = group_chat_history.setdefault(gid_str, [])
-                gh.append({"role": "user", "content": f"[{poke_nick}] （戳了戳你）"})
-                gh.append({"role": "assistant", "content": reply[:300]})
-                group_chat_history[gid_str] = gh[-16:]
-                smart_send_group(gid_str, reply)
-                log(f"群[{gid_str}] 戳一戳回复: {reply[:40]}")
-        except Exception as e:
-            log(f"群[{gid_str}] 戳一戳AI回复失败: {e}")
-        # 发送生气/炸毛类表情包
-        if MEME_OK:
-            try:
-                emotion = random.choice(POKE_MEME_EMOTIONS)
-                meme_path = match_meme(emotion)
-                if meme_path and send_group_image(gid_str, meme_path):
-                    log(f"群[{gid_str}] 戳一戳表情包: {emotion}")
-            except Exception as e:
-                log(f"群[{gid_str}] 戳一戳表情包失败: {e}")
+        # forced=False 是关键：这条要过群聊决策器（[决策放行] / [跳过] / [观察]）。
+        # 当成会话内消息（forced=True）就整段跳过决策，只剩生成端的兜底。
+        # 会话额度也不在这里写：等这一批真的发出去之后由 _pipeline_step 补，
+        # 否则决策器 skip 了也会白送 2 轮免 @ 追问权。
+        _pipeline_upsert(
+            gid_str, sender=poke_uid,
+            text=f"[{poke_nick}] （戳了戳你，这是第 {poke_n} 次）",
+            forced=False, source="poke", poke_uid=poke_uid)
     else:
         # 私聊戳一戳
         # poke_uid 可能是 NT UID（u_xxx），需要转成 QQ 号
@@ -10548,6 +10495,9 @@ def _pipeline_step(group_id):
     #   两边结论不一致时主模型否决决策器 —— 等于花一次 flash 调用做判断再把结论推翻。
     #   现在决策器放行 = 必须开口，主模型的 [不说话] 只剩兜底（接不住时用）。
     _decider_approved = False
+    # ★ 本轮的文字是否真的发出去了（2026-10-25）：戳主的追问权只在
+    #   发送成功之后才写，skip / observe / 生成为空 / 发送异常都不写。
+    _sent_ok = False
     # 提取纯文本内容（去掉 [用户ID] 前缀）
     clean_text = re.sub(r'^\[\d+\]\s*', '', merged_text)
     
@@ -11205,6 +11155,7 @@ def _pipeline_step(group_id):
                 if _dup:
                     log(f"群[{group_id}] 与 2 分钟内的回复重复，跳过发送: {sent_text[:40]}")
                 elif smart_send_group(group_id, sent_text, reply_id=_quote_id):
+                    _sent_ok = True
                     log(f"群回复{'(引用)' if _quote_id else ''}: {sent_text[:60]}")
                     track_bot_reply(group_id, sent_text)
             else:
@@ -11223,10 +11174,28 @@ def _pipeline_step(group_id):
                 try:
                     _fallback = "……"
                     if smart_send_group(group_id, _fallback, reply_id=_quote_id):
+                        _sent_ok = True
                         log(f"群[{group_id}] [纯图兜底] 表情未发出，改发文字「{_fallback}」")
                         track_bot_reply(group_id, _fallback)
                 except Exception as _e:
                     log(f"群[{group_id}] [纯图兜底] 失败: {_e}")
+
+            # ── 戳主的追问权：只在戳这一批真的发出之后生效（2026-10-25 定）──
+            # skip / observe / 生成为空 / 发送抛异常都到不了这里 —— 额度只给已经
+            # 被回应的人。观察回看的批次没有 poke_uid，所以"稍后回"也不补。
+            # "发送成功"按 smart_send_group 未抛异常且返回真判定；它不返回更细的
+            # 结果，本次不扩大这个接口（发送层部分失败时仍会写额度）。
+            _poke_owner = buffer.get("poke_uid")
+            if _poke_owner and _sent_ok:
+                _poke_cap = _config.get("poke_session_replies", 2)
+                with _session_lock:
+                    GROUP_SESSION[group_id] = {
+                        "remaining": _poke_cap,
+                        "last_msg_time": time.time(),
+                        "poke_owner": str(_poke_owner),
+                    }
+                log(f"群[{group_id}] 戳回复完成，解锁追问通道"
+                    f"(仅戳主 {_poke_owner}，额度{_poke_cap})")
 
             save_instruction(merged_text, reply)
 

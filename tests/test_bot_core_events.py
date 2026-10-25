@@ -384,13 +384,19 @@ class TestGroupBan(_EventHandlersBase):
 # ══════════════════════════════════════════════════════════════
 
 class TestPokeEvent(_EventHandlersBase):
-    """额外 mock：call_deepseek / track_bot_reply / 表情包相关 / MEME_OK=False。"""
+    """额外 mock：call_deepseek / track_bot_reply / 表情包相关 / MEME_OK=False。
+
+    2026-10-25：群戳不再自己回——它只把"被戳"写成一条入站事件，交给群回复
+    流水线。所以这里断言的是"进了缓冲区、没调模型、没发送、没提前写会话额度"。
+    """
 
     def setUp(self):
         super().setUp()
         # 快照可变全局状态，测试结束后还原（避免用例间互相污染）
         self._snapshot = (dict(bot_core.GROUP_SESSION), dict(bot_core.POKE_COUNTS),
-                          dict(bot_core.PRIVATE_SESSION))
+                          dict(bot_core.PRIVATE_SESSION),
+                          dict(bot_core.GROUP_MSG_BUFFER),
+                          dict(bot_core.GROUP_PIPELINE))
         self.addCleanup(self._restore_globals)
         self.call_deepseek = mock.Mock(return_value="别戳啦～")
         self.track_bot_reply = mock.Mock()
@@ -410,9 +416,19 @@ class TestPokeEvent(_EventHandlersBase):
         self.addCleanup(lambda: [p.stop() for p in self._poke_patchers])
 
     def _restore_globals(self):
+        # 入站会起真 Timer：先取消，否则 3 秒后回调打到已还原的 mock 上
+        for buf in bot_core.GROUP_MSG_BUFFER.values():
+            t = (buf or {}).get("timer")
+            if t:
+                try:
+                    t.cancel()
+                except Exception:
+                    pass
         bot_core.GROUP_SESSION.clear(); bot_core.GROUP_SESSION.update(self._snapshot[0])
         bot_core.POKE_COUNTS.clear(); bot_core.POKE_COUNTS.update(self._snapshot[1])
         bot_core.PRIVATE_SESSION.clear(); bot_core.PRIVATE_SESSION.update(self._snapshot[2])
+        bot_core.GROUP_MSG_BUFFER.clear(); bot_core.GROUP_MSG_BUFFER.update(self._snapshot[3])
+        bot_core.GROUP_PIPELINE.clear(); bot_core.GROUP_PIPELINE.update(self._snapshot[4])
 
     def _grp_poke(self, **kw):
         ev = {"post_type": "notice", "notice_type": "notify", "sub_type": "poke",
@@ -420,35 +436,55 @@ class TestPokeEvent(_EventHandlersBase):
         ev.update(kw)
         return ev
 
-    def test_group_poke_creates_session_and_replies(self):
+    def _reset_group(self):
+        buf = bot_core.GROUP_MSG_BUFFER.pop("10001", None)
+        if buf and buf.get("timer"):
+            try:
+                buf["timer"].cancel()
+            except Exception:
+                pass
+        bot_core.GROUP_PIPELINE.pop("10001", None)
         bot_core.GROUP_SESSION.pop("10001", None)
+
+    def test_group_poke_enters_pipeline_without_replying(self):
+        self._reset_group()
+        recent_before = len(bot_core.GROUP_RECENT_MSGS.get("10001", []))
+        timeline_before = len(bot_core.GROUP_TIMELINE.get("10001", []))
         bot_core._handle_poke_event(self._grp_poke())
-        self.assertIn("10001", bot_core.GROUP_SESSION)  # 会话已创建
-        self.smart_send_group.assert_called_once()
-        self.assertEqual(self.smart_send_group.call_args[0][0], "10001")
-        self.assertEqual(self.smart_send_group.call_args[0][1], "别戳啦～")
-        self.track_bot_reply.assert_called_once()
+        buf = bot_core.GROUP_MSG_BUFFER.get("10001")
+        self.assertIsNotNone(buf, "戳没有写进群缓冲区")
+        self.assertIn("戳了戳你，这是第 1 次", buf["text"])
+        # 关键：不过决策器的那条路要留着，所以 forced 必须是 False
+        self.assertFalse(buf["forced"])
+        self.assertEqual(buf["poke_uid"], "10086001")
+        self.assertIsNotNone(buf["timer"])
+        self.call_deepseek.assert_not_called()
+        self.smart_send_group.assert_not_called()
+        # 额度后置：入站时不许写，否则决策器 skip 也白送 2 轮免 @
+        self.assertNotIn("10001", bot_core.GROUP_SESSION)
+        # 系统事件不进近况/时间线（否则回抓会把"戳了戳你"当群友发言）
+        self.assertEqual(len(bot_core.GROUP_RECENT_MSGS.get("10001", [])), recent_before)
+        self.assertEqual(len(bot_core.GROUP_TIMELINE.get("10001", [])), timeline_before)
 
     def test_group_poke_other_target_ignored(self):
+        self._reset_group()
         bot_core._handle_poke_event(self._grp_poke(target_id="222", user_id="111"))
         self.smart_send_group.assert_not_called()
         self.call_deepseek.assert_not_called()
+        self.assertNotIn("10001", bot_core.GROUP_MSG_BUFFER)
         self.assertNotIn("10001", bot_core.GROUP_SESSION)
 
-    def test_group_poke_empty_reply_no_send(self):
-        self.call_deepseek.return_value = ""
-        bot_core._handle_poke_event(self._grp_poke())
-        self.smart_send_group.assert_not_called()
-
     def test_group_poke_count_escalates_vibe(self):
-        # 同人同群连续两次 → 第 2 次 prompt 语气与第 1 次不同（计数生效）
+        # 同人同群连续两次 → 同一批，正文里能看到"第 1 次 / 第 2 次"
         bot_core.POKE_COUNTS.clear()
+        self._reset_group()
         bot_core._handle_poke_event(self._grp_poke())
-        first_prompt = self.call_deepseek.call_args[0][0]
         bot_core._handle_poke_event(self._grp_poke())
-        second_prompt = self.call_deepseek.call_args[0][0]
-        self.assertIn("第1次", first_prompt)
-        self.assertIn("连续戳了你2次", second_prompt)
+        buf = bot_core.GROUP_MSG_BUFFER.get("10001")
+        self.assertIsNotNone(buf)
+        self.assertIn("第 1 次", buf["text"])
+        self.assertIn("第 2 次", buf["text"])
+        self.assertEqual(buf.get("merged_n") or 0, 0)  # 戳不回抓历史
         bot_core.POKE_COUNTS.clear()
 
     def test_private_poke_numeric_sends_and_registers_session(self):
