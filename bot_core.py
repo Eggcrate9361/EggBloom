@@ -598,6 +598,167 @@ PRIVATE_SESSION: Dict[str, Dict[str, Any]] = {}
 
 # 群聊消息合并：同一群 X 秒内的多条消息合并为一条
 GROUP_MSG_BUFFER: Dict[str, Dict[str, Any]] = {}  # {group_id: {"text": "", "sender": "", "time": float, "timer": None}}
+
+# ── 私聊消息合并（2026-10-25）──────────────────────────────────────────
+# 事故：私聊两条 4 秒内发出的消息被**分开回复**了两次。
+# 群聊一直有 GROUP_MSG_BUFFER + Timer 合并，私聊从来没有 —— 它收到一条就
+# 立刻进 AI 流程（日志实证：13:12:30 「没有养哦」当场开跑，13:12:34 才来的
+# 第二条只能在 MSG_QUEUE 里排队；等第一条 21 秒生成完才轮到它）。
+#
+# 私聊处理段内联在 main() 里（450 行，依赖 5 个循环内局部变量），
+# **不抽函数**：抽出去要动 5 处状态交接，风险比收益大。
+# 改为在入口拦下、攒够时间再**重新入队**，到点后走的是原来那条完整链路
+# （记忆/画像/画图/ego/表情包/事后校验全都不动）。
+PRIVATE_MSG_BUFFER: Dict[str, Dict[str, Any]] = {}
+# 重新入队时打的标记：二次经过入口不再入缓冲，直接往下走
+_REQUEUE_FLAG = "_egg_merged"
+
+
+def _private_batch_delay(*, first_time, now=None, has_image=False):
+    """私聊这批消息该等几秒。
+
+    **复用 `_batch_delay`，不另写规则** —— 用户 2026-10-23 定下的
+    「同一个人接着说话就重置倒计时，整批有硬顶」对私聊同样成立，
+    再写一份必然和群聊分叉（这个仓库已经因为"同一概念两处判据"踩过四次）。
+
+    与群聊的差异只有输入：私聊永远是"同一个人"，所以 same_sender / in_session
+    恒为 True；私聊也没有 @ 概念，triggered 恒 False。
+    """
+    return _batch_delay(
+        same_sender=True, in_session=True, triggered=False,
+        has_context=False, has_bare_image=has_image,
+        first_time=first_time, now=now,
+    )
+
+
+def _private_flush(sender: str):
+    """合并窗口到点：把这批消息作为**一条**重新入队，交给原链路处理。"""
+    with _session_lock:
+        rec = PRIVATE_MSG_BUFFER.pop(sender, None)
+    if not rec:
+        return
+    parts = [p for p in (rec.get("parts") or []) if str(p).strip()]
+    text = "\n".join(parts).strip()
+    images = list(rec.get("images") or [])
+    if not text and not images:
+        return
+    if len(parts) > 1:
+        log(f"私聊[{sender[:6]}] 合并 {len(parts)} 条为一条: {text[:60]}")
+    # 造一条"像协议层推来的"消息重新入队。原 msg 里只保留 message 段：
+    # 其余字段（post_type/message_type/time）由入口自己补齐。
+    _msg = {
+        "message": [],
+        _REQUEUE_FLAG: True,
+    }
+    if text:
+        _msg["message"].append({"type": "text", "data": {"text": text}})
+    for _p in images:
+        # 图**已经在本地**了（入口早已下载过）。用 url 字段而不是 file 字段：
+        # extract_images 见到 file 会先调 onebot_fresh_image 问协议层要新地址，
+        # 对本地路径是白跑一次 HTTP；用 url 直接命中它的"本地文件"分支。
+        _msg["message"].append({"type": "image", "data": {"url": _p}})
+    MSG_QUEUE.put({
+        "post_type": "message",
+        "message_type": "private",
+        "sender": {"user_id": sender},
+        "user_id": sender,
+        "time": int(time.time()),
+        # ★ 必须给一个唯一 message_id。入口去重对"无 id"的消息走
+        #   时间戳水位线（`_msg_time <= LAST_MSG_TIME` 就丢），而合并后重新入队的
+        #   这条 time 必然 <= 之前那条 → 会被自己的去重闸吞掉，表现为"合并了但不回"。
+        "message_id": f"_merged_{sender}_{int(time.time() * 1000)}",
+        "message": _msg["message"],
+        _REQUEUE_FLAG: True,
+    })
+
+
+def _should_buffer_private(text: str, images, msg) -> bool:
+    """这条私聊该不该先攒进缓冲（而不是立刻处理）。
+
+    单独成一个纯函数，是为了**能被测试直接打**。写在 main() 里的 if 只能靠
+    读源码验证，而"if 写错了"恰恰是最容易发生又最难看出的失误
+    （2026-10-25 实测：`if False and ...` 把整个合并关掉，grep 类测试照样全绿）。
+    """
+    if not isinstance(msg, dict):
+        return False
+    # 合并后重新入队的那一条必须放行，否则自己拦自己 → 永远不回
+    if msg.get(_REQUEUE_FLAG):
+        return False
+    # 完全没有内容的消息不值得占一个窗口
+    if not (text or "").strip() and not images:
+        return False
+    return True
+
+
+def _cancel_private_buffer(sender: str) -> int:
+    """丢掉该用户未处理的合并批次，返回被丢掉的条数（0 = 本来就没有）。
+
+    单独成函数，理由与 `_should_buffer_private` 相同：写在撤回分支里的
+    pop 只能靠读源码验证，而"漏了这一步"恰恰是新增缓冲区最容易犯的错
+    ——群聊有取消、私聊忘了取消，表现为"回复了用户已经撤回的内容"。
+
+    ★ 顺序：先取 timer 再 pop（pop 完就摸不到了）。
+    ★ key 必须与缓冲区一致（真实 QQ 号），u_xxx 的归一化在调用方做。
+    """
+    with _session_lock:
+        rec = PRIVATE_MSG_BUFFER.pop(str(sender), None)
+    if not rec:
+        return 0
+    _t = rec.get("timer")
+    if _t:
+        try:
+            _t.cancel()
+        except Exception:
+            pass
+    n = len([x for x in (rec.get("parts") or []) if str(x).strip()])
+    log(f"[撤回] 私聊[{str(sender)[:6]}] 已取消未处理合并批次（{n} 条），不回复已撤回内容")
+    return n
+
+
+def _buffer_private_message(sender: str, text: str, images, msg) -> bool:
+    """私聊入口闸：把消息攒进缓冲并起定时器，返回 True = 本条已被拦下。
+
+    返回值语义与群聊 `continue` 一致：调用方拦下后用 `continue` 跳过本条。
+    """
+    if not _should_buffer_private(text, images, msg):
+        return False
+    now = time.time()
+    with _session_lock:
+        rec = PRIVATE_MSG_BUFFER.get(sender)
+        if rec:
+            rec.setdefault("parts", []).append(text)
+            if images:
+                rec.setdefault("images", []).extend(images)
+            t = rec.get("timer")
+            if t:
+                try:
+                    t.cancel()
+                except Exception:
+                    pass
+        else:
+            rec = {
+                "parts": [text] if text else [],
+                "images": list(images or []),
+                "first_time": now,
+            }
+            PRIVATE_MSG_BUFFER[sender] = rec
+        # deadline 只算一次。第一版在这里算了两遍（if/else 各一遍），
+        # 两个分支的输入完全相同 —— 纯冗余，且后人改一处忘了另一处就会分叉。
+        rec["deadline"] = now + _private_batch_delay(
+            first_time=rec["first_time"], now=now,
+            has_image=bool(rec.get("images")))
+        _delay = max(0.5, rec["deadline"] - now)
+        _t = Timer(_delay, lambda s=sender: _private_flush(s))
+        try:
+            _t.daemon = True
+        except Exception:
+            pass
+        rec["timer"] = _t
+        _t.start()
+    log(f"私聊[{sender[:6]}] 入缓冲 等 {_delay:.1f}s（本批 {len(rec.get('parts') or [])} 条）")
+    return True
+
+
 # 潜水前观察（2026-10-13，学 qq-bridge 的「沉睡前观察」）：
 # 决策插件判"这次不接"时会返回 action=observe，宿主过 N 秒把这段上下文**再看一眼**；
 # 期间若真有新消息进来（生成了新缓冲），这次观察就作废 —— 那才是更新的上下文。
@@ -7786,6 +7947,16 @@ def _handle_recall_event(ev):
             _m2 = _re2.search(r'\((\d+)\)', _pkey)
             if _m2:
                 _pkey = _m2.group(1)
+        # NT 协议私聊推送的是 u_xxx 随机 UID，而缓冲区按真实 QQ 号做 key
+        # （入口在 sender 上换过一次）。不归一化就永远 pop 不到 → 这条取消是空转。
+        if _pkey.startswith("u_") and TARGET_QQS:
+            _pkey = str(TARGET_QQS[0])
+        # 撤回时取消该用户未处理的合并批次（截断即将发出的回复）。
+        # 群聊那条分支一直有这一步（GROUP_MSG_BUFFER），私聊新增合并后必须同步有：
+        # 否则撤回发生在合并窗口内（默认 5 秒）时，缓冲区照样到点合并、照样回复，
+        # 用户会收到"对已撤回内容的回复"+"撤回了？我还没看到"两条自相矛盾的话。
+        # 放在会话门槛之前 —— 门不通过也要丢掉，撤回就是不想让这条被处理。
+        _cancel_private_buffer(_pkey)
         _p_session = PRIVATE_SESSION.get(_pkey)
         if not _p_session:
             log(f"[调试] 私聊撤回反馈跳过: 无活跃会话 ({recall_uid})")
@@ -12226,24 +12397,47 @@ def main():
                         PENDING_IMAGES.pop(sender, None)
                 
                 # 消息转存
-                save_chat_log(sender, "对方", text)
-                # 统一记忆分发（1.5 任务 2.3）：私聊 scope，四模块各取所需
-                try:
-                    from sandglass_bridge import memory_feed
-                    memory_feed({
-                        "text": text,
-                        "group_id": "",
-                        "sender": sender,
-                        "sender_nick": resolve_qq_nick(sender) if sender else "",
-                    })
-                except Exception:
-                    pass
+                # 重新入队的合并批次**不再转存**：它的每一条原文在入缓冲前
+                # 已经各存过一次（下面这个位置），再存一遍等于同一句话进两次记忆，
+                # 还会额外多出一条"两句拼在一起"的记录。合并只是把"什么时候回复"
+                # 推后，不是产生新消息。
+                # 反过来说，也不能"入缓冲前不存"——那样用户撤回时这句话就永远丢了。
+                if not msg.get(_REQUEUE_FLAG):
+                    save_chat_log(sender, "对方", text)
+                    # 统一记忆分发（1.5 任务 2.3）：私聊 scope，四模块各取所需
+                    try:
+                        from sandglass_bridge import memory_feed
+                        memory_feed({
+                            "text": text,
+                            "group_id": "",
+                            "sender": sender,
+                            "sender_nick": resolve_qq_nick(sender) if sender else "",
+                        })
+                    except Exception:
+                        pass
                 
                 if not text and not images:
                     continue
                 
                 if not text:
                     text = "看看这张图片"
+
+                # ── 私聊消息合并（2026-10-25）──────────────────────────
+                # 放在这里的理由（顺序很关键）：
+                #   · 在"消息转存 + memory_feed"之后 → 每条消息都照常落日志/落记忆，
+                #     合并只影响"什么时候回复"，不影响"记住了什么"。
+                #   · 在一切 AI 调用之前 → 真正的省，不是等生成完再丢。
+                #   · 在纯转发/表情包回敬/图片缓存/指令之后 → 这些分支各自有
+                #     continue 语义，混进来会被合并不该合的东西。
+                # 重新入队的那一条带 _REQUEUE_FLAG，不会再被拦一次（否则死循环）。
+                # 判"该不该拦"在 _should_buffer_private 里（纯函数，测试能直接打）；
+                # 这里只看返回值 —— 返回值 False 表示不该拦，继续走原流程。
+                try:
+                    if _buffer_private_message(sender, text, images, msg):
+                        continue
+                except Exception as _bf_e:
+                    # 合并机制自己坏了不能让私聊整个不回 —— 退化成旧行为
+                    log(f"私聊[{sender[:6]}] 合并不可用，按原样立刻处理: {_bf_e}")
 
                 # 私聊活跃会话登记：对方在主动对话（私聊撤回反馈的会话门槛，与群会话一致）
                 try:
