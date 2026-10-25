@@ -692,6 +692,32 @@ class TestQueryVariants(unittest.TestCase):
             for v in wa._query_variants(q):
                 self.assertGreaterEqual(len(v), 2, v)
 
+    def test_numeric_first_token_not_trimmed(self):
+        """数字开头的首词是限定语不是实体，砍到它更糟。
+
+        实测「200元价位 机械键盘 推荐」砍成「200元价位」→ Bing 按数字匹配，
+        返回「HTTP statusCode 200、300、400」，分数还从 1.04 涨到 1.28。
+        分数涨了、答案更错 —— 说明这套打分测不出对错，只能靠这类结构判据兜。
+        """
+        for q in ("200元价位 机械键盘 推荐", "2026 年 放假安排"):
+            self.assertEqual(wa._query_variants(q), [q], q)
+
+    def test_normal_entity_still_trimmed(self):
+        """实体开头的照常砍（不能因为上面那条把正常情况也关掉）。"""
+        self.assertEqual(wa._query_variants("克莱门莎 角色 是谁"),
+                         ["克莱门莎 角色 是谁", "克莱门莎 角色", "克莱门莎"])
+
+    def test_spaces_kept_between_tokens(self):
+        """多词变体保留空格：实测带空格比去掉空格好。
+
+        「克莱门莎 角色 是谁」带空格 1.63 ／ 去掉空格 1.32。
+        Bing 把空格当词边界分开匹配，粘成一个串反而匹配不上。
+        单字变体没有内部空格，所以最终结果不受影响。
+        """
+        for v in wa._query_variants("克莱门莎 角色 是谁"):
+            if len(v.split()) > 1:
+                self.assertIn(" ", v)
+
     def test_empty(self):
         self.assertEqual(wa._query_variants(""), [])
 
