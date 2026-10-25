@@ -9795,6 +9795,29 @@ def _is_nonsense(text: str) -> bool:
     return False
 
 
+# ── 框架指令（2026-10-25）────────────────────────────────────────────
+# 线上实证（群 829854136 11:46）：群友发 `#sl`，SnowLuma 框架自己回了
+# 「SnowLuma 状态 / 版本 1.14.10 …」，Bot 又把同一条当成聊天，搜索一轮后答
+# 「#sl是啥指令 / 我这边没这功能」——群里出现两条对同一件事的回复，且后一条是错的。
+#
+# 判据不是"以 # 开头"（`#每日一癫` 这种是真在跟人说话），而是
+# **斜杠/井号 + 纯 ASCII 单词 + 整条消息就这一个词**：这正是框架命令的形态。
+# 中文一律不算 —— `#今日份快乐` 必须照常当聊天处理。
+_FW_CMD_RE = re.compile(r"^[/#!！．.]([A-Za-z][A-Za-z0-9_\-]{0,20})$")
+
+
+def _is_framework_command(text: str) -> bool:
+    """整条消息是否是框架/平台自己处理的指令（如 `#sl`、`/help`）。
+
+    这类消息由协议层或框架回，Bot 再答一遍就是重复且通常答错（它并不知道
+    框架有哪些命令）。只拦"整条就是命令"的形态，句中出现的 `#tag` 不受影响。
+    """
+    s = (text or "").strip()
+    if not s or len(s) > 24:
+        return False
+    return bool(_FW_CMD_RE.match(s))
+
+
 def _is_bystander_commentary(text: str) -> bool:
     """检测旁观者对 Bot 对话的评论（"你们演连续剧""你俩说相声"等）。"""
     patterns = [
@@ -11755,6 +11778,15 @@ def main():
                     else:
                         log_text = text[:60]
                     log(f"群[{group_id}] 文本: '{log_text}' has_xiao_a={has_xiao_a} is_at_bot={is_at_bot} has_quote={has_quote} has_text_at={has_text_at}")
+
+                    # ── 框架指令（2026-10-25）──
+                    # `#sl` / `/help` 这类由协议层或框架自己回，Bot 再答一遍就是
+                    # 重复且通常答错（它不知道框架有哪些命令）。判据见
+                    # _is_framework_command：短、以 /#! 开头、余下是纯 ASCII 单词。
+                    # 上下文照记（上面已写进 RECENT_MSGS / TIMELINE），只是不触发回复。
+                    if text and not is_at_bot and not has_xiao_a and _is_framework_command(text):
+                        log(f"群[{group_id}] 框架指令，交给协议层处理（不回复）: {text[:40]}")
+                        continue
 
                     # ── 群管理指令（@Bot + 指令，admin_qqs/主人鉴权）──
                     if (is_at_bot or has_xiao_a) and text:
