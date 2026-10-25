@@ -471,6 +471,28 @@ def build_people_block(group_id=""):
         return ""
 
 
+def _scope_share():
+    """是否允许「私聊 ↔ 群聊」互相召回（配置键 `memory_scope_share`，默认关）。
+
+    2026-10-25 用户决定放宽。起因是实测到的一次白记：
+      · 11:40 私聊里 bot 已经说过「不是真鱼，是 deepseek 那个桌面大肥鱼」
+      · 11:44 群里被问「你想不想养大肥鱼」，它答「养鱼？你当我这是鱼塘啊」
+    两条都写进了沙漏，但群聊检索按 scope 硬隔开，取不到私聊那条 ——
+    记忆存了两份、取的时候各看各的，等于白记。
+
+    **群与群之间仍然隔离**（A 群的记忆不会进 B 群）。放宽的只是私聊与群聊
+    之间那一层：群聊能召回私聊内容，私聊能召回群聊内容。
+
+    隐私代价是真实的：群友的发言可能被带到私聊里复述。所以做成开关、
+    默认关，由使用者在知道代价后自己打开。
+    """
+    try:
+        from config import load_config
+        return bool((load_config() or {}).get("memory_scope_share", False))
+    except Exception:
+        return False
+
+
 def _scope_match(text, scope):
     """按会话作用域过滤沙漏检索结果（2026-10-11：私聊记忆泄漏进群聊实证修复）。
 
@@ -481,6 +503,9 @@ def _scope_match(text, scope):
                        （Bot 在群里的话由会话历史与 timeline 提供，不缺这一路）；
     ("private", uid) → 只留该用户的私聊行：含 [群: 的行排除；agent 裸行排除
                        （无法归属是谁的对话，宁缺勿漏别人隐私）。
+
+    ★ 2026-10-25：`memory_scope_share` 打开后，在**群与群仍隔离**的前提下，
+      私聊行与群行互相可见（详见 `_scope_share` 的说明）。
     """
     if not scope:
         return True
@@ -489,11 +514,15 @@ def _scope_match(text, scope):
     if not key:
         return True
     t = str(text)
+    share = _scope_share()
     if kind == "group":
-        return f"[群:{key}]" in t
+        if f"[群:{key}]" in t:
+            return True
+        # 别的群的照样出局；私聊行在放宽后可以召回
+        return share and "[群:" not in t
     if kind == "private":
         if "[群:" in t:
-            return False
+            return share
         return f"({key})]" in t or f"[{key}]" in t
     return True
 

@@ -1998,6 +1998,10 @@ function renderSwitchesPanel(root){
       <div class="field-label" style="margin:0;flex-shrink:0">私聊记忆</div>
       <div class="field-desc" style="margin:0">记住私聊中聊过的事，跨会话关联上下文</div></div>
     <div class="field" style="display:flex;align-items:center;gap:20px">
+      <input type="checkbox" class="toggle-input" id="sMemoryScopeShare">
+      <div class="field-label" style="margin:0;flex-shrink:0">私聊与群共享记忆</div>
+      <div class="field-desc" style="margin:0">打开后群聊能召回私聊聊过的内容，私聊也能召回群聊内容；群与群之间仍隔离。代价是群友的发言可能被带到私聊里复述</div></div>
+    <div class="field" style="display:flex;align-items:center;gap:20px">
       <input type="checkbox" class="toggle-input" id="sSlangInjectorEnable">
       <div class="field-label" style="margin:0;flex-shrink:0">俚语注入</div>
       <div class="field-desc" style="margin:0">回复时注入网络热词/黑话，让口气更像真人网友</div></div>
@@ -2396,7 +2400,7 @@ async function loadSettingsData(){
     t('sRecallEnable', c.recall_feedback_enable); s('sRecallCooldown', c.recall_feedback_cooldown);
     t('sRecallPrivateEnable', c.recall_private_enable); s('sRecallPrivateCooldown', c.recall_private_cooldown);
     t('sImageCacheEnable', c.image_cache_enable); t('sSelfLearningEnable', c.self_learning_enable);
-    t('sPrivateMemoryEnable', c.private_memory_enable); t('sSlangInjectorEnable', c.slang_injector_enable);
+    t('sPrivateMemoryEnable', c.private_memory_enable); t('sMemoryScopeShare', c.memory_scope_share); t('sSlangInjectorEnable', c.slang_injector_enable);
     t('sNsfwEnable', c.nsfw_enabled);
     t('sDeAiEnable', (c.de_ai&&c.de_ai.enabled)!==false); t('sDeAiPromptInject', (c.de_ai&&c.de_ai.prompt_inject)!==false); t('sDeAiPostProcess', (c.de_ai&&c.de_ai.post_process)!==false);
     t('sDeAiBanWords', (c.de_ai&&c.de_ai.ban_words)!==false); t('sDeAiBanDashes', (c.de_ai&&c.de_ai.ban_dashes)!==false); t('sDeAiBanTriple', (c.de_ai&&c.de_ai.ban_rule_of_three)!==false);
@@ -2534,7 +2538,7 @@ function collectSettings(){
     recall_private_enable: chk('sRecallPrivateEnable'), recall_private_cooldown: num('sRecallPrivateCooldown'),
     recall_private_post_messages: collectListItems('#recallPrivateList'),
     image_cache_enable: chk('sImageCacheEnable'), self_learning_enable: chk('sSelfLearningEnable'),
-    private_memory_enable: chk('sPrivateMemoryEnable'), slang_injector_enable: chk('sSlangInjectorEnable'),
+    private_memory_enable: chk('sPrivateMemoryEnable'), memory_scope_share: chk('sMemoryScopeShare'), slang_injector_enable: chk('sSlangInjectorEnable'),
     nsfw_enabled: chk('sNsfwEnable'),
     de_ai: { enabled: chk('sDeAiEnable'), prompt_inject: chk('sDeAiPromptInject'), post_process: chk('sDeAiPostProcess'),
       ban_words: chk('sDeAiBanWords'), ban_dashes: chk('sDeAiBanDashes'), ban_rule_of_three: chk('sDeAiBanTriple'),

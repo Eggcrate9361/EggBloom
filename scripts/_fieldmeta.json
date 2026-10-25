@@ -727,6 +727,16 @@
    "default": true,
    "default_text": "开启"
   },
+  "memory_scope_share": {
+   "label": "私聊与群共享记忆",
+   "desc": "打开后群聊能召回私聊聊过的内容，私聊也能召回群聊内容；群与群之间仍隔离。代价是群友的发言可能被带到私聊里复述",
+   "ctl": "bool",
+   "panel": "switches",
+   "unit": "",
+   "id": "sMemoryScopeShare",
+   "default": false,
+   "default_text": "关闭"
+  },
   "slang_injector_enable": {
    "label": "俚语注入",
    "desc": "回复时注入网络热词/黑话，让口气更像真人网友",

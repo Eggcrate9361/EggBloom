@@ -4637,6 +4637,7 @@ window.FIELD_META = {
     "image_cache_enable": {"label": "图片缓存", "desc": "生图/表情图是否落缓存，减少重复上传", "ctl": "bool", "panel": "switches", "unit": "", "id": "sImageCacheEnable", "default": true, "default_text": "开启"},
     "self_learning_enable": {"label": "自学习", "desc": "从对话中学习新知识/用语，增强后续回复", "ctl": "bool", "panel": "switches", "unit": "", "id": "sSelfLearningEnable", "default": true, "default_text": "开启"},
     "private_memory_enable": {"label": "私聊记忆", "desc": "记住私聊中聊过的事，跨会话关联上下文", "ctl": "bool", "panel": "switches", "unit": "", "id": "sPrivateMemoryEnable", "default": true, "default_text": "开启"},
+    "memory_scope_share": {"label": "私聊与群共享记忆", "desc": "打开后群聊能召回私聊聊过的内容，私聊也能召回群聊内容；群与群之间仍隔离。代价是群友的发言可能被带到私聊里复述", "ctl": "bool", "panel": "switches", "unit": "", "id": "sMemoryScopeShare", "default": false, "default_text": "关闭"},
     "slang_injector_enable": {"label": "俚语注入", "desc": "回复时注入网络热词/黑话，让口气更像真人网友", "ctl": "bool", "panel": "switches", "unit": "", "id": "sSlangInjectorEnable", "default": true, "default_text": "开启"},
     "nsfw_enabled": {"label": "NSFW 内容", "desc": "是否允许 Bot 参与/回复成人向话题，关闭则回避", "ctl": "bool", "panel": "switches", "unit": "", "id": "sNsfwEnable", "default": true, "default_text": "开启"},
     "private_reply_max_length": {"label": "私聊回复最大长度（字）", "desc": "私聊单条回复的最大字数，超出会按句子拆分多条发送", "ctl": "number", "panel": "length", "unit": "字", "id": "sPrivateReplyMaxLen", "default": 500, "default_text": "500"},
