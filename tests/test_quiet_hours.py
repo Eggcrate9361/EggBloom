@@ -97,11 +97,13 @@ def main():
     print("\n[3] 群聊回复链接了静默闸，且在 AI 调用之前")
     bc = read("bot_core.py")
     check("群聊处理函数里调用了 in_quiet_hours", "_iqh(_config.get(\"quiet_hours\"))" in bc)
-    # 位置：必须在 process_buffered_message 里、且在第一次 call_deepseek 之前
-    pb = bc.index("def process_buffered_message(")
+    # 位置：必须在群批次的处理主体里、且在第一次 call_deepseek 之前。
+    # 2026-10-25：主体从 process_buffered_message 改名为 _pipeline_step，
+    # process_buffered_message 退化为流水线出口（只调 _pipeline_run）。
+    pb = bc.index("def _pipeline_step(")
     gate = bc.index("_iqh(_config.get(\"quiet_hours\"))", pb)
     first_ai = bc.index("call_deepseek(", pb)
-    check("闸门在 process_buffered_message 内", pb < gate)
+    check("闸门在 _pipeline_step 内", pb < gate)
     check("闸门在第一次 call_deepseek 之前（不白花一次请求）", gate < first_ai)
     # 被点名 vs 没被点名的分流必须存在
     check("没被点名时直接 return",

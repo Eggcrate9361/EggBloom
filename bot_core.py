@@ -599,6 +599,16 @@ PRIVATE_SESSION: Dict[str, Dict[str, Any]] = {}
 # 群聊消息合并：同一群 X 秒内的多条消息合并为一条
 GROUP_MSG_BUFFER: Dict[str, Dict[str, Any]] = {}  # {group_id: {"text": "", "sender": "", "time": float, "timer": None}}
 
+# ── 群回复流水线（2026-10-25，1.5.8 重新打包）────────────────────────────
+# 一条群消息从进来到发出去经过 INBOUND → ACCUMULATE → DECIDE → GENERATE → DELIVER。
+# 相位只记"执行中的那一段"，收批不占相位（批次在不在等由 GROUP_MSG_BUFFER 决定）。
+# 为什么单独一把锁：_buffer_lock 非重入（见 12078 的注释），相位判断不该和
+# 缓冲区读写抢同一把锁。
+# REPLY_PHASE_MAX 依据：模型最坏 3×120 超时 + 2×8 退避 ≈ 376 秒，留 44 秒余量。
+GROUP_PIPELINE: Dict[str, Dict[str, Any]] = {}
+_pipeline_lock = Lock()        # 只保护 GROUP_PIPELINE
+REPLY_PHASE_MAX = 420          # 单个相位最长持有时间（秒）
+
 # ── 私聊消息合并（2026-10-25）──────────────────────────────────────────
 # 事故：私聊两条 4 秒内发出的消息被**分开回复**了两次。
 # 群聊一直有 GROUP_MSG_BUFFER + Timer 合并，私聊从来没有 —— 它收到一条就
@@ -9818,6 +9828,13 @@ def _observe_second_look(group_id: str):
         # 期间有**新消息**进来 → 正常路径会以更新的上下文处理，这里不重复动作
         log(f"群[{group_id}] [观察] 窗口内有新消息，改走新上下文（本次观察作废）")
         return
+    # ★ 2026-10-25：相位不空闲时不写合成批次 —— 那会覆盖别人正在用的待批数据。
+    #   回看本来就只发生一次，作废即可，不排队（排队等于多一次模型调用）。
+    with _pipeline_lock:
+        _phase = (GROUP_PIPELINE.get(group_id) or {}).get("phase", "idle")
+    if _phase != "idle":
+        log(f"群[{group_id}] [观察] 正在{_phase}，本次回看作废")
+        return
     text = str(rec.get("text") or "").strip()
     if not text:
         return
@@ -9833,6 +9850,8 @@ def _observe_second_look(group_id: str):
             "has_quote": False, "quote_me": False, "has_text_at": False,
             "in_session": False, "has_context": False, "images": [],
             "observe_retry": True, "timer": None,
+            # 流水线字段（2026-10-25）：合成批次没有触发者，也没有戳主。
+            "forced": False, "poke_uid": None,
         }
     try:
         process_buffered_message(group_id)
@@ -10128,7 +10147,386 @@ def _decider_closed(group_id):
 
 
 def process_buffered_message(group_id):
-    """处理合并后的群聊消息"""
+    """流水线唯一出口：同一群在任一时刻只有一个批次在跑。
+
+    返回 True 表示本次实际跑了一轮；False 表示已排队（相位忙），
+    或该群没有待处理批次。
+
+    ★ 2026-10-25：此前四个入口（两个 Timer、缓冲区过期分支、观察回看）
+      直接调本函数，函数入口即 pop，谁也不知道别人在跑 —— 同一群能同时
+      生成两轮并各发一条。现在入口语义从"立刻处理"改为"保证被处理"，
+      在途期间到达的批次排队，本轮结束后立刻续跑。
+    """
+    return _pipeline_run(group_id)
+
+
+def _new_pipeline_state():
+    return {"phase": "idle", "since": time.time(), "pending": False,
+            "last_reply_at": 0.0}
+
+
+def _phase_set_locked(st, phase):
+    """持 _pipeline_lock 时改相位。"""
+    st["phase"] = phase
+    st["since"] = time.time()
+
+
+def _phase_set(group_id, phase):
+    """不持锁时改相位（生成/发送阶段的标记用）。"""
+    with _pipeline_lock:
+        st = GROUP_PIPELINE.setdefault(group_id, _new_pipeline_state())
+        if st["phase"] != "idle" and st["phase"] != phase:
+            log(f"[流水线] 群[{group_id}] {st['phase']} → {phase}")
+            _phase_set_locked(st, phase)
+
+
+def _pipeline_acquire(group_id) -> bool:
+    """取相位。已被占用则置 pending 并返回 False；超时则强制接管。"""
+    with _pipeline_lock:
+        st = GROUP_PIPELINE.setdefault(group_id, _new_pipeline_state())
+        if st["phase"] == "idle":
+            log(f"[流水线] 群[{group_id}] idle → deciding")
+        elif time.time() - st["since"] < REPLY_PHASE_MAX:
+            st["pending"] = True
+            return False
+        else:
+            log(f"[流水线] 群[{group_id}] {st['phase']} 超时 "
+                f"{int(time.time() - st['since'])}s，强制接管")
+        _phase_set_locked(st, "deciding")
+        st["pending"] = False
+        return True
+
+
+def _pipeline_release(group_id, again: bool = False) -> bool:
+    """结束本轮。有待批时在锁内直接续到 deciding，返回 True。
+
+    不先置 idle 再回循环顶部检查：那会让第三个线程在两步之间插进来。
+    """
+    with _pipeline_lock:
+        st = GROUP_PIPELINE.get(group_id)
+        if st is None:
+            return False
+        if again and st["pending"]:
+            st["pending"] = False
+            log(f"[流水线] 群[{group_id}] {st['phase']} → deciding（续跑待批）")
+            _phase_set_locked(st, "deciding")
+            return True
+        st["pending"] = False
+        log(f"[流水线] 群[{group_id}] {st['phase']} → idle")
+        _phase_set_locked(st, "idle")
+        return False
+
+
+def _pipeline_run(group_id) -> bool:
+    if not _pipeline_acquire(group_id):
+        return False
+    while True:
+        try:
+            _pipeline_step(group_id)
+        except Exception:
+            _pipeline_release(group_id)
+            raise
+        if not _pipeline_release(group_id, again=True):
+            return True
+
+
+def _pipeline_merge_locked(buffer, *, group_id, sender, text, now,
+                           at_bot=False, xiao_a=False, bot_nick=False,
+                           quote=False, text_at=False, in_session=False,
+                           images=None, forced=False, source="message",
+                           poke_uid=None, force=False):
+    """持 _buffer_lock 时把一条事件并进已有批次，返回要启动的 Timer。
+
+    返回 None 表示没并（批次已过 deadline，或调用方传了空批次）。
+    Timer 由调用方在锁外 start()：回调内部要拿同一把锁。
+    force=True 用于"结算发现批次还在、但它已过期"的情形：此时必须并进去，
+    否则新建批次会把旧批次整个覆盖掉 —— 那些消息就丢了。
+    """
+    if buffer is None:
+        return None
+    _buf_dl = buffer.get("deadline")
+    if not force and _buf_dl is not None and now > _buf_dl:
+        return None
+    # ★ 必须用 _display_name（昵称/我(Bot)），不能用裸 QQ 号：
+    #   旧版这里直接 f"[{sender}]"，模型对不上号只能猜说话人
+    #   → 22:30 线上把 A 说的话扣到 B 头上（"乱扣帽子"）。
+    if sender != buffer.get("sender"):
+        buffer["text"] += f"\n[{_display_name(sender, group_id)}] {text}"
+    else:
+        buffer["text"] += f"\n{text}"
+    buffer["time"] = now
+    # 更新 @ / 「小a」/ 昵称 / 引用 / 文本 @ 标记
+    buffer["is_at_bot"] = buffer.get("is_at_bot", False) or at_bot
+    buffer["has_xiao_a"] = buffer.get("has_xiao_a", False) or xiao_a
+    buffer["has_bot_nick"] = buffer.get("has_bot_nick", False) or bot_nick
+    buffer["has_quote"] = buffer.get("has_quote", False) or quote
+    buffer["has_text_at"] = buffer.get("has_text_at", False) or text_at
+    buffer["in_session"] = buffer.get("in_session", False) or in_session
+    # 任一条被点名，整批都算触发
+    buffer["forced"] = buffer.get("forced", False) or forced
+    # 同批多人戳时取最近一条（C2 用它决定追问权给谁）
+    if source == "poke" and poke_uid:
+        buffer["poke_uid"] = str(poke_uid)
+    # 图片也要跟着合并：窗口内多条消息可能各自带图
+    _bi = list(buffer.get("images") or [])
+    for _ip in (images or []):
+        if _ip and _ip not in _bi:
+            _bi.append(_ip)
+    buffer["images"] = _bi
+    # 合并了一条有意义的消息 → 现在有上下文了
+    if not is_meaningless_message(text):
+        buffer["has_context"] = True
+    # 取消之前的定时器，按 _batch_deadline 重算
+    if buffer.get("timer"):
+        buffer["timer"].cancel()
+    # ── 同人临近消息重新等待（2026-10-23 用户定）──
+    # 同一个人接着说话、且落在合并窗口内 → 倒计时重置，等他把话说完；
+    # 换人不重置（对话在流转，该回了）。只在同人时重置，否则热闹群里永远
+    # 等不到回复；8 秒硬顶兜底见 _batch_delay。
+    _deadline = _batch_deadline(
+        now=now,
+        first_time=buffer.get("first_time"),
+        same_sender=(sender == buffer.get("sender")),
+        in_session=buffer.get("in_session", False),
+        triggered=buffer.get("is_at_bot", False) or buffer.get("has_xiao_a", False),
+        has_context=buffer.get("has_context", False),
+        has_bare_image=bool(images and _is_pure_image_text(text)),
+    )
+    buffer["deadline"] = _deadline
+    timer = Timer(_deadline - now,
+                  lambda gid=group_id: process_buffered_message(gid))
+    buffer["timer"] = timer
+    return timer
+
+
+def _pipeline_upsert(group_id, *, sender, text, images=None, flags=None,
+                     forced=False, source="message", reply_mid=0,
+                     poke_uid=None):
+    """把一个入站事件并入该群批次；必要时建批并启动 Timer。
+
+    flags: {"at_bot","xiao_a","bot_nick","quote","quote_me","text_at","in_session"}，
+    缺省全 False。所有 Timer 一律在 _buffer_lock 之外创建与 start()。
+
+    返回 "merged" / "expired" / "created"，仅用于日志与测试断言。
+    """
+    flags = flags or {}
+    images = [p for p in (images or []) if p]
+    now = time.time()
+    at_bot = bool(flags.get("at_bot"))
+    xiao_a = bool(flags.get("xiao_a"))
+    bot_nick = bool(flags.get("bot_nick"))
+    quote = bool(flags.get("quote"))
+    text_at = bool(flags.get("text_at"))
+    in_session = bool(flags.get("in_session"))
+    quote_me = bool(flags.get("quote_me"))
+
+    def _merge(buf, force=False):
+        return _pipeline_merge_locked(
+            buf, group_id=group_id, sender=sender, text=text, now=now,
+            at_bot=at_bot, xiao_a=xiao_a, bot_nick=bot_nick, quote=quote,
+            text_at=text_at, in_session=in_session, images=images,
+            forced=forced, source=source, poke_uid=poke_uid, force=force)
+
+    # ① 有批次且未过 deadline → 并进去
+    with _buffer_lock:
+        buffer = GROUP_MSG_BUFFER.get(group_id)
+        timer = _merge(buffer) if buffer else None
+    if timer is not None:
+        timer.start()          # 锁外启动：回调内部要拿同一把锁
+        return "merged"
+
+    # ② 有批次但已过期 → 先结算旧批，再看它还在不在
+    # ⚠️ process_buffered_message 内部要拿 _buffer_lock（非重入），必须在锁外调。
+    if buffer is not None:
+        process_buffered_message(group_id)
+        with _buffer_lock:
+            still = GROUP_MSG_BUFFER.get(group_id)
+            # 还在 = 刚才没跑成（相位被占，已置 pending），或并发新建了新批次。
+            # force=True：这条事件必须落在某个批次里，不能覆盖掉旧的。
+            timer = _merge(still, force=True) if still else None
+        if timer is not None:
+            timer.start()
+            return "expired"
+
+    # ③ 新建批次：被 @ 或叫「小a」时回抓最近消息作为上下文
+    grabbed_texts = []
+    grabbed_chars = 0
+    grabbed_images = []
+    if at_bot or xiao_a:
+        recent = GROUP_RECENT_MSGS.get(group_id, [])
+        for entry in recent:
+            t, s, tx = entry[0], entry[1], entry[2]
+            _e_imgs = entry[4] if len(entry) > 4 else []
+            if tx == text and s == sender and abs(t - now) < 1:
+                continue  # 跳过当前这条消息本身
+            # 纯图片消息（text 为空）也必须算上下文：它的"内容"在图片里
+            if not (tx or "").strip() and _e_imgs:
+                line = f"[{_display_name(s, group_id)}] [图片]"
+            else:
+                if is_meaningless_message(tx):
+                    continue
+                line = f"[{_display_name(s, group_id)}] {tx}"
+            if grabbed_chars + len(line) > GROUP_REPLY_MAX_LENGTH:
+                break  # 超X字停止
+            grabbed_texts.append(line)
+            grabbed_chars += len(line)
+            for _ip in (_e_imgs or []):
+                if _ip not in grabbed_images:
+                    grabbed_images.append(_ip)
+            if len(grabbed_texts) >= 15:
+                break  # 最多15条
+        if grabbed_texts:
+            log(f"群[{group_id}] 回抓{len(grabbed_texts)}条历史消息"
+                + (f" +{len(grabbed_images)}图" if grabbed_images else ""))
+
+    buffer_text = ("\n".join(grabbed_texts) + ("\n" if grabbed_texts else "")
+                   + f"[{_display_name(sender, group_id)}] {text}")
+    _merged_n = len([x for x in (grabbed_texts or []) if str(x).strip()])
+    has_context = len(grabbed_texts) > 0
+    buffer_images = []
+    for _ip in (list(images) + grabbed_images):
+        if _ip and _ip not in buffer_images:
+            buffer_images.append(_ip)
+
+    _deadline = _batch_deadline(
+        now=now,
+        first_time=now,
+        same_sender=False,
+        in_session=in_session,
+        triggered=bool(at_bot or xiao_a or bot_nick or quote),
+        has_context=has_context,
+        has_bare_image=bool(images and _is_pure_image_text(text)),
+    )
+    delay = _deadline - now
+    _new_timer = Timer(delay, lambda gid=group_id: process_buffered_message(gid))
+    with _buffer_lock:
+        GROUP_MSG_BUFFER[group_id] = {
+            "text": buffer_text,
+            "sender": sender,
+            "time": now,
+            # ★ 批次起点：整批 8 秒硬顶用（2026-10-23）。
+            "first_time": now,
+            # ★ 批次关闭时刻（2026-10-23）：定时器与"能否合并"共用。
+            "deadline": _deadline,
+            "message_id": reply_mid,        # 用于引用回复（QQ message_id）
+            "merged_n": _merged_n,          # 本轮合并了几条历史消息
+            "is_at_bot": at_bot,
+            "has_xiao_a": xiao_a,
+            "has_bot_nick": bot_nick,
+            "has_quote": quote,
+            "quote_me": quote_me,           # ★ 2026-10-19：此前从未写入
+            "has_text_at": text_at,
+            "in_session": in_session,
+            "has_context": has_context,
+            "images": buffer_images,
+            # ★ 2026-10-25 流水线：触发批次免过决策器；戳批次记下发起人。
+            "forced": bool(forced),
+            "poke_uid": str(poke_uid) if (source == "poke" and poke_uid) else None,
+            "timer": _new_timer,
+        }
+    _new_timer.start()
+    log(f"群[{group_id}] 新建缓冲区 delay={delay:.1f}s in_session={in_session} "
+        f"forced={bool(forced)} back_grab={len(grabbed_texts)}")
+    return "created"
+
+
+def _decide(group_id, batch):
+    """群回复的唯一决策点。返回 {"act", "reason", "ctx", "after"}。
+
+    act: "reply" | "skip" | "observe"；ctx 是传给生成端的氛围/策略结论；
+    after 只在 observe 时有意义。本函数只读数据，写 GROUP_OBSERVE 与打日志
+    留在 _pipeline_step —— 便于单测直接调它。
+
+    forced=True（被 @、叫「小a」、含 Bot 昵称、引用我、文本 @、会话模式）时不调
+    决策插件：触发本身就是结论。forced 取批次上的值，合并时取或（任一条被点名，
+    整批都算触发）；老批次缺这个键时按同一口径现算。
+    """
+    merged_text = str(batch.get("text") or "").strip()
+    forced = batch.get("forced")
+    if forced is None:
+        forced = bool(batch.get("is_at_bot") or batch.get("has_xiao_a")
+                      or batch.get("has_bot_nick") or batch.get("has_text_at")
+                      or batch.get("in_session")
+                      or (batch.get("has_quote") and batch.get("quote_me")))
+    if forced:
+        return {"act": "reply", "reason": "触发", "ctx": "", "after": 0}
+
+    quote_forces = bool(batch.get("has_quote") and batch.get("quote_me"))
+    _go = False
+    _ctx = ""
+    _reason = ""      # 决策插件给的"不建议插话"理由（含降级标记），仅用于日志
+    _after = 0
+    if PLUGIN_OK:
+        try:
+            pm = get_plugin_manager()
+            if pm and pm.is_loaded("group_chat_decider") and pm.is_enabled("group_chat_decider"):
+                _decider_ctx = {
+                    "recent_msgs": list(GROUP_RECENT_MSGS.get(group_id, [])),
+                    "bot_replies": _safe_extract_col(GROUP_BOT_REPLIES.get(group_id, []), 1),
+                    "sender": batch.get("sender", ""),
+                    "user_id": batch.get("sender", ""),
+                    "is_at_bot": False, "has_xiao_a": False, "has_bot_nick": False,
+                    "has_quote": quote_forces, "has_text_at": False, "in_session": False,
+                    "observe_retry": bool(batch.get("observe_retry")),
+                    "history": group_chat_history.get(group_id, []),
+                    # ── 场感数据（2026-10-23）────────────────────────────
+                    # 决策器原来只吃「最近消息文本 + 五条 if-else 规则」，
+                    # 判断"该不该插嘴"靠的是规则表，不是场感 —— 人插嘴靠的
+                    # 是：这句谁在跟谁说、自己上次开口多久前、群里现在是不是
+                    # 已经太吵。这三项 bot_core 手上全有，以前一个都没传。
+                    # 只传原始数据、不传结论：判断权仍在决策器。
+                    "bot_last_reply_ago": _decider_last_reply_ago(group_id),
+                    "bot_share_5min": _decider_bot_share(group_id),
+                    "batch_idle_gap": _decider_idle_gap(group_id),
+                    # merged_n = 回抓到的历史消息条数（不含当前这条）。
+                    # 本批总条数 = 历史 + 当前这条 → +1。
+                    "batch_msg_count": int(batch.get("merged_n") or 0) + 1,
+                    "conversation_closed": _decider_closed(group_id),
+                    # 注：当前这条的发送人已以 "sender" 传入。
+                    #   decider 侧用它渲染【现在这条】的说话人 —— 模板原先从
+                    #   recent_msgs[-1] 猜，而 recent_msgs 混着 bot 自己刚发的
+                    #   消息（_remember_own_group_msg 写入），会猜成 bot 自己。
+                    "bot_qq": BOT_QQ, "bot_name": _bot_nicknames()[0],
+                    "bot_nicknames": _bot_nicknames(),
+                }
+                _res = pm.execute_hooks("before_reply", message=merged_text,
+                                        group_id=group_id, context=_decider_ctx)
+                # 只看群聊决策插件的判定，避免 ego 等低优先级注入误放行
+                for _pn, _pr in (_res or []):
+                    if _pn == "group_chat_decider" and isinstance(_pr, dict):
+                        if _pr.get("action") == "inject":
+                            _go = True
+                            # ★ 收下决策结论：插件已经判断出「氛围 + 策略」，
+                            #   以前这里只看 action、把 content 丢掉 —— 等于花一次
+                            #   调用做判断、再把结论扔了，让主模型裸奔重猜。
+                            _ctx = str(_pr.get("content") or "").strip()
+                        elif _pr.get("action") == "observe":
+                            # 潜水前观察：先记下，过一会儿再看一眼（不是直接结束）
+                            _after = int(_pr.get("after") or 0)
+                            _reason = str(_pr.get("reason") or "")[:150]
+                        elif _pr.get("action") == "skip":
+                            # ★ 把"为什么不回"记下来：此前只有一句通用"无触发条件"，
+                            #   AI 挂了导致的静默 和 AI 判断"别插嘴" 在日志里长得一模一样。
+                            _reason = str(_pr.get("reason") or "")[:150]
+                # ── typed 并列派发：spec 插件同样有权请求"放行" ──
+                # 语义与旧式一致（inject = 建议插话），否则 typed 插件无法参与决策。
+                for _tpn, _tpr in _dispatch_typed_before_reply(
+                        pm, message=merged_text, group_id=group_id,
+                        context=_decider_ctx):
+                    if isinstance(_tpr, dict) and _tpr.get("action") == "inject":
+                        _go = True
+                        log(f"群[{group_id}] [typed 决策] {_tpn} 建议插话")
+        except Exception as e:
+            log(f"群[{group_id}] [决策插件] 无触发预判异常: {e}")
+    if _go:
+        return {"act": "reply", "reason": "决策放行", "ctx": _ctx, "after": 0}
+    if _after > 0 and group_id not in GROUP_OBSERVE:
+        return {"act": "observe", "reason": _reason, "ctx": _ctx, "after": _after}
+    return {"act": "skip", "reason": _reason, "ctx": "", "after": 0}
+
+
+def _pipeline_step(group_id):
+    """原 process_buffered_message 的主体：pop、决策、生成、分条发送。"""
     global GROUP_MSG_BUFFER, GROUP_SESSION, group_chat_history, startup_time
     # 清单 3.1：本函数运行在 Timer 线程，与消息处理线程并发动缓冲区 → pop 必须持锁。
     # 锁只包住 pop 本身，重活全在锁外（避免与消息线程的长段合并逻辑互等）。
@@ -10210,88 +10608,31 @@ def process_buffered_message(group_id):
     # ★ 触发口径：只有"引用的是我"才算被叫到；引用别人 → 只是上下文，交给决策判
     quote_forces = has_quote and quote_me
     
-    # 没被 @、没叫「小a」、不含 Bot 昵称、无文本 @、无引用、不在会话模式
-    # 无触发时：交给群聊决策插件判断是否像真人一样自然插话；决策放行则继续回复
+    # ── 决策点（唯一）：_decide 返回 reply / skip / observe ──
+    # 旧代码这段内联在这里，且只有"无触发"才会走到；现在触发批次也经过它，
+    # forced=True 时短路为 reply，日志多一行「[决策放行] 触发」，用来回答
+    # "这轮为什么回"。副作用（排观察、打日志）留在本函数，_decide 只读数据。
     in_session = buffer.get("in_session", False)
-    if not is_at_bot and not has_xiao_a and not has_bot_nick and not quote_forces and not has_text_at and not in_session:
-        _decider_go = False
-        _decider_ctx_text = ""   # ★ 决策结论（氛围/策略）：以前被丢掉，现在要传给生成端
-        _skip_reason = ""      # 决策插件给的"不建议插话"理由（含降级标记），仅用于日志
-        if PLUGIN_OK:
-            try:
-                pm = get_plugin_manager()
-                if pm and pm.is_loaded("group_chat_decider") and pm.is_enabled("group_chat_decider"):
-                    _decider_ctx = {
-                        "recent_msgs": list(GROUP_RECENT_MSGS.get(group_id, [])),
-                        "bot_replies": _safe_extract_col(GROUP_BOT_REPLIES.get(group_id, []), 1),
-                        "sender": buffer.get("sender", ""),
-                        "user_id": buffer.get("sender", ""),
-                        "is_at_bot": False, "has_xiao_a": False, "has_bot_nick": False,
-                        "has_quote": quote_forces, "has_text_at": False, "in_session": False,
-                        "observe_retry": bool(buffer.get("observe_retry")),
-                        "history": group_chat_history.get(group_id, []),
-                        # ── 场感数据（2026-10-23）────────────────────────────
-                        # 决策器原来只吃「最近消息文本 + 五条 if-else 规则」，
-                        # 判断"该不该插嘴"靠的是规则表，不是场感 —— 人插嘴靠的
-                        # 是：这句谁在跟谁说、自己上次开口多久前、群里现在是不是
-                        # 已经太吵。这三项 bot_core 手上全有，以前一个都没传。
-                        # 只传原始数据、不传结论：判断权仍在决策器。
-                        "bot_last_reply_ago": _decider_last_reply_ago(group_id),
-                        "bot_share_5min": _decider_bot_share(group_id),
-                        "batch_idle_gap": _decider_idle_gap(group_id),
-                        # merged_n = 回抓到的历史消息条数（不含当前这条），
-                        # 见 11587 行 `_merged_n = len(grabbed_texts)`。
-                        # 本批总条数 = 历史 + 当前这条 → +1。
-                        # （我第一版写成 merged_n - 1，语义反了，会告诉决策器
-                        #   "这一批 0 条"，比不传更糟。）
-                        "batch_msg_count": int(buffer.get("merged_n") or 0) + 1,
-                        "conversation_closed": _decider_closed(group_id),
-                        # 注：当前这条的发送人已在上面以 "sender" 传入（9664 行）。
-                        #   decider 侧用它渲染【现在这条】的说话人 —— 模板原先从
-                        #   recent_msgs[-1] 猜，而 recent_msgs 混着 bot 自己刚发的
-                        #   消息（_remember_own_group_msg 写入），会猜成 bot 自己，
-                        #   渲染出「小a：你玩啥呢」= 告诉决策器"你在跟自己说话"。
-                        "bot_qq": BOT_QQ, "bot_name": _bot_nicknames()[0], "bot_nicknames": _bot_nicknames(),
-                    }
-                    _res = pm.execute_hooks("before_reply", message=merged_text, group_id=group_id, context=_decider_ctx)
-                    # 只看群聊决策插件的判定，避免 ego 等低优先级注入误放行
-                    _skip_reason = ""
-                    _observe_after = 0
-                    for _pn, _pr in (_res or []):
-                        if _pn == "group_chat_decider" and isinstance(_pr, dict):
-                            if _pr.get("action") == "inject":
-                                _decider_go = True
-                                # ★ 收下决策结论：插件已经判断出「氛围 + 策略」，
-                                #   以前这里只看 action、把 content 丢掉 —— 等于花一次
-                                #   调用做判断、再把结论扔了，让主模型裸奔重猜。
-                                _decider_ctx_text = str(_pr.get("content") or "").strip()
-                                GROUP_OBSERVE.pop(group_id, None)
-                            elif _pr.get("action") == "observe":
-                                # 潜水前观察：先记下，过一会儿再看一眼（不是直接结束）
-                                _observe_after = int(_pr.get("after") or 0)
-                                _skip_reason = str(_pr.get("reason") or "")[:150]
-                            elif _pr.get("action") == "skip":
-                                # ★ 把"为什么不回"记下来：此前只有一句通用"无触发条件"，
-                                #   AI 挂了导致的静默 和 AI 判断"别插嘴" 在日志里长得一模一样。
-                                _skip_reason = str(_pr.get("reason") or "")[:150]
-                    # ── typed 并列派发：spec 插件同样有权请求"放行" ──
-                    # 语义与旧式一致（inject = 建议插话），否则 typed 插件无法参与决策。
-                    for _tpn, _tpr in _dispatch_typed_before_reply(
-                            pm, message=merged_text, group_id=group_id, context=_decider_ctx):
-                        if isinstance(_tpr, dict) and _tpr.get("action") == "inject":
-                            _decider_go = True
-                            log(f"群[{group_id}] [typed 决策] {_tpn} 建议插话")
-            except Exception as e:
-                log(f"群[{group_id}] [决策插件] 无触发预判异常: {e}")
-        if not _decider_go:
-            if _observe_after > 0 and group_id not in GROUP_OBSERVE:
-                _schedule_observe(group_id, merged_text, _observe_after, _skip_reason)
-                return
-            log(f"群[{group_id}] [跳过] 无触发条件，忽略消息"
-                + (f" · 决策理由：{_skip_reason}" if _skip_reason else "")
-                + f": {merged_text[:80]}")
-            return
+    _decision = _decide(group_id, buffer)
+    _decider_ctx_text = str(_decision.get("ctx") or "")
+    if _decision["act"] == "observe":
+        _after = float(_decision.get("after") or 0)
+        if _after > 0 and group_id not in GROUP_OBSERVE:
+            _schedule_observe(group_id, merged_text, _after,
+                              _decision.get("reason") or "")
+        return
+    if _decision["act"] == "skip":
+        _why = str(_decision.get("reason") or "")
+        log(f"群[{group_id}] [跳过] 无触发条件，忽略消息"
+            + (f" · 决策理由：{_why}" if _why else "")
+            + f": {merged_text[:80]}")
+        return
+    if _decision.get("reason") == "触发":
+        log(f"群[{group_id}] [决策放行] 触发: {merged_text[:60]}")
+    else:
         _decider_approved = True
+        # 决策器放行后就不再处于"观察"状态（旧代码在 inject 分支里 pop）
+        GROUP_OBSERVE.pop(group_id, None)
         log(f"群[{group_id}] [决策放行] 无触发消息，决策插件建议插话: {merged_text[:60]}")
     # 会话模式消息，确保 GROUP_SESSION 存在
     if in_session and not is_at_bot and not has_xiao_a and not has_bot_nick:
@@ -10368,6 +10709,7 @@ def process_buffered_message(group_id):
                     prompt = f"（有人 @ 了我，但发的是无意义内容：\"{noise_text}\"，我完全没看懂）"
                 else:
                     prompt = "（有人 @ 了我，但没说话）"
+                _phase_set(group_id, "generating")
                 reply = call_deepseek(prompt, [], group_id=group_id, is_group=True)
                 if reply and reply.strip() not in ("[不说话]", "[跳过]"):
                     smart_send_group(group_id, reply, reply_id=_quote_id)
@@ -10691,6 +11033,7 @@ def process_buffered_message(group_id):
                     + ("（被点名）" if _extra >= 0.8 else ""))
                 time.sleep(_react)
 
+            _phase_set(group_id, "generating")
             reply = call_deepseek(merged_text_for_ai, images, group_id=group_id, is_group=True, personality_temperature=_ST.get("personality_temperature"), ego_inject_context=_ego_ctx, sender=sender)
 
         # 群聊联网搜索循环（共用函数，最多2轮；标记兜底剥离，绝不漏发）
@@ -10847,6 +11190,9 @@ def process_buffered_message(group_id):
                 # 于是连续两条消息被覆盖成同一句。这里做**发送前**的最终比对，
                 # 与最近 2 分钟内的已发内容相同就丢掉 —— 插件和模型两侧都拦不住的东西，
                 # 只能在这一层挡。
+                # 从这一刻起算"发送中"：去重闸、分条发送、表情包、纯图兜底都在这段里。
+                _phase_set(group_id, "sending")
+
                 def _rough(s):
                     return "".join(ch for ch in str(s or "") if ch.strip())
                 _dup = ""
@@ -11926,9 +12272,7 @@ def main():
                         GROUP_TIMELINE[group_id] = GROUP_TIMELINE[group_id][-50:]
                     
                     # 消息合并：同一群 X 秒内的多条消息合并
-                    # 清单 3.1：读取也要持锁（Timer 线程会并发 pop）
-                    with _buffer_lock:
-                        buffer = GROUP_MSG_BUFFER.get(group_id)
+                    # 归口 _pipeline_upsert，这里只算本条消息的判定标记
                     is_at_bot = False
                     has_any_at = False
                     for seg in msg.get("message", []):
@@ -12074,212 +12418,40 @@ def main():
                         has_xiao_a = False
                         in_session = True
                     
-                    # ── 合并 / 过期（清单 3.1：全程持 _buffer_lock）──
-                    # ⚠️ 过期分支的 process_buffered_message 内部也要拿同一把锁，
-                    #    所以必须在**锁外**调用（非重入 Lock，锁内调 = 必死锁）。
-                    #
-                    # ★ 2026-10-23：“还能不能合并”改读 buffer 自己的 deadline。
-                    #   原来这里按档位算 merge_window（三个配置键），与 _batch_delay
-                    #   是两套独立判据，实测两个空转、一个有害（详见 _batch_delay
-                    #   docstring）。现在 deadline 由建批/合并时那一次计算写下，
-                    #   定时器与这里读的是同一个数 —— 不可能再冲突。
-                    _merged = False
-                    _expired = False
-                    # 旧的 buffer 可能来自 deadline 字段出现之前的进程（热重载），
-                    # 缺字段时退回旧口径，避免直接判过期把批次立刻结算。
-                    _buf_dl = (buffer or {}).get("deadline")
-                    if buffer and (_buf_dl is None
-                                   or current_time <= _buf_dl):
-                        with _buffer_lock:
-                            # 并发守卫：Timer 线程可能刚把缓冲区 pop 走 → 以锁内现值为准
-                            buffer = GROUP_MSG_BUFFER.get(group_id)
-                            _buf_dl = (buffer or {}).get("deadline")
-                            if buffer and (_buf_dl is None
-                                           or current_time <= _buf_dl):
-                                # 合并消息，格式："[昵称A] 消息1\n[昵称B] 消息2"
-                                # ★ 必须用 _display_name（昵称/我(Bot)），不能用裸 QQ 号：
-                                #   旧版这里直接 f"[{sender}]"，模型对不上号只能猜说话人
-                                #   → 22:30 线上把 A 说的话扣到 B 头上（"乱扣帽子"）。
-                                if sender != buffer["sender"]:
-                                    buffer["text"] += f"\n[{_display_name(sender, group_id)}] {text}"
-                                else:
-                                    buffer["text"] += f"\n{text}"
-                                buffer["time"] = current_time
-                                # 更新 @ 和「小a」标记
-                                buffer["is_at_bot"] = buffer.get("is_at_bot", False) or is_at_bot
-                                buffer["has_xiao_a"] = buffer.get("has_xiao_a", False) or has_xiao_a
-                                buffer["has_bot_nick"] = buffer.get("has_bot_nick", False) or has_bot_nick
-                                buffer["has_quote"] = buffer.get("has_quote", False) or has_quote
-                                buffer["has_text_at"] = buffer.get("has_text_at", False) or has_text_at
-                                buffer["in_session"] = buffer.get("in_session", False) or in_session
-                                # 图片也要跟着合并：窗口内多条消息可能各自带图
-                                _bi = list(buffer.get("images") or [])
-                                for _ip in (_img_paths or []):
-                                    if _ip and _ip not in _bi:
-                                        _bi.append(_ip)
-                                buffer["images"] = _bi
-                                # 合并了一条有意义的消息 → 现在有上下文了
-                                if not is_meaningless_message(text):
-                                    buffer["has_context"] = True
-                                # 取消之前的定时器
-                                if buffer["timer"]:
-                                    buffer["timer"].cancel()
-                                # 设置新的定时器
-                                buf_sess = buffer.get("in_session", False)
-                                buf_trig = buffer.get("is_at_bot", False) or buffer.get("has_xiao_a", False)
-                                buf_ctx = buffer.get("has_context", False)
-                                # ── 同人临近消息重新等待（2026-10-23 用户定）──
-                                # 规则：**同一个人**接着说话，且落在合并窗口内 → 倒计时重置，
-                                # 等他把话说完；换人则不重置（对话在流转，该回了）。
-                                # 为什么不是照搬 MaiBot 的 same_author=2.0s 固定值：
-                                # 那只是"续发等 2 秒"，用户要的是"每来一条都重新等"，
-                                # 不然三连发（"你听我说" / "那个事" / "算了没事"）会被切成两批。
-                                # ⚠️ 只在**同人**时重置：换人也重置会无限延长，
-                                # 热闹群里永远等不到回复（MaiBot 用 BATCH_LIMIT=8s 兜底，
-                                # 这里用 8 秒硬顶兜底，见 _batch_delay）。
-                                # ★ 2026-10-23：四条分支合并成 _batch_delay 一处计算。
-                                #   原来这里一套、新建批次那里另一套，裸图 4 秒只在
-                                #   这一侧生效、触发等待一侧 15 另一侧 10。详见函数 docstring。
-                                # ★ 定时器与"还能不能再合并"必须用同一个数 —— 只算一次，
-                                #   delay 由 deadline 反推，不再各处 + current_time。
-                                _deadline = _batch_deadline(
-                                    now=current_time,
-                                    first_time=buffer.get("first_time"),
-                                    same_sender=(sender == buffer["sender"]),
-                                    in_session=buf_sess,
-                                    triggered=buf_trig,
-                                    has_context=buf_ctx,
-                                    has_bare_image=bool(_img_paths and _is_pure_image_text(text)),
-                                )
-                                delay = _deadline - current_time
-                                buffer["deadline"] = _deadline
-                                buffer["timer"] = Timer(delay, lambda gid=group_id: process_buffered_message(gid))
-                                _merged = True
-                            elif buffer:
-                                _expired = True       # 锁内发现过期 → 锁外处理
-                        if _merged:
-                            buffer["timer"].start()   # 锁外启动：回调内部要拿同一把锁
-                            continue  # 等待合并完成
-                    elif buffer:
-                        _expired = True               # 锁外读到的就已过期
-                    if _expired:
-                        # 缓冲区已过期，立即处理（锁外调用，见上）
-                        process_buffered_message(group_id)
-                    
-                    # 新建缓冲区
-                    # 被 @ 或叫「小a」→ 回抓最近消息作为上下文（最多15条或800字）
-                    grabbed_texts = []
-                    grabbed_chars = 0
-                    grabbed_images = []      # 回抓到的图片（"这张图是什么" 就靠它）
-                    if is_at_bot or has_xiao_a:
-                        recent = GROUP_RECENT_MSGS.get(group_id, [])
-                        for entry in recent:
-                            t, s, tx = entry[0], entry[1], entry[2]
-                            _e_imgs = entry[4] if len(entry) > 4 else []
-                            if tx == text and s == sender and abs(t - current_time) < 1:
-                                continue  # 跳过当前这条消息本身
-                            # 纯图片消息（text 为空）也必须算上下文：它的"内容"在图片里
-                            if not (tx or "").strip() and _e_imgs:
-                                line = f"[{_display_name(s, group_id)}] [图片]"
-                            else:
-                                if is_meaningless_message(tx):
-                                    continue
-                                line = f"[{_display_name(s, group_id)}] {tx}"
-                            if grabbed_chars + len(line) > GROUP_REPLY_MAX_LENGTH:
-                                break  # 超X字停止
-                            grabbed_texts.append(line)
-                            grabbed_chars += len(line)
-                            for _ip in (_e_imgs or []):
-                                if _ip not in grabbed_images:
-                                    grabbed_images.append(_ip)
-                            if len(grabbed_texts) >= 15:
-                                break  # 最多15条
-                        if grabbed_texts:
-                            log(f"群[{group_id}] 回抓{len(grabbed_texts)}条历史消息"
-                                + (f" +{len(grabbed_images)}图" if grabbed_images else ""))
-                    
-                    # （说话人标签统一走 _display_name：昵称/我(Bot)/裸号兜底）
-                    buffer_text = "\n".join(grabbed_texts) + ("\n" if grabbed_texts else "") + f"[{_display_name(sender, group_id)}] {text}"
-                    # ★ 记住"本轮要回的那条"的 message_id：回复时可以带上**引用**，
-                    #   QQ 里就能像 qq-bridge 那样指着某条话说（它用 qq_reply/replyToMessageId）。
+                    # ── 入站：唯一入口（2026-10-25 流水线）──
+                    # 合并 / 过期结算 / 新建三件事都在 _pipeline_upsert 里，main() 只
+                    # 负责把这条消息的判定结果交过去。原来合并与新建两套分支各写一遍
+                    # deadline 计算，过期分支还直接抢跑一次生成。
                     try:
                         _reply_mid = int(msg.get("message_id") or 0)
                     except Exception:
                         _reply_mid = 0
-                    _merged_n = len([x for x in (grabbed_texts or []) if str(x).strip()])
-                    has_context = len(grabbed_texts) > 0
-                    # ★ 2026-10-19 修「每群消息必抛 NameError」：
-                    #   下面两处（buffer 的 quote_me、建立会话的 if）原来都引用
-                    #   `quote_forces`，但**这个变量在本函数里从没定义过**
-                    #   （只在 process_buffered_message 里定义，是另一个作用域）。
-                    #   自 1.5.5 首发即存在 —— 日志实证：
-                    #       NameError: name 'quote_forces' is not defined
-                    #   它在 buffer 建好之后抛出 → 异常跳过 `continue` 与建立会话那段，
-                    #   于是"被@/叫名字/引用 → 立即建立会话"从来没生效过，
-                    #   且每条群消息都白打一次堆栈。
-                    #   正确定义：**引用的原主是 Bot 自己**才算"引用我必回"。
-                    _quote_me = bool(has_quote) and str(quoted_sender or "") == str(BOT_QQ)
-                    # 图片：本条消息的 + 回抓到的（去重保序）
-                    buffer_images = []
-                    for _ip in (list(_img_paths or []) + grabbed_images):
-                        if _ip and _ip not in buffer_images:
-                            buffer_images.append(_ip)
-                    
-                    # 清单 3.1：写入持锁；Timer 在锁外创建与启动
-                    # （回调内部要拿 _buffer_lock，持锁启动有理论上的竞态窗口）
-                    # ★ 2026-10-23：原来这里是 `5 if in_session else (10 if 触发 and not
-                    #   has_context else 3)` —— 与合并分支的公式不一致，两处差异：
-                    #     · 触发等待 10 vs 15（同一种情况两个数，以 15 为准）
-                    #     · **裸图 4 秒完全没生效**：一张图作为本批第一条时只等 3~10 秒，
-                    #       而"图要下载、可能要理解"最慢的正是这个场景
-                    #   现在统一走 _batch_delay，与合并分支同一个权威源。
-                    # ★ 2026-10-23 追加：deadline 与 delay 出自同一次计算
-                    #   （_batch_deadline），"还能不能再合并"读的就是它。
-                    _deadline = _batch_deadline(
-                        now=current_time,
-                        first_time=current_time,
-                        same_sender=False,
-                        in_session=in_session,
-                        triggered=bool(is_at_bot or has_xiao_a or has_bot_nick or has_quote),
-                        has_context=has_context,
-                        has_bare_image=bool(_img_paths and _is_pure_image_text(text)),
-                    )
-                    delay = _deadline - current_time
-                    _new_timer = Timer(delay, lambda gid=group_id: process_buffered_message(gid))
-                    with _buffer_lock:
-                        GROUP_MSG_BUFFER[group_id] = {
-                            "text": buffer_text,
-                            "sender": sender,
-                            "time": current_time,
-                            # ★ 批次起点：整批 8 秒硬顶用（2026-10-23）。
-                            #   同人每条都重置 delay，没有这个字段就会无限等下去。
-                            "first_time": current_time,
-                            # ★ 批次关闭时刻（2026-10-23）：定时器与"能否合并"共用。
-                            #   旧代码这里没有，靠外面按档位算 merge_window，两套判据冲突。
-                            "deadline": _deadline,
-                            "message_id": _reply_mid,      # 用于引用回复（QQ message_id）
-                            "merged_n": _merged_n,          # 本轮合并了几条历史消息
-                            "is_at_bot": is_at_bot,
-                            "has_xiao_a": has_xiao_a,
-                            "has_bot_nick": has_bot_nick,
-                            "has_quote": has_quote,
-                            "quote_me": _quote_me,      # ★ 2026-10-19：此前从未写入，
-                                                        #   导致 process_buffered_message
-                                                        #   的 buffer.get("quote_me") 恒 False
-                            "has_text_at": has_text_at,
+                    # ★ 2026-10-19：**引用的原主是 Bot 自己**才算"引用我必回"。
+                    #   此前这里引用过 `quote_forces` —— 它在 main() 里从没定义过，
+                    #   每条群消息白抛一次 NameError，且"被@/叫名字/引用 → 立即建立
+                    #   会话"从来没生效过。
+                    _quote_me = (bool(has_quote)
+                                 and str(quoted_sender or "") == str(BOT_QQ))
+                    # 触发口径（旧 10216 那个条件的反面）：任一项命中 → 免过决策器。
+                    _forced = bool(is_at_bot or has_xiao_a or has_bot_nick
+                                   or _quote_me or has_text_at or in_session)
+                    _res = _pipeline_upsert(
+                        group_id, sender=sender, text=text,
+                        images=_img_paths, reply_mid=_reply_mid,
+                        forced=_forced, source="message",
+                        flags={
+                            "at_bot": is_at_bot, "xiao_a": has_xiao_a,
+                            "bot_nick": has_bot_nick, "quote": has_quote,
+                            "quote_me": _quote_me, "text_at": has_text_at,
                             "in_session": in_session,
-                            "has_context": has_context,
-                            "images": buffer_images,
-                            "timer": _new_timer
-                        }
-                    _new_timer.start()
-                    log(f"群[{group_id}] 新建缓冲区 delay={delay}s in_session={in_session} back_grab={len(grabbed_texts)}")
-                    
-                    # 被 @ 或叫「小a」或含 Bot 昵称或引用 → 立即建立会话，让缓冲窗口内的后续消息能被合并
-                    if is_at_bot or has_xiao_a or has_bot_nick or _quote_me:
+                        })
+                    # 被 @ / 叫「小a」/ 昵称 / 引用我 → 立即建立会话，让缓冲窗口内的
+                    # 后续消息能被合并。只在**新建批次**时做，与旧行为一致。
+                    if _res == "created" and (is_at_bot or has_xiao_a
+                                              or has_bot_nick or _quote_me):
                         GROUP_SESSION[group_id] = {
                             "remaining": _session_round_budget(),
-                            "last_msg_time": time.time()
+                            "last_msg_time": time.time(),
                         }
                     continue  # 等待可能的后续消息
                 

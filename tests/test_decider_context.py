@@ -143,15 +143,15 @@ class TestBatchCount(unittest.TestCase):
     """batch_msg_count = merged_n + 1（历史条数 + 当前这条）。
 
     ★ 回归：第一版写成 merged_n - 1，语义反了 —— 会告诉决策器"这批 0 条"。
-    这个断言直接打在源码上，因为它的计算在 process_buffered_message 内联，
-    没有可单独调用的函数。
+    这个断言直接打在源码上，因为它的计算内联在决策点里（2026-10-25 起该段
+    在 `_decide`，批次形参叫 `batch`），没有可单独调用的函数。
     """
 
     def test_formula_is_plus_one(self):
         import io
         with io.open(os.path.join(ROOT, "bot_core.py"), encoding="utf-8") as f:
             src = f.read()
-        self.assertIn('"batch_msg_count": int(buffer.get("merged_n") or 0) + 1', src,
+        self.assertIn('"batch_msg_count": int(batch.get("merged_n") or 0) + 1', src,
                       "batch_msg_count 的算法不是 merged_n + 1")
 
 

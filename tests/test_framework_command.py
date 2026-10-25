@@ -76,7 +76,7 @@ def main():
     _i_log = src.find("has_xiao_a={has_xiao_a}")          # 文本日志
     _i_ctx = src.find("GROUP_RECENT_MSGS[group_id].append")  # 上下文入库
     _i_cmd = src.find("_is_framework_command(text)")      # 拦截
-    _i_buf = src.find("GROUP_MSG_BUFFER[group_id] = {", _i_cmd)  # 建缓冲区
+    _i_buf = src.find("_pipeline_upsert(", _i_cmd)  # 建批（2026-10-25 起归口函数）
     check("上下文入库早于拦截（近况里还能看到这条）",
           0 < _i_ctx < _i_cmd, f"ctx={_i_ctx} cmd={_i_cmd}")
     check("★ 拦截早于建缓冲区（否则 continue 白写，照样进流程）",
