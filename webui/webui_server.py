@@ -1294,16 +1294,22 @@ def collect_events(limit=400):
     return {"events": events, "counts": counts, "total": len(rows)}
 
 
+def _log_paths():
+    """日志文件候选列表（按优先级）。**唯一一份** —— 事件视图、原始流、
+    轮次视图都读这几处，不能再各写一遍。"""
+    return [
+        PROJECT / "core_log.txt",
+        PROJECT / "qq_bot.log",
+        Path.home() / "AppData/Local/EggBloom_v3/qq_bot.log",
+        Path.home() / "AppData/Local/Temp/botcore_final.log",
+        Path.home() / "AppData/Local/Temp/eggbloom_bot.log",
+    ]
+
+
 def get_chat_logs(limit=200):
     logs = []
     try:
-        log_paths = [
-            PROJECT / "core_log.txt",
-            PROJECT / "qq_bot.log",
-            Path.home() / "AppData/Local/EggBloom_v3/qq_bot.log",
-            Path.home() / "AppData/Local/Temp/botcore_final.log",
-            Path.home() / "AppData/Local/Temp/eggbloom_bot.log",
-        ]
+        log_paths = _log_paths()
         for lf in log_paths:
             if not lf.exists():
                 continue
