@@ -1,6 +1,7 @@
 {
-  "name": "eggbroom-desktop",
+  "name": "eggbloom-desktop",
   "version": "1.5.7",
   "private": true,
+  "license": "MIT",
   "main": "main.js"
 }
