@@ -12,7 +12,7 @@
 |---|---|---|---|
 | 0.1 | **仓库地址 / 用户名** | `Eggcrate9361/EggBloom`（已替换 README / CONTRIBUTING / issue 模板） | ✅ |
 | 0.2 | **NexSandglass 的处理** | **源码已彻底移除**（2026-10-19）。沙漏改由自研 `sandglass_lite.py` 实现，数据格式与上游兼容。上游仅作**设计参考**署名（`THIRD_PARTY.md`），不再内嵌分发 | ✅ |
-| 0.3 | **LiGGUF DLL 的再分发许可** | README 明写 MIT；已补 `models/LICENSE-ligguf.txt`（随 zip 分发） | ✅ |
+| 0.3 | **LiGGUF DLL 的再分发许可** | 上游 README 只写 MIT、仓库无 LICENSE 文件；中文移植仓库 <https://github.com/Eggcrate9361/LiGGUF-CN> 已公开并带 LICENSE 全文，正文复制到 `licenses/LiGGUF.txt`，`pack_all.py` 压缩前校验 | ✅ |
 | 0.4 | 表情包 / 图标来源 | 混合，部分不明 | 抽查后决定 |
 
 ---
@@ -27,8 +27,8 @@
   现由自研 `sandglass_lite.py` 复刻这四项能力（落沙 / 原文检索 / 按日期回忆 / 决策粒子），
   **数据格式完全兼容**（同一份 `sandglass.txt` / `sandglass.idx`）。
   仓库不再分发上游任何源码 → 无需保留其 LICENSE；`THIRD_PARTY.md` 按「设计参考」署名。
-- [x] **LiGGUF**：README 末尾声明 MIT；已在 `models/` 放 `LICENSE-ligguf.txt`，随包分发。
-- [ ] `LICENSE` 年份/署名确认：当前 `MIT / Copyright (c) 2026 EggBloom Team`。
+- [x] **LiGGUF**：上游 README 末尾声明 MIT（无 LICENSE 文件）；移植仓库 `Eggcrate9361/LiGGUF-CN` 带 MIT 全文，正文见 `licenses/LiGGUF.txt`，随包分发。
+- [x] `LICENSE` 年份/署名确认：已改为 `MIT / Copyright (c) 2026 Eggcrate9361`。
 
 ### 1.2 隐私
 

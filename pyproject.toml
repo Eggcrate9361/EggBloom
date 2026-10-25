@@ -2,6 +2,8 @@
 name = "EggBloom-Desktop"
 version = "1.5.7"
 description = "EggBloom Desktop — 桌面陪伴型 AI (OneBot/QQ) 全端:聊天核心 + 记忆 + 人格 + WebUI + 插件系统"
+# setuptools 68 还不认 PEP 639 的字符串写法（license = "MIT"），用 table 形式
+license = { text = "MIT" }
 requires-python = ">=3.13,<3.14"
 dependencies = [
     # ── 核心运行时 (Python 3.13 实测版本,已固化) ──

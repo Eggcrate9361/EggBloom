@@ -1,6 +1,6 @@
 # 第三方组件与许可
 
-本项目以 MIT 分发（`Copyright (c) 2026 EggBloom Team`，见 `LICENSE`）。
+本项目以 MIT 分发（`Copyright (c) 2026 Eggcrate9361`，见 `LICENSE`）。
 下面列出随仓库或随发行包分发的第三方内容。
 
 > 截至 2026-10-18，随仓库分发的组件许可均已落实（见下表「状态」列）。
@@ -51,14 +51,13 @@
 |---|---|---|---|
 | Electron / Chromium | 桌面外壳 | MIT + BSD 系 | 包内自带 `LICENSE.electron.txt`、`LICENSES.chromium.html` |
 | Python 3.13 (embedded) | 运行时 | PSF-2.0 | 包内 `python/LICENSE.txt` |
-| LiGGUF (`ligguf_embed.dll`) | 进程内 GGUF 推理（bge-small-zh 向量化） | **MIT**（上游 README 声明） | 上游 `matrixsmaster/ligguf` | ✅ 已署名（`models/LICENSE-ligguf.txt`） |
-| LiGGUF 中文移植版 | 包内 DLL 的**实际来源**：Windows/MSVC 移植 + 中文分词重写 + fp16 LUT 修复 + F16C 加速 | 衍生作品，随上游 MIT | 本机 `D://LiGGUF-CN`（未入库） | ⚠ **未版本控制**，建议单独建仓 |
+| LiGGUF（`ligguf_embed.dll`） | 进程内 GGUF 推理（bge-small-zh 向量化） | MIT（上游 README 的 `## License` 只写一行 `MIT`） | 上游 <https://github.com/matrixsmaster/ligguf>，作者 Dmitry "sciloaf" Solovyev（MatrixS_Master）。上游仓库**没有 LICENSE 文件**，正文见 `licenses/LiGGUF.txt` |
+| LiGGUF 中文移植版 | 包内 DLL 的移植源码：Windows/MSVC 移植 + 中文分词重写 + fp16 LUT 修复 + F16C 加速 | MIT（仓库内 `LICENSE`，含上游版权行） | <https://github.com/Eggcrate9361/LiGGUF-CN>，2026-10-25 起公开 |
+| bge-small-zh-v1.5 (f16 gguf) | 记忆向量化模型 | MIT（Hugging Face 模型卡 `license: mit`） | 45 MB，位于 `plugins/ego/super_memory/models/`；模型卡 <https://huggingface.co/BAAI/bge-small-zh-v1.5>。包内是 f16 GGUF 转换件，**转换来源未记录** |
 
-> `plugins/ego/super_memory/models/` 已在 `.gitignore` 中，**不会进入 GitHub 源码仓库**，
-> 但会进 Standard/Full 的 zip。LiGGUF 的 MIT 声明写在 README 末尾（`## License → MIT`），
-> 作者为 Dmitry "sciloaf" Solovyev（MatrixS_Master），2025–2026。
-> 二进制再分发时须一并保留 `LICENSE-ligguf.txt`——`pack_all.py` 会随 `models/` 一起带上。
-| bge-small-zh-v1.5 (f16 gguf) | 记忆向量化模型 | MIT（BAAI 模型卡） | 45 MB，位于 `plugins/ego/super_memory/models/` |
+> `plugins/ego/super_memory/models/` 已在 `.gitignore` 中，**不会进入 GitHub 源码仓库**，但会进 Standard/Full 的 zip。
+> LiGGUF 正文放在仓库的 `licenses/` 下（已跟踪），不依赖被忽略的 `models/`。
+> `scripts/pack_all.py` 在压缩前把 `LICENSE`、`THIRD_PARTY.md`、`licenses/` 复制进包根，并校验缺项。
 
 ## 外部依赖（不随包分发）
 
@@ -69,8 +68,8 @@ NapCat / SnowLuma / LLOneBot / OneBot v11 实现、DeepSeek 等云端模型、Ol
 | 组件 | 结论 |
 |---|---|
 | **NexSandglass** | **源码已彻底移除**。自研 `sandglass_lite.py` 替代（数据格式兼容）。仅作**设计参考**署名，不再内嵌、不再分发其代码，故不需要保留其 LICENSE。来源：<https://github.com/lovevin1314-tech/NexSandglass-Agent-DedicatedMemory> |
-| LiGGUF | 上游 README 声明 MIT → `models/LICENSE-ligguf.txt` 随包分发 |
-| 表情包图库 | 283 张二创动漫图来源不明 → **不随任何包对外分发**（仓库里本就未跟踪） |
+| LiGGUF | 上游 README 声明 MIT，但上游仓库没有 LICENSE 文件 → 移植仓库 `Eggcrate9361/LiGGUF-CN` 带 MIT 全文，正文见 `licenses/LiGGUF.txt` |
+| 表情包图库 | 全量图库来源不明 → 不随包对外分发（仓库里本就未跟踪）；Standard 由 `scripts/make_meme_sample.py` 取 20 张文件名不含 6 位以上数字的样本随包分发，这 20 张的版权状态未核实 |
 | 字体 | Press Start 2P / Silkscreen / Fusion Pixel 均 OFL-1.1，署名见 `webui/fonts/README.txt` |
 
 > 上一轮记录（2026-10-18）：NexSandglass 曾是内嵌上游（v2.9.10 + 桥接层）。
