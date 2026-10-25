@@ -8,7 +8,7 @@ Tech: ThreadedHTTP + Single-file SPA (Chart.js + CSS Glassmorphism + Vanilla JS)
 Start: python webui_server.py
 Visit: http://localhost:8080
 """
-import json, os, sys, time, threading, sqlite3, subprocess, socket
+import json, os, sys, time, threading, sqlite3, subprocess, socket, zlib
 import datetime, re
 from pathlib import Path
 from collections import deque
@@ -585,6 +585,29 @@ STATE_LOCK = threading.Lock()
 BOT_CORE_URL = "http://127.0.0.1:3005"
 
 
+# ── 本机请求一律不走系统代理（2026-10-25）──────────────────────────
+# 实测：环境里有 HTTP_PROXY/HTTPS_PROXY 时，Python 的 urllib 会把
+# `http://127.0.0.1:3005` **也交给代理**。代理连不上目标就干等 2 秒才回 502，
+# 而这 2 秒是同步阻塞在 HTTP handler 里的。
+#
+# 后果（在本机实测到）：
+#   · GET /api/bot/status   1.65s —— probe_protocol_online 探 4 个端口 × 0.4s
+#   · /api/admin/notify_log 2.07s —— 转发 bot_core 前先被代理卡 2 秒
+#   两者都在首屏路径上，页面看起来"一直在转圈"。
+#
+# curl 默认对 localhost 免代理，urllib 不会（它只认 no_proxy，没有就全走代理）。
+# 所以本机地址必须显式用一个空 ProxyHandler 的 opener。
+#
+# ⚠ 只给**本机地址**用这个 opener。外网请求（模型 API、模型列表）仍走默认
+#   opener —— 那些该走代理，关掉会直接连不上。
+_LOCAL_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
+def _local_open(req, timeout=5):
+    """打开一个**本机** HTTP 请求，绕过系统代理。"""
+    return _LOCAL_OPENER.open(req, timeout=timeout)
+
+
 # Performance cache
 class _Cache:
     def __init__(self, ttl=5):
@@ -623,7 +646,7 @@ def fetch_from_bot_core(path, timeout=0.5):
         return None
     try:
         req = urllib.request.Request(f"{BOT_CORE_URL}{path}", headers={"Accept": "application/json"})
-        with urllib.request.urlopen(req, timeout=timeout) as r:
+        with _local_open(req, timeout=timeout) as r:
             return json.loads(r.read().decode("utf-8"))
     except Exception:
         return None
@@ -640,7 +663,7 @@ def push_bot_reload():
             headers={"Content-Type": "application/json"},
             method="POST",
         )
-        with urllib.request.urlopen(req, timeout=2) as r:
+        with _local_open(req, timeout=2) as r:
             return json.loads(r.read().decode("utf-8"))
     except Exception:
         return None
@@ -1628,7 +1651,7 @@ class Handler(BaseHTTPRequestHandler):
                 method="POST",
             )
             # agent 任务可能跑很久（多步工具调用）→ 给足超时
-            with urllib.request.urlopen(req, timeout=180) as r:
+            with _local_open(req, timeout=180) as r:
                 raw = r.read()
             try:
                 out = json.loads(raw.decode("utf-8"))
@@ -1667,7 +1690,7 @@ class Handler(BaseHTTPRequestHandler):
                 req = urllib.request.Request(
                     url, data=json.dumps(data, ensure_ascii=False).encode("utf-8"),
                     headers={"Content-Type": "application/json"}, method="POST")
-            with urllib.request.urlopen(req, timeout=timeout) as r:
+            with _local_open(req, timeout=timeout) as r:
                 body = r.read().decode("utf-8", "replace")
             self._send_json(200, json.loads(body) if body.strip() else {"ok": True})
         except Exception as e:
@@ -1691,7 +1714,7 @@ class Handler(BaseHTTPRequestHandler):
         try:
             req = urllib.request.Request(f"{BOT_CORE_URL}{raw_path}",
                                          headers={"Accept": "application/x-ndjson"})
-            with urllib.request.urlopen(req, timeout=330) as up:
+            with _local_open(req, timeout=330) as up:
                 self.send_response(200)
                 self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
                 self.send_header("Cache-Control", "no-cache, no-store")
@@ -1736,11 +1759,44 @@ class Handler(BaseHTTPRequestHandler):
     def _send_html(self, html):
         try:
             data = html.encode("utf-8")
+            # ★ 2026-10-25：从 no-store 改成 no-cache + ETag。
+            #   实测每次刷新都完整重传 582 KB 文档，一次缓存都没命中。
+            #   no-store 是"别存"，浏览器连副本都不留，所以每次都全量下载。
+            #   改成 no-cache（可以存、但每次要问一句）：ETag 命中就回 304，
+            #   只传几个字节。内容变了 ETag 就变，不存在看到旧页面的风险 ——
+            #   这正是 ETag 存在的意义，比 no-store 既快又不牺牲正确性。
+            etag = '"h%x"' % (zlib.crc32(data) & 0xFFFFFFFF)
+            # 文件时间也一并给出去：有些客户端（含 Chromium 对**顶层导航**）
+            # 更愿意用 If-Modified-Since 校验，光给 ETag 它不一定来问。
+            try:
+                _mt = int(_get_html_mtime())
+                lastmod = self.date_time_string(_mt) if _mt > 0 else None
+            except Exception:
+                lastmod = None
+            inm = self.headers.get("If-None-Match")
+            ims = self.headers.get("If-Modified-Since")
+            hit = (inm == etag)
+            if not hit and ims and lastmod:
+                try:
+                    from email.utils import parsedate_to_datetime
+                    hit = parsedate_to_datetime(ims) >= parsedate_to_datetime(lastmod)
+                except Exception:
+                    hit = False
+            if hit:
+                self.send_response(304)
+                self.send_header("ETag", etag)
+                if lastmod:
+                    self.send_header("Last-Modified", lastmod)
+                self.send_header("Cache-Control", "no-cache")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
-            self.send_header("Pragma", "no-cache")
-            self.send_header("Expires", "0")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("ETag", etag)
+            if lastmod:
+                self.send_header("Last-Modified", lastmod)
             ao = self._allowed_origin()
             if ao:
                 self.send_header("Access-Control-Allow-Origin", ao)
@@ -1832,6 +1888,25 @@ class Handler(BaseHTTPRequestHandler):
             in_dir = (_real == _root) or _real.startswith(_root + os.sep)
             if in_dir and file_path.is_file() and file_path.suffix.lower() in _STATIC_EXTS:
                 try:
+                    # ★ 2026-10-25：静态资源加 ETag + Last-Modified，命中回 304。
+                    #   实测每次刷新都重传 624 KB 字体（3 个 woff2 全量），
+                    #   因为原来只有 "no-cache" 而没有校验凭证 ——
+                    #   no-cache 的意思是"可以存，但每次用之前必须问服务器"，
+                    #   而服务器没有 ETag 可比，只能整份重发。
+                    #   代价在你这里尤其明显：程序装在 E 盘（USB 移动硬盘），
+                    #   每刷新一次就从外置盘读 620 KB。
+                    #   ETag 先用 stat 算（mtime+size），**命中时连读盘都省掉**。
+                    st = file_path.stat()
+                    etag = '"%x-%x"' % (int(st.st_mtime), st.st_size)
+                    lastmod = self.date_time_string(int(st.st_mtime))
+                    if self.headers.get("If-None-Match") == etag:
+                        self.send_response(304)
+                        self.send_header("ETag", etag)
+                        self.send_header("Last-Modified", lastmod)
+                        self.send_header("Cache-Control", "no-cache")
+                        self.send_header("Content-Length", "0")
+                        self.end_headers()
+                        return
                     data = file_path.read_bytes()
                     ct = "application/javascript"
                     if path.endswith(".css"):
@@ -1840,10 +1915,19 @@ class Handler(BaseHTTPRequestHandler):
                         ct = "image/png"
                     elif path.endswith(".svg"):
                         ct = "image/svg+xml"
+                    elif path.endswith(".woff2"):
+                        ct = "font/woff2"
                     self.send_response(200)
                     self.send_header("Content-Type", ct)
                     self.send_header("Content-Length", str(len(data)))
-                    self.send_header("Cache-Control", "no-cache")
+                    # 字体一年内不会变，给长缓存省掉每日的第一趟往返；
+                    # 其余静态仍走 no-cache + ETag（改了就 304 不掉旧版）
+                    if path.endswith(".woff2"):
+                        self.send_header("Cache-Control", "public, max-age=604800")
+                    else:
+                        self.send_header("Cache-Control", "no-cache")
+                    self.send_header("ETag", etag)
+                    self.send_header("Last-Modified", lastmod)
                     self.end_headers()
                     self.wfile.write(data)
                     return
@@ -2329,7 +2413,7 @@ class Handler(BaseHTTPRequestHandler):
             comfyui_port = cfg.get("comfyui_port", 8000)
             try:
                 req = urllib.request.Request(f"http://{comfyui_host}:{comfyui_port}/system_stats", headers={"Accept": "application/json"})
-                with urllib.request.urlopen(req, timeout=3) as r:
+                with _local_open(req, timeout=3) as r:
                     comfyui_running = True
             except Exception:
                 comfyui_running = False
@@ -2579,7 +2663,7 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 url = f"http://{host}:{port}/system_stats"
                 req = urllib.request.Request(url, headers={"Accept": "application/json"})
-                with urllib.request.urlopen(req, timeout=timeout) as r:
+                with _local_open(req, timeout=timeout) as r:
                     resp_data = json.loads(r.read().decode("utf-8"))
                 self._send_json(200, {"success": True, "comfyui_version": resp_data.get("system", {}).get("comfyui_version", "")})
                 return
@@ -2711,14 +2795,14 @@ class Handler(BaseHTTPRequestHandler):
                 if driver == "ollama":
                     base_url = f"http://127.0.0.1:{port}/v1/chat/completions"
                     req = urllib.request.Request(base_url, data=json.dumps({"model": model_name or "llama3", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 4}).encode("utf-8"), headers={"Content-Type": "application/json"})
-                    with urllib.request.urlopen(req, timeout=15) as r:
+                    with _local_open(req, timeout=15) as r:
                         resp = json.loads(r.read().decode("utf-8"))
                     self._send_json(200, {"ok": True, "driver": driver, "api_url": base_url, "model_name": model_name or "llama3", "error": None})
                     return
                 if driver == "lmstudio":
                     base_url = f"http://127.0.0.1:{port}/v1/chat/completions"
                     req = urllib.request.Request(base_url, data=json.dumps({"model": model_name or "local-model", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 4}).encode("utf-8"), headers={"Content-Type": "application/json"})
-                    with urllib.request.urlopen(req, timeout=15) as r:
+                    with _local_open(req, timeout=15) as r:
                         resp = json.loads(r.read().decode("utf-8"))
                     self._send_json(200, {"ok": True, "driver": driver, "api_url": base_url, "model_name": model_name or "local-model", "error": None})
                     return
@@ -2741,7 +2825,7 @@ class Handler(BaseHTTPRequestHandler):
                     ready = False
                     try:
                         req = urllib.request.Request(f"http://127.0.0.1:{_LLAMA_PORT}/health")
-                        with urllib.request.urlopen(req, timeout=5) as resp:
+                        with _local_open(req, timeout=5) as resp:
                             ready = resp.status == 200
                     except Exception:
                         ready = False
@@ -2762,7 +2846,7 @@ class Handler(BaseHTTPRequestHandler):
                             time.sleep(1)
                             try:
                                 req = urllib.request.Request(f"http://127.0.0.1:{_LLAMA_PORT}/health")
-                                with urllib.request.urlopen(req, timeout=3) as resp:
+                                with _local_open(req, timeout=3) as resp:
                                     if resp.status == 200:
                                         ready = True
                                         break
@@ -2825,7 +2909,7 @@ class Handler(BaseHTTPRequestHandler):
                 ready = False
                 try:
                     req = urllib.request.Request(f"http://127.0.0.1:{_LLAMA_PORT}/health")
-                    with urllib.request.urlopen(req, timeout=5) as resp:
+                    with _local_open(req, timeout=5) as resp:
                         ready = resp.status == 200
                 except Exception:
                     ready = False
@@ -2848,7 +2932,7 @@ class Handler(BaseHTTPRequestHandler):
                     time.sleep(1)
                     try:
                         req = urllib.request.Request(f"http://127.0.0.1:{_LLAMA_PORT}/health")
-                        with urllib.request.urlopen(req, timeout=3) as resp:
+                        with _local_open(req, timeout=3) as resp:
                             if resp.status == 200:
                                 ready = True
                                 break
@@ -2954,7 +3038,7 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 url = f"http://127.0.0.1:{port}/shutdown"
                 req = urllib.request.Request(url, method="POST")
-                with urllib.request.urlopen(req, timeout=10) as r:
+                with _local_open(req, timeout=10) as r:
                     self._send_json(200, {"ok": True})
                     return
             except Exception as e:
@@ -4166,7 +4250,7 @@ def probe_protocol_online(timeout=0.4, ttl=3.0):
                 cands.append(u)
         for u in cands:
             try:
-                with urllib.request.urlopen(u + "/get_status", timeout=timeout) as r:
+                with _local_open(u + "/get_status", timeout=timeout) as r:
                     d = json.loads(r.read())
                 if (d.get("data") or {}).get("online"):
                     ok, url = True, u
