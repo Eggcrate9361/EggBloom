@@ -1308,10 +1308,12 @@ _RND_EVT = re.compile(
     r"\[事件\]\s*收到:\s*post_type=(\w+)\s+msg_type=(\S*)\s+uid=(\S*)\s+gid=(\S*)")
 # 私聊用户消息：`收到: 你在干嘛呢`（可能带 `[引用]` 前缀）
 _RND_ASK_PM = re.compile(r"^收到:\s*(?:\[引用\]\s*)?(.+)$", re.S)
-# 私聊引用消息：`私聊[(/ω＼)(3150007406)] 引用消息: 你看现在…`
-_RND_ASK_QUOTE = re.compile(r"^(?:私聊|群)\[(.+?)\]\s*引用消息:\s*(.+)$", re.S)
+# 引用消息：`私聊[(/ω＼)(3150007406)] 引用消息: 你看现在…`
+# 前缀要单独捕获：群标签可能带群名，不能靠"里面有括号"猜是私聊。
+_RND_ASK_QUOTE = re.compile(r"^(私聊|群)\[(.+?)\]\s*引用消息:\s*(.+)$", re.S)
 # 群聊合并后的批次：`群[829854136] 合并消息: [(/ω＼)] @AAA 你想不想养大肥鱼`
-_RND_ASK_GRP = re.compile(r"^群\[(\d+)\]\s*合并消息:\s*(.+)$", re.S)
+# 群标签可能是群名 + 括号群号（`群[远望酒庄(991461217)]`），不能只认纯数字。
+_RND_ASK_GRP = re.compile(r"^群\[([^\]]+)\]\s*合并消息:\s*(.+)$", re.S)
 _RND_ROUTE = re.compile(r"^→\s*(?:进入AI聊天流程|群回复流程|AI聊天流程)")
 _RND_TOOLS = re.compile(r"^工具调用:\s*\[(.+)\]")
 _RND_SEARCH = re.compile(r"^搜索「(.+?)」\s*→\s*(.*)$")
@@ -1319,8 +1321,58 @@ _RND_TOOLREC = re.compile(r"^→\s*([A-Za-z_][A-Za-z0-9_]*):\s*(.*)$")
 _RND_DECISION = re.compile(r"\[(跳过|观察|决策放行|不参与)\]|暂不插话")
 _RND_REPLY_PM = re.compile(r"^(?:私聊|群)\[.*?\]?\s*AI回复\((.+?)\):\s*(.+)$", re.S)
 _RND_REPLY_GRP = re.compile(r"^群回复:\s*(.+)$", re.S)
-_RND_SEND = re.compile(r"^\[发送\]\s*(私聊|群\[(\d+)\])\s*→\s*([^:]*):.*?句=(.*)$", re.S)
+_RND_SEND = re.compile(r"^\[发送\]\s*(私聊|群\[([^\]]+)\])\s*→\s*([^:]*):.*?句=(.*)$", re.S)
 _RND_COST = re.compile(r"^AI 回复 \(")
+
+# ── notice 事件（2026-10-25）──
+# 日志页原来只认消息与群回复，戳一戳、撤回、成员增减、禁言整类不可见。
+# 旧版（1.5.8 首发）的戳一戳回复与表情包是独立通道，日志里留着这两类行；
+# 接入流水线后回复记成普通的「群回复:」，两种都认，老日志照样能读。
+_RND_POKE_EVENT = re.compile(
+    r"^\[事件\]\s*戳一戳:\s*user_id=(.+?)\s+group_id=(\S+)$")
+# 目标是别人（群友互戳）的行不进轮次
+_RND_POKE_IGNORE = re.compile(r"^\[事件\]\s*戳一戳忽略:")
+# `群[远望酒庄(991461217)] 戳一戳回复: …` / `私聊戳一戳回复: …`
+_RND_POKE_REPLY = re.compile(
+    r"^(群|私聊)(?:\[([^\]]+)\])?\s*戳一戳回复:\s*(.+)$", re.S)
+_RND_POKE_MEME = re.compile(
+    r"^(群|私聊)(?:\[([^\]]+)\])?\s*戳一戳表情包:\s*(.+)$")
+# `[事件] 反戳 send_poke user=… group=… retcode=0`；旧版没有 action 段，也认
+_RND_POKE_BACK = re.compile(
+    r"^\[事件\]\s*反戳(?:\(兜底段\))?\s+(?:(\S+)\s+)?user=(.+?)\s+group=(\S+)"
+    r"(?:\s+retcode=(\S+))?")
+_RND_RECALL = re.compile(
+    r"^\[事件\]\s*撤回:\s*type=(\S+)\s+user_id=(.+?)\s+group_id=(\S+)\s+msg_id=(\S+)")
+_RND_MEMBER = re.compile(
+    r"^\[事件\]\s*群成员(增加|减少):\s*group=(\S+)\s+user=(\S+)")
+_RND_BAN = re.compile(
+    r"^\[事件\]\s*群(禁言|解除禁言):\s*group=(\S+)\s+user=(\S+)(.*)$")
+
+
+def _scope_key(label):
+    """把日志里的会话标签归一成 key：群号 / `pm`。
+
+    `'829854136'` → `'829854136'`
+    `'远望酒庄(991461217)'` → `'991461217'`
+    `'私聊'` / `'pm'` → `'pm'`
+
+    不归一的话，同一群在日志页会裂成 `群 829854136` 与
+    `群 远望酒庄(991461217)` 两项 —— 后者来自带群名的 `群[...]` 行。
+    """
+    s = str(label or "").strip()
+    if not s or s in ("私聊", "pm"):
+        return "pm"
+    m = re.search(r"\((\d{5,})\)\s*$", s)
+    if m:
+        return m.group(1)
+    return s
+
+
+def _rnd_event_row(t, scope, who, ask, route):
+    """notice 类事件自成一"轮"：只填事件本身，没有决策与工具。"""
+    return {"time": t, "scope": scope, "who": who, "ask": ask[:200],
+            "route": route, "decisions": [], "tools": [], "reply": ""}
+
 
 
 def _read_log_rows(max_lines=6000):
@@ -1352,7 +1404,7 @@ def _rnd_scope_from_event(text):
         return None, None
     msg_type, uid, gid = m.group(2), m.group(3), m.group(4)
     if gid and gid != "gid=" and not gid.startswith("="):
-        return gid, uid
+        return _scope_key(gid), uid
     if msg_type == "private" or not gid:
         return "pm", uid
     return None, None
@@ -1427,6 +1479,56 @@ def collect_rounds(limit=120):
             last_scope = (sc, _rnd_who_nick(who))
             continue
 
+        # ── 戳一戳：事件行本身就是新一轮的起点 ──
+        m = _RND_POKE_EVENT.match(s)
+        if m:
+            _uid, _gid = m.group(1).strip(), m.group(2).strip()
+            _sc = _scope_key(_gid)
+            _nick = _rnd_who_nick(_uid)
+            last_scope = (_sc, _nick)
+            flush()
+            cur = _rnd_event_row(t, _sc, _nick, "（戳了戳你）",
+                                 "戳一戳 → 反戳 → 决策")
+            continue
+        if _RND_POKE_IGNORE.match(s):
+            continue
+
+        # ── 撤回 / 成员增减 / 禁言：各成一轮，没有回复 ──
+        m = _RND_RECALL.match(s)
+        if m:
+            _sc = _scope_key(m.group(3))
+            _who = _rnd_who_nick(m.group(2))
+            last_scope = (_sc, _who)
+            flush()
+            cur = _rnd_event_row(
+                t, _sc, _who, f"撤回了一条消息（msg_id={m.group(4)}）", "撤回")
+            continue
+        m = _RND_MEMBER.match(s)
+        if m:
+            _act, _gid, _uid = m.group(1), m.group(2), m.group(3)
+            _sc = _scope_key(_gid)
+            _who = _rnd_who_nick(_uid)
+            last_scope = (_sc, _who)
+            flush()
+            cur = _rnd_event_row(
+                t, _sc, _who, "进群" if _act == "增加" else "退群",
+                f"群成员{_act}")
+            continue
+        m = _RND_BAN.match(s)
+        if m:
+            _act, _gid, _uid, _rest = m.group(1), m.group(2), m.group(3), m.group(4)
+            _sc = _scope_key(_gid)
+            _who = _rnd_who_nick(_uid)
+            last_scope = (_sc, _who)
+            flush()
+            _ask = "解除禁言" if _act == "解除禁言" else "被禁言"
+            if _act != "解除禁言":
+                _dur = re.search(r"时长=(\d+)", _rest or "")
+                if _dur:
+                    _ask += f"（{_dur.group(1)} 秒）"
+            cur = _rnd_event_row(t, _sc, _who, _ask, f"群{_act}")
+            continue
+
         # ── 新的用户消息 = 新一轮 ──
         new_ask, new_scope, new_who = None, None, None
         m = _RND_ASK_PM.match(s)
@@ -1435,12 +1537,13 @@ def collect_rounds(limit=120):
         else:
             m = _RND_ASK_QUOTE.match(s)
             if m:
-                new_ask, new_who = m.group(2).strip(), _rnd_who_nick(m.group(1))
-                new_scope = "pm" if m.group(1).startswith("(") or "(" in m.group(1) else None
+                new_ask = m.group(3).strip()
+                new_who = _rnd_who_nick(m.group(2))
+                new_scope = "pm" if m.group(1) == "私聊" else _scope_key(m.group(2))
             else:
                 m = _RND_ASK_GRP.match(s)
                 if m:
-                    new_ask, new_scope = m.group(2).strip(), m.group(1)
+                    new_ask, new_scope = m.group(2).strip(), _scope_key(m.group(1))
                     if new_ask.startswith("["):
                         end = new_ask.find("]")
                         if end > 0:
@@ -1465,6 +1568,31 @@ def collect_rounds(limit=120):
 
         # ── 成本行：用户不要求在日志里出现，直接跳过 ──
         if _RND_COST.match(s):
+            continue
+
+        # ── 戳一戳的后续：反戳 / 回复 / 表情包 ──
+        m = _RND_POKE_BACK.match(s)
+        if m:
+            _sc = _scope_key(m.group(3))
+            if str(cur.get("scope")) == _sc:
+                _act = (m.group(1) or "poke").strip()
+                cur["decisions"].append(
+                    f"[反戳] {_act} retcode={m.group(4) or '?'}")
+            continue
+        m = _RND_POKE_REPLY.match(s)
+        if m:
+            _sc = _scope_key(m.group(2)) if m.group(2) else "pm"
+            if str(cur.get("scope")) == _sc:
+                _piece = m.group(3).strip()[:400]
+                cur["reply"] = (_piece if not cur["reply"]
+                                else cur["reply"] + "\n" + _piece)
+            continue
+        m = _RND_POKE_MEME.match(s)
+        if m:
+            _sc = _scope_key(m.group(2)) if m.group(2) else "pm"
+            if str(cur.get("scope")) == _sc:
+                cur["tools"].append({"name": "表情包",
+                                     "q": m.group(3).strip(), "note": ""})
             continue
 
         # ── 流程 ──
@@ -1513,7 +1641,7 @@ def collect_rounds(limit=120):
         if _RND_DECISION.search(s):
             # 别让别的会话的决策粘到本轮：日志里混着测试群的记录
             gm = re.search(r"群\[([^\]]+)\]", s)
-            if gm and str(cur.get("scope")) != gm.group(1):
+            if gm and str(cur.get("scope")) != _scope_key(gm.group(1)):
                 continue
             cur["decisions"].append(s[:120])
             continue
