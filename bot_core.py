@@ -4702,22 +4702,83 @@ def _render_ds_search(results, query, _log_prefix="搜索"):
     return "\n".join(parts)
 
 
+# ── 天气意图与城市识别（2026-10-25）──────────────────────────────
+# 判据只认字面「天气」会漏掉很自然的问法：
+#   「明天南京会下雨吗」「南京冷不冷」「今天多少度」「要不要带伞」
+# 这些实测都落到通用搜索去了。而通用搜索对「会下雨吗」这类问句
+# 返回的是鲁迅《明天》和株洲天气的旧页面（真实测过）。
+_WEATHER_INTENT_RE = re.compile(
+    r"天气|气温|多少度|几度|冷不冷|热不热|会?下雨|会?下雪|带伞|紫外线|雾霾|湿度")
+# 城市出现在这些词之前：南京天气 / 南京会下雨 / 南京冷不冷 / 南京气温
+_WEATHER_CITY_RE = re.compile(
+    r"([\u4e00-\u9fa5]{2,8}?)(?:的)?(?:天气|气温|多少度|几度|冷不冷|热不热|会?下雨|会?下雪|雾霾|湿度)")
+# 这些是时间/语气词，不是地名，要先剥掉（「明天南京会下雨吗」→ 南京）
+_WEATHER_TIME_PREFIX = ("今天", "明天", "后天", "昨天", "前天", "现在", "目前",
+                        "这几天", "这周", "下周", "本周", "早上", "上午", "中午",
+                        "下午", "晚上", "今晚", "明早", "帮我", "我想", "请问",
+                        "查一下", "看看", "知道")
+
+
+def _is_weather_query(query: str) -> bool:
+    return bool(_WEATHER_INTENT_RE.search(str(query or "")))
+
+
+def _weather_city(query: str) -> str:
+    """从问句里取城市名。取不到返回空串 —— **绝不拿默认城市顶上**。
+
+    原来的实现取不到就问北京，而结果标题仍写用户说的城市
+    （标题【株洲天气】、数据是北京的），这是最坏的一种错。
+    """
+    q = str(query or "")
+    m = _WEATHER_CITY_RE.search(q)
+    city = m.group(1) if m else ""
+    if not city:
+        # 「南京今天热吗」这种城市在前、时间词在后的写法：取句首到时间词之前
+        m2 = re.match(r"^([\u4e00-\u9fa5]{2,8}?)(?:今天|明天|后天|现在|这几天)", q)
+        city = m2.group(1) if m2 else ""
+    if not city:
+        return ""
+    # 剥前缀时间词，可能叠多层（「帮我查一下明天南京」）
+    for _ in range(4):
+        before = city
+        for w in _WEATHER_TIME_PREFIX:
+            if city.startswith(w):
+                city = city[len(w):]
+        if city == before:
+            break
+    city = city.strip("的了呢啊吧吗")
+    # 只剩一个字的不是地名
+    return city if len(city) >= 2 else ""
+
+
 def search_web(query):
     """联网搜索，返回结果摘要（优先天气 API）"""
     # 如果是天气查询，用 wttr.in
-    if "天气" in query or "weather" in query.lower() or query.strip() == "天气":
+    if _is_weather_query(query) or query.strip() == "天气":
         try:
-            city_match = re.search(r'([\u4e00-\u9fa5]+)天气', query)
-            city = city_match.group(1) if city_match else "Beijing"
-            # wttr.in 支持中文城市名，但用英文更稳
-            city_map = {
+            # ★ 2026-10-25 重写取城市的方式。原来的两个缺陷都会给出
+            #   **确定但错误**的答案，比查不到更糟：
+            #     ① 正则 `([\u4e00-\u9fa5]+)天气` 贪婪，「上海的天气」取到「上海的」，
+            #        不在映射表里 → 静默查北京；而「X的天气」是最自然的说法之一
+            #     ② 映射表只有 12 个城市，其余的（株洲、洛阳、保定…）全部
+            #        静默落到 Beijing，而结果标题还写着用户问的城市名 ——
+            #        标题说【株洲天气】，数据是北京的
+            #   实测 wttr.in **直接认中文城市名**（`株洲` 与 `Zhuzhou` 返回
+            #   同一个 nearest_area），所以那张英文映射表是多余的。
+            city = _weather_city(query)
+            if not city:
+                # 问天但没说城市 —— 不能拿北京顶上，交给通用搜索如实回答
+                log("天气查询未识别城市，转通用搜索")
+                raise LookupError("no city")
+            _city_hint = {
                 "北京": "Beijing", "上海": "Shanghai", "广州": "Guangzhou",
                 "深圳": "Shenzhen", "杭州": "Hangzhou", "成都": "Chengdu",
                 "衡阳": "Hengyang", "长沙": "Changsha", "武汉": "Wuhan",
                 "南京": "Nanjing", "西安": "XiAn", "重庆": "Chongqing"
             }
-            city_en = city_map.get(city, "Beijing")
-            url = f"https://wttr.in/{city_en}?format=j1"
+            # 已知的中文名给英文（延迟更稳），未收录的直接用中文 —— 实测可用
+            city_q = _city_hint.get(city, city)
+            url = f"https://wttr.in/{urllib.parse.quote(city_q)}?format=j1"
             req = urllib.request.Request(url, headers={"User-Agent": "curl/7.0"})
             with urllib.request.urlopen(req, timeout=10, context=CTX) as r:
                 data = json.loads(r.read().decode("utf-8"))
