@@ -3,7 +3,7 @@
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 `package.json` 的 `version`（唯一真相源）。
 
-## [Unreleased]
+## [1.5.8] - 2026-10-25
 
 ### 修复
 
