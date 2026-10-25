@@ -146,7 +146,7 @@ python scripts/pack_all.py            # Lite 走 git archive HEAD，不 commit �
 
 ## 4. 发布后
 
-- [ ] 置顶 Issue：安装/配置问题请走 Discussions
+- [ ] 置顶 Issue：安装/配置问题请在 Issue 里提问（仓库未启用 Discussions）
 - [ ] 观察 72 小时：启动失败、依赖缺失、杀软误报
 - [ ] 记录第一周的真实反馈到 `docs/`（比 star 有用）
 

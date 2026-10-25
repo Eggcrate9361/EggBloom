@@ -14,7 +14,7 @@ EggBloom Desktop 目前由维护者单人开发，仓库不开放常规 PR。本
 
 ### 1. 报告 Bug
 
-Issue 收两类：**Bug** 和 **功能建议**。装不上、配置不会、想问效果，走 [Discussions](https://github.com/Eggcrate9361/EggBloom/discussions)。
+Issue 收两类：**Bug** 和 **功能建议**。装不上、配置不会、想问效果，也开 Issue（仓库未启用 Discussions）。
 
 - 先搜索 [Issues](https://github.com/Eggcrate9361/EggBloom/issues) 确认未被报告
 - 使用 Bug Report 模板创建新 Issue
@@ -222,8 +222,7 @@ CI（`.github/workflows/ci.yml`）只跑冒烟测试，不出包。
 
 ## 沟通渠道
 
-- **Issues**：Bug、功能建议（各有模板）
-- **Discussions**：使用问题、装不上、配置不会、想问效果
+- **Issues**：Bug、功能建议、使用问题（各有模板；仓库未启用 Discussions）
 - **Security 私密通道**：安全漏洞，见 [SECURITY.md](SECURITY.md)。不要开公开 Issue
 
 ---
@@ -231,7 +230,7 @@ CI（`.github/workflows/ci.yml`）只跑冒烟测试，不出包。
 ## 常见问题
 
 **Q: 可以直接向 main 分支提 PR 吗？**
-A: 仓库目前不接受常规 PR，`main` 只走 Release 提交。Bug 和功能建议开 Issue，使用问题走 Discussions。
+A: 仓库目前不接受常规 PR，`main` 只走 Release 提交。Bug、功能建议和使用问题都开 Issue。
 
 **Q: 我改了配置文件格式，需要注意什么？**
 A: 
