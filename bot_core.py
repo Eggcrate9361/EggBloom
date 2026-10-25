@@ -10808,13 +10808,20 @@ def main():
     log(f"Bot: {BOT_QQ} | 监听: {', '.join(TARGET_QQS)} | 群聊: {len(GROUP_IDS)}个")
     log("=" * 50)
 
-    # ── 沙漏记忆引擎（后台懒加载，不阻塞主流程） ──
+    # ── 沙漏记忆引擎（同步初始化，实测 20ms）──
+    # ★ 2026-10-25：原来起后台线程后只打一句「后台初始化中」，
+    #   线程失败/卡住时这句话照样出现，看起来一切正常 —— 实际记忆库
+    #   从 2026-10-16 起九天一条没写，日志里没有任何异常。
+    #   现在同步做（20ms 不值得用线程换不可观测性），并如实打成功/失败。
     try:
-        from sandglass_bridge import _ensure_init
-        _ensure_init()
-        log("[Sandglass] 后台初始化中...")
+        from sandglass_bridge import _ensure_init, is_available
+        _ok = _ensure_init()
+        if _ok and is_available():
+            log("[Sandglass] 记忆系统已就绪")
+        else:
+            log("[Sandglass] 记忆系统未就绪 —— 记忆不会写入，请检查上面的初始化失败原因")
     except Exception as e:
-        log(f"[Sandglass] 导入失败: {e}")
+        log(f"[Sandglass] 初始化异常: {e}")
 
     log("启动冷却完毕，开始监听消息")
 

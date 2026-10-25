@@ -212,15 +212,33 @@ def _log_err_throttled(tag, e):
         _log(f"[Sandglass] {tag} 异常（已降级为空结果，60s 内不再重复记）: {type(e).__name__}: {e}")
 
 
+_ENSURE_LAST = 0.0
+
+
 def _ensure_init():
-    global _init_attempted
+    """初始化记忆系统。**同步做，不再扔给后台线程。**
+
+    ★ 2026-10-25 改：原来起一个 daemon 线程跑 `_try_init`，然后立刻 return False。
+      线程一旦卡住或死掉，**什么都不留** —— 没有成功日志、没有失败日志，
+      bot_core 那边照旧打一句「后台初始化中」，看起来一切正常。
+      实际后果：`is_available()` 永远是 False，`log_user_message` 在门口就
+      return，记忆库最后一条记录停在 **2026-10-16**，九天一条没写。
+
+      而 `_try_init` 实测只要 **0.02 秒**（建目录 + 打开 sqlite）。
+      20 毫秒的活不值得用线程换这种不可观测性。
+
+    失败后允许重试（10s 一次）：原来的 `_init_attempted` 一旦置位就再也不会
+    重试，一次偶发失败等于永久关掉记忆。
+    """
+    global _ENSURE_LAST
     if _initialized:
         return True
-    if not _init_attempted:
-        _init_attempted = True
-        t = threading.Thread(target=_try_init, daemon=True, name="sandglass-init")
-        t.start()
-    return False
+    now = time.time()
+    if now - _ENSURE_LAST < 10:
+        return False
+    _ENSURE_LAST = now
+    _try_init()
+    return _initialized
 
 
 # 模块导入即载入人物画像（纯本地 json，毫秒级；失败只记日志）
@@ -231,9 +249,29 @@ def is_available():
     return _initialized and _provider is not None and _provider.is_available()
 
 
+_UNAVAIL_LOGGED = [0.0]
+
+
+def _note_unavailable(where):
+    """记忆不可用时留一行日志（60s 节流）。
+
+    原来这里直接 return，静默到底 —— 记忆九天没写入，日志里连一句都没有。
+    「不可用」是可以接受的（插件没装、初始化失败），但**必须能看见**。
+    """
+    now = time.time()
+    if now - _UNAVAIL_LOGGED[0] >= 60:
+        _UNAVAIL_LOGGED[0] = now
+        _log(f"[Sandglass] 记忆不可用，跳过写入（{where}）"
+             f"：enabled={_enabled} initialized={_initialized} "
+             f"provider={'有' if _provider else '无'}")
+
+
 def log_user_message(text, group_id="", sender="", sender_nick="", timestamp=None):
     """落沙：用户消息写入沙漏（含完整上下文）"""
-    if not _enabled or not is_available():
+    if not _enabled:
+        return
+    if not is_available():
+        _note_unavailable("用户消息")
         return
     try:
         from sandglass_lite import log_message
@@ -308,7 +346,10 @@ def log_bot_reply(text, group_id=""):
       · 不再叠 "[Bot回复]" 前缀（那是旧格式，本轮反而**顺手清理**）——
         检索侧会跳过带该前缀的旧行，避免历史垃圾干扰。
     """
-    if not _enabled or not is_available():
+    if not _enabled:
+        return
+    if not is_available():
+        _note_unavailable("Bot 回复")
         return
     try:
         from sandglass_lite import log_message
