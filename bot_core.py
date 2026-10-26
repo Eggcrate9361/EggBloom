@@ -2538,7 +2538,10 @@ def _build_group_context_block(group_id: str, bot_qq: str, before=None) -> str:
     entries.sort(key=lambda e: e[0])
     lines = []
     for _t, who, tx in entries[-12:]:
-        lines.append(f"{who}: {tx[:60]}")
+        # 带钟点：模型没有时间锚时会瞎估（"二十分钟前"）。流水都在当天窗口内，
+        # HH:MM 足够，不占太多 token。
+        _hhmm = datetime.datetime.fromtimestamp(_t).strftime("%H:%M")
+        lines.append(f"[{_hhmm}] {who}: {tx[:60]}")
     return ("【群聊近况（真实流水，最新在后；你插话前群里正在聊这些）】\n"
             + "\n".join(lines)
             + "\n【要求】回复必须接得住上面的当前话题，别答非所问、别自说自话。")
@@ -2707,7 +2710,8 @@ def _record_bot_group_msg(group_id, text):
     track_bot_reply(group_id, text)
     try:
         gh = group_chat_history.setdefault(group_id, [])
-        gh.append({"role": "assistant", "content": str(text)[:300]})
+        gh.append({"role": "assistant", "content": str(text)[:300],
+                   "ts": time.time()})
         group_chat_history[group_id] = gh[-16:]
     except Exception:
         pass
@@ -3648,7 +3652,8 @@ def _seg_group_rules(is_group):
         "被打断不生气，回头接着说自己那条。冷场不用你负责救场，"
         "但实在没人说话可以自己念叨两句。\n"
         "【群聊事实】以下是你推不出来的硬信息：\n"
-        "- 消息前的 [昵称] 标了说话人，「我(Bot)」是你自己的话。回答人物问题时直接从前缀提取，"
+        "- 消息前的 [时:分] 是这条消息的发送时间，[昵称] 标了说话人，「我(Bot)」是你自己的话。"
+        "回答人物问题时直接从前缀提取，"
         "**不许猜、不许把甲的话扣到乙头上**；认不准就引用原话而不是点人名。\n"
         "- 有 get_group_members 工具。涉及「选个人」「群里有谁」「随机@」「谁在线」时必须先调用它拿真实列表，"
         "不要编造群成员。\n"
@@ -7785,8 +7790,10 @@ def _handle_poke_event(ev):
                 # 否则私聊下一轮同样看不到"我刚说过什么"。
                 if poke_qq:
                     _pch = chat_history.setdefault(poke_qq, [])
-                    _pch.append({"role": "user", "content": "（戳了戳你）"})
-                    _pch.append({"role": "assistant", "content": reply[:500]})
+                    _pch.append({"role": "user", "content": "（戳了戳你）",
+                                 "ts": time.time()})
+                    _pch.append({"role": "assistant", "content": reply[:500],
+                                 "ts": time.time()})
                     chat_history[poke_qq] = _pch[-24:]
                 log(f"私聊戳一戳回复: {reply[:40]}")
                 # 补发戳一戳表情包（AI 标注了 [表情:xx] 则用该情绪，否则随机）
@@ -8427,6 +8434,22 @@ def _budget_recent_history(entries, budget_chars):
     return ents, dropped
 
 
+def _hist_time_prefix(entry) -> str:
+    """历史条目的绝对时间锚；老条目没有 ts 时返回空串。
+
+    模型没有时间锚时只能估：线上实测把 3 分钟前说的话讲成「二十分钟前」
+    （2026-10-25）。时间戳在写入 history 时记死，这里只做格式化 ——
+    同一轮重复渲染得到同一字符串，不会抖动缓存前缀。
+    """
+    try:
+        ts = float((entry or {}).get("ts") or 0)
+    except Exception:
+        ts = 0.0
+    if ts <= 0:
+        return ""
+    return datetime.datetime.fromtimestamp(ts).strftime("[%m-%d %H:%M] ")
+
+
 def _build_cached_messages(history: List[Dict], cache_key: str,
                            static_prompt: str, dynamic_parts: List[str],
                            user_msg: str, images: Optional[List[str]] = None,
@@ -8475,21 +8498,23 @@ def _build_cached_messages(history: List[Dict], cache_key: str,
         _own_limit = _OWN_LIMIT   # 自己的话：100 字（立场/态度要能对上）
 
         def _entry_line(h):
-            text = (h.get("content") or "")[:_limit]
+            _tp = _hist_time_prefix(h)
+            _body = h.get("content") or ""
             if cache_key.startswith("g_"):
                 # 群聊：user 行 content 已含「[昵称(QQ号)] 文本」前缀，直接保留说话人。
                 # ★ assistant 行**没有前缀**，必须补 `我:` —— 否则超过最近几轮后，
                 #   模型认不出"这句是我说的"，每轮重建立场 → 上下矛盾（2026-10-21 修）。
                 if h.get("role") == "assistant":
-                    return "我: " + (h.get("content") or "")[:_own_limit]
-                return text
+                    return _tp + "我: " + _body[:_own_limit]
+                return _tp + _body[:_limit]
             role = "我" if h.get("role") == "assistant" else "对方"
             if h.get("role") == "assistant":
-                return f"{role}: " + (h.get("content") or "")[:_own_limit]
-            return f"{role}: {text}"
+                return _tp + f"{role}: " + _body[:_own_limit]
+            return _tp + f"{role}: {_body[:_limit]}"
 
         def _entry_fp(h):
-            src = (h.get("role") or "") + "|" + (h.get("content") or "")
+            src = ((h.get("role") or "") + "|" + str(h.get("ts") or "")
+                   + "|" + (h.get("content") or ""))
             return hashlib.md5(src.encode("utf-8", "ignore")).hexdigest()
 
         window = [(_entry_fp(h), _entry_line(h)) for h in old]
@@ -8562,7 +8587,8 @@ def _build_cached_messages(history: List[Dict], cache_key: str,
         # 不要在这里套账本摘要的 100 字口径（见 _entry_line 的 _own_limit）——
         # 原文区的意义就是"最近几轮说完整"，砍到 100 字就退化成摘要了。
         _recent_clipped.append({"role": h["role"],
-                                "content": _clip_for_history(_c, HISTORY_RECENT_CHARS_PER_ENTRY)})
+                                "content": _hist_time_prefix(h)
+                                + _clip_for_history(_c, HISTORY_RECENT_CHARS_PER_ENTRY)})
 
     _recent_budget = int(_config.get("history_recent_budget_chars") or 6000)
     if _recent_budget > 0:
@@ -10328,12 +10354,13 @@ def _pipeline_upsert(group_id, *, sender, text, images=None, flags=None,
             if tx == text and s == sender and abs(t - now) < 1:
                 continue  # 跳过当前这条消息本身
             # 纯图片消息（text 为空）也必须算上下文：它的"内容"在图片里
+            _hhmm = datetime.datetime.fromtimestamp(t).strftime("%H:%M")
             if not (tx or "").strip() and _e_imgs:
-                line = f"[{_display_name(s, group_id)}] [图片]"
+                line = f"[{_hhmm}] [{_display_name(s, group_id)}] [图片]"
             else:
                 if is_meaningless_message(tx):
                     continue
-                line = f"[{_display_name(s, group_id)}] {tx}"
+                line = f"[{_hhmm}] [{_display_name(s, group_id)}] {tx}"
             if grabbed_chars + len(line) > GROUP_REPLY_MAX_LENGTH:
                 break  # 超X字停止
             grabbed_texts.append(line)
@@ -11069,8 +11096,8 @@ def _pipeline_step(group_id):
             # merged_text 已包含 [昵称(QQ号)] 格式，直接存储
             _hist_user = merged_text[:300]
             _hist_reply = reply[:300]
-            gh.append({"role": "user", "content": _hist_user})
-            gh.append({"role": "assistant", "content": _hist_reply})
+            gh.append({"role": "user", "content": _hist_user, "ts": time.time()})
+            gh.append({"role": "assistant", "content": _hist_reply, "ts": time.time()})
             # C2 存储对齐：群聊截断 30→16 轮（组装只取最近10轮）
             group_chat_history[group_id] = gh[-16:]
 
@@ -12908,8 +12935,9 @@ def main():
                         log("[私聊表情] 引擎未加载")
                     
                     ch = chat_history.setdefault(sender, [])
-                    ch.append({"role": "user", "content": text})
-                    ch.append({"role": "assistant", "content": reply[:500]})
+                    ch.append({"role": "user", "content": text, "ts": time.time()})
+                    ch.append({"role": "assistant", "content": reply[:500],
+                               "ts": time.time()})
                     # C2 存储对齐：私聊截断 60→24 轮（组装只取最近10轮，储存更多纯占内存+IO）
                     chat_history[sender] = ch[-24:]
                     # 转存 AI 回复
