@@ -263,7 +263,9 @@ DEFAULT_CONFIG = {
     #   配置与现实一致。想真的等更久要同时改 GROUP_BATCH_HARD_CAP。
     "group_msg_buffer_window_trigger": 8,
     "group_last_exit_cooldown": 3000,
-    "poke_timeout": 30,
+    # 2026-10-25：30 秒太短 —— 实测两次戳相隔 2 分钟，计数都从 1 重来，
+    # 用户看到的就是"计数不动"。改为 10 分钟，覆盖正常人连续戳的间隔。
+    "poke_timeout": 600,
     "group_idle_exit_enable": True,
     "group_idle_exit_probability": 0.3,
     "group_idle_exit_min_silence": 600,

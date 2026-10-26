@@ -109,7 +109,7 @@
   "group_msg_buffer_window_session": 5,
   "group_msg_buffer_window_trigger": 8,
   "group_last_exit_cooldown": 3000,
-  "poke_timeout": 30,
+  "poke_timeout": 600,
   "reply_reaction_delay": 1.6,
   "private_reply_reaction_delay": 1.2,
   "reply_typing_speed": 6.0,

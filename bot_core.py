@@ -786,7 +786,7 @@ GROUP_BOT_REPLIES: Dict[str, List[Tuple[float, str]]] = {}  # {group_id: [(times
 GROUP_LAST_EXIT: Dict[str, float] = {}  # {group_id: timestamp}  记录上次退场时间，15分钟内不重复退场语
 GROUP_LAST_ANY_MSG: Dict[str, float] = {}  # {group_id: timestamp}  追踪群内任意成员最新消息时间
 GROUP_LAST_BOT_MSG: Dict[str, float] = {}  # {group_id: timestamp}  追踪 Bot 每个群最后发言时间
-POKE_COUNTS: Dict[str, dict] = {}  # {"group_uid": {"count": N, "time": ts}}  戳一戳计数（30秒超时重置）
+POKE_COUNTS: Dict[str, dict] = {}  # {"group_uid": {"count": N, "time": ts}}  戳一戳计数（poke_timeout 超时重置，默认 600 秒）
 
 # 空闲超时退场语（真真正正一大段碎碎念，有概率触发）
 EXIT_PHRASES_IDLE = _config.get("custom_exit_phrases_idle", [
@@ -7701,7 +7701,7 @@ def _handle_poke_event(ev):
         # 戳一戳计数（同一人同一群，poke_timeout 内累计）
         _poke_key = f"{gid_str}_{poke_uid}"
         _poke_count = POKE_COUNTS.get(_poke_key, {"count": 0, "time": 0})
-        if time.time() - _poke_count["time"] > _config.get("poke_timeout", 30):
+        if time.time() - _poke_count["time"] > _config.get("poke_timeout", 600):
             _poke_count = {"count": 0, "time": 0}
         _poke_count["count"] += 1
         _poke_count["time"] = time.time()
@@ -7732,7 +7732,7 @@ def _handle_poke_event(ev):
         poke_nick = resolve_qq_nick(poke_uid) or poke_uid
         _poke_key = f"private_{poke_uid}"
         _poke_count = POKE_COUNTS.get(_poke_key, {"count": 0, "time": 0})
-        if time.time() - _poke_count["time"] > _config.get("poke_timeout", 30):
+        if time.time() - _poke_count["time"] > _config.get("poke_timeout", 600):
             _poke_count = {"count": 0, "time": 0}
         _poke_count["count"] += 1
         _poke_count["time"] = time.time()

@@ -487,6 +487,45 @@ class TestPokeEvent(_EventHandlersBase):
         self.assertEqual(buf.get("merged_n") or 0, 0)  # 戳不回抓历史
         bot_core.POKE_COUNTS.clear()
 
+    def test_group_poke_count_survives_minutes_apart(self):
+        """相隔 2 分钟的两次戳要累加。
+
+        2026-10-25 线上实测：20:17 与 20:19 两次戳都显示「第 1 次」，
+        因为旧默认 poke_timeout=30 秒。用户看到的就是「计数不动」。
+        """
+        bot_core.POKE_COUNTS.clear()
+        self._reset_group()
+        t0 = 1_700_000_000.0
+        with mock.patch.object(bot_core.time, "time", return_value=t0):
+            bot_core._handle_poke_event(self._grp_poke())
+        _buf = bot_core.GROUP_MSG_BUFFER.pop("10001", None)
+        if _buf and _buf.get("timer"):
+            _buf["timer"].cancel()
+        with mock.patch.object(bot_core.time, "time", return_value=t0 + 120):
+            bot_core._handle_poke_event(self._grp_poke())
+        buf = bot_core.GROUP_MSG_BUFFER.get("10001")
+        self.assertIsNotNone(buf)
+        self.assertIn("第 2 次", buf["text"], "相隔 2 分钟的戳被重置成第 1 次")
+        bot_core.POKE_COUNTS.clear()
+
+    def test_group_poke_count_resets_after_timeout(self):
+        """超过 poke_timeout（默认 600 秒）才重新从 1 数。"""
+        bot_core.POKE_COUNTS.clear()
+        self._reset_group()
+        t0 = 1_700_000_000.0
+        with mock.patch.object(bot_core.time, "time", return_value=t0):
+            bot_core._handle_poke_event(self._grp_poke())
+        _buf = bot_core.GROUP_MSG_BUFFER.pop("10001", None)
+        if _buf and _buf.get("timer"):
+            _buf["timer"].cancel()
+        with mock.patch.object(bot_core.time, "time", return_value=t0 + 601):
+            bot_core._handle_poke_event(self._grp_poke())
+        buf = bot_core.GROUP_MSG_BUFFER.get("10001")
+        self.assertIsNotNone(buf)
+        self.assertIn("第 1 次", buf["text"])
+        self.assertNotIn("第 2 次", buf["text"])
+        bot_core.POKE_COUNTS.clear()
+
     def test_private_poke_numeric_sends_and_registers_session(self):
         bot_core.PRIVATE_SESSION.clear()
         bot_core._handle_poke_event({"post_type": "notice", "notice_type": "notify",

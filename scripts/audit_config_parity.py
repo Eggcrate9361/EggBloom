@@ -61,7 +61,7 @@ def cfg_fixture():
         "ai_frequency_penalty": 0, "ai_presence_penalty": 0,
         "session_ttl": 1800, "session_max_rounds": 30, "private_reply_interval": 5,
         "idle_timeout": 600, "private_reply_max_length": 300, "group_reply_max_length": 120,
-        "msg_split_len": 200, "poke_timeout": 60,
+        "msg_split_len": 200, "poke_timeout": 600,
         "group_msg_buffer_window": 5, "group_recent_msgs_window": 20,
         "group_session_max_replies": 3, "group_session_idle_timeout": 600,
         "group_last_exit_cooldown": 120, "group_idle_exit_enable": True,
