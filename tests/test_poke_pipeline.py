@@ -117,7 +117,7 @@ def _run(plugin_results, *, poke_text=None, merge_text=None, merge_sender=OTHER,
     try:
         bot_core._pipeline_upsert(
             GID, sender=POKER,
-            text=poke_text or f"[小明] （戳了戳你，这是第 1 次）",
+            text=poke_text or "（戳了戳你，这是第 1 次）",
             forced=False, source="poke", poke_uid=POKER)
         if merge_text is not None:
             bot_core._pipeline_upsert(
@@ -142,13 +142,39 @@ def test_batch_carries_poke_source():
     print("\n[1] 戳写进批次：forced=False、source=poke、poke_uid 记发起人")
     _clean()
     try:
-        bot_core._pipeline_upsert(GID, sender=POKER, text="[小明] （戳了戳你，这是第 1 次）",
+        bot_core._pipeline_upsert(GID, sender=POKER, text="（戳了戳你，这是第 1 次）",
                                   forced=False, source="poke", poke_uid=POKER)
         buf = bot_core.GROUP_MSG_BUFFER.get(GID) or {}
         check("forced=False（要过决策器）", buf.get("forced") is False, buf.get("forced"))
         check("poke_uid 是戳的人", buf.get("poke_uid") == POKER, buf.get("poke_uid"))
         check("没写会话额度", GID not in bot_core.GROUP_SESSION)
     finally:
+        _clean()
+
+
+def test_poke_event_name_appears_once():
+    print("\n[1b] 真实入口：戳文本里的名字只出现一次（不叠昵称与群名片）")
+    _clean()
+    orig = (bot_core._send_poke_back, bot_core.GROUP_MEMBERS.get(GID), bot_core.log)
+    bot_core._send_poke_back = lambda *a, **kw: None
+    bot_core.log = lambda *a, **kw: None
+    # 群里挂一张名片（_display_name 群名片优先）；同时让全局昵称不同，
+    # 旧版会把两者都写进文本，模型据此以为说话人换了人。
+    bot_core.GROUP_MEMBERS.setdefault(GID, {})[POKER] = "小明"
+    try:
+        bot_core._handle_poke_event({"user_id": POKER, "group_id": GID})
+        buf = bot_core.GROUP_MSG_BUFFER.get(GID) or {}
+        txt = str(buf.get("text") or "")
+        check("名字只出现一次", txt.count("小明") == 1, txt)
+        check("文本以群名片开头", txt.startswith("[小明] （戳了戳你"), txt)
+        check("没有括号叠括号", "][ " not in txt and "]] （" not in txt, txt)
+    finally:
+        bot_core._send_poke_back = orig[0]
+        bot_core.log = orig[2]
+        if orig[1] is None:
+            bot_core.GROUP_MEMBERS.pop(GID, None)
+        else:
+            bot_core.GROUP_MEMBERS[GID] = orig[1]
         _clean()
 
 
@@ -211,6 +237,7 @@ def test_send_failure_writes_nothing():
 
 def main():
     test_batch_carries_poke_source()
+    test_poke_event_name_appears_once()
     test_decider_skip_writes_nothing()
     test_decider_reply_sends_once_and_unlocks()
     test_merged_batch_counts_once_and_unlocks_poker()

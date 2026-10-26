@@ -7697,7 +7697,6 @@ def _handle_poke_event(ev):
         # （真机 17:05:22→17:05:31），事件收取跟着滞后。
         # 现在只做两件事：记一次计数（分级文案用）、把"被戳"当成一条入站事件。
         gid_str = str(poke_gid)
-        poke_nick = resolve_qq_nick(poke_uid) or poke_uid
         # 戳一戳计数（同一人同一群，poke_timeout 内累计）
         _poke_key = f"{gid_str}_{poke_uid}"
         _poke_count = POKE_COUNTS.get(_poke_key, {"count": 0, "time": 0})
@@ -7711,9 +7710,14 @@ def _handle_poke_event(ev):
         # 当成会话内消息（forced=True）就整段跳过决策，只剩生成端的兜底。
         # 会话额度也不在这里写：等这一批真的发出去之后由 _pipeline_step 补，
         # 否则决策器 skip 了也会白送 2 轮免 @ 追问权。
+        #
+        # ★ 不手写 `[{昵称}]`（2026-10-25）：_pipeline_upsert 建批/并批时会统一加
+        #   `[群名片]`，这里再写一遍就变成 `[DeepSeek v41f] [Texas] （戳了戳你…）`。
+        #   线上 20:19 模型据此认定"戳我的是另一个人"，还解释"我收到的原文"。
+        #   名字只由 _display_name 给一次（群名片优先）。
         _pipeline_upsert(
             gid_str, sender=poke_uid,
-            text=f"[{poke_nick}] （戳了戳你，这是第 {poke_n} 次）",
+            text=f"（戳了戳你，这是第 {poke_n} 次）",
             forced=False, source="poke", poke_uid=poke_uid)
     else:
         # 私聊戳一戳
