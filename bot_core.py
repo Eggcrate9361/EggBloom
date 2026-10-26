@@ -10443,6 +10443,42 @@ def _pipeline_upsert(group_id, *, sender, text, images=None, flags=None,
     return "created"
 
 
+def _batch_snapshot(group_id, batch):
+    """本批可见的流水快照：(recent_msgs, bot_replies)，按批次截止时刻截断。
+
+    ★ 2026-10-25 补（这次自查发现）：截断原先只写在 `_decide` 里，
+      `_pipeline_step` 的第二次插件派发仍读实时缓存。决策插件的缓存键是
+      `(群, 文本前80字, recent_msgs尾条时间戳, observe_retry)` —— 两处采到的
+      尾条时间戳一旦不同就**不命中**，同一批会跑两次完整决策：多烧一次 flash，
+      两次结论还可能打架（前一次 inject 放行、后一次 skip → plugin_skip 直接
+      return），线上表现就是"决策放行了，群里一句话没有"。
+      抽成一处，两边必须同一份数据；以后再加消费者也只能调这里。
+
+    batch["time"] 是批次**最后一次并入事件**的时刻，等于"这批定稿时"。
+    """
+    _recent = list(GROUP_RECENT_MSGS.get(group_id, []))
+    _breps = list(GROUP_BOT_REPLIES.get(group_id, []))
+    _cut = batch.get("time")
+    if _cut is None:
+        return _recent, _breps
+    try:
+        _cut = float(_cut)
+    except Exception:
+        return _recent, _breps
+
+    def _upto(seq):
+        out = []
+        for e in seq:
+            try:
+                if float(e[0]) <= _cut:
+                    out.append(e)
+            except Exception:
+                continue
+        return out
+
+    return _upto(_recent), _upto(_breps)
+
+
 def _decide(group_id, batch):
     """群回复的唯一决策点。返回 {"act", "reason", "ctx", "after"}。
 
@@ -10476,14 +10512,9 @@ def _decide(group_id, batch):
                 # ★ 批次快照（2026-10-25）：决策只看本批截止前的数据。
                 #   读实时缓存会把**下一批**的消息算进来 → 决策给这一批复述
                 #   下一批的话题，下一批自己又回一遍（同一条消息回两次）。
-                _cut = batch.get("time")
-                _recent_all = list(GROUP_RECENT_MSGS.get(group_id, []))
-                _breps_all = list(GROUP_BOT_REPLIES.get(group_id, []))
-                if _cut is not None:
-                    _recent_all = [e for e in _recent_all
-                                   if len(e) > 0 and float(e[0]) <= float(_cut)]
-                    _breps_all = [e for e in _breps_all
-                                  if len(e) > 0 and float(e[0]) <= float(_cut)]
+                #   统一走 _batch_snapshot：_pipeline_step 的第二次派发用同一个
+                #   函数，保证两处尾条时间戳相同（否则决策缓存不命中 → 跑两遍）。
+                _recent_all, _breps_all = _batch_snapshot(group_id, batch)
                 _decider_ctx = {
                     "recent_msgs": _recent_all,
                     "bot_replies": _safe_extract_col(_breps_all, 1),
@@ -10826,9 +10857,15 @@ def _pipeline_step(group_id):
             has_hook = pm.has_hook("before_reply") if pm else False
             log(f"[调试] pm={pm is not None} has_hook={has_hook}")
             if pm and has_hook:
+                # ★ 2026-10-25：与 `_decide` 同一份快照（同一个 _batch_snapshot）。
+                #   旧版这里读 `list(GROUP_RECENT_MSGS[...])` 实时缓存 —— 决策器
+                #   缓存键含 `recent_msgs` 尾条时间戳，两次派发采到的尾条不同就
+                #   不命中：同一批跑两遍完整决策，第二次还可能返回 skip 把第一次
+                #   的放行作废（plugin_skip → 直接 return，群里没有回复）。
+                _snap_recent, _snap_breps = _batch_snapshot(group_id, buffer)
                 _plugin_ctx = {
-                    "recent_msgs": list(GROUP_RECENT_MSGS.get(group_id, [])),
-                    "bot_replies": _safe_extract_col(GROUP_BOT_REPLIES.get(group_id, []), 1),
+                    "recent_msgs": _snap_recent,
+                    "bot_replies": _safe_extract_col(_snap_breps, 1),
                     "sender": buffer.get("sender", ""),
                     "user_id": buffer.get("sender", ""),
                     "is_at_bot": buffer.get("is_at_bot", False),
@@ -11263,6 +11300,10 @@ def _pipeline_step(group_id):
 
             # 表情包附着：AI 标注了 [表情] 或自动检测到情绪时发一张
             meme_file = try_send_meme(group_id, reply)
+            # 图发出去了也算"回应过了"：模型只回一个 [表情:xx] 时没有文字，
+            # 但对方确实收到了反应 —— 追问权不能因为"没文本"就不给。
+            if meme_file:
+                _sent_ok = True
 
             # ── 纯图回复的兜底（1.5.7）──
             #    模型只写了 [表情:xxx] 时上面不会走文字发送，全靠这一张图。
@@ -11280,12 +11321,29 @@ def _pipeline_step(group_id):
                 except Exception as _e:
                     log(f"群[{group_id}] [纯图兜底] 失败: {_e}")
 
+            # ── 戳一戳的"炸毛"表情包（2026-10-25 补回）──
+            # 旧版 `_handle_poke_event` 末尾无条件发一张 POKE_MEME_EMOTIONS 里的图，
+            # 接进流水线时整段重写把这一步漏了 → 群戳变安静，只剩模型自己标
+            # [表情] 时才有图。这里放回，只加一个条件：`not meme_file`。
+            # 模型本批已经用 [表情:xx] 发过一张就不再补 —— 否则一个戳换来两张图。
+            # 发成功也记 `_sent_ok`：只有图、没有文字时同样算"回应过了"，
+            # 追问权该解（旧版就是这样，这里不能因为"没文本"就不给）。
+            _poke_owner = buffer.get("poke_uid")
+            if _poke_owner and MEME_OK and not meme_file:
+                try:
+                    _emotion = random.choice(POKE_MEME_EMOTIONS)
+                    _poke_meme = match_meme(_emotion)
+                    if _poke_meme and send_group_image(group_id, _poke_meme):
+                        _sent_ok = True
+                        log(f"群[{group_id}] 戳一戳表情包: {_emotion}")
+                except Exception as _pe:
+                    log(f"群[{group_id}] 戳一戳表情包失败: {_pe}")
+
             # ── 戳主的追问权：只在戳这一批真的发出之后生效（2026-10-25 定）──
             # skip / observe / 生成为空 / 发送抛异常都到不了这里 —— 额度只给已经
             # 被回应的人。观察回看的批次没有 poke_uid，所以"稍后回"也不补。
             # "发送成功"按 smart_send_group 未抛异常且返回真判定；它不返回更细的
             # 结果，本次不扩大这个接口（发送层部分失败时仍会写额度）。
-            _poke_owner = buffer.get("poke_uid")
             if _poke_owner and _sent_ok:
                 _poke_cap = _config.get("poke_session_replies", 2)
                 with _session_lock:

@@ -205,5 +205,56 @@ class TestBatchCount(unittest.TestCase):
                       "batch_msg_count 的算法不是 merged_n + 1")
 
 
+class TestBatchSnapshotShared(_Clean):
+    """两处派发必须用**同一份**快照（2026-10-25 自查发现的回归）。
+
+    `57473f8` 只在 `_decide` 里截断，`_pipeline_step` 的第二次插件派发仍读
+    实时缓存。决策器缓存键含 `recent_msgs` 尾条时间戳：
+      · 尾条不同 → 缓存不命中 → 同一批跑两遍完整决策（多烧一次 flash）
+      · 两次结论可能打架：前一次 inject 放行、后一次 skip → `plugin_skip`
+        直接 return，线上表现是"决策放行了，群里一句话没有"
+    """
+
+    def test_snapshot_cuts_both_lists(self):
+        now = time.time()
+        cutoff = now - 10
+        bot_core.GROUP_RECENT_MSGS[GID] = [
+            (cutoff - 5, "111", "本批", None, []),
+            (cutoff + 2, "222", "下一批", None, []),
+        ]
+        bot_core.GROUP_BOT_REPLIES[GID] = [
+            (cutoff - 3, "早先的回复"),
+            (cutoff + 3, "后来的回复"),
+        ]
+        recent, breps = bot_core._batch_snapshot(GID, {"time": cutoff})
+        self.assertEqual([e[2] for e in recent], ["本批"])
+        self.assertEqual([e[1] for e in breps], ["早先的回复"])
+
+    def test_snapshot_missing_time_returns_all(self):
+        """老批次没有 time 字段 → 不截断（与旧行为一致，不能清空上下文）。"""
+        bot_core.GROUP_RECENT_MSGS[GID] = [(time.time(), "111", "a", None, [])]
+        recent, _ = bot_core._batch_snapshot(GID, {})
+        self.assertEqual(len(recent), 1)
+
+    def test_snapshot_bad_time_returns_all(self):
+        bot_core.GROUP_RECENT_MSGS[GID] = [(time.time(), "111", "a", None, [])]
+        recent, _ = bot_core._batch_snapshot(GID, {"time": "不是数字"})
+        self.assertEqual(len(recent), 1)
+
+    def test_both_dispatch_sites_use_it(self):
+        """源码级：`_pipeline_step` 的插件派发不能再读实时缓存。
+
+        这个断言打源码，因为它防的是"两个消费者各写一份"这种结构性问题 ——
+        行为测试只能证明当下一致，证明不了"以后新增消费者也会一致"。
+        """
+        import io
+        with io.open(os.path.join(ROOT, "bot_core.py"), encoding="utf-8") as f:
+            src = f.read()
+        self.assertIn("_snap_recent, _snap_breps = _batch_snapshot(group_id, buffer)", src,
+                      "_pipeline_step 的插件派发没用 _batch_snapshot")
+        self.assertNotIn('"recent_msgs": list(GROUP_RECENT_MSGS.get(group_id, [])),', src,
+                         "还有地方在读实时缓存喂决策器 → 两处快照会不一致")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -85,24 +85,30 @@ def _clean():
 
 
 def _run(plugin_results, *, poke_text=None, merge_text=None, merge_sender=OTHER,
-         merge_forced=True, send_raises=False):
+         merge_forced=True, send_raises=False, no_poke=False, reply=None):
     """建一个戳批次（可选合并一条普通消息），同步跑一轮。返回观测结果。"""
     _clean()
-    seen = {"ai": 0, "sent": []}
+    seen = {"ai": 0, "sent": [], "meme": 0}
     orig = (bot_core.call_deepseek, bot_core.smart_send_group,
             bot_core.get_plugin_manager, bot_core.PLUGIN_OK,
-            bot_core._dispatch_typed_before_reply, bot_core.startup_time)
+            bot_core._dispatch_typed_before_reply, bot_core.startup_time,
+            bot_core.MEME_OK, bot_core.match_meme, bot_core.send_group_image,
+            bot_core.try_send_meme)
     orig_cfg = dict(bot_core._config)
     fake = _FakePM(plugin_results)
 
     def fake_call(user_msg, images=None, *a, **kw):
         seen["ai"] += 1
-        return "戳我干嘛"
+        return "戳我干嘛" if reply is None else reply
 
     def fake_send(gid, text, *a, **kw):
         if send_raises:
             raise RuntimeError("模拟发送失败")
         seen["sent"].append(text)
+        return True
+
+    def fake_send_img(gid, path, *a, **kw):
+        seen["meme"] += 1
         return True
 
     bot_core.call_deepseek = fake_call
@@ -111,14 +117,22 @@ def _run(plugin_results, *, poke_text=None, merge_text=None, merge_sender=OTHER,
     bot_core.PLUGIN_OK = True
     bot_core._dispatch_typed_before_reply = lambda *a, **kw: []
     bot_core.startup_time = time.time() - 10 ** 6
+    # 表情包引擎在测试里没加载 → 手动放行并替换成纯计数桩。
+    # `match_meme` 返回非空路径，`send_group_image` 计次；
+    # `try_send_meme` 归零（否则它也会发一张，测不出"只发一张"）。
+    bot_core.MEME_OK = True
+    bot_core.match_meme = lambda x: "/fake/meme.png"
+    bot_core.send_group_image = fake_send_img
+    bot_core.try_send_meme = lambda gid, txt: None
     bot_core._config["quiet_hours"] = ""
     bot_core._config["meme_enable"] = False
     bot_core._config["reply_reaction_delay"] = 0
     try:
-        bot_core._pipeline_upsert(
-            GID, sender=POKER,
-            text=poke_text or "（戳了戳你，这是第 1 次）",
-            forced=False, source="poke", poke_uid=POKER)
+        if not no_poke:
+            bot_core._pipeline_upsert(
+                GID, sender=POKER,
+                text=poke_text or "（戳了戳你，这是第 1 次）",
+                forced=False, source="poke", poke_uid=POKER)
         if merge_text is not None:
             bot_core._pipeline_upsert(
                 GID, sender=merge_sender, text=merge_text,
@@ -132,7 +146,9 @@ def _run(plugin_results, *, poke_text=None, merge_text=None, merge_sender=OTHER,
     finally:
         (bot_core.call_deepseek, bot_core.smart_send_group,
          bot_core.get_plugin_manager, bot_core.PLUGIN_OK,
-         bot_core._dispatch_typed_before_reply, bot_core.startup_time) = orig
+         bot_core._dispatch_typed_before_reply, bot_core.startup_time,
+         bot_core.MEME_OK, bot_core.match_meme, bot_core.send_group_image,
+         bot_core.try_send_meme) = orig
         bot_core._config.clear()
         bot_core._config.update(orig_cfg)
     return seen, batched, fake
@@ -235,6 +251,37 @@ def test_send_failure_writes_nothing():
     _clean()
 
 
+def test_poke_sends_meme():
+    print("\n[6] 戳批次补发「炸毛」表情包（接流水线时漏掉的那一步）")
+    seen, buf, _ = _run([("group_chat_decider",
+                          {"action": "inject", "content": "【群聊氛围】可以接"})])
+    check("★ 发了表情包", seen["meme"] >= 1, seen["meme"])
+    check("★ 只发一张（不叠 try_send_meme）", seen["meme"] == 1, seen["meme"])
+    _clean()
+
+
+def test_plain_msg_sends_no_poke_meme():
+    print("\n[7] 普通消息（无 poke_uid）不发戳表情包")
+    seen, buf, _ = _run([("group_chat_decider",
+                          {"action": "inject", "content": "【群聊氛围】可以接"})],
+                        merge_text="[小红] 小a 在吗", merge_forced=False,
+                        poke_text=None, no_poke=True)
+    check("批次没有 poke_uid", buf.get("poke_uid") is None, buf.get("poke_uid"))
+    check("★ 没发戳表情包", seen["meme"] == 0, seen["meme"])
+    _clean()
+
+
+def test_meme_only_still_unlocks():
+    print("\n[8] 只有表情包、没有文字 → 追问权照样解（旧版语义）")
+    seen, buf, _ = _run([("group_chat_decider",
+                          {"action": "inject", "content": "【群聊氛围】可以接"})],
+                        reply="[表情:生气]")
+    check("发了表情包", seen["meme"] >= 1, seen["meme"])
+    gs = bot_core.GROUP_SESSION.get(GID) or {}
+    check("★ 只有图也写了追问权", gs.get("poke_owner") == POKER, gs)
+    _clean()
+
+
 def main():
     test_batch_carries_poke_source()
     test_poke_event_name_appears_once()
@@ -242,6 +289,9 @@ def main():
     test_decider_reply_sends_once_and_unlocks()
     test_merged_batch_counts_once_and_unlocks_poker()
     test_send_failure_writes_nothing()
+    test_poke_sends_meme()
+    test_plain_msg_sends_no_poke_meme()
+    test_meme_only_still_unlocks()
 
     print("\n" + "=" * 56)
     if _fail:
