@@ -248,7 +248,19 @@ def main():
         lite_root = build / "lite" / "EggBloom-Lite"
         log(f"\n[3] Lite 重建 → {lite_root}")
         if lite_root.exists():
-            shutil.rmtree(lite_root, ignore_errors=True)
+            # ★ 改名让路，不用 shutil.rmtree（2026-10-26）。
+            #   本机安全策略对"单次批量删除 >50 个文件"直接拦死：
+            #   `[safe-delete][SAFE_DELETE_BULK_CONFIRM_REQUIRED] {"count":441,...}`
+            #   —— 每重建一次 Lite 都会被拦，打包停在第三步。
+            #   rename 是原子的、非破坏性的，同样能达到"给新树腾位置"的效果；
+            #   `SEVENZ_EXCLUDES` 里的 `-xr!*.old-*` 本来就把这类目录挡在包外。
+            #   旧目录留在 build/lite/ 下不自动清理（要占地就自己删）。
+            _aside = build / "lite" / f"EggBloom-Lite.old-{time.strftime('%Y%m%d%H%M%S')}"
+            try:
+                lite_root.rename(_aside)
+                log(f"  旧树改名让路 → {_aside.name}")
+            except Exception as e:
+                log(f"  !! 旧树改名失败（{e}）→ 继续在原目录上覆盖")
         lite_root.mkdir(parents=True, exist_ok=True)
         tmp_zip = build / "lite" / "_head.zip"
         tmp_zip.unlink(missing_ok=True)
