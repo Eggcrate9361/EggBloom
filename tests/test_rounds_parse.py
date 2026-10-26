@@ -166,12 +166,94 @@ def test_scope_key():
     check("空值", ws._scope_key("") == "pm")
 
 
+def test_decision_binds_own_batch():
+    print("\n[6] 决策行在自己那批之前 → 不能粘到上一轮")
+
+    text = (
+        "[20:18:56] 群[829854136] [决策放行] 触发: [(/ω＼)] 很奇怪啊\n"
+        "[20:18:56] 群[829854136] 合并消息: [(/ω＼)] 很奇怪啊\n"
+        "[20:18:56] 群回复: 奇怪啥\n"
+        "[20:19:41] 群[829854136] [决策放行] 触发: [Texas] 现在呢\n"
+        "[20:19:41] 群[829854136] 合并消息: [Texas] 现在呢\n"
+        "[20:20:32] 群回复: 刚到账\n"
+    )
+    r = _rounds_for(text)
+    check("两轮", r["total"] == 2, r["total"])
+    rows = r["rounds"]
+    if len(rows) != 2:
+        return
+    check("第一轮的问话", rows[0].get("ask") == "很奇怪啊", rows[0].get("ask"))
+    check("第一轮的决策只有自己的",
+          len(rows[0].get("decisions") or []) == 1
+          and "很奇怪啊" in rows[0]["decisions"][0],
+          rows[0].get("decisions"))
+    check("第一轮的回复", rows[0].get("reply") == "奇怪啥", rows[0].get("reply"))
+    check("第二轮的决策只有自己的",
+          len(rows[1].get("decisions") or []) == 1
+          and "现在呢" in rows[1]["decisions"][0],
+          rows[1].get("decisions"))
+    check("第二轮的回复", rows[1].get("reply") == "刚到账", rows[1].get("reply"))
+
+
+def test_poke_merge_is_one_round():
+    print("\n[7] 戳事件 + 决策 + 合并消息 + 回复 = 同一轮")
+
+    text = (
+        "[20:19:25] [事件] 戳一戳: user_id=Texas(2011257385) group_id=829854136\n"
+        "[20:19:25] [事件] 反戳 send_poke user=Texas(2011257385)"
+        " group=829854136 retcode=0\n"
+        "[20:19:41] 群[829854136] [决策放行] 无触发消息，决策插件建议插话:"
+        " [DeepSeek v41f] （戳了戳你，这是第 1 次）\n"
+        "[20:19:41] 群[829854136] 合并消息: [DeepSeek v41f] （戳了戳你，这是第 1 次）\n"
+        "[20:20:11] 群回复: 还没刷新\n"
+        "我账上你还是第1下\n"
+    )
+    r = _rounds_for(text)
+    check("只产出一轮", r["total"] == 1, r["total"])
+    if not r["rounds"]:
+        return
+    row = r["rounds"][0]
+    check("ask 是戳那批", "戳了戳你" in (row.get("ask") or ""), row.get("ask"))
+    check("名字只出现一次", (row.get("ask") or "").count("DeepSeek v41f") <= 1,
+          row.get("ask"))
+    check("who 是戳的人", row.get("who") == "Texas", row.get("who"))
+    check("决策留在同一轮",
+          any("决策插件建议插话" in d for d in row.get("decisions") or []),
+          row.get("decisions"))
+    check("回复留在同一轮", "还没刷新" in (row.get("reply") or ""), row.get("reply"))
+
+
+def test_skip_is_its_own_round():
+    print("\n[8] 跳过也成轮，且带自己的正文")
+
+    text = (
+        "[20:19:20] 群[829854136] [决策放行] 触发: [(/ω＼)] 很奇怪啊\n"
+        "[20:19:20] 群[829854136] 合并消息: [(/ω＼)] 很奇怪啊\n"
+        "[20:19:21] 群回复: 奇怪啥\n"
+        "[20:19:30] 群[829854136] [跳过] 无触发条件，忽略消息 · 决策理由：不想理:"
+        " [Texas] 现在呢\n"
+    )
+    r = _rounds_for(text)
+    check("两轮", r["total"] == 2, r["total"])
+    rows = r["rounds"]
+    if len(rows) != 2:
+        return
+    check("上一轮不背这一轮的决策",
+          len(rows[0].get("decisions") or []) == 1, rows[0].get("decisions"))
+    check("跳过轮的问话是它自己的", rows[1].get("ask") == "现在呢", rows[1].get("ask"))
+    check("跳过轮的 route", "跳过" in (rows[1].get("route") or ""), rows[1].get("route"))
+    check("跳过轮没有回复", not rows[1].get("reply"), rows[1].get("reply"))
+
+
 def main():
     test_poke_round()
     test_poke_ignore_not_a_round()
     test_private_poke()
     test_notice_events()
     test_scope_key()
+    test_decision_binds_own_batch()
+    test_poke_merge_is_one_round()
+    test_skip_is_its_own_round()
 
     print("\n" + "=" * 56)
     print(f"通过 {PASS} / 失败 {FAIL}")

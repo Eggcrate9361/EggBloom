@@ -1318,6 +1318,13 @@ _RND_TOOLS = re.compile(r"^工具调用:\s*\[(.+)\]")
 _RND_SEARCH = re.compile(r"^搜索「(.+?)」\s*→\s*(.*)$")
 _RND_TOOLREC = re.compile(r"^→\s*([A-Za-z_][A-Za-z0-9_]*):\s*(.*)$")
 _RND_DECISION = re.compile(r"\[(跳过|观察|决策放行|不参与)\]|暂不插话")
+# 决策行自带的批次正文（`bot_core` 里 `merged_text` 被截到 60/80 字）。
+# 决策是**在批次结算时**打的，而"下一轮"可能已经开了 → 不能再无条件粘到当前轮。
+# 用冒号后那段正文（跳过/放行都有）把决策绑回它自己那批；`[观察]` 行没有正文，
+# 无法绑定 —— 只留在还没收口的轮次里，不写进已完成的上一轮。
+_RND_OBSERVE = re.compile(r"\[观察\]")
+_RND_DEC_GO = re.compile(r"^群\[([^\]]+)\]\s*\[决策放行\].*?:\s*(.*)$", re.S)
+_RND_DEC_SKIP = re.compile(r"^群\[([^\]]+)\]\s*\[跳过\].*?:\s*(.*)$", re.S)
 _RND_REPLY_PM = re.compile(r"^(?:私聊|群)\[.*?\]?\s*AI回复\((.+?)\):\s*(.+)$", re.S)
 _RND_REPLY_GRP = re.compile(r"^群回复:\s*(.+)$", re.S)
 _RND_SEND = re.compile(r"^\[发送\]\s*(私聊|群\[([^\]]+)\])\s*→\s*([^:]*):.*?句=(.*)$", re.S)
@@ -1371,6 +1378,20 @@ def _rnd_event_row(t, scope, who, ask, route):
     """notice 类事件自成一"轮"：只填事件本身，没有决策与工具。"""
     return {"time": t, "scope": scope, "who": who, "ask": ask[:200],
             "route": route, "decisions": [], "tools": [], "reply": ""}
+
+
+#: 戳一戳事件轮的标记（`合并消息` 到达时要并回同一轮，而不是再开一轮）
+_POKE_ROUTE = "戳一戳 → 反戳 → 决策"
+
+
+def _rnd_split_sender(text):
+    """`[名字] 正文` → (名字, 正文)。首行没有 `[名字]` 前缀时名字为空。"""
+    s = str(text or "").strip()
+    if s.startswith("["):
+        end = s.find("]")
+        if 0 < end <= 40:
+            return s[1:end].strip(), s[end + 1:].strip()
+    return "", s
 
 
 
@@ -1587,6 +1608,21 @@ def collect_rounds(limit=120):
     cur = None
     last_scope = ("pm", "")
     last_who = ""
+    # 决策行先挂起，等它自己那批的 `合并消息` 到达再落盘。
+    # 线上实证（20:18–20:19）：决策行总在 `合并消息` 之前一行，旧实现把它粘到
+    # **上一轮**，于是日志页出现「这轮的决策写在上一轮、回复写在下一轮」。
+    pending = []          # [(scope, decision_line)]
+
+    def drain(scope):
+        """取出属于该会话的挂起决策（其余保留）。"""
+        nonlocal pending
+        got = [d for sc, d in pending if sc == scope]
+        pending = [(sc, d) for sc, d in pending if sc != scope]
+        return got
+
+    def drop_pending(scope):
+        nonlocal pending
+        pending = [(sc, d) for sc, d in pending if sc != scope]
 
     def flush():
         nonlocal cur
@@ -1613,8 +1649,9 @@ def collect_rounds(limit=120):
             _nick = _rnd_who_nick(_uid)
             last_scope = (_sc, _nick)
             flush()
-            cur = _rnd_event_row(t, _sc, _nick, "（戳了戳你）",
-                                 "戳一戳 → 反戳 → 决策")
+            # 上一批如果只打了决策却没等到 `合并消息`，那是它自己的事，别带进戳轮。
+            drop_pending(_sc)
+            cur = _rnd_event_row(t, _sc, _nick, "（戳了戳你）", _POKE_ROUTE)
             continue
         if _RND_POKE_IGNORE.match(s):
             continue
@@ -1657,6 +1694,7 @@ def collect_rounds(limit=120):
 
         # ── 新的用户消息 = 新一轮 ──
         new_ask, new_scope, new_who = None, None, None
+        is_merge = False
         m = _RND_ASK_PM.match(s)
         if m and not s.startswith("[事件]"):
             new_ask = m.group(1).strip()
@@ -1669,24 +1707,58 @@ def collect_rounds(limit=120):
             else:
                 m = _RND_ASK_GRP.match(s)
                 if m:
-                    new_ask, new_scope = m.group(2).strip(), _scope_key(m.group(1))
-                    if new_ask.startswith("["):
-                        end = new_ask.find("]")
-                        if end > 0:
-                            new_who = new_ask[1:end].strip()
-                            new_ask = new_ask[end + 1:].strip()
+                    is_merge = True
+                    new_who, new_ask = _rnd_split_sender(m.group(2))
+                    new_scope = _scope_key(m.group(1))
         if new_ask:
+            _new_sc = new_scope or last_scope[0]
+            # 戳事件轮 + 紧随其后的 `合并消息` 是同一批：
+            # 并回那一轮，否则一轮只剩"决策"、下一轮只剩"回复"。
+            if (is_merge and cur is not None
+                    and str(cur.get("scope")) == str(_new_sc)
+                    and cur.get("route") == _POKE_ROUTE
+                    and "戳了戳你" in new_ask):
+                cur["ask"] = new_ask[:200]
+                if new_who and not cur.get("who"):
+                    cur["who"] = new_who
+                cur["decisions"].extend(drain(_new_sc))
+                continue
             # 同一条消息会被记两次：先 `私聊[x] 引用消息: …`，再 `收到: [引用] …`。
             # 两者只差一秒、正文相同 —— 合并成一轮，不然日志页出现两条一样的问话。
             if (cur is not None and cur.get("ask") == new_ask
                     and cur.get("scope") in (new_scope or cur.get("scope"))
                     and _rnd_same_minute(t, cur.get("time"))):
                 cur["route"] = cur.get("route", "")
+                cur["decisions"].extend(drain(_new_sc))
                 continue
             flush()
-            cur = {"time": t, "scope": new_scope or last_scope[0],
+            cur = {"time": t, "scope": _new_sc,
                    "who": new_who or last_scope[1], "ask": new_ask[:200],
                    "route": "", "decisions": [], "tools": [], "reply": ""}
+            cur["decisions"].extend(drain(_new_sc))
+            continue
+
+        # ── 决策 ──
+        # 跳过：这一批没有回复，也要单独成轮（否则它只会变成上一轮里的一行，
+        # 用户看到的就是"上一轮的问题配这一轮的决策"）。
+        m = _RND_DEC_SKIP.match(s)
+        if m:
+            _sc = _scope_key(m.group(1))
+            _w, _ask = _rnd_split_sender(m.group(2))
+            last_scope = (_sc, _w or last_scope[1])
+            flush()
+            cur = _rnd_event_row(t, _sc, _w or last_who,
+                                 _ask or "（空批次）", "跳过（决策器不建议插话）")
+            cur["decisions"].append(s[:120])
+            cur["decisions"].extend(drain(_sc))
+            flush()
+            continue
+        # 放行：先挂起，等下一条 `合并消息` 建好本轮再落盘。
+        # 必须放在 `if cur is None` 之前：一轮的第一条决策往往出现在
+        # `合并消息` 之前，此时 cur 还是 None，放后面会被直接丢掉。
+        m = _RND_DEC_GO.match(s)
+        if m:
+            pending.append((_scope_key(m.group(1)), s[:120]))
             continue
 
         if cur is None:
@@ -1769,6 +1841,8 @@ def collect_rounds(limit=120):
             gm = re.search(r"群\[([^\]]+)\]", s)
             if gm and str(cur.get("scope")) != _scope_key(gm.group(1)):
                 continue
+            if _RND_OBSERVE.search(s) and cur.get("reply"):
+                continue      # 观察行没有批次正文，别写进已经回完的上一轮
             cur["decisions"].append(s[:120])
             continue
 
