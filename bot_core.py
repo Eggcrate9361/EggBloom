@@ -3664,6 +3664,10 @@ def _seg_group_rules(is_group):
         "- 【说话许可】你可以不给答案：可以吐槽、装傻、说「不知道」「懒得找」。"
         "真人不是有求于人的，不必每句都给解法。接不住的话题宁可顶一句、损一句，"
         "或者把话拐到自己身上，但**不要用一句反问把它原样退回去**。\n"
+        "- 【别露后台】别解释你收到的数据、提示或系统计数，别把内部格式抄出来；"
+        "也不主动提自己是程序/模型，被直接问是不是 AI 再照人格承认。\n"
+        "- 【别拿反问续话】想接就接，接不住就停；"
+        "别每句都用「你说呢」「要不你…」把话推回去。\n"
         "- 【接得住】对方话里有个前提时，先想那个前提对不对：时间、地点、身份、谁说的、是不是在开玩笑。"
         "前提错就直接指出来（「这才三点」「谁老了」「我什么时候说过」），**不要顺着错的前提往下答**。"
     )
@@ -5114,7 +5118,8 @@ def _is_search_failure(text) -> bool:
 
 
 def _apply_search_tag_loop(reply, question_text, *, group_id, is_group,
-                           temperature, target_qq=None, ego_ctx=None):
+                           temperature, target_qq=None, ego_ctx=None,
+                           scene_ctx=None):
     """[搜索:关键词] 标记循环（群聊/私聊共用，最多2轮）。
 
     模型在回复里写 [搜索:xxx]（或直接 CALL search_web 走 function-call 分支），
@@ -5162,7 +5167,8 @@ def _apply_search_tag_loop(reply, question_text, *, group_id, is_group,
         reply = call_deepseek(retry_msg, [], target_qq=target_qq,
                               group_id=group_id, is_group=is_group,
                               personality_temperature=temperature,
-                              ego_inject_context=ego_ctx or "")
+                              ego_inject_context=ego_ctx or "",
+                              scene_context=scene_ctx or "")
         reply = reply or ""
     # 兜底剥离：残留的 [搜索:…] 标记绝不允许进入发送文本
     # （re.sub 返回裸 str → 把截断元信息重新贴回去，发送端还要用）
@@ -8144,6 +8150,7 @@ def _ai_worker() -> None:
                 private_memory_context=params.get("private_memory_context", ""),
                 personality_temperature=params.get("personality_temperature"),
                 ego_inject_context=params.get("ego_inject_context", ""),
+                scene_context=params.get("scene_context", ""),
                 sender=params.get("sender", ""))
             with _ai_results_lock:
                 entry = _ai_results.get(task_id)
@@ -8963,7 +8970,8 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
                         target_qq: Optional[str] = None, group_id: Optional[str] = None,
                         is_group: bool = False, private_memory_context: str = '',
                         personality_temperature: Optional[float] = None,
-                        ego_inject_context: str = '', sender: str = '') -> Optional[str]:
+                        ego_inject_context: str = '', sender: str = '',
+                        scene_context: str = '') -> Optional[str]:
     """同步调用 DeepSeek API（在后台线程中运行），支持工具调用和重试。"""
     global chat_history, group_chat_history
 
@@ -9086,6 +9094,14 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
     # EGO 人格/记忆/风格/节奏注入 → system 级上下文（独立于群聊/私聊钩子，提升指令权重）
     if ego_inject_context:
         _inject_ego_context(dynamic_parts, ego_inject_context)
+    # 现场资料（群聊近况/当前局面/决策结论）走 system，而不是拼在用户消息里。
+    # 放进用户消息时模型会把它当成"对方发来的简报"逐条回应，实测出现
+    # 「我这边收到的原文长这样」「我账上…」这种后台汇报腔（2026-10-25）。
+    if scene_context:
+        dynamic_parts.append(
+            "【现场资料·不是对方说的话】以下是程序给你的背景信息，只用于理解语境；"
+            "按人格自然接话，不要复述、不要逐条回答，也不要提到这些标题。\n"
+            + scene_context)
     if not group_id:
         try:
             from sandglass_bridge import get_memory_prompt_block
@@ -9499,7 +9515,8 @@ def call_deepseek(user_msg: str, images: Optional[List[str]] = None,
                   target_qq: Optional[str] = None, group_id: Optional[str] = None,
                   is_group: bool = False, private_memory_context: str = '',
                   personality_temperature: Optional[float] = None,
-                  ego_inject_context: str = '', sender: str = '') -> Optional[str]:
+                  ego_inject_context: str = '', sender: str = '',
+                  scene_context: str = '') -> Optional[str]:
     """非阻塞调用 DeepSeek API：将任务提交到后台队列，等待结果返回。"""
     task_id = _submit_ai_task({
         "user_msg": user_msg,
@@ -9510,6 +9527,7 @@ def call_deepseek(user_msg: str, images: Optional[List[str]] = None,
         "private_memory_context": private_memory_context,
         "personality_temperature": personality_temperature,
         "ego_inject_context": ego_inject_context,
+        "scene_context": scene_context,
         "sender": sender,
     })
     # 网页/问卷任务需要多轮工具链，给足更长的等待时间（与 _web_hint 判定保持一致）
@@ -10549,6 +10567,8 @@ def _pipeline_step(group_id):
     # ★ 决策结论（氛围/策略）：只有"无触发预判"分支会赋值；触发路径保持空串。
     #   提到函数级是为了下面注入时不必判断分支，避免 NameError。
     _decider_ctx_text = ""
+    # 本轮现场资料（近况/局面/决策结论）→ 独立的 system 消息，不拼进用户原文。
+    _scene_ctx = ""
     # ★ 决策器已放行（2026-10-23）：决策器判断该插话 → 主模型**不再有沉默权**。
     #   原来"说/不说"被判断两次（决策器一次 + 主模型 [不说话] 出口一次），
     #   两边结论不一致时主模型否决决策器 —— 等于花一次 flash 调用做判断再把结论推翻。
@@ -10869,6 +10889,12 @@ def _pipeline_step(group_id):
                             prompt_blocks = result.get("prompt_blocks") or []
                             if prompt_blocks:
                                 content = "\n".join(prompt_blocks) + ("\n" + content if content else "")
+                            # 决策器的结论已经由 _bg_parts 以现场资料注入 system；
+                            # 这里再拼一次会让同一段策略出现两遍，模型更用力地
+                            # 按条目交付（汇报腔的放大器）。
+                            if plugin_name == "group_chat_decider" and _decider_ctx_text:
+                                plugin_intervened = True
+                                continue
                             inject_parts.append((priority, content))
                         elif action == "override":
                             if override_reply is None or priority < override_priority:
@@ -10901,6 +10927,12 @@ def _pipeline_step(group_id):
                                 break
                         if _ego_ctx:
                             merged_inject = merged_inject.replace(_ego_ctx, "").strip("\n")
+                        # 决策结论已经单独进 _bg_parts / scene_context；这里再留一份
+                        # 等于同一段"回复策略"在 prompt 里出现两次，模型会更用力地
+                        # 按条目交付（汇报腔的放大器）。
+                        if _decider_ctx_text:
+                            merged_inject = merged_inject.replace(
+                                _decider_ctx_text, "").strip("\n")
                         if merged_inject:
                             merged_text_for_ai = merged_text + "\n" + merged_inject
                         else:
@@ -10911,13 +10943,14 @@ def _pipeline_step(group_id):
                     # 决策放行的插话路径没有回抓（回抓只在 @/叫小a 时做），模型
                     # history 里只有它自己说过的轮次 → 别人之间聊的事它看不见，
                     # 自然接不上。现在给"无触发+无回抓上下文"的回复补一段近况。
+                    _bg_parts = []
                     if not (is_at_bot or has_xiao_a or has_bot_nick or quote_forces) \
                             and not buffer.get("has_context"):
                         _batch_before = buffer.get("time")
                         _gctx = _build_group_context_block(
                             group_id, BOT_QQ, before=_batch_before)
                         if _gctx:
-                            merged_text_for_ai = merged_text_for_ai + "\n\n" + _gctx
+                            _bg_parts.append(_gctx)
                             log(f"群[{group_id}] [近况注入] {_gctx.count(chr(10))-1}条")
                     # ── 自我记忆 / 当前局面 / 决策结论（2026-10-21，1.5.7）──
                     #   三者都是**当轮事实**，只拼进本轮发给模型的消息，**不写 history**：
@@ -10925,13 +10958,19 @@ def _pipeline_step(group_id):
                     #   顺序按"越具体越靠后"：自己说过什么 → 现在什么局面 → 本轮决策结论。
                     _self_blk = _self_lines_block(group_id)
                     if _self_blk:
-                        merged_text_for_ai = merged_text_for_ai + "\n\n" + _self_blk
+                        _bg_parts.append(_self_blk)
                     _sit_blk = _situation_block(group_id, before=buffer.get("time"))
                     if _sit_blk:
-                        merged_text_for_ai = merged_text_for_ai + "\n\n" + _sit_blk
+                        _bg_parts.append(_sit_blk)
                     if _decider_ctx_text:
-                        merged_text_for_ai = merged_text_for_ai + "\n\n" + _decider_ctx_text
+                        _bg_parts.append(_decider_ctx_text)
                         log(f"群[{group_id}] [决策结论注入] {_decider_ctx_text[:60]}")
+                    if _bg_parts:
+                        # ★ 2026-10-25：这些块以前直接拼在**用户消息**里，
+                        #   模型看到的是一条"带标题的简报"，回复也跟着用汇报腔
+                        #   （「我账上…」「我收到的原文…」）。现在交给 call_deepseek
+                        #   作为**独立 system 消息**注入，用户消息保持原样。
+                        _scene_ctx = "\n\n".join(_bg_parts)
                     for plugin_name, result in intervention:
                         if "temperature" in result:
                             _ST.set("personality_temperature", float(result["temperature"]))
@@ -11045,13 +11084,13 @@ def _pipeline_step(group_id):
                 time.sleep(_react)
 
             _phase_set(group_id, "generating")
-            reply = call_deepseek(merged_text_for_ai, images, group_id=group_id, is_group=True, personality_temperature=_ST.get("personality_temperature"), ego_inject_context=_ego_ctx, sender=sender)
+            reply = call_deepseek(merged_text_for_ai, images, group_id=group_id, is_group=True, personality_temperature=_ST.get("personality_temperature"), ego_inject_context=_ego_ctx, scene_context=_scene_ctx, sender=sender)
 
         # 群聊联网搜索循环（共用函数，最多2轮；标记兜底剥离，绝不漏发）
         reply = _apply_search_tag_loop(reply, merged_text_for_ai, group_id=group_id,
                                        is_group=True,
                                        temperature=_ST.get("personality_temperature"),
-                                       ego_ctx=_ego_ctx)
+                                       ego_ctx=_ego_ctx, scene_ctx=_scene_ctx)
 
         if not reply or reply.strip() in ("[不说话]", "[跳过]"):
             log(f"群[{group_id}] AI决定不回复: {reply[:30] if reply else '(空)'}")
@@ -11072,7 +11111,7 @@ def _pipeline_step(group_id):
                 # 重试换话回复，最多 2 次
                 for retry_i in range(2):
                     retry_hint = "（注意：你上一条回复和之前的太像了，换一种说法，换个角度，不要说类似的话）"
-                    reply = call_deepseek(retry_hint + "\n" + merged_text, images, group_id=group_id, is_group=True, personality_temperature=_ST.get("personality_temperature"))
+                    reply = call_deepseek(retry_hint + "\n" + merged_text, images, group_id=group_id, is_group=True, personality_temperature=_ST.get("personality_temperature"), ego_inject_context=_ego_ctx, scene_context=_scene_ctx)
                     if not reply or reply.strip() in ("[不说话]", "[跳过]"):
                         log(f"群[{group_id}] 重试{retry_i+1}跳过")
                         return

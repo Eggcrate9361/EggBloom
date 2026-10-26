@@ -247,12 +247,26 @@ class TestWiring(unittest.TestCase):
         checks = (
             "_self_blk = _self_lines_block",
             "_sit_blk = _situation_block",
-            'merged_text_for_ai + "\\n\\n" + _decider_ctx_text',
+            "_bg_parts.append(_decider_ctx_text)",
+            "【现场资料·不是对方说的话】",
+            "scene_context: str = ''",
+            '"\\n\\n".join(_bg_parts)',
         )
         for needle in checks:
             idx = src.find(needle)
             self.assertGreater(idx, 0, f"缺少注入语句：{needle}")
             self.assertLess(idx, call, f"注入在模型调用之后，不会生效：{needle}")
+
+    def test_scene_context_goes_to_system_message(self):
+        with open(os.path.join(_ROOT, "bot_core.py"), encoding="utf-8") as f:
+            src = f.read()
+        anchor = src.find("if scene_context:")
+        self.assertGreater(anchor, 0, "缺少 scene_context 注入")
+        seg = src[anchor:anchor + 500]
+        self.assertIn("dynamic_parts.append", seg,
+                      "现场资料没有进 system 消息")
+        self.assertNotIn("merged_text_for_ai", seg,
+                         "现场资料又被拼回用户消息")
 
     def test_permission_present(self):
         blk = bc._seg_group_rules(True)

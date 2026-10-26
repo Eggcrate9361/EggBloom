@@ -42,10 +42,11 @@ class Decision:
         return asdict(self)
 
     def to_prompt_injection(self) -> str:
-        """注入到主模型 system_prompt 的决策上下文"""
-        parts = []
-        parts.append(f"【群聊氛围】{self.atmosphere}（置信度 {self.atmosphere_confidence:.1f}）")
-        parts.append(f"【回复策略】{self.strategy}——{self.strategy_detail}")
+        """现场参考（不是指令）。与 `__init__.py` 的正式实现保持同一口径。"""
+        parts = ["【现场判断（系统参考，不是对方说的话；别复述这些词）】"]
+        parts.append(f"- 氛围：{self.atmosphere}")
+        if self.strategy:
+            parts.append(f"- 怎么接：{self.strategy}")
         return "\n".join(parts)
 
 

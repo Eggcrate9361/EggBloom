@@ -65,7 +65,10 @@ def main():
           f"共 {len(_all)} 处遍历，其中读 action 的 {len(_loops)} 处")
     if not _loops:
         return 1
-    body = src[_loops[0]:_loops[0] + 3000]
+    # 窗口到「会话内未指向 Bot」守卫为止 —— 它是裁决循环所在函数段的收尾。
+    # 固定 3000 字窗口会被循环内新增的注释挤爆（2026-10-26 加去重分支时踩到）。
+    _guard = src.find("\n        if not plugin_intervened", _loops[0])
+    body = src[_loops[0]:_guard if _guard > 0 else _loops[0] + 4000]
 
     print("[1] 裁决循环认 observe")
     check('裁决循环里有 action == "observe" 分支',
