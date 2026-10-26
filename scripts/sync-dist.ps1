@@ -323,6 +323,32 @@ if ($DryRun) {
         Write-Host "  + LICENSE（根许可，显式拷贝）"
     }
 
+    # ── 包根 README：由模板生成，不从源码库搬 ─────────────────────────────
+    #   2026-10-26 发现：Standard 包根躺着一份 10-18 手写的「标准版说明」
+    #   （2834 字节），而 resources\app\README.md 才是当前源码版（3783 字节）。
+    #   两者都叫 README.md，用户解压后先看到哪份取决于他点哪里。
+    #
+    #   为什么会漂：本脚本只增不删（robocopy 不带 /MIR），根目录里的 .md
+    #   一旦写进去就再没人更新它 —— 源码库改了 8 天，它还是 10-18 的样子。
+    #
+    #   为什么不能直接"根目录也同步源码 README"：那份是**开发者文档**
+    #   （克隆、venv、跑测试），直接给下载 Standard 的人看是错的。根目录该是
+    #   "解压即用怎么办"，是另一篇文章。
+    #
+    #   所以：模板在 scripts/dist_templates/，每次同步覆盖写一次。
+    #   模板改了 → 重跑同步 → 包根就跟着变。不再有"没人更新"的死文件。
+    #
+    #   只做 standard：Full 是本地自用、不对外分发，包根不需要说明页。
+    if ((Split-Path $DistPath -Leaf) -like "*standard*") {
+        $tplPath = Join-Path (Join-Path $SourceDir "scripts\dist_templates") "README-standard.md"
+        if (Test-Path $tplPath) {
+            Copy-Item -LiteralPath $tplPath -Destination (Join-Path $DistPath "README.md") -Force
+            Write-Host "  + README.md（包根说明，由 README-standard.md 生成）"
+        } else {
+            Write-Host "  ! 模板缺失：$tplPath（包根说明未更新）" -ForegroundColor Yellow
+        }
+    }
+
     # ── 收尾：不再删除目标端的任何运行态目录 ─────────────────────────────
     #   2026-10-22 之前这里会 Remove-Item 掉 $TargetDir\plugins\state 与
     #   \plugins\conversation_state。这两个都是**用户数据**：
