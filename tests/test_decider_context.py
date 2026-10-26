@@ -139,6 +139,56 @@ class TestConversationClosed(_Clean):
         self.assertTrue(bot_core._decider_closed(GID))
 
 
+class TestDeciderBatchSnapshot(_Clean):
+    """决策器也只能看本批截止前的数据（2026-10-25）。
+
+    此前 `recent_msgs` 读的是实时缓存：本批还没生成，下一批的消息已经进来，
+    决策器按下一批的话题给本批写结论，主模型照着答一遍，下一批再答一遍。
+    """
+
+    class _PM:
+        def __init__(self):
+            self.ctx = None
+
+        def is_loaded(self, name):
+            return True
+
+        def is_enabled(self, name):
+            return True
+
+        def execute_hooks(self, hook_name, **kwargs):
+            self.ctx = kwargs.get("context") or {}
+            return [("group_chat_decider", {"action": "skip", "reason": "测试"})]
+
+    def test_recent_msgs_cut_at_batch_time(self):
+        now = time.time()
+        cutoff = now - 10
+        bot_core.GROUP_RECENT_MSGS[GID] = [
+            (cutoff - 5, "111", "本批的消息", None, []),
+            (cutoff + 2, "222", "下一批的消息", None, []),
+        ]
+        bot_core.GROUP_BOT_REPLIES[GID] = [
+            (cutoff - 3, "本批之前的回复"),
+            (cutoff + 3, "下一批之后的回复"),
+        ]
+        pm = self._PM()
+        orig = (bot_core.PLUGIN_OK, bot_core.get_plugin_manager,
+                bot_core._dispatch_typed_before_reply)
+        bot_core.PLUGIN_OK = True
+        bot_core.get_plugin_manager = lambda: pm
+        bot_core._dispatch_typed_before_reply = lambda *a, **kw: []
+        try:
+            bot_core._decide(GID, {"text": "本批的消息", "time": cutoff,
+                                   "forced": False, "sender": "111"})
+        finally:
+            (bot_core.PLUGIN_OK, bot_core.get_plugin_manager,
+             bot_core._dispatch_typed_before_reply) = orig
+        got = [e[2] for e in pm.ctx.get("recent_msgs", [])]
+        self.assertIn("本批的消息", got)
+        self.assertNotIn("下一批的消息", got)
+        self.assertEqual(pm.ctx.get("bot_replies"), ["本批之前的回复"])
+
+
 class TestBatchCount(unittest.TestCase):
     """batch_msg_count = merged_n + 1（历史条数 + 当前这条）。
 

@@ -2505,7 +2505,7 @@ def is_similar_to_recent(recent_texts, new_text, threshold=0.6):
     return False, ""
 
 
-def _build_group_context_block(group_id: str, bot_qq: str) -> str:
+def _build_group_context_block(group_id: str, bot_qq: str, before=None) -> str:
     """组装"群聊近况"块（2026-10-10 决策重写 · 治接不上话）。
 
     旧版只有被 @ / 叫小a 时才回抓历史进 buffer；决策插件主动放行的插话
@@ -2514,13 +2514,23 @@ def _build_group_context_block(group_id: str, bot_qq: str) -> str:
     GROUP_TIMELINE 只收入站消息（Bot 自己的被主循环过滤），所以把
     GROUP_BOT_REPLIES（Bot 发言时间线）合并进来按时间排序 —— 模型才能
     看到"谁说了什么、我刚说过什么"的完整流水。
+
+    ★ before（2026-10-25）：只取该时刻之前的流水。批次一旦定稿就只代表
+      它自己那几条事件；生成时若读实时时间线，会把**下一批**的消息也塞进
+      这一轮的输入 —— 线上实测：戳批次在 20:19:55 注入了 26 条近况，里面
+      含着 20:19:28 的「现在呢」，模型先答了一遍；那条消息自己又成一批，
+      20:20:11 再答一遍。同一条消息被回两次，且第一次答的不是本批的戳。
     """
     gid = str(group_id)
     entries = []
     for t, sid, nick, tx in GROUP_TIMELINE.get(gid, []) or []:
+        if before is not None and t > before:
+            continue
         if tx:
             entries.append((t, nick or sid or "群友", tx))
     for t, txt in GROUP_BOT_REPLIES.get(gid, []) or []:
+        if before is not None and t > before:
+            continue
         if txt:
             entries.append((t, "我(Bot)", txt))
     if not entries:
@@ -2598,7 +2608,7 @@ def _bot_replies_of(group_id):
     return []
 
 
-def _situation_block(group_id, window: int = 6) -> str:
+def _situation_block(group_id, window: int = 6, before=None) -> str:
     """【当前局面】—— 只讲结构，不猜语义。
 
     治理的是"接不上游戏"：模型此前只拿到一条孤立消息，不知道谁在跟它说、
@@ -2606,9 +2616,14 @@ def _situation_block(group_id, window: int = 6) -> str:
 
     这里给的全是**可统计的事实**（谁/几条/跨度/上一句原文/我这轮接没接），
     至于"这是认亲游戏还是挑衅"——不在这里硬塞，交给模型自己判断。
+
+    before：与 `_build_group_context_block` 同一语义 —— 只看批次定稿时刻
+    之前的流水，别把下一批的消息算进"刚说话的人"。
     """
     try:
         tl = _timeline_of(group_id)
+        if before is not None:
+            tl = [e for e in tl if float(e[0]) <= float(before)]
         if not tl:
             return ""
         tail = list(tl)[-int(window or 6):]
@@ -2634,6 +2649,8 @@ def _situation_block(group_id, window: int = 6) -> str:
         ]
 
         br = _bot_replies_of(group_id)
+        if before is not None:
+            br = [e for e in br if float(e[0]) <= float(before)]
         if br and float(br[-1][0]) >= float(burst_start):
             lines.append(f"- 这轮你已经接过一句：「{str(br[-1][1] or '')[:50]}」")
         else:
@@ -10411,9 +10428,20 @@ def _decide(group_id, batch):
         try:
             pm = get_plugin_manager()
             if pm and pm.is_loaded("group_chat_decider") and pm.is_enabled("group_chat_decider"):
+                # ★ 批次快照（2026-10-25）：决策只看本批截止前的数据。
+                #   读实时缓存会把**下一批**的消息算进来 → 决策给这一批复述
+                #   下一批的话题，下一批自己又回一遍（同一条消息回两次）。
+                _cut = batch.get("time")
+                _recent_all = list(GROUP_RECENT_MSGS.get(group_id, []))
+                _breps_all = list(GROUP_BOT_REPLIES.get(group_id, []))
+                if _cut is not None:
+                    _recent_all = [e for e in _recent_all
+                                   if len(e) > 0 and float(e[0]) <= float(_cut)]
+                    _breps_all = [e for e in _breps_all
+                                  if len(e) > 0 and float(e[0]) <= float(_cut)]
                 _decider_ctx = {
-                    "recent_msgs": list(GROUP_RECENT_MSGS.get(group_id, [])),
-                    "bot_replies": _safe_extract_col(GROUP_BOT_REPLIES.get(group_id, []), 1),
+                    "recent_msgs": _recent_all,
+                    "bot_replies": _safe_extract_col(_breps_all, 1),
                     "sender": batch.get("sender", ""),
                     "user_id": batch.get("sender", ""),
                     "is_at_bot": False, "has_xiao_a": False, "has_bot_nick": False,
@@ -10858,7 +10886,9 @@ def _pipeline_step(group_id):
                     # 自然接不上。现在给"无触发+无回抓上下文"的回复补一段近况。
                     if not (is_at_bot or has_xiao_a or has_bot_nick or quote_forces) \
                             and not buffer.get("has_context"):
-                        _gctx = _build_group_context_block(group_id, BOT_QQ)
+                        _batch_before = buffer.get("time")
+                        _gctx = _build_group_context_block(
+                            group_id, BOT_QQ, before=_batch_before)
                         if _gctx:
                             merged_text_for_ai = merged_text_for_ai + "\n\n" + _gctx
                             log(f"群[{group_id}] [近况注入] {_gctx.count(chr(10))-1}条")
@@ -10869,7 +10899,7 @@ def _pipeline_step(group_id):
                     _self_blk = _self_lines_block(group_id)
                     if _self_blk:
                         merged_text_for_ai = merged_text_for_ai + "\n\n" + _self_blk
-                    _sit_blk = _situation_block(group_id)
+                    _sit_blk = _situation_block(group_id, before=buffer.get("time"))
                     if _sit_blk:
                         merged_text_for_ai = merged_text_for_ai + "\n\n" + _sit_blk
                     if _decider_ctx_text:

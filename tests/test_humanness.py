@@ -93,6 +93,61 @@ class TestSituation(unittest.TestCase):
     def test_empty_safe(self):
         self.assertEqual(bc._situation_block("不存在"), "")
 
+    def test_before_excludes_later_messages(self):
+        """批次定稿后到的消息不能算进本批的「刚说话的人」。"""
+        now = time.time()
+        bc.GROUP_TIMELINE["g_sit"] = [
+            (now - 60, "10001", "小明", "现在呢"),
+            (now - 5, "10002", "小红", "下一批的话"),
+        ]
+        blk = bc._situation_block("g_sit", before=now - 30)
+        self.assertIn("现在呢", blk)
+        self.assertNotIn("下一批的话", blk)
+        self.assertNotIn("小红", blk)
+
+    def test_before_excludes_later_bot_reply(self):
+        """Bot 在本批之后发的回复，不能让本批显示成「已经接过一句」。"""
+        now = time.time()
+        bc.GROUP_TIMELINE["g_sit"] = [(now - 10, "10001", "小明", "妈妈")]
+        bc.GROUP_BOT_REPLIES["g_sit"] = [(now - 1, "下一批才该出现的回复")]
+        blk = bc._situation_block("g_sit", before=now - 5)
+        self.assertIn("这轮你还没接话", blk)
+        self.assertNotIn("下一批才该出现的回复", blk)
+
+
+class TestGroupContextSnapshot(unittest.TestCase):
+    """【群聊近况】必须按批次截止时间取快照。
+
+    线上 20:19:55 的实证：戳批次注入了 26 条近况，其中含 20:19:28 的
+    「现在呢」—— 模型先答了它；这条消息自己又成一批，20:20:11 再答一遍。
+    """
+
+    def setUp(self):
+        self.now = time.time()
+        bc.GROUP_TIMELINE["g_snap"] = [
+            (self.now - 60, "10001", "小明", "旧话题"),
+            (self.now - 5, "10002", "小红", "下一批的消息"),
+        ]
+        bc.GROUP_BOT_REPLIES["g_snap"] = [
+            (self.now - 2, "下一批的回复"),
+        ]
+
+    def tearDown(self):
+        bc.GROUP_TIMELINE.pop("g_snap", None)
+        bc.GROUP_BOT_REPLIES.pop("g_snap", None)
+
+    def test_before_filters_timeline_and_bot_replies(self):
+        blk = bc._build_group_context_block("g_snap", "999", before=self.now - 30)
+        self.assertIn("旧话题", blk)
+        self.assertNotIn("下一批的消息", blk)
+        self.assertNotIn("下一批的回复", blk)
+
+    def test_without_before_keeps_all(self):
+        blk = bc._build_group_context_block("g_snap", "999")
+        self.assertIn("旧话题", blk)
+        self.assertIn("下一批的消息", blk)
+        self.assertIn("下一批的回复", blk)
+
 
 class TestLedgerRole(unittest.TestCase):
     """账本必须能区分'我说的'与'别人说的'，且自己那句不能被砍到 30 字。"""
