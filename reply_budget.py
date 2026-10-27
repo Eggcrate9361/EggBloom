@@ -76,15 +76,56 @@ def prompt_line(b: Dict) -> str:
 
 
 def visible(text: str) -> str:
-    """去掉控制标记后的可见文本。"""
+    """去掉控制标记后的可见文本。
+
+    ★ 2026-10-27：连**行首的上下文标记**一起剥（时间戳/说话人标签）。
+      模型会从输入里模仿这些标记（真机："[10-27 18:55] 记不住…"），
+      它们不是内容，不该计入字数、也不该影响"完整句"的判断。
+    """
     t = _MEME_TAG.sub("", str(text or ""))
     t = _MARKUP.sub("", t)
+    t = strip_ctx_marks(t)
     return re.sub(r"\s+", "", t)
 
 
 def parts(text: str) -> List[str]:
     """按行切条，丢掉空行。"""
     return [ln.strip() for ln in str(text or "").split("\n") if ln.strip()]
+
+
+#: 行首的上下文标记（模型从输入里模仿来的）：
+#:   [18:46] / [10-27 18:55] / [名字] / [名字·4位锚]
+_CTX_MARK = re.compile(
+    r"^\s*\[(?:\d{1,2}:\d{2}(?::\d{2})?"          # 时间 [18:46] / [18:46:16]
+    r"|\d{1,2}-\d{1,2}\s+\d{1,2}:\d{2}(?::\d{2})?"  # 日期+时间 [10-27 18:55]
+    r"|[^\[\]]{1,24}(?:·[0-9a-z]{4})?)"            # 说话人 [名字] / [名字·锚]
+    r"\]\s*"
+)
+
+
+def strip_ctx_marks(text: str) -> str:
+    """剥掉行首的上下文标记。
+
+    ★ 2026-10-27 真机：模型把输入里的 `[10-27 18:55]` 抄进了回复正文
+      （"记不住，我又不是录音机" 变成 "[10-27 18:55] 记不住…"）。
+      这个标记既不是内容，也不该参与"这句话完整吗""多长"的判断 ——
+      不剥的话 `visible()` 去掉空格后变成 "[10-2718:55]记不住…"，
+      结尾落在"机"上 → 被判成半截 → 优先级降到最低。
+
+    只剥**行首**；行中间的不动（"我在[18:46]说的"是正文）。
+
+    一行最多剥两轮（时间戳 + 说话人标签），避免把正文里的方括号也吃掉。
+    """
+    out = []
+    for ln in str(text or "").split("\n"):
+        _l = ln
+        for _ in range(2):
+            _new = _CTX_MARK.sub("", _l, count=1)
+            if _new == _l:
+                break
+            _l = _new
+        out.append(_l)
+    return "\n".join(out)
 
 
 def check(text: str, b: Dict, hard: Optional[Dict] = None) -> Tuple[bool, str, Dict]:
@@ -155,4 +196,4 @@ def regen_hint(reason: str, b: Dict) -> str:
 
 __all__ = ["BUDGETS", "HARD_MAX_CHARS", "HARD_MAX_PARTS", "HARD_MAX_TOTAL",
            "pick", "prompt_line", "visible", "parts", "check", "fit",
-           "anchor_ok", "regen_hint"]
+           "anchor_ok", "regen_hint", "strip_ctx_marks"]

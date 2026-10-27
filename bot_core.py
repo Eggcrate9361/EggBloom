@@ -10822,6 +10822,23 @@ def _extract_qq(s) -> str:
     return m.group(1) if m else s
 
 
+def _strip_context_marks(text: str) -> str:
+    """剥掉回复里被模型模仿来的**上下文标记**。
+
+    ★ 2026-10-27 真机：发出过「[18:46] 别戳」。
+      模型看到输入行首的 `[HH:MM] [名字·锚] 原文`，把 `[18:46]` 当成
+      "回复该有的格式"照抄了 —— 群里看就是机器人突然报时。
+
+    权威实现是 `reply_budget.strip_ctx_marks`（那边还要用它算字数、
+    判完整句）。这里只做转发，不重复实现 ——
+    **一条规则只能有一个权威源**（仓库已因"同一概念两处判据"踩过多次）。
+    """
+    try:
+        return reply_budget.strip_ctx_marks(text)
+    except Exception:
+        return text
+
+
 def _is_at_others(text: str) -> bool:
     """检测消息是否定向给他人（非 Bot/非小a）。"""
     # 先检查是否包含触发词
@@ -11714,7 +11731,7 @@ def _pipeline_step(group_id):
         content = re.sub(r'^\[.+?\]\s*', '', line).strip()
         if not content:
             continue
-        
+
         # ── 使用共享过滤函数检测 @ 他人 / 定向消息 ──
         if _is_at_others(content):
             log(f"群[{group_id}] 跳过定向他人的消息: {line[:60]}")
@@ -11785,6 +11802,11 @@ def _pipeline_step(group_id):
     plugin_reply = None
     # ★ 批次头给名单（1.5.9 §B1.3）：只给条数时，模型按最后一条说话人算整批。
     #   单人不加头 —— 那是噪音，还占 token。
+    #
+    # ★ 2026-10-27 补格式说明：回抓的历史消息每行带 `[HH:MM]` 时间戳前缀，
+    #   而**当前**那条不带 —— 两种格式不一致，模型就学会了这个"格式"：
+    #     [18:46] 别戳          ← 真机发出去的原文（用户投诉"回复把时间戳装进去了"）
+    #   所以头里明说：方括号里的是**上下文标记**，回复正文里不许出现。
     _batch_head = ""
     try:
         _spk = buffer.get("speakers") or {}
@@ -11794,6 +11816,11 @@ def _pipeline_step(group_id):
             _batch_head = f"[本批 {_n_lines} 条 · {len(_spk)} 人：{_names}]"
     except Exception:
         _batch_head = ""
+    # 格式说明**总是**加（哪怕单人）：它约束的是输出格式，与批内人数无关。
+    _fmt_note = ("【格式】上面每行开头的 [HH:MM] 和 [名字·锚] 都是**给你看的上下文标记**，"
+                 "不是正文的一部分。回话时不要带时间戳、不要带方括号、"
+                 "不要模仿这些标记，只说你要说的话。")
+    _batch_head = f"{_batch_head}\n{_fmt_note}" if _batch_head else _fmt_note
 
     def _ai_text(t: str) -> str:
         return f"{_batch_head}\n{t}" if _batch_head else t
@@ -12235,6 +12262,11 @@ def _pipeline_step(group_id):
             clean_reply, _meme_emotion = parse_meme_intent(reply)
             sent_text = clean_reply.strip() if clean_reply else ""
             sent_text = _trim_incomplete(sent_text, getattr(reply, "truncated", False))
+            # ── 剥掉模型模仿来的上下文标记（2026-10-27）──
+            #   模型看到输入里有 `[18:46] [名字·锚] 原文`，有时会把 `[18:46]`
+            #   当成回复格式照抄（真机发出过「[18:46] 别戳」）。
+            #   prompt 里已经写了格式说明，这里是兜底 —— 改过的文本一律删。
+            sent_text = _strip_context_marks(sent_text)
             # ── 去AI味：规则级后处理（发送前清理破折号/套话/客服口吻等）──
             try:
                 from de_ai import de_ai_post_process
@@ -14102,6 +14134,8 @@ def main():
                     clean_reply, _meme_emotion = parse_meme_intent(reply)
                     sent_text = clean_reply.strip() if clean_reply else ""
                     sent_text = _trim_incomplete(sent_text, getattr(reply, "truncated", False))
+                    # ── 剥掉模型模仿来的上下文标记（2026-10-27，与群聊一致）──
+                    sent_text = _strip_context_marks(sent_text)
                     # ── 去AI味：规则级后处理（私聊同样生效）──
                     try:
                         from de_ai import de_ai_post_process
