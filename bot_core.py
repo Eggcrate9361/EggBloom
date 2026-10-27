@@ -12,6 +12,8 @@ from typing import Dict, List, Optional, Tuple, Any
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from socketserver import ThreadingMixIn
 
+import capabilities_view
+
 
 class ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
     """多线程 HTTP 服务器，避免并发请求阻塞"""
@@ -3554,9 +3556,15 @@ def _seg_honesty(is_group):
       换成可自查的形式（「回复里出现对方提过、这轮没搜过的名词就是违规」）
       才拦得住：**带执行判据的条款会压过不带判据的条款**，这是这个仓库
       反复验证过的结论（骂人尺度那次同理）。
+
+    ★ 2026-10-27 加第 4 条「不假装不会」（1.5.9 §A.5）：
+      前三条只禁止编造"做了/成了/知道"，缺一条：编造"不能做"。
+      它和第 1 条对称 —— 编造"做了"是撒谎，编造"不能做"同样是撒谎。
+      第 4 条的第二个分句把"不想"和"不会"分开：诚实铁律不禁止拒绝，
+      只禁止**用错误的理由**拒绝。
     """
     return (
-        '\n\n【诚实铁律·最重要】三条同级，违反任何一条都算撒谎。\n'
+        '\n\n【诚实铁律·最重要】四条同级，违反任何一条都算撒谎。\n'
         '1) 不假装做过：你拥有真实可用的工具（web_operate 打开网页/填问卷/答题、'
         'search_web 联网搜索、open_app 打开本机应用等）。凡是用工具能真实完成的操作，'
         '必须 CALL 对应工具，以工具返回的真实结果为准。绝对禁止用语言假装做过了 —— '
@@ -3570,7 +3578,11 @@ def _seg_honesty(is_group):
         'CALL search_web（群聊里也可以只在回复开头独占一行写 [搜索:关键词]，程序替你查完再让你作答）。'
         '搜完用真实结果自然地说，语气还是你自己的；实在查不到就直说不知道、或明说懒得查，别硬编。\n'
         '  ★ 自查判据：回复写完后扫一遍 —— 如果里面出现了**对方提过、'
-        '而你这轮没调用过 search_web 的名词/梗/黑话/人名/版本**，就是违规，删掉重写。'
+        '而你这轮没调用过 search_web 的名词/梗/黑话/人名/版本**，就是违规，删掉重写。\n'
+        '4) 不假装不会：说「没这个能力」前先看能力清单。标了「这轮没挂上/插件没开/'
+        '要主人发话」的**都有能力**，要说缺什么、谁能解决；只有清单没提到的才允许说做不了。\n'
+        '  ★ 自查：说「做不到/干不了」时，必须能指出清单里确实没有的对应项，否则重写。\n'
+        '  ★ 不想做≠不会做：能力在就可以拒绝、可以撒娇，但只能说"不想"，不能说"没能力"。'
     )
 
 
@@ -5507,6 +5519,63 @@ TOOL_FUNCTIONS = {
     "web_operate": lambda args: handle_web_operate(args),
 }
 
+# ── 插件工具（主链常驻，不参与关键词裁剪、不受群白名单影响）──────────
+#  agent 链早就有这两个，主链没有 —— 于是「发个 QQ 空间」只能答「没能力」。
+#  常驻的理由：措辞一旦没命中关键词，按需加载就不会挂上它，又回到"不会"。
+_PLUGIN_TOOL_SCHEMAS = [
+    {"type": "function", "function": {
+        "name": "plugin_list",
+        "description": "列出已装插件及其简介、可调用动作、启用状态。"
+                       "不确定有哪些插件、或不确定某件事能不能做时，先调它。",
+        "parameters": {"type": "object",
+                       "properties": {"keyword": {"type": "string",
+                                                  "description": "可选，按名字/简介/标签过滤"}}},
+    }},
+    {"type": "function", "function": {
+        "name": "plugin_call",
+        "description": "调用插件能力（发 QQ 空间、群待办、群相册、定时任务等）。"
+                       "参数 plugin=插件名、action=动作名、params=参数对象。"
+                       "未启用的插件会被拒绝并说明怎么开 —— 这不是「没能力」。",
+        "parameters": {"type": "object",
+                       "properties": {
+                           "plugin": {"type": "string", "description": "插件名，如 qzone/capabilities"},
+                           "action": {"type": "string", "description": "动作名，如 run/add"},
+                           "params": {"type": "object", "description": "参数对象，可为空"}},
+                       "required": ["plugin", "action"]},
+    }},
+]
+
+
+def _tool_plugin_list(args):
+    try:
+        from harness import plugin_tools as _ptf
+        _kw = str((args or {}).get("keyword") or "").strip()
+        _r = _ptf.plugin_list(keyword=_kw) if _kw else _ptf.plugin_list()
+        return _tool_ok(json.dumps(_r, ensure_ascii=False))
+    except Exception as e:
+        return _tool_fail(f"列插件失败：{e}")
+
+
+def _tool_plugin_call(args):
+    try:
+        from harness import plugin_tools as _ptf
+        _r = _ptf.plugin_call(
+            plugin=str((args or {}).get("plugin") or ""),
+            action=str((args or {}).get("action") or ""),
+            params=(args or {}).get("params") or {},
+            # 主链不阻塞等授权：群里弹窗没人看，180 秒还会把相位顶到超时
+            interactive=False,
+        )
+        if isinstance(_r, dict) and _r.get("error"):
+            return _tool_fail(str(_r["error"]))
+        return _tool_ok(json.dumps(_r, ensure_ascii=False))
+    except Exception as e:
+        return _tool_fail(f"调用插件失败：{e}")
+
+
+TOOL_FUNCTIONS["plugin_list"] = _tool_plugin_list
+TOOL_FUNCTIONS["plugin_call"] = _tool_plugin_call
+
 
 def _tool_web(query: str) -> str:
     """联网搜索：结果原样回传；看着像失败的加 ❌ 前缀（模型据此不乱编）。"""
@@ -5600,6 +5669,224 @@ def _apply_scope_registry(kind, sid, tools, *, registry=None):
         return tools
 
 
+#: 好感度档位缓存：{"gid:uid": (ts, (tier, note, score))}，TTL 300 秒
+_RELATION_CACHE: Dict[str, Tuple[float, tuple]] = {}
+
+#: 好感度 → 四档关系。阈值沿用 self_learning.get_context_for_llm 的分档口径
+#: （>50 友好 / >20 普通 / 其余冷淡），只把"友好"再切一刀成"好"与"特别好"。
+_RELATION_TIERS = (
+    (80, "特别好", "能抱怨、能撒娇、能逗他；关系到这了，这次真不干也行"),
+    (50, "好", "傲娇，可以撒娇，两三句内"),
+    (20, "一般", "轻微抱怨，一句"),
+    (0, "浅", "直白嫌烦，不撒娇"),
+)
+
+
+def _relation_tier(group_id, sender):
+    """好感度 → (档位, 说明, 分数)。读不到返回空三元组。
+
+    只给档位词，不给分数：分数进了 prompt 模型会念叨，而且分数每轮都动，
+    档位十天半个月才跳一次 —— 前者破坏缓存，后者不会。
+    查询结果缓存 5 分钟：每轮一次 SQLite 查询在群聊高频下没必要。
+    """
+    if not group_id or not sender:
+        return ("", "", "")
+    _key = f"{group_id}:{sender}"
+    _now = time.time()
+    _hit = _RELATION_CACHE.get(_key)
+    if _hit and _now - _hit[0] < 300:
+        return _hit[1]
+    try:
+        if not SELF_LEARN_OK or self_learn is None:
+            return ("", "", "")
+        _sc = int((self_learn.get_affection(str(group_id), str(sender)) or {}).get("score") or 0)
+    except Exception:
+        return ("", "", "")
+    for floor, key, note in _RELATION_TIERS:
+        if _sc >= floor:
+            _out = (key, note, str(_sc))
+            _RELATION_CACHE[_key] = (_now, _out)
+            return _out
+    _out = ("浅", "直白嫌烦，不撒娇", str(_sc))
+    _RELATION_CACHE[_key] = (_now, _out)
+    return _out
+
+
+#: 意愿轴账本：{"gid:uid": [ts...]} 与 {"YYYY-MM-DD:uid": [ts...]}
+#: 前者管"同一人 30 分钟内最多被拒几次"，后者管"一天里拿不想逃避正经求助几次"。
+_REFUSE_LEDGER: Dict[str, List[float]] = {}
+_EVADE_LEDGER: Dict[str, List[float]] = {}
+_REFUSE_LOCK = Lock()
+
+#: 关系档 → 拒绝概率系数（A.7.2 ②）
+_REFUSE_COEF = {"浅": 0.5, "一般": 1.0, "好": 1.5, "特别好": 2.0}
+
+
+def _refuse_license(group_id, sender):
+    """这次给不给「可以不办」的许可。返回 (allowed, reason)。
+
+    概率只决定**要不要启动撒娇**，不决定办不办 —— 真正办不办由模型按
+    人格【干活的时候】决定，概率只是把"这次可以拒"这句话放进 prompt。
+
+    三道闸（A.7.2 ③ / A.7.4）：
+      · 同一人 30 分钟内已给过 N 次许可 → 这次必须办（耍赖有额度）
+      · 当天拿"不想"逃避正经求助 N 次 → 概率归零（逃避有上限）
+      · 概率 × 关系系数，浅档基本不给
+    """
+    if not _config.get("refuse_enable", True):
+        return (False, "off")
+    if not group_id or not sender:
+        return (False, "no-scope")
+    tier, _note, _score = _relation_tier(group_id, sender)
+    if not tier:
+        return (False, "no-tier")
+    now = time.time()
+    key = f"{group_id}:{sender}"
+    day = time.strftime("%Y-%m-%d")
+    dkey = f"{day}:{sender}"
+    with _REFUSE_LOCK:
+        hist = [t for t in _REFUSE_LEDGER.get(key, []) if now - t < 1800]
+        _REFUSE_LEDGER[key] = hist
+        quota = int(_config.get("refuse_quota_per_30min", 2) or 0)
+        if quota > 0 and len(hist) >= quota:
+            return (False, "quota")
+        ev = [t for t in _EVADE_LEDGER.get(dkey, []) if now - t < 86400]
+        _EVADE_LEDGER[dkey] = ev
+        limit = int(_config.get("refuse_evade_daily_limit", 3) or 0)
+        if limit > 0 and len(ev) >= limit:
+            return (False, "evade-limit")
+    try:
+        base = float(_config.get("refuse_base_prob", 0.08) or 0)
+    except Exception:
+        base = 0.08
+    p = max(0.0, min(1.0, base * _REFUSE_COEF.get(tier, 1.0)))
+    if p <= 0 or random.random() >= p:
+        return (False, "dice")
+    with _REFUSE_LOCK:
+        _REFUSE_LEDGER.setdefault(key, []).append(now)
+    return (True, "ok")
+
+
+def _note_evade(sender):
+    """模型拿"不想"把正经求助挡回去时记一笔（由回复后处理调用）。"""
+    if not sender:
+        return
+    now = time.time()
+    day = time.strftime("%Y-%m-%d")
+    with _REFUSE_LOCK:
+        _EVADE_LEDGER.setdefault(f"{day}:{sender}", []).append(now)
+
+
+#: bot 自己在群里的角色缓存：{gid: (ts, role)}，role ∈ owner/admin/member
+_BOT_ROLE_CACHE: Dict[str, Tuple[float, str]] = {}
+
+
+def _bot_group_role(group_id) -> str:
+    """查 bot 自己在该群的角色，缓存 `group_role_cache_sec`（默认 600 秒）。
+
+    `GROUP_ROLES`（1.5.2）只存群主/管理员的名字，不含 bot 自己的身份，
+    所以模型答不出「我能不能禁言」。这里补的是事实依据，不是措辞规则。
+    查不到返回空串，调用方按「不知道」处理 —— 不要兜底成 member。
+    """
+    gid = str(group_id or "")
+    if not gid or not gid.isdigit() or len(gid) < 5:
+        # 非群号（测试桩、私聊 id、空串）不查 API：白等 3 秒还会打进日志
+        return ""
+    try:
+        ttl = float(_config.get("group_role_cache_sec", 600) or 600)
+    except Exception:
+        ttl = 600.0
+    now = time.time()
+    hit = _BOT_ROLE_CACHE.get(gid)
+    if hit and now - hit[0] < ttl:
+        return hit[1]
+    role = ""
+    try:
+        resp = api_call("get_group_member_info",
+                        {"group_id": int(gid), "user_id": int(BOT_QQ)}, timeout=3)
+        role = str(((resp or {}).get("data") or {}).get("role") or "")
+    except Exception as e:
+        log(f"[能力视图] 查群角色失败 group={gid}: {e}")
+    if role in ("owner", "admin", "member"):
+        _BOT_ROLE_CACHE[gid] = (now, role)
+        return role
+    return ""
+
+
+def _all_tool_names() -> List[str]:
+    """主链全量工具名（TOOLS + GROUP_TOOLS + 常驻插件工具），去重保序。"""
+    out: List[str] = []
+    seen = set()
+    for group in (TOOLS, GROUP_TOOLS):
+        for t in group or ():
+            try:
+                n = t["function"]["name"]
+            except Exception:
+                continue
+            if n and n not in seen:
+                seen.add(n)
+                out.append(n)
+    for sch in _PLUGIN_TOOL_SCHEMAS:
+        try:
+            n = sch["function"]["name"]
+        except Exception:
+            continue
+        if n and n not in seen:
+            seen.add(n)
+            out.append(n)
+    return out
+
+
+def _capability_view_lines(*, is_group, group_id, sender, tool_names):
+    """三态能力清单。返回若干行，由 `_capability_block` 统一加前缀。"""
+    _plugins: Dict[str, bool] = {}
+    try:
+        _pm = get_plugin_manager()
+        if _pm:
+            for _pname, _label in capabilities_view.PLUGIN_CAPABILITIES:
+                _plugins[_pname] = bool(_pm.is_enabled(_pname))
+    except Exception:
+        pass
+    _all = _all_tool_names()
+    # 群里调不了的工具分两种：群白名单没放（改配置才能好）、这轮按需加载没挂（下轮会好）
+    _blocked: List[str] = []
+    if is_group:
+        try:
+            _allowed = {t["function"]["name"] for t in _build_group_tools(group_id)}
+            _blocked = [n for n in _all if n not in _allowed]
+        except Exception:
+            _blocked = []
+    _role = _bot_group_role(group_id) if (is_group and group_id) else ""
+    try:
+        _sender_is_admin = bool(_is_authorized(sender)) if sender else False
+    except Exception:
+        _sender_is_admin = False
+    _snap = capabilities_view.build_snapshot(
+        offered_tools=tool_names,
+        all_tools=_all,
+        blocked_tools=_blocked,
+        plugins=_plugins,
+        is_group=is_group,
+        bot_role=_role,
+        sender_is_admin=_sender_is_admin,
+        admin_enabled=bool(_config.get("admin_commands_enable", True)),
+        show_disabled=bool(_config.get("capability_show_disabled", True)),
+    )
+    return capabilities_view.render(_snap, is_group=is_group, bot_role=_role)
+
+
+def _legacy_tool_line(names) -> str:
+    """1.5.8 的旧文案，仅 `capability_view_enable=false` 时使用。"""
+    _desc = capabilities_view.TOOL_LABELS
+    _parts = []
+    for n in names:
+        d = _desc.get(n)
+        _parts.append(f"{n}（{d}）" if d else n)
+    return (f"你这轮**真有**的工具：{'、'.join(_parts)}。"
+            "这些是真能用的，被问就照实说；不在这份名单里的能力，"
+            "直接说「这个我这边干不了」，不许假装能做到。")
+
+
 def _capability_block(*, is_group, group_id=None, sender="", tool_names=(),
                       user_msg=""):
     """把**运行时真实状态**写进 prompt：我在哪、我能用什么、谁有权让我干活。
@@ -5621,37 +5908,31 @@ def _capability_block(*, is_group, group_id=None, sender="", tool_names=(),
       · 白名单里"谁能用"只给**昵称**，不给 QQ 号（群聊规则明确禁止出现号码）。
     """
     lines = []
-    # ── 1. 本轮我手上有什么工具 ──
+    # ── 1. 能力清单（三态：能做 / 有条件 / 真没有）──
+    #  旧实现只列「这轮真有的工具」，并要求名单外一律否认 —— 模型照做，
+    #  于是"插件没开"被答成"我没有这个能力"。见 docs/FIXPLAN_1.5.9.md §A.2。
     _names = [n for n in (tool_names or ()) if n]
-    if _names:
-        _desc = {
-            "search_web": "联网搜索",
-            "web_operate": "真实操作网页（打开/点击/填表）",
-            "take_screenshot": "截本机屏幕并发过去",
-            "search_files": "在本机找文件",
-            "send_user_file": "把本机文件发过去",
-            "get_group_members": "读群成员名单",
-            "generate_image": "生成图片",
-            "open_app": "打开本机应用",
-            "get_system_info": "读 CPU/内存等状态",
-            "control_volume": "调音量",
-            "control_power": "关机/重启/锁屏",
-            "manage_process": "查/杀进程",
-        }
-        _parts = []
-        for n in _names:
-            d = _desc.get(n)
-            _parts.append(f"{n}（{d}）" if d else n)
-        lines.append(f"你这轮**真有**的工具：{'、'.join(_parts)}。"
-                     "这些是真能用的，被问就照实说；不在这份名单里的能力，"
-                     "直接说「这个我这边干不了」，不许假装能做到。")
+    if _config.get("capability_view_enable", True):
+        try:
+            lines.extend(_capability_view_lines(
+                is_group=is_group, group_id=group_id, sender=sender,
+                tool_names=_names))
+        except Exception as e:
+            log(f"[能力视图] 三态清单生成失败（退回旧文案）: {e}")
+            if _names:
+                lines.append(_legacy_tool_line(_names))
+    elif _names:
+        lines.append(_legacy_tool_line(_names))
     # ── 2. 作用域差异（群里 vs 私聊）──
     if is_group:
         _wl = _config.get("group_tool_allowlist")
         if isinstance(_wl, list) and _wl:
-            lines.append("这条限制**只在群里**生效：群聊工具是白名单制，名单外的工具在群里"
-                         "我调不了，但在私聊里是另一套。被问「你在群里能干什么」时，"
-                         "就按上面那份真实名单答，别说成什么都能干。")
+            lines.append("这条限制**只在群里**生效：群聊工具是白名单制，私聊是另一套。"
+                         "上面标了「群白名单没放它」的，群里真调不了"
+                         "（让主人加进 group_tool_allowlist）；"
+                         "标了「这轮没挂上」的，下一轮会挂上。"
+                         "被问「你在群里能干什么」就按清单答，"
+                         "别把前一种答成「我没有这个能力」。")
         else:
             lines.append("群聊和私聊用的是同一套工具，没有额外限制。")
     # ── 3. 谁能让我干活（管理员）──
@@ -5703,12 +5984,28 @@ def _capability_block(*, is_group, group_id=None, sender="", tool_names=(),
             pass
         if _is_adm:
             lines.append(f"现在跟你说话的是 {_sender_name or '本人'}，**是主人**。"
-                         "他让我干事就直接干，别摆架子、别问「你确定吗」。")
+                         "他让我干事就办，别摆架子、别问「你确定吗」；"
+                         "真有脾气也直说，别装不会。")
         else:
             lines.append(f"现在跟你说话的是 {_sender_name or '群友'}，**不是**主人。"
                          "普通聊天天南地北都行；但调本机/改配置/执行命令这类事，"
                          "得主人发话——你可以直说「这我不能替你办」，"
                          "或者阴阳一句「你使唤我？」都行，**别答应下来再装失败**。")
+        # ── 5. 我跟他什么关系（A.7：撒娇与抱怨的强度从这里来）──
+        if _config.get("persona_relation_enable", True):
+            _rk, _rn, _ = _relation_tier(group_id, sender)
+            if _rk:
+                lines.append(f"我跟他关系：{_rk}（{_rn}）。")
+            # ── 6. 意愿轴：这次允不允许拒绝（概率 + 额度，见 _refuse_license）──
+            if is_group and _rk:
+                _allow, _why = _refuse_license(group_id, sender)
+                if _allow:
+                    if _rk == "特别好" and _config.get("intimate_refuse_ok", True):
+                        lines.append("这次他让你办的事，你可以真不办 —— 想拒就拒，"
+                                     "说「不想」「懒得」都行，别编「不会」。")
+                    else:
+                        lines.append("这次可以嫌烦、可以念叨，但事还是要办 —— "
+                                     "别把不情愿说成「不会」。")
     return "【我现在的处境】\n" + "\n".join("- " + x for x in lines) if lines else ""
 
 
@@ -8005,6 +8302,15 @@ def _handle_recall_event(ev):
         else:
             log(f"私聊撤回: user_id 无效({recall_uid})，跳过反馈")
 
+#: 群管理指令正则：动词表来自 capabilities_view，避免两处各写一份。
+#: 按长度倒序，保证「踢人」不被「踢」先吃掉（原顺序有这个 bug：
+#: 输入「踢人 10001」时 verb=踢、rest=人 10001，目标号仍能捞到，
+#: 但「解除禁言」这类只要前缀本身是动词就会错位）。
+_ADMIN_COMMAND_RE = re.compile(
+    r'^(' + '|'.join(sorted((re.escape(v) for v in capabilities_view.ADMIN_VERBS),
+                            key=len, reverse=True)) + r')(.*)$')
+
+
 def _handle_group_admin_command(text, msg, sender, group_id):
     """@Bot + 群管理指令：踢人/禁言/设管理/改名片/改群名/退群。返回 True 表示已处理。"""
     if not _config.get("admin_commands_enable", True):
@@ -8024,7 +8330,7 @@ def _handle_group_admin_command(text, msg, sender, group_id):
             cmd = cmd[len(w):].lstrip(" \t,，:：")
             break
     cmd = re.sub(r'^@[\w\u4e00-\u9fa5]+[ \t,，:：]*', '', cmd).strip()
-    m = re.match(r'^(踢出?|踢人|禁言|解除禁言|解禁|设管理|设管理员|撤管理|撤销管理|改名片|改群名|退群)(.*)$', cmd)
+    m = _ADMIN_COMMAND_RE.match(cmd)
     if not m:
         return False
     verb, rest = m.group(1), (m.group(2) or "").strip()
@@ -8032,7 +8338,8 @@ def _handle_group_admin_command(text, msg, sender, group_id):
     if str(sender) != str(BOT_QQ) and str(sender) not in admins:
         log(f"[群管理] 权限不足: {sender} 尝试「{verb}」group={group_id}")
         try:
-            smart_send_group(str(group_id), "你没有权限执行这个操作哦")
+            # 这是**真拒绝**，不是"没能力"：说清谁能办，不装客服
+            smart_send_group(str(group_id), "这得主人发话，我可不听你的")
         except Exception:
             pass
         return True
@@ -8047,15 +8354,28 @@ def _handle_group_admin_command(text, msg, sender, group_id):
     rest_digits = re.search(r'\d{5,12}', rest)
     target = at_targets[0] if at_targets else (rest_digits.group(0) if rest_digits else "")
     gid = int(group_id) if str(group_id).isdigit() else str(group_id)
-    def _ok(resp, act=""):
+    def _ok(resp, act="", receipt=""):
         rc = resp.get("retcode") if isinstance(resp, dict) else resp
         log(f"[群管理] {verb} {act} group={group_id} target={target} retcode={rc}")
+        # 1.5.9 §A.3④：执行完必须回话。原实现只 log，群里一片安静，
+        # 用户看到的就是"它说做不了/它没反应"。
+        if not _config.get("admin_command_receipt", True):
+            return True
+        _say = receipt or act or "办了"
+        try:
+            if rc == 0:
+                smart_send_group(str(group_id), _say)
+            else:
+                # 失败要如实报，不要含糊成"好像没成功"
+                smart_send_group(str(group_id), f"{verb}没办成，驱动返回 retcode={rc}")
+        except Exception:
+            pass
         return True
     if verb in ("踢", "踢出", "踢人"):
         if not target:
             smart_send_group(str(group_id), "要踢谁？@TA 或写QQ号")
             return True
-        return _ok(api_call("set_group_kick", {"group_id": gid, "user_id": int(target)}))
+        return _ok(api_call("set_group_kick", {"group_id": gid, "user_id": int(target)}), "踢了")
     if verb == "禁言":
         if not target:
             smart_send_group(str(group_id), "禁言谁？@TA 或写QQ号")
@@ -8066,37 +8386,38 @@ def _handle_group_admin_command(text, msg, sender, group_id):
             minutes = int(mm.group(1))
             if mm.group(2) == "小时":
                 minutes = minutes * 60
-        return _ok(api_call("set_group_ban", {"group_id": gid, "user_id": int(target), "duration": minutes * 60}))
+        return _ok(api_call("set_group_ban", {"group_id": gid, "user_id": int(target), "duration": minutes * 60}),
+                   receipt=f"禁了 {minutes} 分钟")
     if verb in ("解除禁言", "解禁"):
         if not target:
             smart_send_group(str(group_id), "解除谁？@TA 或写QQ号")
             return True
-        return _ok(api_call("set_group_ban", {"group_id": gid, "user_id": int(target), "duration": 0}))
+        return _ok(api_call("set_group_ban", {"group_id": gid, "user_id": int(target), "duration": 0}), "解了")
     if verb in ("设管理", "设管理员"):
         if not target:
             smart_send_group(str(group_id), "给谁设管理？@TA 或写QQ号")
             return True
-        return _ok(api_call("set_group_admin", {"group_id": gid, "user_id": int(target), "enable": True}))
+        return _ok(api_call("set_group_admin", {"group_id": gid, "user_id": int(target), "enable": True}), "给管理了")
     if verb in ("撤管理", "撤销管理"):
         if not target:
             smart_send_group(str(group_id), "撤谁的管理？@TA 或写QQ号")
             return True
-        return _ok(api_call("set_group_admin", {"group_id": gid, "user_id": int(target), "enable": False}))
+        return _ok(api_call("set_group_admin", {"group_id": gid, "user_id": int(target), "enable": False}), "撤了")
     if verb == "改名片":
         card = re.sub(r'\d{5,12}', '', rest)
         card = re.sub(r'@\s*', '', card).strip()
         if not target or not card:
             smart_send_group(str(group_id), "格式：改名片 @TA 新名片")
             return True
-        return _ok(api_call("set_group_card", {"group_id": gid, "user_id": int(target), "card": card}))
+        return _ok(api_call("set_group_card", {"group_id": gid, "user_id": int(target), "card": card}), "名片改了")
     if verb == "改群名":
         name = rest.strip()
         if not name:
             smart_send_group(str(group_id), "格式：改群名 新名字")
             return True
-        return _ok(api_call("set_group_name", {"group_id": gid, "group_name": name}))
+        return _ok(api_call("set_group_name", {"group_id": gid, "group_name": name}), "群名改了")
     if verb == "退群":
-        return _ok(api_call("set_group_leave", {"group_id": gid}))
+        return _ok(api_call("set_group_leave", {"group_id": gid}))   # 退群后已不在群里，不回执
     return False
 
 
@@ -9354,6 +9675,20 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
 
     if tools_for_call is None:
         tools_for_call = _build_group_tools(group_id) if is_group else TOOLS
+    # ★ 插件工具常驻：不参与关键词裁剪，也不受群白名单影响。
+    #   否则「发个 QQ 空间」这类措辞一旦没命中关键词，按需加载就不挂它，
+    #   模型又只能答"没能力"（1.5.9 §A.4）。
+    try:
+        if isinstance(tools_for_call, (list, tuple)) and all(
+                isinstance(_t, dict) for _t in tools_for_call):
+            _tfc = list(tools_for_call)
+            _have = {(_t.get("function") or {}).get("name") for _t in _tfc}
+            for _sch in _PLUGIN_TOOL_SCHEMAS:
+                if _sch["function"]["name"] not in _have:
+                    _tfc.append(_sch)
+            tools_for_call = _tfc
+    except Exception as _e:
+        log(f"[插件工具] 常驻注入失败（用原工具集）: {_e}")
     # 本轮真正"提供给模型"的工具名集合（用于越界防护）
     try:
         _offered_tool_names = {t["function"]["name"] for t in tools_for_call

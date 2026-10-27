@@ -309,8 +309,13 @@ def plugin_list(keyword="", **_kw):
     return {"plugins": rows, "hint": hint}
 
 
-def plugin_call(plugin="", action="", params=None, **_kw):
-    """执行工具：路由到该插件的 PLUGIN_ACTIONS[action](params)。"""
+def plugin_call(plugin="", action="", params=None, interactive=True, **_kw):
+    """执行工具：路由到该插件的 PLUGIN_ACTIONS[action](params)。
+
+    interactive=False 时**不阻塞等授权**：未启用的插件直接回一句"让主人去开"。
+    主链（群聊/私聊回复）用这个模式——群里弹窗没人看，180 秒阻塞还会把
+    回复流水线的相位顶到超时。agent 链保持默认 True。
+    """
     # 若是 fn(args) 形式（整个字典塞进 plugin）→ 拆开取
     if isinstance(plugin, dict):
         _a = plugin
@@ -327,6 +332,10 @@ def plugin_call(plugin="", action="", params=None, **_kw):
         if name != plugin:
             continue
         if not enabled:
+            if not interactive:
+                return {"error": "插件 %s 没开（不是「没能力」）：让主人去「插件」页打开它，"
+                                 "然后我就能做。" % plugin,
+                        "need_enable": plugin}
             # ★ 不直接拒绝：**先问主人**（同意就打开插件并继续执行）
             allow = _ask_permission(plugin, action, desc, "插件未启用")
             if allow is None:

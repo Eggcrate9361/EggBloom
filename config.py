@@ -200,6 +200,31 @@ DEFAULT_CONFIG = {
     # 群管理指令白名单（空 = 仅 Bot 本人 + command_admins + target_qqs）
     "admin_qqs": [],
     "admin_commands_enable": True,
+    # 能力清单（1.5.9）：把「这轮给了什么工具」与「我会什么」分开。
+    # 关掉即回到 1.5.8 的旧文案（只列本轮工具，名单外一律否认）。
+    "capability_view_enable": True,
+    # 列出未启用插件的能力（关掉则只列能用的；代价是"有但没开"与"真没有"又混在一起）
+    "capability_show_disabled": True,
+    # bot 自己在群里的角色缓存秒数（owner/admin/member）
+    "group_role_cache_sec": 600,
+    # 群管理指令执行后回一句话（空=只在日志里，群里没反应）
+    "admin_command_receipt": True,
+    # 关系档位进 prompt（A.7 撒娇与抱怨强度的数据来源；关掉则只在文本里空着）
+    "persona_relation_enable": True,
+    # 意愿轴（A.7）：关掉即"能做的都做"（1.5.8 行为）
+    "refuse_enable": True,
+    # 收到请求时给"可以不办"许可的基础概率（十来次一次；太高会被嫌"叫不动"）
+    "refuse_base_prob": 0.08,
+    # 拒绝时用撒娇/抱怨包裹的比例，其余直说"不干"
+    "refuse_soften_ratio": 0.7,
+    # 办完才允许念叨（关掉则只撒娇不抱怨）
+    "refuse_nag_after_done": True,
+    # 同一人 30 分钟内最多被拒几次，超限强制办（耍赖有额度）
+    "refuse_quota_per_30min": 2,
+    # 一天内拿"不想"逃避正经求助几次后概率归零
+    "refuse_evade_daily_limit": 3,
+    # 关系特别好档允许真不干（对熟人耍赖本身就是关系的一部分）
+    "intimate_refuse_ok": True,
     # 事件通知：加好友 / 加群 时自动私聊通知管理员 QQ（空 admin_qqs = 用上方 admin_qqs）
     "notify_admin": {
         "enabled": True,
