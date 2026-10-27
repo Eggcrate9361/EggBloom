@@ -287,6 +287,10 @@ DEFAULT_CONFIG = {
     #   于是 15 从来没生效过（第一次等 8 秒，之后每次最多 8 秒）。用户拍板统一为 8，
     #   配置与现实一致。想真的等更久要同时改 GROUP_BATCH_HARD_CAP。
     "group_msg_buffer_window_trigger": 2,
+    # 私聊合并（1.5.9 真机 2026-10-27）：连发 5 条被切成 3 批时定的参数。
+    # 群里 3 秒够用，私聊是"听他把话说完"，窗口与硬顶都更松。
+    "private_msg_buffer_window": 8,
+    "private_batch_hard_cap": 15,
     # 回复预算硬上限（1.5.9 §B3）。档位分布见 reply_budget.py：
     # A 60% 1 条 ≤8 字 / B 30% 1–2 条 ≤16 字 / C 10% 2–3 条 ≤40 字。
     # 这里只是兜底，正常情况下档位更严。

@@ -120,6 +120,8 @@
   "group_session_idle_timeout": 300,
   "group_msg_buffer_window_session": 3,
   "group_msg_buffer_window_trigger": 2,
+  "private_msg_buffer_window": 8,
+  "private_batch_hard_cap": 15,
   "reply_stale_drop_sec": 40,
   "reply_max_chars": 16,
   "reply_max_parts": 3,

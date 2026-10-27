@@ -649,10 +649,15 @@ def _private_batch_delay(*, first_time, now=None, has_image=False):
     与群聊的差异只有输入：私聊永远是"同一个人"，所以 same_sender / in_session
     恒为 True；私聊也没有 @ 概念，triggered 恒 False。
     """
+    # 2026-10-27 真机：连发 5 条被切成 3 批，回了 3 次。
+    # 群里 3 秒够用（对话在流转，该回了），私聊是"听他把话说完"，
+    # 要有更长的窗口和更松的硬顶 —— 只改参数，不另写规则。
     return _batch_delay(
         same_sender=True, in_session=True, triggered=False,
         has_context=False, has_bare_image=has_image,
         first_time=first_time, now=now,
+        window=_delay_cfg("private_msg_buffer_window", 8),
+        hard_cap=_delay_cfg("private_batch_hard_cap", 15),
     )
 
 
@@ -3194,7 +3199,8 @@ def _delay_cfg(key, default):
 
 
 def _batch_delay(*, same_sender, in_session, triggered, has_context,
-                 has_bare_image, first_time=None, now=None):
+                 has_bare_image, first_time=None, now=None,
+                 window=None, hard_cap=None):
     """算这批消息的定时器延迟（秒）。
 
     same_sender   : 合并的这条和批次发起人同一个人
@@ -3233,7 +3239,9 @@ def _batch_delay(*, same_sender, in_session, triggered, has_context,
       且只有一个地方读它们 —— 原来是两处各自读，这才是冲突的来源。
     """
     if same_sender or in_session:
-        d = _delay_cfg("group_msg_buffer_window_session", 5)
+        # window 只有私聊会传：私聊是"听他说完"场景，比群里更有耐心。
+        # 规则本身不另写一份，只是参数不同（同一概念两处判据踩过四次）。
+        d = window if window is not None else _delay_cfg("group_msg_buffer_window_session", 3)
     elif triggered and not has_context:
         d = _delay_cfg("group_msg_buffer_window_trigger", GROUP_TRIGGER_DELAY)
     else:
@@ -3242,8 +3250,9 @@ def _batch_delay(*, same_sender, in_session, triggered, has_context,
     if has_bare_image and d < GROUP_BARE_IMAGE_DELAY:
         d = GROUP_BARE_IMAGE_DELAY
     # 整批硬顶：同人规则每条重置，没有上限就会无限等
+    _cap = GROUP_BATCH_HARD_CAP if hard_cap is None else float(hard_cap)
     if first_time is not None:
-        left = first_time + GROUP_BATCH_HARD_CAP - (now if now is not None else time.time())
+        left = first_time + _cap - (now if now is not None else time.time())
         if left < 1:
             left = 1          # 保底 1 秒，允许立刻收
         if d > left:

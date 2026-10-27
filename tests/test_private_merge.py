@@ -79,7 +79,12 @@ def main():
     dg = bot_core._batch_delay(same_sender=True, in_session=True, triggered=False,
                                has_context=False, has_bare_image=False,
                                first_time=time.time())
-    check("★ 与群聊同人档位算出来一致", abs(d1 - dg) < 0.01, f"私聊 {d1} vs 群聊 {dg}")
+    # 2026-10-27 真机：连发 5 条被切成 3 批、回了 3 次。私聊改成"听他说完"，
+    # 窗口比群里长；规则仍是同一份 _batch_delay，只是参数不同。
+    check("★ 私聊比群聊更耐心（群里该回了，私聊还在等他说完）",
+          d1 > dg, f"私聊 {d1} vs 群聊 {dg}")
+    check("私聊窗口就是 private_msg_buffer_window",
+          abs(d1 - float(bot_core._config.get("private_msg_buffer_window", 8))) < 0.01, d1)
     # 硬顶：first_time 很久以前 → 剩余被压到 1 秒
     d_cap = bot_core._private_batch_delay(first_time=time.time() - 100)
     check("★ 整批有硬顶（不会无限等）", d_cap <= 1.5, d_cap)
