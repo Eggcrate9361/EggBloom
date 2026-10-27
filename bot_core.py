@@ -11162,6 +11162,15 @@ def _pipeline_step(group_id):
     #: 本轮是否丢弃（B5）。函数级默认 False —— meme 那段在发送块外层，
     #: 只写在块里会在别的路径上 NameError。
     _dropped = False
+    #: 情绪形式参数（C.1）：只改档位与首字延迟，不改文本。
+    #: 读不到就全用中性值 —— 关闭情绪必须与"没有情绪"逐字节等价。
+    _form = {"budget_shift": 0, "delay_scale": 1.0, "emoji_bonus": 0.0,
+             "soft_punct": False, "filler_pool": "mid"}
+    try:
+        from plugins.ego.mood_engine import get_form_params as _mood_form
+        _form = _mood_form(group_id)
+    except Exception as e:
+        log(f"[情绪] 形式参数读取失败（用中性值）: {e}")
     # ★ 本轮的文字是否真的发出去了（2026-10-25）：戳主的追问权只在
     #   发送成功之后才写，skip / observe / 生成为空 / 发送异常都不写。
     _sent_ok = False
@@ -11680,7 +11689,7 @@ def _pipeline_step(group_id):
             #    全是"攒消息"和"发出去之后"的，**生成之前是 0 秒** —— 这就是"太快"的根因。
             #    这里补上"看到 → 想"的那段时间。只影响时序，不碰 prompt、不影响成本。
             #    被 @ / 被戳时反而多等一点（被点名会愣一下），长消息也多等。
-            _react_base = float(_config.get("reply_reaction_delay", 1.6))
+            _react_base = float(_config.get("reply_reaction_delay", 1.6)) * float(_form.get("delay_scale", 1.0))
             if _react_base > 0:
                 _extra = 0.0
                 if is_at_bot or has_xiao_a or has_bot_nick or has_quote:
@@ -11694,7 +11703,7 @@ def _pipeline_step(group_id):
 
             # 1.5.9 §B3：本轮回合预算。话术进 user 消息（dynamic），不进静态段 ——
             # 静态段会打断黄金哈希与前缀缓存。
-            _budget = reply_budget.pick()
+            _budget = reply_budget.pick(shift=_form.get("budget_shift", 0))
             merged_text_for_ai = f"{merged_text_for_ai}\n[系统提示] {reply_budget.prompt_line(_budget)}"
             _phase_set(group_id, "generating")
             reply = call_deepseek(merged_text_for_ai, images, group_id=group_id, is_group=True, personality_temperature=_ST.get("personality_temperature"), ego_inject_context=_ego_ctx, scene_context=_scene_ctx, sender=sender)

@@ -44,16 +44,22 @@ _MEME_TAG = re.compile(r"\[表情[:：][^\]]*\]")
 _MARKUP = re.compile(r"\[(图片|引用|搜索|不说话)[^\]]*\]")
 
 
-def pick(rng: Optional[float] = None) -> Dict:
-    """按分布抽一档。传入 rng 便于测试复现。"""
+def pick(rng: Optional[float] = None, shift: int = 0) -> Dict:
+    """按分布抽一档。传入 rng 便于测试复现。
+
+    shift：情绪兴奋度给的偏移（+1 上移一档 / -1 下移）。夹在首尾之间，
+    不会因为一次激动就突破 A 档 —— 档位是分布，不是滑杆。
+    """
     r = random.random() if rng is None else float(rng)
     acc = 0.0
-    for name, prob, lo, hi, per, total in BUDGETS:
+    idx = len(BUDGETS) - 1
+    for i, (_n, prob, _lo, _hi, _per, _tot) in enumerate(BUDGETS):
         acc += prob
         if r < acc:
-            return {"name": name, "parts_min": lo, "parts_max": hi,
-                    "max_chars": per, "max_total": total}
-    name, prob, lo, hi, per, total = BUDGETS[-1]
+            idx = i
+            break
+    idx = max(0, min(len(BUDGETS) - 1, idx + int(shift or 0)))
+    name, prob, lo, hi, per, total = BUDGETS[idx]
     return {"name": name, "parts_min": lo, "parts_max": hi,
             "max_chars": per, "max_total": total}
 

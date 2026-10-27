@@ -16,6 +16,7 @@ EGO mood_engine.py —— Bot 自身情绪状态机
 import os
 import json
 import time
+from typing import Optional
 
 PLUGIN_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(PLUGIN_DIR, "data")
@@ -148,7 +149,8 @@ class MoodEngine:
         m = self.moods.get(gid)
         if not m:
             return self._format(self._effective(0.0))
-        return self._format(self._effective(self._decay_score(m)))
+        return self._format(self._effective(self._decay_score(m)),
+                            self._decay_arousal(m))
 
     def _effective(self, score: float) -> float:
         """瞬时情绪 + 日内基线。**只用于读取**，绝不写回 self.moods。"""
@@ -157,7 +159,8 @@ class MoodEngine:
     def get_all(self) -> dict:
         out = {}
         for gid, m in self.moods.items():
-            out[gid] = self._format(self._effective(self._decay_score(m)))
+            out[gid] = self._format(self._effective(self._decay_score(m)),
+                                    self._decay_arousal(m))
         return out
 
     def _decay_score(self, m: dict) -> float:
@@ -176,6 +179,17 @@ class MoodEngine:
             return score
         ratio = 1.0 - min(1.0, elapsed / decay_sec)
         return score * ratio
+
+    def _decay_arousal(self, m: dict) -> float:
+        """兴奋度向 0.3 回落。半衰比 score 慢 —— 人激动起来没那么快平复。"""
+        a = float(m.get("arousal", 0.3))
+        updated = float(m.get("updated", time.time()))
+        elapsed = max(0.0, time.time() - updated)
+        decay_sec = float(self.config.get("arousal_decay_seconds", 900))
+        if decay_sec <= 0:
+            return max(0.0, min(1.0, a))
+        ratio = 1.0 - min(1.0, elapsed / decay_sec)
+        return max(0.0, min(1.0, 0.3 + (a - 0.3) * ratio))
 
     def _baseline_score(self) -> float:
         """日内情绪基线（2026-10-24）。
@@ -210,7 +224,14 @@ class MoodEngine:
         #   光靠默认值自觉是不够的，用户随时可以在配置里把晚上改成 5。
         return max(_BASELINE_FLOOR, min(_BASELINE_CEIL, v))
 
-    def _format(self, score: float) -> dict:
+    def _format(self, score: float, arousal: Optional[float] = None) -> dict:
+        """score → 标签 + 二维形式参数（C.1）。
+
+        `arousal`（0–1）才决定长短快慢，`valence` 决定语气。旧实现只有
+        score 一维，于是"开心"和"激动"共用同一个出口 —— 实际效果是情绪
+        只能改语气，改不了说话长度。
+        没有独立 arousal 记录时按 |score|/10 推导，保证旧数据也能读出二维。
+        """
         if score >= 6:
             label = "very_happy"
         elif score >= 2:
@@ -223,11 +244,19 @@ class MoodEngine:
             label = "sad"
         else:
             label = "neutral"
+        if arousal is None:
+            # 旧数据没有独立 arousal：中性给 0.3，越极端越高，最高 0.8。
+            # 不能直接拿 |score|/10 —— 那样"平静"会读成 0.02，落进"低迷"档，
+            # 把配额压到最低，等于一上线就让机器人变哑。
+            arousal = 0.3 + 0.5 * min(1.0, abs(float(score)) / 10.0)
+        arousal = max(0.0, min(1.0, float(arousal)))
         return {
             "label": label,
             "text": MOOD_LABELS.get(label, "平静"),
             "score": round(score, 2),
-            "boost": round(score / 10.0, 2),  # -1 ~ 1
+            "valence": round(score / 10.0, 3),   # -1 ~ 1
+            "arousal": round(arousal, 3),        # 0 ~ 1
+            "boost": round(score / 10.0, 2),     # 旧字段，保留给温度与前端
         }
 
     # ── 更新 ──
@@ -246,7 +275,14 @@ class MoodEngine:
         delta = self._delta_from_text(message)
         new_score = current + delta
         new_score = max(-10, min(10, new_score))
-        self.moods[gid] = {"score": new_score, "updated": time.time()}
+        # arousal：感叹号、惊叹、长句让它上冲；每轮回落 0.05。
+        _a = self._decay_arousal(m)
+        _t = str(message or "")
+        _burst = min(0.5, 0.06 * _t.count("！") + 0.06 * _t.count("!")
+                     + 0.02 * min(60, len(_t)))
+        _a = max(0.0, min(1.0, _a + _burst - 0.05))
+        self.moods[gid] = {"score": new_score, "arousal": round(_a, 3),
+                           "updated": time.time()}
         self._save()
 
     def _delta_from_text(self, text: str) -> float:
@@ -279,24 +315,44 @@ class MoodEngine:
     # ── 注入 ──
 
     def get_prompt_block(self, group_id: str = "") -> str:
-        """生成注入主模型的当前心情提示（含语气建议与温度偏移）"""
-        mood = self.get_mood(group_id)
+        """情绪**不再进 prompt**（1.5.9 §C.1）。
+
+        旧实现只要不是 neutral 就返回「【当前心情】开心（4）」进 system，
+        模型会把"心情"和分数念出来 —— 与 1.5.8 刚修掉的汇报腔同源。
+        现在只在极端情绪下给一句不带数字的短提示，其余完全不注入；
+        情绪对行为的影响全部走 `get_form_params()`（长度、延迟、表情概率）。
+        """
         if not self.config.get("mood_enabled", True):
             return ""
-        label = mood["label"]
-        if label == "neutral":
-            return ""
-        advice = {
-            "very_happy": "超开心，多用感叹号、表情，语气活泼热情。",
-            "happy": "心情很好，回复轻松带点小雀跃。",
-            "sad": "有点低落，语气软一点，别太热情。",
-            "down": "闷闷不乐，回复简短些，不想多说。",
-            "angry": "有点不爽，语气冷淡克制，别阴阳怪气。",
-        }.get(label, "")
-        lines = [f"【当前心情】{mood['text']}（{mood['score']}）"]
-        if advice:
-            lines.append(advice)
-        return "\n".join(lines)
+        f = self.get_form_params(group_id)
+        v = float(f.get("valence") or 0.0)
+        if v >= 0.8:
+            return "【今天心情不错】"
+        if v <= -0.8:
+            return "【现在有点烦，别哄我】"
+        return ""
+
+    def get_form_params(self, group_id: str = "") -> dict:
+        """情绪 → 形式参数（只改生成方式，不改文本）。"""
+        if not self.config.get("mood_enabled", True):
+            return dict(_NEUTRAL_FORM)
+        try:
+            m = self.get_mood(group_id)
+        except Exception:
+            return dict(_NEUTRAL_FORM)
+        v = float(m.get("valence") or 0.0)
+        a = float(m.get("arousal") or 0.3)
+        return {
+            "valence": round(v, 3),
+            "arousal": round(a, 3),
+            # 兴奋 → 配额上移一档；低迷 → 下移一档
+            "budget_shift": 1 if a >= 0.7 else (-1 if a <= 0.2 else 0),
+            # 以 0.3 为中性基准：中性必须正好是 1.0 / 0，否则"没情绪"也在改行为
+            "delay_scale": round(max(0.5, 1.0 - 0.35 * (a - 0.3) / 0.7), 3),
+            "emoji_bonus": round(0.15 * (a - 0.3) / 0.7, 3),
+            "soft_punct": a < 0.3,
+            "filler_pool": "high" if v > 0.3 else ("low" if v < -0.3 else "mid"),
+        }
 
     def get_temperature(self, group_id: str = "", base: float = None) -> float:
         """按情绪微调温度（happy 更发散，低落更收敛）"""
@@ -306,6 +362,13 @@ class MoodEngine:
             return 1.0 + shift
         return max(0.2, min(2.0, float(base) + shift))
 
+
+#: 情绪关闭 / 读不到时的形式参数。所有偏移必须是 0，否则"关了情绪"仍有行为差异。
+_NEUTRAL_FORM = {
+    "valence": 0.0, "arousal": 0.3, "budget_shift": 0,
+    "delay_scale": 1.0, "emoji_bonus": 0.0,
+    "soft_punct": False, "filler_pool": "mid",
+}
 
 _mood = MoodEngine()
 
@@ -372,6 +435,11 @@ __all__ = [
 def reset_mood(group_id: str = "") -> dict:
     _mood.reset(group_id)
     return {"ok": True, "moods": _mood.get_all()}
+
+
+def get_form_params(group_id: str = "") -> dict:
+    """情绪 → 形式参数（模块级入口，供 bot_core 调）。"""
+    return _mood.get_form_params(group_id)
 
 
 def get_moods() -> dict:

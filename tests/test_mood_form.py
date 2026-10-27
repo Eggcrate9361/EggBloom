@@ -1,0 +1,146 @@
+# -*- coding: utf-8 -*-
+"""情绪二维与形式参数（2026-10-27 · 1.5.9 §C.1）
+
+## 为什么
+
+旧 `mood_engine` 是单维 `score ∈ [-10,10]`，只有"开心/难过"一条轴。
+但决定说话**长短快慢**的是兴奋度（arousal），不是好坏（valence）：
+开心可以是话痨也可以是懒得理人。
+
+更实际的问题：`get_prompt_block()` 只要不是 neutral 就返回
+「【当前心情】开心（4）」进 system —— 模型会把"心情"和分数念出来，
+与 1.5.8 刚修掉的汇报腔同源。
+
+## 契约
+
+1. 情绪只改形式参数（档位 / 延迟 / 表情概率），**不进 prompt**
+2. 中性必须正好是 `budget_shift=0 / delay_scale=1.0` —— 否则"没情绪"也在改行为
+3. 关闭情绪（`mood_enabled=False`）与没有情绪记录逐字节等价
+4. 只有 |valence| 极端时才给一句不带数字的提示
+
+运行：python tests/test_mood_form.py
+"""
+import os
+import sys
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(HERE)
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)
+
+_FAIL = []
+
+
+def check(name, ok, detail=""):
+    if ok:
+        print(f"  [OK]   {name}")
+    else:
+        print(f"  [FAIL] {name}  {detail}")
+        _FAIL.append(name)
+
+
+def _engine():
+    from plugins.ego.mood_engine import _mood, _NEUTRAL_FORM
+    return _mood, _NEUTRAL_FORM
+
+
+def _set(score=0.0, arousal=0.3, gid="__test_mood__"):
+    import time
+    m, _ = _engine()
+    m.moods[gid] = {"score": float(score), "arousal": float(arousal),
+                    "updated": time.time()}
+    return gid
+
+
+def test_neutral_is_zero():
+    m, neutral = _engine()
+    gid = _set(0.0, 0.3)
+    f = m.get_form_params(gid)
+    check("中性档位不偏移", f["budget_shift"] == 0, f)
+    check("中性延迟系数为 1", abs(f["delay_scale"] - 1.0) < 0.02, f)
+    check("中性表情加成接近 0", abs(f["emoji_bonus"]) < 0.02, f)
+    check("中性不打软标点", f["soft_punct"] is False, f)
+    check("中性语气池为 mid", f["filler_pool"] == "mid", f)
+    check("关闭情绪 == 中性", neutral["budget_shift"] == 0
+          and neutral["delay_scale"] == 1.0, neutral)
+
+
+def test_arousal_drives_form():
+    m, _ = _engine()
+    hi = _set(4.0, 0.85)
+    f_hi = m.get_form_params(hi)
+    check("高兴奋 → 档位上移", f_hi["budget_shift"] == 1, f_hi)
+    check("高兴奋 → 延迟更短", f_hi["delay_scale"] < 0.9, f_hi)
+    lo = _set(-2.0, 0.15)
+    f_lo = m.get_form_params(lo)
+    check("低兴奋 → 档位下移", f_lo["budget_shift"] == -1, f_lo)
+    check("低兴奋 → 软标点", f_lo["soft_punct"] is True, f_lo)
+    check("低兴奋 → 延迟更长", f_lo["delay_scale"] >= 0.99, f_lo)
+
+
+def test_valence_drives_pool():
+    m, _ = _engine()
+    g1 = _set(6.0, 0.5)
+    check("正向 → high 语气池", m.get_form_params(g1)["filler_pool"] == "high",
+          m.get_form_params(g1))
+    g2 = _set(-6.0, 0.5)
+    check("负向 → low 语气池", m.get_form_params(g2)["filler_pool"] == "low",
+          m.get_form_params(g2))
+
+
+def test_prompt_block():
+    m, _ = _engine()
+    mid = _set(1.0, 0.4)
+    check("普通情绪不注入", m.get_prompt_block(mid) == "", m.get_prompt_block(mid))
+    hi = _set(9.0, 0.6)
+    blk = m.get_prompt_block(hi)
+    check("极端正向给短提示", "心情不错" in blk, blk)
+    check("提示里没有数字", not any(ch.isdigit() for ch in blk), blk)
+    lo = _set(-9.0, 0.6)
+    blk2 = m.get_prompt_block(lo)
+    check("极端负向给短提示", "烦" in blk2, blk2)
+    check("旧格式已消失", "【当前心情】" not in blk + blk2, blk + blk2)
+
+
+def test_mood_disabled():
+    m, _ = _engine()
+    gid = _set(9.0, 0.9)
+    old = m.config.get("mood_enabled", True)
+    m.config["mood_enabled"] = False
+    try:
+        f = m.get_form_params(gid)
+        check("关闭情绪 → 全中性", f["budget_shift"] == 0 and f["delay_scale"] == 1.0, f)
+        check("关闭情绪 → 不注入", m.get_prompt_block(gid) == "", m.get_prompt_block(gid))
+    finally:
+        m.config["mood_enabled"] = old
+
+
+def test_old_data_compat():
+    """旧 mood.json 没有 arousal 字段，不能读成"低迷"。"""
+    import time
+    m, _ = _engine()
+    gid = "__test_mood_old__"
+    m.moods[gid] = {"score": 0.0, "updated": time.time()}
+    f = m.get_form_params(gid)
+    check("旧数据中性不落到下移档", f["budget_shift"] == 0, f)
+    check("旧数据 arousal 落在 0.3 附近", 0.25 <= f["arousal"] <= 0.45, f)
+
+
+def main():
+    print("=" * 58)
+    print("情绪二维与形式参数（C.1）")
+    print("=" * 58)
+    for fn in (test_neutral_is_zero, test_arousal_drives_form,
+               test_valence_drives_pool, test_prompt_block,
+               test_mood_disabled, test_old_data_compat):
+        print(f"\n[{fn.__name__}]")
+        fn()
+    print("\n" + "=" * 58)
+    if _FAIL:
+        print(f"失败 {len(_FAIL)}：{_FAIL}")
+        sys.exit(1)
+    print("全部通过")
+
+
+if __name__ == "__main__":
+    main()
