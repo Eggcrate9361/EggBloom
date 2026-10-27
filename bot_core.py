@@ -10839,6 +10839,41 @@ def _strip_context_marks(text: str) -> str:
         return text
 
 
+def _line_is_directed_to_others(line: str, *, addressed: bool = False) -> bool:
+    """这一行是不是"用户在跟别人说话"（该跳过）。
+
+    ★ 2026-10-27 修真机事故（群 829854136 18:45 / 18:46）：
+
+        [决策放行] 触发: [18:45] [外莱塔尼亚·6acy] [引用:(/ω＼)｜引用我，必回] …
+        跳过定向他人的消息: [当前] @(/ω＼)  这是你的求救信号吗
+
+      用户 @了 Bot 问「讲解一下精神分析理论」，**整批却被丢掉** ——
+      因为批次里有一行 `[当前] @(/ω＼) …`（用户引用了一条喊群主的话），
+      逐行检测时它被判成"这条在跟群主说话"，于是 return 掉了整批。
+
+      两个独立的错：
+        ① **被引用的历史**里的 @别人 —— 那是别人之间的事，与 Bot 无关
+        ② **用户当前这句**里的 @别人 —— 用户引用了别人的话再问你，
+           这是在跟你说话，不是跟别人说话
+
+      判据：
+        · 这行是回抓的历史（行首 `[HH:MM]`）→ 不算（①）
+        · 这行带 `[当前]` → 是用户当前的话，但**若整批有在叫我的信号**，
+          就不算定向他人（②）；否则照旧判
+        · 其他行 → 照旧判
+    """
+    # ① 回抓的历史：行首是 [HH:MM]，不是用户当前的话
+    if re.match(r'^\[\d{1,2}:\d{2}\]\s', line):
+        return False
+    # ② 用户当前这句：整批在叫我 → 不因 @别人 而丢弃
+    if line.lstrip().startswith("[当前]") and addressed:
+        return False
+    content = re.sub(r'^\[.+?\]\s*', '', line).strip()
+    if not content:
+        return False
+    return _is_at_others(content)
+
+
 def _is_at_others(text: str) -> bool:
     """检测消息是否定向给他人（非 Bot/非小a）。"""
     # 先检查是否包含触发词
@@ -11681,6 +11716,11 @@ def _pipeline_step(group_id):
     _quote_id = quote_target_for(buffer)
     # ★ 触发口径：只有"引用的是我"才算被叫到；引用别人 → 只是上下文，交给决策判
     quote_forces = has_quote and quote_me
+    # ★ 这批**有没有在叫我**的信号（2026-10-27）。
+    #   用于逐行检测：既然对方明确在叫我，就不该因为某一行 @了别人
+    #   而把整批丢掉（真机 18:46：用户 @我问精神分析，整批被丢）。
+    _batch_addressed = bool(is_at_bot or has_xiao_a or has_bot_nick
+                             or quote_forces or has_text_at)
     
     # ── 决策点（唯一）：_decide 返回 reply / skip / observe ──
     # 旧代码这段内联在这里，且只有"无触发"才会走到；现在触发批次也经过它，
@@ -11733,7 +11773,10 @@ def _pipeline_step(group_id):
             continue
 
         # ── 使用共享过滤函数检测 @ 他人 / 定向消息 ──
-        if _is_at_others(content):
+        # ★ 2026-10-27：改用 _line_is_directed_to_others ——
+        #   旧版逐行判 _is_at_others(content)，把「回抓的历史里 @别人」
+        #   和「用户引用别人再问我」都当成"在跟别人说话" → 整批被丢。
+        if _line_is_directed_to_others(line, addressed=_batch_addressed):
             log(f"群[{group_id}] 跳过定向他人的消息: {line[:60]}")
             return
         
