@@ -244,6 +244,86 @@ class TestRecency(unittest.TestCase):
         for q in ("原神是什么", "版本历史", "怎么评价这个", "MaiBot 架构"):
             self.assertFalse(sc.wants_recency(q), q)
 
+    # ── 2026-10-27 真机事故 ──────────────────────────────────
+    #  用户问「今年明日方舟周年半周年限定是谁」，模型把检索词改写成
+    #  「明日方舟 2026 半周年 限定 干员」——「今年」被改写掉了，
+    #  时效加权整个失效（wants_recency=False），2025 年旧闻压过 2026 年新消息，
+    #  模型据此答「十一月的还没宣」，而 11 月的消息就在搜索结果里。
+
+    def test_year_number_triggers_recency(self):
+        """年份数字本身是时效信号（比「今年」更精确）。"""
+        for q in ("明日方舟 2026 半周年 限定 干员",
+                  "明日方舟 2026 感谢庆典 限定干员 是谁",
+                  "原神 2025 版本"):
+            self.assertTrue(sc.wants_recency(q), q)
+
+    def test_year_extraction(self):
+        self.assertEqual(sc.query_years("明日方舟 2026 半周年"), {"2026"})
+        self.assertEqual(sc.query_years("2025 和 2026 都看看"), {"2025", "2026"})
+        self.assertEqual(sc.query_years("没有年份"), set())
+        # 不是年份的数字不能误判
+        self.assertEqual(sc.query_years("明日方舟 版本 3.8"), set())
+        self.assertEqual(sc.query_years("QQ 3865661256"), set())
+
+    def test_stale_year_verdict(self):
+        """问 2026、结果全是 2025 → 判 stale_year（不是 good）。"""
+
+        def _it(date, score=2.0):
+            return {"date": date, "title": "t", "summary": "s", "score": score}
+
+        items = [_it("2025-06-18"), _it("2025-07-16")]
+        r = sc.quality_of(items, "明日方舟 2026 半周年 限定 干员")
+        self.assertEqual(r["verdict"], "stale_year", r)
+        self.assertIn("2026", " ".join(r["reasons"]))
+
+    def test_stale_year_not_triggered_when_one_matches(self):
+        """只要有一条年份对得上，就不该判 stale_year。"""
+
+        def _it(date, score=2.0):
+            return {"date": date, "title": "t", "summary": "s", "score": score}
+
+        items = [_it("2025-06-17"), _it("2026-10-17")]
+        r = sc.quality_of(items, "明日方舟 2026 感谢庆典 限定干员 是谁")
+        self.assertNotEqual(r["verdict"], "stale_year", r)
+
+    def test_stale_year_hint_tells_model_to_research(self):
+        """提示必须明确让模型换词再搜，别拿别的年份下结论。"""
+
+        def _it(date, score=2.0):
+            return {"date": date, "title": "t", "summary": "s", "score": score}
+
+        info = sc.quality_of([_it("2025-06-18")], "明日方舟 2026 半周年")
+        hint = sc.quality_hint(info)
+        self.assertIn("年份对不上", hint)
+        self.assertIn("再搜一次", hint)
+        self.assertIn("不要", hint)
+
+    def test_no_year_in_query_never_stale(self):
+        """问句没提年份 → 不判 stale_year（不冤枉 timeless 内容）。"""
+
+        def _it(date, score=2.0):
+            return {"date": date, "title": "t", "summary": "s", "score": score}
+
+        items = [_it("2025-06-18"), _it("2020-01-01")]
+        r = sc.quality_of(items, "弗洛伊德 精神分析引论")
+        self.assertNotEqual(r["verdict"], "stale_year", r)
+
+    def test_single_authority_for_wants_recency(self):
+        """★ 一条规则只能有一个权威源。
+
+        这次改动真的踩到了：search_core.py 里同时存在两个 `def wants_recency`
+        —— 后一个（旧版）把前一个（带年份判断的）整个覆盖掉，
+        改完看起来生效、实则没有。仓库已因「同一概念两处判据」踩过多次。
+        """
+        import io
+        import os
+        src = io.open(os.path.join(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__))), "search_core.py"), encoding="utf-8").read()
+        self.assertEqual(src.count("def wants_recency("), 1,
+                         "wants_recency 有多个定义，后者会覆盖前者")
+        self.assertEqual(src.count("def query_years("), 1)
+        self.assertEqual(src.count("def year_mismatch_count("), 1)
+
     def test_age_bonus_unknown(self):
         for x in ("", None, "bad", "0000-00-00"):
             self.assertEqual(sc._age_bonus(x), 0.0, repr(x))

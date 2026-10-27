@@ -379,6 +379,54 @@ _RECENCY_WORDS = (
     "最新版", "新版", "更新", "上线", "发布", "发售",
 )
 
+#: ★ 2026-10-27：问句里出现**年份数字**，同样是在要"这一年的版本"。
+#:
+#: 起因是真机事故：用户问「今年明日方舟周年半周年限定是谁」，
+#: 模型把检索词改写成「明日方舟 2026 半周年 限定 干员」——
+#: **「今年」被改写掉了**，时效加权因此整个失效（wants_recency=False），
+#: 于是 2025 年的旧闻排在 2026 年的新消息前面。
+#: 模型答「十一月的还没宣」，而那条 11 月的消息其实就躺在搜索结果里。
+#:
+#: 所以：年份数字本身就是时效信号，且比「今年」更精确 ——
+#: 问 2026 就该优先要 2026 年的内容。
+_YEAR_RE = re.compile(r"(?<!\d)(20[0-4]\d)(?!\d)")
+
+
+def query_years(query):
+    """从问句里抽年份数字（2024~2049）。返回集合，空集表示没提年份。"""
+    return set(_YEAR_RE.findall(str(query or "")))
+
+
+def wants_recency(query):
+    q = str(query or "").lower()
+    if any(w in q for w in _RECENCY_WORDS):
+        return True
+    # 年份数字也算时效信号（见上面的真机事故）
+    return bool(query_years(query))
+
+
+def year_mismatch_count(items, query):
+    """这批结果里，有多少条**年份与问句对不上**。
+
+    判据：问句提到 2026，结果的发布日期是 2025 → 对不上。
+    这类结果不是"没用"，而是**回答了另一个问题** ——
+    模型把它们当成答案就会说出「还没宣」这种事实错误。
+
+    没有日期的结果不计入（无从判断，不冤枉）。
+    """
+    years = query_years(query)
+    if not years:
+        return 0
+    n = 0
+    for it in (items or []):
+        d = str(it.get("date") or "")[:10]
+        if len(d) != 10:
+            continue
+        y = d[:4]
+        if y not in years:
+            n += 1
+    return n
+
 #: 下载站/入口页的标题特征。它们日期永远是最新的（页面天天被重抓），
 #: 内容却不是答案 —— 问「原神最新版本」时返回「应用宝官网免费下载」毫无用处。
 _AGGREGATOR_TITLE = (
@@ -392,11 +440,6 @@ _RECENCY_BONUS_MAX = 0.35
 
 #: 时效加权的半衰期（天）。一个月内的内容拿满分，90 天后归零。
 _RECENCY_HALFLIFE_DAYS = 30
-
-
-def wants_recency(query):
-    q = str(query or "").lower()
-    return any(w in q for w in _RECENCY_WORDS)
 
 
 def _age_bonus(date_str, today=None):
@@ -646,11 +689,19 @@ def _content_excerpt(content, summary, q="", limit=CONTENT_BUDGET):
 
 # ── 质量判定 ──────────────────────────────────────────────
 
-def quality_of(items):
+def quality_of(items, query=""):
     """判这批结果够不够回答。三档：good / thin / empty。
 
     判据是 score 和有没有内容，不掺"摘要像不像导航"这类文本特征 ——
     那是扒网页时才需要绕的弯（因为它只有文本），统一后由内容量兜住。
+
+    ★ 2026-10-27 加「年份对不上」这一档（stale_year）：
+      问句提到 2026，结果全是 2025 年的 —— 它们**不是没用，是回答了另一个
+      问题**。真机事故：用户问「今年明日方舟周年半周年限定是谁」，
+      搜回 2025 年的旧闻，模型据此答「十一月的还没宣」，
+      而 11 月的消息就在另一条结果的正文里（那条排在后面，因为没有时效加权）。
+      这种"能答但答的是错年份"比"查不到"更危险：查不到模型会说没查到，
+      答错年份模型会**笃定地说错话**。
     """
     lst = list(items or ())
     if not lst:
@@ -672,6 +723,15 @@ def quality_of(items):
         return {"verdict": "empty", "good_count": 0, "top_score": round(top, 2),
                 "reasons": ["结果里没有任何可读内容"]}
 
+    # ── 年份对不上：有日期、且年份跟问句不是同一年 ──
+    _ym = year_mismatch_count(lst, query)
+    _dated = sum(1 for x in lst if len(str(x.get("date") or "")[:10]) == 10)
+    if _ym and _dated and _ym == _dated:
+        _ys = "、".join(sorted(query_years(query)))
+        return {"verdict": "stale_year", "good_count": good,
+                "top_score": round(top, 2),
+                "reasons": [f"问的是 {_ys} 年，但 {_dated} 条结果全部是其他年份的"]}
+
     if good >= 1:
         return {"verdict": "good", "good_count": good, "top_score": round(top, 2),
                 "reasons": []}
@@ -686,6 +746,12 @@ QUALITY_HINT = {
         "【结果质量：偏薄】{reasons}。"
         "\n这些结果可能不足以回答问题。把查到的那点说出来（具体的名词、数字、时间），"
         "再说清哪一部分没查到。不要凭常识补全没查到的部分。"
+    ),
+    "stale_year": (
+        "【结果质量：年份对不上】{reasons}。"
+        "\n这些内容讲的是**别的年份**的事，拿它们回答会说出事实错误。"
+        "\n换一组关键词再搜一次（换个说法、加上年份或活动名），"
+        "或者直接说自己没查到这一年的消息 —— **不要**根据别的年份下结论。"
     ),
     "empty": (
         "【结果质量：几乎没有可用内容】"

@@ -818,6 +818,40 @@ def _buffer_private_message(sender: str, text: str, images, msg) -> bool:
 GROUP_OBSERVE: Dict[str, Dict[str, Any]] = {}
 GROUP_RECENT_MSGS: Dict[str, List[Tuple]] = {}  # {group_id: [(timestamp, sender, text), ...]}  最近X秒消息缓存
 GROUP_TIMELINE: Dict[str, List[Tuple]] = {}  # {group_id: [(timestamp, sender_id, sender_nick, text), ...]}  全局消息时间线（概率门之前记录）
+def _search_year_mismatch(query: str, result_text: str) -> Optional[str]:
+    """搜到的结果**年份**与问句对不上？返回错的那个年份串，没错返回 None。
+
+    ★ 2026-10-27 真机事故（群 829854136 18:13）：
+      用户问「今年明日方舟周年半周年限定是谁」，模型把检索词改写成
+      「明日方舟 2026 半周年 限定 干员」（「今年」被改掉了），
+      搜回来的全是 2025 年的旧闻 —— 而 11 月的消息（【以风雪为誓】11/01）
+      就在另一条结果里，因为没有时效加权被压到了后面。
+      模型据此答「十一月的还没宣」。
+
+      **搜到了但答的是别的年份，比查不到更危险**：
+      查不到模型会说"没查到"，答错年份模型会笃定地说错话。
+
+    判据：问句里的年份 vs 结果文本里出现的日期年份（`[2025-06-18 · site]`）。
+    两边完全不交集才算不符 —— 只要有一条对得上就不算（那可能是对的答案）。
+    """
+    try:
+        import search_core as _sc
+    except Exception:
+        return None
+    try:
+        _ys = _sc.query_years(query)
+        if not _ys:
+            return None
+        _found = set(re.findall(r"\[(\d{4})-\d{2}-\d{2}", str(result_text or "")))
+        if not _found:
+            return None
+        if _found & _ys:
+            return None
+        return "/".join(sorted(_found))
+    except Exception:
+        return None
+
+
 def _drop_reason(*, new_msgs=0, age=0.0, turns=2, hard_sec=120.0, text="",
                  addressed=False):
     """这条回复该不该整条丢。返回原因（空串 = 照发）。
@@ -5049,7 +5083,7 @@ def _render_ds_search(results, query, _log_prefix="搜索"):
     if not items:
         return ""
 
-    q_info = search_core.quality_of(items)
+    q_info = search_core.quality_of(items, query)
     log(f"[{_log_prefix}] DeepSeek「{query}」→ {len(items)} 条 "
         f"(质量 {q_info['verdict']}, top {q_info['top_score']})")
 
@@ -10149,6 +10183,8 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
                     messages.append({"role": "assistant", "content": msg.get("content") or "", "tool_calls": tool_calls})
                     web_rounds += 1
                     _round_ok_flags = []        # 这一轮每个工具的成功情况
+                    #: 本轮是否出现「搜索结果年份与问句不符」（见下方注释）
+                    _stale_hit = False
                     # 群管理工具要把**当前消息的发送者**带进去做权限判断。
                     # execute_tool_call 只会自动补 group_id（来自参数），
                     # sender 不在它的职责里，所以在这里闭包捕获。
@@ -10177,6 +10213,27 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
                         _mark = "" if _r["ok"] else (" [被拒:%s]" % _r["blocked"] if _r["blocked"] else " [失败]")
                         log(f"  → {_r['tool']}: action={_act} (第{web_rounds}轮)"
                             f"{_mark} → {_res_parts}")
+                        # ── 搜索结果年份对不上（2026-10-27 真机事故）──
+                        #   搜「明日方舟 2026 半周年」只回 2025 年的旧闻，模型据此
+                        #   答「十一月的还没宣」—— 而 11 月的消息就在另一条结果里。
+                        #   搜到了但答的是别的年份，比查不到更危险：查不到模型会
+                        #   说"没查到"，答错年份模型会**笃定地说错话**。
+                        #   这里记下来，好让下一轮强制它换词再搜。
+                        if _r.get("tool") == "search_web" and _r.get("ok"):
+                            try:
+                                _q = ""
+                                try:
+                                    _q = str((json.loads(tc["function"].get("arguments")
+                                                          or "{}") or {}).get("query") or "")
+                                except Exception:
+                                    _q = ""
+                                _bad_years = _search_year_mismatch(_q, _r.get("full_text") or "")
+                                if _bad_years:
+                                    _stale_hit = True
+                                    log(f"  → [搜索年份不符] 问 {_q}，"
+                                        f"结果全是 {_bad_years} → 需换词重搜")
+                            except Exception:
+                                pass
                         messages.append(_trunner.make_tool_message(tc["id"], _r["inline"]))
                     # ── 上下文总量闸（2026-10-21）──
                     #   工具轮累计逼近窗口预算 → 停止继续调工具，强制收尾。
@@ -10201,6 +10258,24 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
                     # max_tool_rounds 续轮。判据抽在 _should_continue_tool_round 里
                     # （全部失败 → 收尾如实说；有成功的 → 继续）。
                     # 上下文总量闸在上面对所有轮次都生效，不会无限堆。
+                    #
+                    # ★ 搜索年份不符（2026-10-27）：搜到了但答的是别的年份，
+                    #   不能就这么收尾 —— 模型会拿着 2025 年的旧闻下结论。
+                    #   强制它换一组词再搜（搜活动名、加上年份），直到
+                    #   搜到对年份的，或者轮次用完。
+                    if _stale_hit and web_rounds < _max_plain_rounds:
+                        log(f"[搜索重搜] 年份不符，第 {web_rounds}/{_max_plain_rounds} 轮，"
+                            f"要求换词重搜")
+                        messages.append({
+                            "role": "user",
+                            "content": ("【必须重搜】刚才搜到的内容**年份不对**，"
+                                        "拿它回答会说出事实错误。"
+                                        "换一组关键词再搜一次：换个说法、"
+                                        "加上具体活动名或角色名、"
+                                        "或者只搜年份+活动名。"
+                                        "这次不要直接下结论。"),
+                        })
+                        continue
                     if not _should_continue_tool_round(web_rounds, _round_ok_flags,
                                                        _max_plain_rounds):
                         if web_rounds >= _max_plain_rounds and any(_round_ok_flags):

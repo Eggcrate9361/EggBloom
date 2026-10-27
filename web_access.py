@@ -1009,7 +1009,13 @@ def _render(items, nq, query, via):
     if not body:
         return ""
     parts = [f"【{nq}】搜索结果{key_note}：", body]
-    hint = search_core.quality_hint(search_core.quality_of(items))
+    # ★ 年份判据用**原始 query**而不是提炼后的 nq：
+    #   提炼会砍词（「今年明日方舟周年限定是谁」→「明日方舟 限定」），
+    #   年份信息恰恰最容易被砍掉 —— 而砍掉之后就没法判断结果答的是哪一年。
+    #   原始问句里的年份才作数。
+    _q_years = search_core.query_years(query) or search_core.query_years(nq)
+    _q_for_quality = query if search_core.query_years(query) else nq
+    hint = search_core.quality_hint(search_core.quality_of(items, _q_for_quality))
     if hint:
         parts.append("\n\n" + hint)
     return "\n".join(parts)
