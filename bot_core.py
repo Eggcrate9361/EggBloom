@@ -5726,7 +5726,7 @@ GROUP_ADMIN_SCHEMA = {"type": "function", "function": {
     }, "required": ["action"]}}}
 
 
-def _tool_group_admin(args, *, sender="", group_id=""):
+def _tool_group_admin(args, *, sender="", group_id="", user_msg=""):
     _a = str((args or {}).get("action") or "")
     _ok, _msg = _do_group_admin(
         _a,
@@ -5734,6 +5734,7 @@ def _tool_group_admin(args, *, sender="", group_id=""):
         value=str((args or {}).get("value") or ""),
         sender=sender or str((args or {}).get("sender") or ""),
         group_id=group_id or str((args or {}).get("group_id") or ""),
+        user_msg=user_msg,
     )
     return _tool_ok(_msg) if _ok else _tool_fail(_msg)
 
@@ -8520,8 +8521,140 @@ _ADMIN_LABELS = {
     "set_card": "名片改了", "set_group_name": "群名改了", "leave": "走了",
 }
 
+# ── 群名记忆（2026-10-27）──────────────────────────────────────────
+#: 记群名历史 —— 否则「把群名改回去」这类指令无从下手：
+#:   用户说「改回去」，目标值是个**指代**（「回去」「原来」「之前那个」），
+#:   不是具体名字。机器人不知道原来叫什么，就只能瞎填或反问。
+#:
+#: 语义：历史列表 **[0]=当前群名，[1]=上一个群名**。
+#:   「改回去」= 改成 [1]。
+#:
+#: 为什么要 [1] 而不是"我改之前那个"：
+#:   群名不一定是 bot 改的 —— 用户自己也改。真机（群 829854136）：
+#:     bot 把「高浓度神金矿区」改成「高浓度神金**矿产区**」（模型多填一个字）
+#:     → 用户自己改回「高浓度神金矿区」
+#:   此时"原来的名字"是「高浓度神金矿产区」（bot 改坏的那个），
+#:   而"用户自己改之前"的是它自己。
+#:   按 [1] 记：读到「高浓度神金矿区」时列表变成
+#:     [高浓度神金矿区, 高浓度神金矿产区] → 「改回去」还原成后者 ✓
+#:
+#: 真机（20:34）：用户说「额，把群名改回去」→ 机器人没执行（被 observe 掉了），
+#:   用户接着说「把群名改成高浓度神金矿区」才推进。
+_GROUP_NAME_HISTORY: Dict[str, List[str]] = {}
+_GROUP_NAME_LOCK = threading.Lock()
 
-def _do_group_admin(action, *, target="", value="", sender="", group_id=""):
+#: 群名历史落盘位置 —— 内存版重启就没了，"改回去"会跟着失忆
+_GROUP_NAME_STATE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                  "plugins", "state", "group_names.json")
+
+#: 指代词 —— value 是这些词时，意思是"改回原来的名字"
+_NAME_BACKREF = ("回去", "回来", "原来", "原来的", "之前", "先前", "旧名", "老名字")
+
+
+def _load_group_names() -> None:
+    """从 state 文件恢复群名历史。失败就当没有 —— 不影响主链。"""
+    try:
+        with open(_GROUP_NAME_STATE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, dict):
+            with _GROUP_NAME_LOCK:
+                for k, v in data.items():
+                    if isinstance(v, list):
+                        _GROUP_NAME_HISTORY[str(k)] = [str(x) for x in v][:5]
+    except Exception:
+        pass
+
+
+def _save_group_names() -> None:
+    """群名历史落盘。失败不抛 —— 存不住只是下次失忆，不该连累改群名。"""
+    try:
+        with _GROUP_NAME_LOCK:
+            data = {k: list(v)[:5] for k, v in _GROUP_NAME_HISTORY.items()}
+        os.makedirs(os.path.dirname(_GROUP_NAME_STATE), exist_ok=True)
+        with open(_GROUP_NAME_STATE, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=1)
+    except Exception:
+        pass
+
+
+def _remember_group_name(gid: str, name: str) -> None:
+    """记录一个群名到历史（最新在前，最多留 5 个）。"""
+    n = str(name or "").strip()
+    if not n:
+        return
+    with _GROUP_NAME_LOCK:
+        lst = _GROUP_NAME_HISTORY.setdefault(str(gid), [])
+        if lst and lst[0] == n:
+            return                      # 同一个名，不动历史
+        if n in lst:
+            lst.remove(n)
+        lst.insert(0, n)
+        del lst[5:]
+    _save_group_names()
+
+
+def _last_group_name(gid: str) -> str:
+    """这个群的**上一个**群名（「改回去」的目标）；没有记录返回空串。"""
+    with _GROUP_NAME_LOCK:
+        lst = _GROUP_NAME_HISTORY.get(str(gid)) or []
+        return lst[1] if len(lst) >= 2 else ""
+
+
+def _is_name_backref(value: str) -> bool:
+    """value 是不是"改回去"这种指代（而不是具体名字）。"""
+    v = str(value or "").strip()
+    if not v:
+        return False
+    # 去掉"改""成""到""把""群名"等壳，只看剩下的核心词
+    core = re.sub(r"(群名|群|改|成|到|把|换|一下|名字)", "", v).strip()
+    if not core:
+        core = v
+    return any(w in core for w in _NAME_BACKREF)
+
+
+def _read_group_name(gid: int, no_cache: bool = True):
+    """读当前群名。成功返回 (True, 名字)，失败返回 (False, 原因)。
+
+    ★ no_cache 必须为 True（2026-10-27）：
+      `get_group_info` 在 OneBot 侧**带缓存** —— 改完群名立刻读，
+      读到的还是改之前的旧名。
+      实测：改成功（群里已是「干净验证A」），但 get_group_info 返回
+      「高浓度神金矿产区」，get_group_info(no_cache=True) 才返回新名。
+      用带缓存的读做回读校验，会把**成功**误判成失败。
+    """
+    try:
+        _body = {"group_id": int(gid)}
+        if no_cache:
+            _body["no_cache"] = True
+        resp = api_call("get_group_info", _body)
+    except Exception as e:
+        return (False, f"读不到群信息：{e}")
+    if not isinstance(resp, dict):
+        return (False, "读群信息返回格式不对")
+    if resp.get("retcode") not in (0, None):
+        return (False, f"读群信息 retcode={resp.get('retcode')}")
+    data = resp.get("data") or {}
+    name = str(data.get("group_name") or "").strip()
+    if not name:
+        return (False, "读群信息没返回群名")
+    # ★ 每读到一次就更新历史 —— 群名不一定是 bot 改的，用户自己也改。
+    #   不更新的话，「改回去」会还原到一个早就不是"上一个"的名字。
+    try:
+        _remember_group_name(str(gid), name)
+    except Exception:
+        pass
+    return (True, name)
+
+
+# 启动时把群名历史读回来（内存版重启就失忆，"改回去"会跟着失忆）
+try:
+    _load_group_names()
+except Exception:
+    pass
+
+
+def _do_group_admin(action, *, target="", value="", sender="", group_id="",
+                    user_msg=""):
     """群管理动作的统一执行层：正则路径与 agent 工具路径共用。
 
     返回 (ok, msg)。msg 直接可以回给群 —— 成功、失败、没权限都说人话。
@@ -8582,7 +8715,75 @@ def _do_group_admin(action, *, target="", value="", sender="", group_id=""):
     if action == "set_group_name":
         if not value:
             return (False, "新群名是空的")
-        return _call("set_group_name", {"group_id": gid, "group_name": value})
+        # ── 「改回去」这类指代：换成记住的原名 ──
+        #   _from_backref：还原出来的值**不**再过"出自原话"那道校验 ——
+        #   原话里当然没有"原群名"这三个字，它是我们自己记下来的。
+        _from_backref = False
+        if _is_name_backref(value):
+            _prev = _last_group_name(gid)
+            if not _prev:
+                return (False, "我不记得这群原来叫什么了，你直接说要改成什么")
+            value = _prev
+            _from_backref = True
+        # ── ★ 执行前校验：新群名必须是用户原话里出现过的（2026-10-27）──
+        #   group_admin 的 value 是**模型自己填的参数**，模型会顺手润色：
+        #     用户：「把群名改成高浓度神金矿区」
+        #     模型填：「高浓度神金矿产区」（多一个"产"）
+        #   真机就是这么把群名改错的，而且 retcode=0 → 报"✅ 群名改了"。
+        #   回读校验只能发现"没改成"，拦不住"改成了别的"——
+        #   那会把用户没要的名字写上去。所以这里先拦一道。
+        if user_msg and not _from_backref:
+            if value not in str(user_msg):
+                return (False, f"你要改成的名字是「{value}」，"
+                               f"但你原话里没这么写 —— 说清楚要改成什么我再动")
+        # ── 改之前先读当前群名并记住 ──
+        #   一是给「改回去」留底，二是回读校验时能对照。
+        _ok_read, _cur = _read_group_name(gid)
+        if _ok_read and _cur != value:
+            _remember_group_name(gid, _cur)
+        # ── 执行 ──
+        _ok_set, _msg = _call("set_group_name",
+                              {"group_id": gid, "group_name": value})
+        if not _ok_set:
+            return (False, _msg)
+        # ── ★ 回读校验（2026-10-27）──
+        #   retcode=0 只说明**请求被接受**，不代表群名真改成了这个值。
+        #   真机：用户要「高浓度神金矿区」，实际改成了「高浓度神金矿产区」
+        #   （模型自己填的参数多一个字），机器人却报「✅ 群名改了」。
+        #   不回读就永远发现不了 —— 而"发现不了"正是用户投诉的那件事。
+        #
+        #   两处细节，缺一个就会误判（2026-10-27 实测）：
+        #     · 读必须带 no_cache —— 否则读到的是 OneBot 侧的旧缓存，
+        #       会把**成功**误判成失败（实测改成功了，get_group_info 仍返回旧名）
+        #     · 要重试几次 —— QQ 侧生效不是瞬时的
+        _now = ""
+        _ok2 = False
+        for _d in (0.0, 0.4, 1.0):
+            if _d:
+                time.sleep(_d)
+            _ok2, _now = _read_group_name(gid)
+            if _ok2 and _now == value:
+                break
+        if _ok2:
+            if _now == value:
+                return (True, _ADMIN_LABELS.get(action, "办了"))
+            # ★ 没生效 —— 说清原因，别只说"没改成"（2026-10-27）
+            #   真机：set_group_name 返回 retcode=0 但群名没变（QQ 侧拒绝）。
+            #   原因多半是身份不够：bot 是 admin 不是 owner。
+            #   查一次自己的角色，把"为什么不行"说清楚，
+            #   否则用户只能自己去猜。
+            _role = ""
+            try:
+                _role = _bot_group_role(str(gid))
+            except Exception:
+                _role = ""
+            if _role and _role != "owner":
+                return (False, f"没改成，现在这群还叫「{_now}」"
+                               f"（我不是群主，QQ 那边不让改，得群主来）")
+            return (False, f"没改成，现在这群还叫「{_now}」")
+        # 回读失败（网络/接口问题）——不能因此说成功
+        return (False, f"{_ADMIN_LABELS.get(action, '操作')}的返回是成功了，"
+                       f"但我没能回读确认，不确定到底改没改")
     if action == "leave":
         return _call("set_group_leave", {"group_id": gid})
     return (False, f"不认识的管理动作：{action}")
@@ -8595,6 +8796,34 @@ def _do_group_admin(action, *, target="", value="", sender="", group_id=""):
 _ADMIN_COMMAND_RE = re.compile(
     r'^(' + '|'.join(sorted((re.escape(v) for v in capabilities_view.ADMIN_VERBS),
                             key=len, reverse=True)) + r')(.*)$')
+
+#: ★ 自然语言句式（2026-10-27）：「把群名改成 X」「群名改成 X」「改下群名 X」
+#:
+#:   为什么群名要单独走这条路（其他管理动作不走）：
+#:     group_admin 工具的 value 是**模型自己填的参数**，模型会顺手润色 ——
+#:       用户：「把群名改成高浓度神金矿区」
+#:       模型填：「高浓度神金矿产区」（多一个"产"）→ 群名真被改错了
+#:     而且它要过决策器，「把群名改回去」这种请求会被判 observe（真机 20:34），
+#:     整批直接结束 —— 明确的操作请求不该由"要不要插话"来裁决。
+#:
+#:   群名的参数**就是那句话本身**，正则完全够用，不需要 AI 理解。
+#:   走正则：参数出自原文（不会改写）、不经决策器（不会被 observe）。
+_ADMIN_NAME_NL_RE = re.compile(
+    r'^(?:请\s*)?(?:把\s*)?(?:群\s*名|群名称)\s*'
+    r'(?:改成|改为|换成|换为|整成|叫成|设为|设成|修改成|修改为|弄成|搞成)\s*'
+    r'(.+?)\s*[。！!？?，,、]?\s*$'
+)
+
+#: 指代式（2026-10-27）：「把群名改回去」「群名换回来」「群名恢复原名」
+#:
+#:   单独一个模式，因为这类句子里**没有具体名字** ——
+#:   目标值是「改回之前那个」，得从记住的原名里取。
+#:   若并进上面的模式，「改回去」会被切成「去」（动词吃掉「改回」）。
+_ADMIN_NAME_BACKREF_RE = re.compile(
+    r'^(?:请\s*)?(?:把\s*)?(?:群\s*名|群名称)\s*'
+    r'(?:改回|改还|换回|恢复|退回)\s*'
+    r'(?:去|来|原来|原名|之前|先前|以前)?\s*[。！!？?，,、]?\s*$'
+)
 
 
 def _handle_group_admin_command(text, msg, sender, group_id):
@@ -8619,6 +8848,23 @@ def _handle_group_admin_command(text, msg, sender, group_id):
             cmd = cmd[len(w):].lstrip(" \t,，:：")
             break
     cmd = re.sub(r'^@[\w\u4e00-\u9fa5]+[ \t,，:：]*', '', cmd).strip()
+    # ── 自然语言群名句式（2026-10-27）—— 先试这个 ──
+    #   「把群名改成 X」不是"开头就是动词"，走不了下面的 _ADMIN_COMMAND_RE。
+    #   而它若落到 AI 流程：参数由模型填（会改写）、还要过决策器（会被 observe）。
+    #   群名的参数就是那句话本身，正则直接取，不经这两道。
+    # 指代式优先（「把群名改回去」—— 没有具体名字，目标从记住的原名取）
+    _bl = _ADMIN_NAME_BACKREF_RE.match(cmd)
+    _nl = _ADMIN_NAME_NL_RE.match(cmd)
+    if _bl or _nl:
+        _new_name = (cmd if _bl else (_nl.group(1) or "")).strip()
+        if not _new_name:
+            return False
+        _ok_n, _msg_n = _do_group_admin(
+            "set_group_name", value=_new_name, sender=sender,
+            group_id=group_id, user_msg=cmd)
+        log(f"群[{group_id}] [群管理·自然语言] 群名改成「{_new_name}」→ "
+            f"{'成功' if _ok_n else '没成：' + str(_msg_n)}")
+        return True
     m = _ADMIN_COMMAND_RE.match(cmd)
     if not m:
         return False
@@ -8665,7 +8911,8 @@ def _handle_group_admin_command(text, msg, sender, group_id):
         value = rest.strip()
 
     ok, out = _do_group_admin(action, target=target, value=value,
-                              sender=sender, group_id=group_id)
+                              sender=sender, group_id=group_id,
+                              user_msg=cmd)
     log(f"[群管理] {action} group={group_id} target={target} ok={ok} msg={out}")
     if action == "leave" and ok:
         return True          # 退群后已不在群里，发不出去
@@ -10192,9 +10439,12 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
                     # sender 不在它的职责里，所以在这里闭包捕获。
                     _tool_fns = dict(TOOL_FUNCTIONS)
                     if is_group:
+                        # user_msg 传原话 —— group_admin 要用它核对
+                        # 「模型填的群名是不是用户原话里的」（见 _do_group_admin）
                         _tool_fns["group_admin"] = (
-                            lambda a, _s=sender, _g=group_id:
-                            _tool_group_admin(a, sender=_s, group_id=_g))
+                            lambda a, _s=sender, _g=group_id, _m=merged_text:
+                            _tool_group_admin(a, sender=_s, group_id=_g,
+                                              user_msg=_m))
                     for tc in tool_calls:
                         _r = _trunner.execute_tool_call(
                             tc,

@@ -49,11 +49,20 @@ OTHER = "2011257385"
 def _stub(retcode=0, raise_exc=False):
     import bot_core
     calls = []
+    #: 模拟真实驱动：改群名会真的改到 group_name 上
+    state = {"name": "旧群名"}
 
     def _api(ep, body=None, timeout=15):
         if raise_exc:
             raise RuntimeError("boom")
         calls.append((ep, body))
+        if ep == "get_group_info":
+            # ★ 2026-10-27：回读校验要用它 —— 桩必须返回群名，
+            #   否则所有改群名的用例都变成"没能回读确认"。
+            return {"retcode": 0, "data": {"group_id": (body or {}).get("group_id"),
+                                          "group_name": state["name"]}}
+        if ep == "set_group_name" and retcode == 0:
+            state["name"] = (body or {}).get("group_name", state["name"])
         return {"retcode": retcode, "data": {}}
 
     bot_core.api_call = _api
@@ -94,8 +103,12 @@ def test_master_ok():
                                      sender=MASTER, group_id=GID)
         check("主人可执行", ok, (ok, msg))
         check("回执是人话", msg == "群名改了", msg)
-        check("调到 set_group_name", calls and calls[0][0] == "set_group_name", calls)
-        check("群名传对", calls[0][1].get("group_name") == "外莱塔尼亚", calls[0])
+        # ★ 2026-10-27：改群名前会先 get_group_info 读当前名（给「改回去」留底），
+        #   所以 set_group_name 不再是第一个调用 —— 按名字找，别按下标。
+        _sets = [c for c in calls if c[0] == "set_group_name"]
+        check("调到 set_group_name", bool(_sets), calls)
+        check("群名传对", _sets and _sets[0][1].get("group_name") == "外莱塔尼亚",
+              _sets[0] if _sets else calls)
     finally:
         _restore(old)
 
@@ -150,7 +163,12 @@ def test_single_implementation():
           src.count('return (False, "这得主人发话")') == 1,
           src.count('return (False, "这得主人发话")'))
     check("工具只在群聊注入", "if is_group and GROUP_ADMIN_SCHEMA" in src)
-    check("sender 由调用方闭包注入", "lambda a, _s=sender, _g=group_id:" in src)
+    # ★ 2026-10-27：闭包多传一个 user_msg —— group_admin 要用它核对
+    #   「模型填的群名是不是用户原话里的」（真机多了一个"产"字）。
+    check("sender 由调用方闭包注入",
+          "lambda a, _s=sender, _g=group_id" in src, "闭包没注入 sender")
+    check("user_msg 也由闭包注入",
+          "_m=merged_text" in src and "user_msg=_m" in src, "user_msg 没传下去")
 
 
 def test_schema():
