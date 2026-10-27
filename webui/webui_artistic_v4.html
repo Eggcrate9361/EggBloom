@@ -5187,6 +5187,20 @@ async function pageConfig(el) {
     +   '</div>'
     + '</div>'
     + '<div class="cfg-groups" id="cfgGroups"></div>'
+
+    /* ── 人格与人设（2026-10-27 新增）──
+       改的是 plugins/personality.txt —— 唯一生效的人格来源（与 EGO 同一个文件，
+       EGO 不可用时的兜底也读它）。段落**按真实段名动态渲染**：以前插件自带的
+       那个人格页把段名写死成【你是谁】【日常】…，与本文件实际的
+       【我是谁】【怎么说话】【荤的】【网络用语】【什么不干】【干活的时候】
+       一个都不匹配 —— 那页点保存会把整份人格写空。这里不重犯。 */
+    + '<div class="hd" style="margin-top:var(--s6);cursor:pointer" id="cPersonaHd">'
+    +   '<span class="lab">人格与人设</span><i class="rule"></i>'
+    +   '<span class="dim" id="cPersonaTip">写回 plugins/personality.txt · 点击展开</span>'
+    +   '<span class="sig" style="display:inline-flex"><i></i><span id="cPersonaStat">—</span></span>'
+    + '</div>'
+    + '<div id="cPersonaBody" hidden><div id="cPersonaInner"><div class="empty">展开后读取</div></div></div>'
+
     + '<div id="cfgConnect">'
     + '<div class="hd"><span class="lab">快速切换模型</span><i class="rule"></i></div>'
     + '<div style="display:flex;gap:var(--s5);flex-wrap:wrap;align-items:flex-end">'
@@ -5259,6 +5273,154 @@ async function pageConfig(el) {
     const tip = $('cOrphanTip');
     if (tip) tip.textContent = show ? '未登记标签的键' : '未登记标签的键 · 点击展开';
   };
+
+  /* ═══ 人格与人设 ═══════════════════════════════════════════════════
+     读 get_personality / 写 save_personality（plugin_id=personality_engine）。
+     设计要点：
+       ① 段名**不写死**，一律用后端返回的 sections 键 —— 人格文件的段名会变
+          （实测当前是【我是谁】【怎么说话】…，而插件自带页写死的是【你是谁】…）。
+       ② 提交时把**所有段**原样回传（含没改的）。后端 save_personality 只写
+          传进去的键，漏一段就等于删一段。
+       ③ 总字数暴跌时二次确认 —— 防"段名对不上→提交空集合→整份人格清零"
+          这类事故（插件自带页正是这么写的）。
+       ④ 保存后不刷新页面：mtime 变了，下次组 prompt 自动重建静态前缀。
+     示例（few-shot）不在这里编辑，只给一个注入开关：
+      它写的是 plugins/personality/examples/ 下那 9 个文件，改人格时应当一起看，
+      所以把 example_enabled 放在同一块里，随时能关掉验证效果。
+  */
+  (function mountPersona() {
+    const hd = $('cPersonaHd'), body = $('cPersonaBody'), inner = $('cPersonaInner');
+    if (!hd || !body || !inner) return;
+    let loaded = false, lastTotal = 0;
+
+    const say = (t, bad) => {
+      const m = $('cPersonaMsg');
+      if (!m) return;
+      m.className = bad ? 'errbox' : 'dim';
+      m.textContent = t || '';
+    };
+
+    async function load() {
+      inner.innerHTML = '<div class="empty">读取中…</div>';
+      let r;
+      try {
+        r = await API('/plugins/action', {
+          method: 'POST',
+          body: JSON.stringify({ plugin_id: 'personality_engine', action: 'get_personality' }),
+        }, 30000);
+      } catch (e) {
+        inner.innerHTML = '<div class="errbox">读取人格失败：' + esc(e.message) + '</div>';
+        return;
+      }
+      if (r && r.error) {
+        inner.innerHTML = '<div class="errbox">读取人格失败：' + esc(r.error) + '</div>';
+        return;
+      }
+      const secs = (r && r.sections) || {};
+      const conf = (r && r.config) || {};
+      const names = Object.keys(secs);
+      lastTotal = names.reduce((n, k) => n + String(secs[k] || '').length, 0);
+      const st = $('cPersonaStat');
+      if (st) st.textContent = names.length + ' 段 / ' + lastTotal + ' 字';
+      const tip = $('cPersonaTip');
+      if (tip) tip.textContent = '写回 plugins/personality.txt · 保存后下一条消息即生效';
+
+      let html = ''
+        + '<div class="stats" style="margin-bottom:var(--s4)">'
+        +   '<div class="st"><div class="lab">段落</div><div class="v">' + names.length
+        +     '</div><div class="c">按【】切分</div></div>'
+        +   '<div class="st"><div class="lab">总字数</div><div class="v">' + lastTotal
+        +     '</div><div class="c" id="cPersonaTotal">当前生效内容</div></div>'
+        +   '<div class="st"><div class="lab">示例注入</div><div class="v">'
+        +     (conf.example_enabled === false ? '关' : '开') + '</div><div class="c">few-shot</div></div>'
+        + '</div>';
+
+      names.forEach(function (k) {
+        const v = String(secs[k] || '');
+        const rows = Math.min(16, Math.max(3, Math.ceil(v.length / 38)));
+        html += '<div class="fld" style="margin-bottom:var(--s4)">'
+          + '<label>' + esc(k) + ' <span class="dim">· ' + v.length + ' 字</span></label>'
+          + '<textarea data-sec="' + esc(k) + '" rows="' + rows + '" spellcheck="false"></textarea>'
+          + '</div>';
+      });
+      if (!names.length) {
+        html += '<div class="errbox">没读到任何段落。人格文件可能是空的 —— '
+          + '先别保存，去 plugins/personality.txt 确认内容。</div>';
+      }
+
+      html += '<div style="display:flex;gap:var(--s3);flex-wrap:wrap;align-items:flex-end;margin-top:var(--s4)">'
+        +   '<button class="btn primary" id="cPersonaSave">保存人格</button>'
+        +   '<button class="btn" id="cPersonaReload">重新读取</button>'
+        +   '<div class="fld" style="max-width:200px">'
+        +     '<label>few-shot 示例注入</label>'
+        +     '<select id="cPersonaEx">'
+        +       '<option value="1"' + (conf.example_enabled === false ? '' : ' selected') + '>开启</option>'
+        +       '<option value="0"' + (conf.example_enabled === false ? ' selected' : '') + '>关闭</option>'
+        +     '</select></div>'
+        + '</div>'
+        + '<div id="cPersonaMsg" class="dim" style="margin-top:var(--s3)"></div>'
+        + '<div class="dim" style="margin-top:var(--s2);font-size:var(--z1)">'
+        +   '保存会自动备份（auto_backup 保留 5 份）。段标题【】不要改 —— '
+        +   '下游按段名取值，改名等于删段。示例开关与人格一起保存。</div>';
+
+      inner.innerHTML = html;
+      // 值用 property 写入，避免把人格正文塞进 HTML 属性里被转义破坏
+      qsa('#cPersonaBody textarea[data-sec]').forEach(function (t) {
+        t.value = String(secs[t.dataset.sec] || '');
+        t.addEventListener('input', function () {
+          const n = qsa('#cPersonaBody textarea[data-sec]')
+            .reduce((s, x) => s + x.value.length, 0);
+          const tot = $('cPersonaTotal');
+          if (tot) tot.textContent = '改后 ' + n + ' 字';
+        });
+      });
+
+      const btn = $('cPersonaSave');
+      if (btn) btn.onclick = async function () {
+        const sections = {};
+        qsa('#cPersonaBody textarea[data-sec]').forEach(function (t) {
+          sections[t.dataset.sec] = t.value;          // ★ 所有段都回传，漏一段=删一段
+        });
+        const total = Object.keys(sections).reduce((s, k) => s + sections[k].length, 0);
+        if (lastTotal > 0 && total < lastTotal * 0.3) {
+          if (!confirm('改动后只剩 ' + total + ' 字（原来 ' + lastTotal + ' 字）。'
+            + '确定要保存吗？')) return;
+        }
+        btn.disabled = true;
+        say('保存中…');
+        try {
+          const r1 = await API('/plugins/action', {
+            method: 'POST',
+            body: JSON.stringify({ plugin_id: 'personality_engine', action: 'save_personality',
+                                   params: { sections: sections } }),
+          }, 30000);
+          if (r1 && r1.success === false) throw new Error(r1.error || '保存失败');
+          const ex = $('cPersonaEx');
+          if (ex) {
+            await API('/plugins/action', {
+              method: 'POST',
+              body: JSON.stringify({ plugin_id: 'personality_engine', action: 'set_config',
+                                     params: { example_enabled: ex.value === '1' } }),
+            }, 30000);
+          }
+          say('已保存 · ' + total + ' 字，下一条消息生效');
+          lastTotal = total;
+        } catch (e) {
+          say('保存失败：' + e.message, true);
+        } finally {
+          btn.disabled = false;
+        }
+      };
+      const re = $('cPersonaReload');
+      if (re) re.onclick = function () { load(); };
+    }
+
+    hd.onclick = function () {
+      const show = body.hidden;
+      body.hidden = !show;
+      if (show && !loaded) { loaded = true; load(); }
+    };
+  })();
 
   const dirty = {};
   /* 元数据区上下文：与"其他配置项"共用 dirty/mark，保存时一起提交 */

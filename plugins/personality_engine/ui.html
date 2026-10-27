@@ -73,7 +73,19 @@
           <input type="checkbox" id="example-enabled" checked>
           <span>启用示例库</span>
         </label>
-        <button class="primary" onclick="saveAll()">保存人格</button>
+        <button class="primary" id="pSaveAll" onclick="saveAll()">保存人格</button>
+      </div>
+      <!-- ★ 2026-10-27 防误删：本页的段名是写死的 8 个（【你是谁】【日常】…），
+           而人格文件实际的段名是【我是谁】【怎么说话】【荤的】【网络用语】
+           【什么不干】【干活的时候】——一个都不匹配。于是 loadPersonality()
+           取不到值、saveAll() 又只提交"非空"的框，提交的是空集合，
+           save_personality({}) 会把整份人格写成空文件。
+           这里加一道闸：一个段都没匹配上就禁用保存，把人指到配置中心那份
+           （按真实段名动态渲染的那页）。 -->
+      <div id="pMismatch" class="desc" hidden
+           style="margin-top:10px;color:var(--warn,#ff9f0a);line-height:1.7">
+        本页的段名与当前人格文件对不上，**已禁用保存**（点了会把人格写空）。<br>
+        请到「配置中心 → 人格与人设」修改 —— 那一页按真实段名渲染。
       </div>
     </div>
     <div class="panel">
@@ -135,6 +147,17 @@
       const el = document.getElementById('sec-' + key);
       if (el) el.value = sections['【' + key + '】'] || '';
     }
+    /* ★ 段名闸门（2026-10-27）：一个都没匹配上 → 禁用保存，否则一按就把人格写空。
+       判据用"后端返回的真实段名"和"本页写死的段名"做交集，不猜。 */
+    try {
+      const hit = fields.filter(function (k) { return sections['【' + k + '】'] !== undefined; }).length;
+      const btn = document.getElementById('pSaveAll');
+      const warn = document.getElementById('pMismatch');
+      if (hit === 0 && Object.keys(sections).length > 0) {
+        if (btn) { btn.disabled = true; btn.title = '段名与当前人格文件不匹配，已禁用'; btn.style.opacity = 0.45; }
+        if (warn) warn.hidden = false;
+      }
+    } catch (e) {}
     const cfg = (data && data.config) || {};
     const exEl = document.getElementById('example-enabled');
     if (exEl) exEl.checked = !(cfg.example_enabled === false);
