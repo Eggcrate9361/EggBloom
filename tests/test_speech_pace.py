@@ -114,6 +114,37 @@ def test_min_quiet_floor():
           p.quiet_needed("z"))
 
 
+def test_replay_real_batch():
+    """用 2026-10-27 16:30 那批的真实时间戳回放：旧参数切 2 批，节奏判据 1 批。"""
+    ts = [34, 34, 36, 38, 39, 41]      # 从日志 [事件] 收到 抄的秒数
+
+    def _batches(quiet, cap, use_pace=False):
+        p = SpeechPace()
+        out, cur = [], None
+        for t in ts:
+            if use_pace:
+                p.note("u", float(t)); q, c = p.quiet_needed("u"), p.hard_cap("u")
+            else:
+                q, c = quiet, cap
+            if cur is None:
+                cur = {"first": t, "items": [t]}
+            else:
+                cur["items"].append(t)
+            cur["deadline"] = min(t + q, cur["first"] + c)
+            if t >= cur["deadline"]:
+                out.append(cur); cur = None
+        if cur:
+            out.append(cur)
+        return out
+
+    old_b = _batches(3, 5)
+    new_b = _batches(0, 0, use_pace=True)
+    check("旧参数会切分", len(old_b) >= 2, len(old_b))
+    check("节奏判据全收进一批", len(new_b) == 1, [b["items"] for b in new_b])
+    # 全新实例没有样本 → 返回兜底 2.5，这是"还不知道"，不是设计值
+    check("无样本时退回兜底 pace", abs(SpeechPace().median_gap("u") - 2.5) < 1e-9)
+
+
 def test_wired():
     import io
     src = io.open(os.path.join(ROOT, "bot_core.py"), encoding="utf-8").read()
@@ -128,7 +159,7 @@ def main():
     print("=" * 58)
     for fn in (test_cold_start, test_fast_talker, test_slow_talker, test_mixed_is_median,
                test_gap_outlier_ignored, test_history_window, test_per_person,
-               test_min_quiet_floor, test_wired):
+               test_min_quiet_floor, test_replay_real_batch, test_wired):
         print(f"\n[{fn.__name__}]")
         fn()
     print("\n" + "=" * 58)

@@ -819,11 +819,12 @@ _SPEAK_WINDOW: Dict[str, Dict[str, List[float]]] = {}
 _SPEAK_LOCK = Lock()
 _SPEAK_WIN_SEC = 1800
 
-#: 入站内容指纹判重（1.5.9 §B0）。
-#: 窗口 6 秒，不是 30 —— 协议层重投是毫秒级，30 秒会误伤真人：
-#: 2026-10-27 真机「我是鸡蛋」隔 3 秒说第二遍被当重复丢掉。
-#: 判据要挡的是"同一条事件被投递两次"，不是"同一句话被说了两次"。
-_INBOUND_DUPE = inbound.DupeGuard(window=6.0)
+#: 入站内容指纹判重。
+#: 窗口 1 秒 —— 它挡的是"同一条事件被协议层推了两次"（毫秒级），
+#: 不是"同一句话被说了两次"。30 秒会误伤真人重复发言（实测「我是鸡蛋」
+#: 隔 3 秒说第二遍被丢），6 秒仍然覆盖 3 秒，同样是误伤。
+#: 真人重复说话由模型看上下文处理，不靠字符串比对。
+_INBOUND_DUPE = inbound.DupeGuard(window=1.0)
 
 
 def _speak_note(group_id, kind: str):
