@@ -795,8 +795,27 @@ GROUP_TIMELINE: Dict[str, List[Tuple]] = {}  # {group_id: [(timestamp, sender_id
 _OFFICIAL_RE = re.compile(r"作为\s*AI|作为一个人工智能|希望(对你|可以帮到你)|"
                           r"综上所述|以上就是|如有(需要|疑问)")
 
+#: 发言率观测（1.5.9 §B6，**只记不改**）：{gid: {"in": [ts], "out": [ts]}}
+#: 收紧放行线会让机器人明显变哑，所以这一版只统计，参数留到有真实数据再定。
+_SPEAK_WINDOW: Dict[str, Dict[str, List[float]]] = {}
+_SPEAK_LOCK = Lock()
+_SPEAK_WIN_SEC = 1800
+
 #: 入站内容指纹判重（1.5.9 §B0）：30 秒窗口，同人同内容只算一条
 _INBOUND_DUPE = inbound.DupeGuard(window=30.0)
+
+
+def _speak_note(group_id, kind: str):
+    """记一次入站（in）或出站（out），返回 30 分钟窗口内的 (in, out)。"""
+    gid = str(group_id or "")
+    if not gid or kind not in ("in", "out"):
+        return (0, 0)
+    now = time.time()
+    with _SPEAK_LOCK:
+        rec = _SPEAK_WINDOW.setdefault(gid, {"in": [], "out": []})
+        rec[kind] = [t for t in rec[kind] if now - t < _SPEAK_WIN_SEC]
+        rec[kind].append(now)
+        return (len(rec["in"]), len(rec["out"]))
 GROUP_SUMMARY: Dict[str, str] = {}  # {group_id: str}  群聊历史摘要（超过窗口的旧消息压缩）
 _GROUP_SUMMARY_PREV: Dict[str, str] = {}  # {group_id: str}  上上次摘要（E 三段式拼接用，保留主题锚）
 _GROUP_SUMMARY_AT: Dict[str, float] = {}  # {group_id: last_summary_ts}  摘要刷新节流（T2）
@@ -9386,7 +9405,7 @@ def _stream_chat_lines(messages, runtime_cfg=None, max_tokens=AI_MAX_TOKENS, wit
     if last_usage:
         try:
             from token_stats import record as _ts_record
-            _ts_record(scene, last_usage, {"stream": True})
+            _ts_record(scene, last_usage, {"stream": True}, lane="main")
             # P23 锚点（实测）：流式末尾的 usage 是真实值 → 以此打上下文压力锚点。
             # 作用域用 scene（本函数拿不到群号/QQ），是有意的粗粒度锚点。
             from token_stats import note_context_anchor as _ts_anchor
@@ -9812,7 +9831,8 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
                     # T5 观测：工具轮 token 也计入（群聊/私聊/网页场景）
                     try:
                         from token_stats import record as _ts_record
-                        _ts_record("web" if _web_hint else ("group" if is_group else "private"), usage, {"round": "tool"})
+                        _ts_record("web" if _web_hint else ("group" if is_group else "private"), usage,
+                                   {"round": "tool"}, lane="tool")
                     except Exception:
                         pass
                     messages.append({"role": "assistant", "content": msg.get("content") or "", "tool_calls": tool_calls})
@@ -9889,7 +9909,7 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
             try:
                 from token_stats import record as _ts_record
                 _scene = "web" if _web_hint else ("group" if is_group else "private")
-                _ts_record(_scene, usage, {"web_rounds": web_rounds})
+                _ts_record(_scene, usage, {"web_rounds": web_rounds}, lane="web")
                 # P23 锚点（实测）：用本轮的 prompt_tokens 给「这个群/这个人」打上下文压力锚点。
                 # 只认实测值；拿不到就什么都不记（不在这里退化成估算 —— 估算是调用方的事）。
                 try:
@@ -11916,6 +11936,7 @@ def _pipeline_step(group_id):
                     log(f"群[{group_id}] 与 2 分钟内的回复重复，跳过发送: {sent_text[:40]}")
                 elif smart_send_group(group_id, sent_text, reply_id=_quote_id):
                     _sent_ok = True
+                    _speak_note(group_id, "out")
                     if not _seq_logged:
                         _seq_logged = True
                         log(f"[时序] 群{group_id} batch={_seq_ready - _seq_first:.1f} "
@@ -12963,6 +12984,11 @@ def main():
                     if _INBOUND_DUPE.hit(group_id, sender, oc):
                         log(f"群[{group_id}] [重复:指纹] {oc[:30]}")
                         continue
+                    # 发言率观测（只记不改）：每 50 条打一行，给下一版调参用
+                    _in_n, _out_n = _speak_note(group_id, "in")
+                    if _in_n and _in_n % 50 == 0:
+                        log(f"[发言率] 群{group_id} 30min in={_in_n} out={_out_n} "
+                            f"→ {100.0 * _out_n / max(1, _in_n):.1f}%")
                     # 全群画像
                     if re.match(r'^(群友画像|画像|群友报告|群报告|group.report|群聊画像|群聊报告)\s*$', oc):
                         log(f"群[{group_id}] 群友画像指令: {oc}")

@@ -180,8 +180,17 @@ def _ensure_log_dir():
         pass
 
 
-def record(scene: str = "private", usage: dict = None, extra: dict = None):
-    """记录一次 LLM 调用的 token 消耗。scene ∈ group/private/web。usage 为 API 返回的 usage dict。"""
+def record(scene: str = "private", usage: dict = None, extra: dict = None,
+           model: str = "", lane: str = ""):
+    """记录一次 LLM 调用的 token 消耗。
+
+    scene ∈ group/private/web；`lane` 区分同一次对话里的不同车道
+    （main 主链 / tool 工具轮 / web 网页任务 / decide 决策）。
+
+    为什么加 lane（1.5.9 §C.3.2）：只有 scene 时，一次群回复里主模型、
+    工具轮、搜索兜底全算在同一格，分不清钱花在哪 —— 而这三者的单价和
+    调用次数差一个数量级。
+    """
     usage = usage or {}
     if not isinstance(usage, dict):
         usage = {}
@@ -209,6 +218,8 @@ def record(scene: str = "private", usage: dict = None, extra: dict = None):
     line = {
         "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
         "scene": scene,
+        "model": str(model or ""),
+        "lane": str(lane or ""),
         "prompt_tokens": prompt,
         "completion_tokens": output,
         "total_tokens": total,
