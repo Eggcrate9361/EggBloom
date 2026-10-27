@@ -110,45 +110,61 @@ def test_profile_needs_samples():
     p = reply_drop.LatencyProfile()
     check("没样本 → p99 为 None", p.p99() is None)
     line, src = p.hard_line()
-    check("没样本 → 用兜底线", line == reply_drop.FALLBACK_HARD, (line, src))
+    check("没样本 → 抬到结构性地板", line == reply_drop.STRUCTURAL_FLOOR, (line, src))
     check("来源标注清楚", "样本不足" in src, src)
 
 
 def test_profile_follows_distribution():
-    """线必须跟着实测走，不能是常数 —— 这是本机制存在的理由。"""
+    """线必须跟着实测走，不能是常数 —— 这是本机制存在的理由。
+
+    线 = max(结构性地板, p99 × 系数)。
+    地板是绝对下限（120s），分布负责校准。所以：
+      · 分布比地板高 → 线 = 分布线（跟着实测走）
+      · 分布比地板低 → 线 = 地板（托住，不误杀）
+    """
     p = reply_drop.LatencyProfile()
     for a in REAL_AGES:
         p.note(a)
     p99 = p.p99()
     check("攒够样本后有 p99", p99 is not None, p99)
     line, src = p.hard_line()
-    check("线 = p99 × 系数", abs(line - p99 * reply_drop.P99_MULT) < 0.01, (line, p99))
+    _expect = max(reply_drop.STRUCTURAL_FLOOR, p99 * reply_drop.P99_MULT)
+    check("线 = max(地板, p99×系数)", abs(line - _expect) < 0.01, (line, _expect))
     check("线高于真机所有正常样本（不再误杀搜索链）",
           line > max(REAL_AGES), (line, max(REAL_AGES)))
     check("来源写明依据", "实测p99" in src, src)
 
-    p2 = reply_drop.LatencyProfile()
-    for a in [x / 2 for x in REAL_AGES]:
-        p2.note(a)
-    line2, _ = p2.hard_line()
-    check("整体变快 → 线跟着降", line2 < line, (line2, line))
-
+    # 整体变慢 → 线跟着升（这条必须在地板之上才看得出）
     p3 = reply_drop.LatencyProfile()
     for a in [x * 2 for x in REAL_AGES]:
         p3.note(a)
     line3, _ = p3.hard_line()
     check("整体变慢 → 线跟着升", line3 > line, (line3, line))
 
+    # 整体变快 → 线被地板托住（不会跟着塌）
+    p2 = reply_drop.LatencyProfile()
+    for a in [x / 2 for x in REAL_AGES]:
+        p2.note(a)
+    line2, _ = p2.hard_line()
+    check("整体变快 → 线不低于地板",
+          line2 >= reply_drop.STRUCTURAL_FLOOR, (line2, reply_drop.STRUCTURAL_FLOOR))
+    check("整体变快 → 线不高于变慢时", line2 <= line, (line2, line))
+
 
 def test_profile_addressed_is_tighter():
-    """被点名 → 对方在等，线要收窄（以为你聋了比晚回更伤）。"""
+    """★ 已被 2026-10-27 的真机修正推翻 —— 断言的是**错误设计**。
+
+    原断言：「被点名 → 对方在等，线要收窄（以为你聋了比晚回更伤）」。
+    真机证明它会「被点名 + 要搜索 = 必丢」（见 test_addressed_does_not_tighten）。
+    留着这个测试等于把错设计钉死，所以改成显式记录"不再收紧"。
+    """
     p = reply_drop.LatencyProfile()
     for a in REAL_AGES:
         p.note(a)
     plain, _ = p.hard_line(addressed=False)
     addr, src = p.hard_line(addressed=True)
-    check("被点名时线更紧", addr < plain, (addr, plain))
-    check("但仍有下限（不能窄到 0）", addr >= 15.0, addr)
+    check("被点名不再收紧（真机修正）", addr >= plain, (addr, plain))
+    check("仍有下限（不能窄到 0）", addr >= 15.0, addr)
     check("来源说明在等", "在等" in src, src)
 
 
@@ -204,26 +220,82 @@ def test_profile_group_buckets():
     check("两个群不互相污染", b1[-1] != b2[-1], (b1[-1], b2[-1]))
 
 
+def test_addressed_does_not_tighten():
+    """★ 被点名**不收紧**线（2026-10-27 真机修正）。
+
+    原设计是"对方在等，宽容度收窄到一半"，真机证明是错的：
+
+      18:30:47 [工具轮次] 达到上限 3 轮，收尾      ← 搜到了 11 月那条
+      18:30:54 [丢弃:过时 51.4s（线 45s）] 本批不发
+      18:31:18 [丢弃:过时 48.7s（线 45s）] 本批不发
+
+    线 45 = 兜底 90 × 0.5。而带搜索的回复结构上就要 50 秒
+    → 被点名 + 要搜索 = 必丢。用户等来的是"一声不吭"。
+
+    直觉错在：「以为你聋了比晚回更伤」没错，但我把它实现成了
+    "把回复丢掉"—— 而不回复才是"以为你聋了"的最强形式。
+    """
+    p = reply_drop.LatencyProfile()
+    for a in REAL_AGES:
+        p.note(a)
+    plain, _ = p.hard_line(addressed=False)
+    addr, src = p.hard_line(addressed=True)
+    check("被点名不收紧", addr >= plain, (addr, plain))
+    check("两者相等（系数 1.0）", addr == plain, (addr, plain))
+
+    # ★ 真机那两次：必须照发
+    for age in (51.4, 48.7):
+        why = reply_drop.drop_reason(new_msgs=0, age=age, turns=2,
+                                     hard_sec=addr, addressed=True)
+        check(f"真机 age={age}s 被点名 → 照发", why == "", why)
+
+
+def test_structural_floor():
+    """★ 线永远不低于结构性地板。
+
+    带搜索的回复结构上就要 50 秒，线画在 45 秒 = 必丢。
+    地板保证线只挡真卡死，不参与日常判断。
+    """
+    p = reply_drop.LatencyProfile()
+    line, src = p.hard_line()
+    check("无样本也不低于地板", line >= reply_drop.STRUCTURAL_FLOOR, line)
+    check("地板高于带搜索链的耗时", reply_drop.STRUCTURAL_FLOOR >= 65,
+          reply_drop.STRUCTURAL_FLOOR)
+
+    # 样本全是快的 → 线也不能塌到地板以下
+    p2 = reply_drop.LatencyProfile()
+    for _ in range(30):
+        p2.note(0.2)
+    line2, src2 = p2.hard_line()
+    check("样本很快时线仍守地板", line2 >= reply_drop.STRUCTURAL_FLOOR,
+          (line2, src2))
+    check("抬到地板时来源写明", "地板" in src2 or "抬到" in src2, src2)
+
+
 def test_line_is_per_group():
     """★ 线按群取：不同群速度差很多，混在一起会互相污染。
 
     冷群（没人抢机器）本来就慢，线要跟着它的分布走；
     拿活跃群的线去卡冷群，冷群的慢回复会被误杀。
+
+    注意地板（120s）会吃掉一部分差异：快群的线被地板托住，
+    慢群的线由分布顶起 —— 这正是设计意图（地板托底，分布校准）。
     """
     p = reply_drop.LatencyProfile()
     # 活跃群：快
     for i in range(30):
         p.note(5 + i * 0.1, group_id="hot_group")
-    # 冷群：慢（带搜索）
+    # 冷群：慢（带搜索），且慢到超过地板
     for i in range(30):
-        p.note(50 + i, group_id="cold_group")
+        p.note(200 + i, group_id="cold_group")
 
     hot_line, hot_src = p.hard_line(group_id="hot_group")
     cold_line, cold_src = p.hard_line(group_id="cold_group")
-    check("活跃群线明显更紧", hot_line < cold_line, (hot_line, cold_line))
-    check("冷群线覆盖它的慢样本", cold_line > 79, cold_line)
-    check("活跃群线不会误杀冷群样本（各用自己的）",
-          hot_line < 50, hot_line)
+    check("冷群线明显更宽（慢群用分布顶起）", cold_line > hot_line,
+          (hot_line, cold_line))
+    check("冷群线覆盖它的慢样本", cold_line > 229, cold_line)
+    check("活跃群线守地板（不被分布带偏）",
+          hot_line >= reply_drop.STRUCTURAL_FLOOR, hot_line)
 
     # 群样本不够 → 回退全局池
     p2 = reply_drop.LatencyProfile()
@@ -287,6 +359,8 @@ def main():
                test_profile_needs_samples,
                test_profile_follows_distribution,
                test_profile_addressed_is_tighter,
+               test_addressed_does_not_tighten,
+               test_structural_floor,
                test_profile_ignores_bad_values,
                test_profile_bounded_history,
                test_test_groups_do_not_pollute,
