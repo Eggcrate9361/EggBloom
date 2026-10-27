@@ -159,12 +159,72 @@ def check(text: str, b: Dict, hard: Optional[Dict] = None) -> Tuple[bool, str, D
     return (True, "", stats)
 
 
-def fit(text: str, b: Dict) -> str:
-    """超配额时的兜底：取最短的一条。不做截断 —— 半句比长句更假。"""
+def _is_complete_sentence(p: str) -> bool:
+    """这条能独立成句吗（不是半截、不是清单碎片）。
+
+    判据：**不以连接符收尾**就算完整。
+
+    ★ 2026-10-27 改。原来要求"结尾必须有句末标点"，真机证明太严：
+        "记不住，我又不是录音机"（无句号）→ 被判半截 → 优先级降到最低
+        → 选中的反而是敷衍那句。
+
+    QQ 上真人说话常常不打句号，而"半截"的特征是**连接符收尾**
+    （逗号/顿号/冒号/破折号 —— 明显话没说完）。
+    """
+    t = visible(p)
+    if not t:
+        return False
+    # 连接符收尾 = 半截
+    if t.endswith(("，", ",", "、", "；", ";", "：", ":", "…", "-", "—",
+                   "（", "(", "《", "“", "\"")):
+        return False
+    return True
+
+
+def fit(text: str, b: Dict, trigger: str = "") -> str:
+    """超配额时的兜底：从已生成的几条里挑一条。
+
+    ★ 2026-10-27 改判据：原来取**最短**的一条，真机证明是错的：
+
+        模型给了 2 条共 33 字（超 B 档 32 字）：
+          "你问点能查的行不行？"   (23 字)  ← 敷衍
+          "[10-27 18:55] 记不住，我又不是录音机" (10 字)  ← 正面回答
+        旧版取最短 → 发了那句敷衍的，把**有内容**的扔了。
+
+        「最短」和「最该发」根本不是一回事 —— 短的常常是空的
+        （「嗯」「行吧」都是短的）。
+
+        新判据（按优先级，先命中先得）：
+          ① **回应了触发消息**（与触发共享 2-gram，或本身够长）
+             —— 最强信号：问的是"我一天前说过什么"，得有个接得住的答案
+          ② 能独立成句（不以连接符收尾）
+          ③ 有实质内容（不是纯语气词）
+          ④ 兜底：最后一条（通常是最重要的结论）
+        同级内取**较长**的 —— 长才有信息量。
+    """
     ps = parts(text)
     if not ps:
         return ""
-    return min(ps, key=lambda p: len(visible(p)))
+    # ★ 剥掉行首的上下文标记后再挑 —— 标记不是内容，
+    #   留着会让"多长"的判断算上它（真机："[10-27 18:55] 记不住…"）。
+    ps = [strip_ctx_marks(p).strip() for p in ps]
+    ps = [p for p in ps if p]
+    if not ps:
+        return ""
+    # ① 回应触发消息的优先
+    if trigger and str(trigger).strip():
+        _anchored = [p for p in ps if anchor_ok(p, trigger, min_chars=8)]
+        if _anchored:
+            return max(_anchored, key=lambda p: (len(visible(p)), ps.index(p)))
+    # ② 完整句
+    complete = [p for p in ps if _is_complete_sentence(p)]
+    pool = complete or ps
+    # ③ 有实义吗（不是纯语气词/标点）
+    _substantive = [p for p in pool if len(visible(p).strip("。，！？、~… ")) >= 4]
+    pool = _substantive or pool
+    # 同级取较长者；长度相同时取最后一条（通常是结论）
+    best = max(pool, key=lambda p: (len(visible(p)), ps.index(p)))
+    return best
 
 
 def _bigrams(s: str) -> set:

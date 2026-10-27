@@ -12196,6 +12196,52 @@ def _pipeline_step(group_id):
                 log(f"群[{group_id}] 剥离退场语后为空，跳过")
                 return
 
+            # ── 回复预算超了 → **重生**（1.5.9 §B3，2026-10-27 接上）──
+            #   docstring 一直写着"调用方应当带『N 字超上限，重写』重生一次"，
+            #   但主链从来没接 —— 于是超配额就直接 fit() 挑一条，真机（18:55）：
+            #
+            #     模型给 2 条共 33 字（超 B 档 32 字）：
+            #       "你问点能查的行不行？"              (23 字) ← 敷衍
+            #       "[10-27 18:55] 记不住，我又不是录音机" (10 字) ← 正面回答
+            #     旧版 fit 取**最短** → 发了敷衍那句，把有内容的扔了。
+            #
+            #   用户原话：「花了钱为什么不发，只是较短，没有触发任何严禁规则」
+            #   —— 钱花了、内容生成了、只是超了 1 个字，结果丢了一半。
+            #
+            #   正确顺序：超配额 → 让模型**按预算重写一次** → 还超才 fit 挑一条。
+            #   重生是一次额外模型调用，但它换回的是"完整的一条回复"。
+            if _budget and reply:
+                try:
+                    _hard_b = {
+                        "max_chars": int(_config.get("reply_max_chars", 16) or 16),
+                        "max_parts": int(_config.get("reply_max_parts", 3) or 3),
+                        "max_total": int(_config.get("reply_max_total", 80) or 80),
+                    }
+                    _ok_b, _why_b, _st_b = reply_budget.check(reply, _budget, _hard_b)
+                    if not _ok_b:
+                        log(f"群[{group_id}] [预算] {_why_b} {_st_b} → 重生一次")
+                        _regen = reply_budget.regen_hint(_why_b, _budget)
+                        _reply2 = call_deepseek(
+                            _regen + "\n" + merged_text_for_ai, images,
+                            group_id=group_id, is_group=True,
+                            personality_temperature=_ST.get("personality_temperature"),
+                            ego_inject_context=_ego_ctx, scene_context=_scene_ctx,
+                            sender=sender)
+                        if _reply2 and _reply2.strip() not in ("[不说话]", "[跳过]"):
+                            _ok_b2, _why_b2, _st_b2 = reply_budget.check(
+                                _reply2, _budget, _hard_b)
+                            if _ok_b2:
+                                log(f"群[{group_id}] [预算] 重生通过 {_st_b2}")
+                                reply = _reply2
+                            else:
+                                log(f"群[{group_id}] [预算] 重生仍超（{_why_b2}）"
+                                    f" → 取一条完整的")
+                                reply = _reply2
+                        else:
+                            log(f"群[{group_id}] [预算] 重生没给出内容 → 用原回复")
+                except Exception as _be:
+                    log(f"群[{group_id}] [预算] 重生异常（忽略）: {_be}")
+
             # 检查是否与最近回复高度相似，防重复唠嗑
             recent = [t for ts, t in GROUP_BOT_REPLIES.get(group_id, []) if time.time() - ts < 60]
             is_dup, matched = is_similar_to_recent(recent, reply)
@@ -12417,8 +12463,8 @@ def _pipeline_step(group_id):
                     _ok_b, _why_b, _st_b = reply_budget.check(sent_text, _budget, _hard)
                     if not _ok_b:
                         log(f"群[{group_id}] [预算] {_why_b} {_st_b}")
-                        sent_text = reply_budget.fit(sent_text, _budget)
-                        log(f"群[{group_id}] [预算] 取最短一条：{sent_text[:30]}")
+                        sent_text = reply_budget.fit(sent_text, _budget, merged_text)
+                        log(f"群[{group_id}] [预算] 取一条完整的：{sent_text[:30]}")
                     elif not reply_budget.anchor_ok(sent_text, merged_text):
                         log(f"群[{group_id}] [预算] 锚点不足（与触发消息无 2-gram 且 <8 字）")
                 # 从这一刻起算"发送中"：去重闸、分条发送、表情包、纯图兜底都在这段里。
