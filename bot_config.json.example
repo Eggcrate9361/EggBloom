@@ -125,7 +125,7 @@
   "persona_talkativeness": 0.0,
   "private_batch_hard_cap": 15,
   "reply_stale_turns": 2,
-  "reply_stale_drop_sec": 120,
+  "reply_stale_drop_sec": null,
   "reply_max_chars": 16,
   "reply_max_parts": 3,
   "reply_max_total": 80,
