@@ -12246,7 +12246,8 @@ def _pipeline_step(group_id):
                                       or buffer.get("has_xiao_a")
                                       or buffer.get("has_text_at"))
                     _age_now = time.time() - _seq_first
-                    _hard_line, _hard_src = _latency.hard_line(addressed=_addressed)
+                    _hard_line, _hard_src = _latency.hard_line(addressed=_addressed,
+                                                           group_id=str(group_id))
                     # 配置项保留为**覆盖**：写 0 = 不用时间兜底（合法，①②仍在）。
                     # 不配 → 用分布导出的线。这样配置不再是"设计值"，
                     # 只是"临时拉高/关掉"的开关。
@@ -12270,14 +12271,17 @@ def _pipeline_step(group_id):
                         addressed=_addressed,
                         text=sent_text,
                         official_re=_OFFICIAL_RE)
-                    # 观测：无论丢不丢都记一笔 —— 分布就是这么攒出来的
-                    _latency.note(_age_now, addressed=_addressed)
+                    # 观测：无论丢不丢都记一笔 —— 分布就是这么攒出来的。
+                    # 带群号：测试群（_test_*）的样本会被 reply_drop 过滤掉，
+                    # 不然测试脚本 import bot_core 就能把真实分布带偏。
+                    _latency.note(_age_now, addressed=_addressed,
+                                  group_id=str(group_id))
                     if _why:
                         log(f"群[{group_id}] [丢弃:{_why}] 本批不发"
                             f"（线 {_hard_src}）")
                         _dropped = True
                     else:
-                        _st = _latency.stats()
+                        _st = _latency.stats(str(group_id))
                         log(f"[时序] 群{group_id} 本批 age={_age_now:.1f}s "
                             f"线={_hard_line:.0f}({_hard_src}) "
                             f"新消息={_new_msgs} 在等={'是' if _addressed else '否'} "

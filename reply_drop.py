@@ -46,7 +46,7 @@ gen_send 分布（n=86）：p50=0.1  p90=14.2  p95=18.6  max=26.5
 from __future__ import annotations
 
 import threading
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 #: 至少要有这么多条实测样本，才用自己的分布定线；否则用兜底线。
 MIN_SAMPLES = 20
@@ -84,8 +84,20 @@ class LatencyProfile:
     而常数不会跟着动。真机第一次就踩了：阈值定 25，实际 p90 是 14、
     搜索链要到 40+，常数等于把搜索链整体判死。
 
+    ★ 按群分组统计（2026-10-27 晚）。原先所有群共用一个池子，实测发现
+      测试脚本 import bot_core 后会往同一个全局单例里灌样本
+      （群号 `_test_poke_pipeline_` 之类，age 0.1–5.2 秒），
+      把真实群的分布整个带偏 —— 真实群的慢样本被测试的快样本稀释。
+      现在按群分桶，线只看**真实群**的样本。
+
+    ★ 合成群号过滤：群号以 `_test_` / `test_` 开头的是测试造的，
+      一律不进池子。这不是"猜测试群"，是"测试自己声明的命名"。
+
     线程安全：主链在 Timer 线程记、等待线程读。
     """
+
+    #: 测试群号前缀 —— 这些群的样本不进分布池
+    TEST_PREFIXES = ("_test_", "test_")
 
     def __init__(self, history: int = 200):
         self._lock = threading.Lock()
@@ -93,14 +105,28 @@ class LatencyProfile:
         self._history = max(20, int(history))
         #: 分场景：被点名 / 未被点名。两者的容忍度不同，混在一起会互相污染。
         self._vals_addressed: List[float] = []
+        #: 按群分桶 {gid: [age, ...]}（只存真实群）
+        self._by_group: Dict[str, List[float]] = {}
 
-    def note(self, age: float, *, addressed: bool = False) -> None:
-        """记一条"这次生成花了多久"。非正值忽略（评测/桩调用会传 0）。"""
+    @classmethod
+    def is_test_group(cls, gid: str) -> bool:
+        g = str(gid or "")
+        return g.startswith(cls.TEST_PREFIXES)
+
+    def note(self, age: float, *, addressed: bool = False,
+             group_id: str = "") -> None:
+        """记一条"这次生成花了多久"。非正值忽略（评测/桩调用会传 0）。
+
+        `group_id` 给了就按群分桶；测试群（`_test_*`）直接忽略。
+        """
         try:
             v = float(age)
         except Exception:
             return
         if v <= 0 or v > 3600:
+            return
+        gid = str(group_id or "")
+        if gid and self.is_test_group(gid):
             return
         with self._lock:
             self._vals.append(v)
@@ -110,21 +136,38 @@ class LatencyProfile:
                 self._vals_addressed.append(v)
                 if len(self._vals_addressed) > self._history:
                     self._vals_addressed = self._vals_addressed[-self._history:]
+            if gid:
+                bucket = self._by_group.setdefault(gid, [])
+                bucket.append(v)
+                if len(bucket) > self._history:
+                    del bucket[:-self._history]
 
-    def p99(self) -> Optional[float]:
+    def p99(self, group_id: str = "") -> Optional[float]:
+        """该群的 p99（不给群号则用全局池）。
+
+        按群取优先：不同群的生成速度差很多 —— 活跃群里模型被顶得多、
+        冷群里没人抢机器。全局池会把两边的慢样本混在一起，
+        冷群的线被活跃群拉宽，而冷群恰恰是最容易"发出去也没人接"的。
+        群样本不够时回退全局池，再不够回退兜底线。
+        """
         with self._lock:
+            if group_id:
+                bucket = list(self._by_group.get(str(group_id)) or [])
+                if len(bucket) >= MIN_SAMPLES:
+                    return _pct(sorted(bucket), 0.99)
             vals = sorted(self._vals)
         if len(vals) < MIN_SAMPLES:
             return None
         return _pct(vals, 0.99)
 
-    def stats(self) -> dict:
+    def stats(self, group_id: str = "") -> dict:
         with self._lock:
             vals = sorted(self._vals)
             addressed = sorted(self._vals_addressed)
+            bucket = sorted(self._by_group.get(str(group_id)) or []) if group_id else []
         if not vals:
             return {"n": 0}
-        return {
+        out = {
             "n": len(vals),
             "p50": round(_pct(vals, 0.5), 1),
             "p90": round(_pct(vals, 0.9), 1),
@@ -132,14 +175,18 @@ class LatencyProfile:
             "max": round(vals[-1], 1),
             "addressed_n": len(addressed),
         }
+        if bucket:
+            out["gid_n"] = len(bucket)
+            out["gid_p99"] = round(_pct(bucket, 0.99), 1)
+        return out
 
-    def hard_line(self, *, addressed: bool = False) -> tuple:
+    def hard_line(self, *, addressed: bool = False, group_id: str = "") -> tuple:
         """当前该用的兜底线，返回 (秒, 来源说明)。
 
         样本够 → 用自己分布的 p99 × 1.5；不够 → FALLBACK_HARD。
         被点名时再 × ADDRESSED_MULT。
         """
-        p99 = self.p99()
+        p99 = self.p99(group_id)
         if p99 is None:
             base, src = FALLBACK_HARD, "兜底(样本不足)"
         else:

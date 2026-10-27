@@ -166,6 +166,77 @@ def test_profile_bounded_history():
     check("历史有上限（不会无限长）", p.stats()["n"] <= 30, p.stats()["n"])
 
 
+def test_test_groups_do_not_pollute():
+    """★ 测试脚本 import bot_core 时会灌样本，不能带偏真实分布。
+
+    真机实测：8 条样本全来自 `_test_poke_pipeline_` 之类（age 0.1–5.2s），
+    真实群样本 0 条。全局池子被测试的快样本占满 → 线被拉到远低于真实搜索链，
+    于是真实群的慢回复反而被误杀 —— 正好是这次要修的问题。
+    """
+    p = reply_drop.LatencyProfile()
+    for _ in range(30):
+        p.note(0.2, group_id="_test_poke_pipeline_")
+    check("测试群样本不进池", p.stats().get("n", 0) == 0, p.stats())
+    check("测试群样本不进分桶", not p._by_group, p._by_group)
+
+    # 真实群的慢样本要能正常进池
+    p.note(58.0, group_id="829854136")
+    check("真实群样本进池", p.stats().get("n", 0) == 1, p.stats())
+
+    # 前缀判定
+    check("_test_ 前缀识别", reply_drop.LatencyProfile.is_test_group("_test_x"))
+    check("test_ 前缀识别", reply_drop.LatencyProfile.is_test_group("test_x"))
+    check("真实群号不误判", not reply_drop.LatencyProfile.is_test_group("829854136"))
+    check("空群号不误判", not reply_drop.LatencyProfile.is_test_group(""))
+
+
+def test_profile_group_buckets():
+    p = reply_drop.LatencyProfile()
+    for i in range(10):
+        p.note(50 + i, group_id="g1")
+    for i in range(10):
+        p.note(5 + i, group_id="g2")
+    with p._lock:
+        b1 = sorted(p._by_group.get("g1", []))
+        b2 = sorted(p._by_group.get("g2", []))
+    check("按群分桶：g1", len(b1) == 10 and b1[0] == 50, b1[:3])
+    check("按群分桶：g2", len(b2) == 10 and b2[0] == 5, b2[:3])
+    check("两个群不互相污染", b1[-1] != b2[-1], (b1[-1], b2[-1]))
+
+
+def test_line_is_per_group():
+    """★ 线按群取：不同群速度差很多，混在一起会互相污染。
+
+    冷群（没人抢机器）本来就慢，线要跟着它的分布走；
+    拿活跃群的线去卡冷群，冷群的慢回复会被误杀。
+    """
+    p = reply_drop.LatencyProfile()
+    # 活跃群：快
+    for i in range(30):
+        p.note(5 + i * 0.1, group_id="hot_group")
+    # 冷群：慢（带搜索）
+    for i in range(30):
+        p.note(50 + i, group_id="cold_group")
+
+    hot_line, hot_src = p.hard_line(group_id="hot_group")
+    cold_line, cold_src = p.hard_line(group_id="cold_group")
+    check("活跃群线明显更紧", hot_line < cold_line, (hot_line, cold_line))
+    check("冷群线覆盖它的慢样本", cold_line > 79, cold_line)
+    check("活跃群线不会误杀冷群样本（各用自己的）",
+          hot_line < 50, hot_line)
+
+    # 群样本不够 → 回退全局池
+    p2 = reply_drop.LatencyProfile()
+    for i in range(30):
+        p2.note(20 + i, group_id="g1")
+    for i in range(3):
+        p2.note(60, group_id="g2")
+    line_g2, src_g2 = p2.hard_line(group_id="g2")
+    check("群样本不够时回退全局池（不直接用兜底）",
+          "实测p99" in src_g2, src_g2)
+    check("回退后线仍合理", 20 < line_g2 < 200, line_g2)
+
+
 def test_stats_shape():
     p = reply_drop.LatencyProfile()
     check("空样本 stats 安全", p.stats() == {"n": 0}, p.stats())
@@ -218,6 +289,9 @@ def main():
                test_profile_addressed_is_tighter,
                test_profile_ignores_bad_values,
                test_profile_bounded_history,
+               test_test_groups_do_not_pollute,
+               test_profile_group_buckets,
+               test_line_is_per_group,
                test_stats_shape,
                test_defaults_from_config,
                test_wired):
