@@ -9779,14 +9779,41 @@ def _is_group_trigger(text: str) -> bool:
     return False
 
 
+def quoted_text_calls_bot(quoted_text: str) -> str:
+    """被引用的**原文**里有没有在叫 Bot。命中返回那个称呼，否则空串。
+
+    为什么单独判一次（2026-10-27 真机）：群友把自己早先那句
+    「@AAA无理由退货 讲解一下精神分析引论」引着又发一遍（等于重问），
+    而原来的判据只看 `quoted_sender`（= 他自己，不是 Bot）→ 判成
+    「他在引用别人，**不是在叫我**，别抢话」，一条明确冲 Bot 来的提问
+    被当成空气。
+
+    判据不能拿"谁写的"覆盖"写了什么"：引用者是谁只决定话题归属，
+    被引用那句话里有没有叫我，才是要不要接的重点。
+    """
+    if not quoted_text:
+        return ""
+    n = bot_nick_in_text(quoted_text)
+    if n:
+        return n
+    if _is_group_trigger(quoted_text):
+        w = _group_trigger_words()
+        return w[0] if w else "触发词"
+    return ""
+
+
 def quote_target_for(buffer: dict) -> int:
     """这次回复要不要带**引用**（指向"本轮正在回的那条"），返回 message_id 或 0。
 
     模式（配置中心 → 群聊 → 群引用回复）：
       off    永远不引用
-      auto   ★默认：只在"对象明确"时引用 —— 本轮合并了多条历史消息，或消息本身带引用
-             （此时不说清楚是在回哪一条，群里就会看着像自说自话）。
-             跟 qq-bridge 的判据一致：普通接最新一句且对象唯一时不用引用。
+      auto   ★默认：只在"对象明确"时引用。
+             **冲 Bot 来的**（@ / 文本 @ / 叫「小a」/ 含昵称）也算"对象明确" ——
+             2026-10-27 用户真机反馈：群里几路人同时说话时，Bot 回三行短句却不带
+             引用，根本看不出在回哪条（实证：回「哦 / 然后呢 / 憋半天就这？」时
+             上一句是别人 @ 它骂的，读者只能靠猜）。
+             旧判据只有"合并了多条历史"或"对方本来就发了引用"，恰好漏掉最常见的那种。
+             另外两种情况（合并多条历史、消息本身带引用）保留：不说清楚就成自说自话。
       always 每条都引用
     """
     mode = str(_config.get("group_quote_mode", "auto") or "auto").strip().lower()
@@ -9797,9 +9824,19 @@ def quote_target_for(buffer: dict) -> int:
         mid = int(buf.get("message_id") or 0)
     except Exception:
         mid = 0
-    if mid <= 0:
+    # ★ 2026-10-27：只把 0 当"没有 id"，**负数照用**。
+    #   SnowLuma 给的消息 id 常是负数（实测 17 条被引用消息里 12 条是负的），
+    #   原来这里 `mid <= 0` 等于把七成消息的引用能力直接关掉 —— 这也是
+    #   "引用回复几乎从没出现过"的第二个原因（日志里只有 2 次 群回复(引用)）。
+    #   风险兜底：驱动若认不了这个 id，会打 could not quote 并**丢掉引用继续发**
+    #   （见本文件 tests/test_quote_reply.py 开头记录的实测），最坏退回今天的样子。
+    if mid == 0:
         return 0
     if mode == "always":
+        return mid
+    # 冲 Bot 来的：@ / 文本 @ / 叫了「小a」/ 含任一称呼
+    if (buf.get("is_at_bot") or buf.get("has_text_at")
+            or buf.get("has_xiao_a") or buf.get("has_bot_nick")):
         return mid
     try:
         merged_n = int(buf.get("merged_n") or 0)
@@ -11293,7 +11330,9 @@ def _pipeline_step(group_id):
                     log(f"群[{group_id}] 与 2 分钟内的回复重复，跳过发送: {sent_text[:40]}")
                 elif smart_send_group(group_id, sent_text, reply_id=_quote_id):
                     _sent_ok = True
-                    log(f"群回复{'(引用)' if _quote_id else ''}: {sent_text[:60]}")
+                    # 记上引用目标的 id：负数 id 能不能被驱动接受，就看这一行
+                    # 之后群里有没有真的出现引用卡片（也便于事后按 id 对账）。
+                    log(f"群回复{'(引用 id=' + str(_quote_id) + ')' if _quote_id else ''}: {sent_text[:60]}")
                     track_bot_reply(group_id, sent_text)
             else:
                 log(f"群[{group_id}] 仅表情标记，跳过文本发送")
@@ -12310,6 +12349,14 @@ def main():
                         except Exception:
                             pass
                         quoted_text = sanitize_cq(quoted_text)
+                        # ★ 2026-10-27：被引用的**原文本身在叫 Bot**，也算"在叫我"。
+                        #   判据与来龙去脉见 quoted_text_calls_bot()。
+                        if not quote_me:
+                            _qn = quoted_text_calls_bot(quoted_text)
+                            if _qn:
+                                quote_me = True
+                                log(f"群[{group_id}] 引用注记修正：被引用原文里叫了「{_qn}」"
+                                    f"→ 按'在叫我'处理")
                         # 引用路由写进 prompt：让模型自己也能判断"这是在跟谁说话"
                         _qtag = ("引用我，必回" if quote_me
                                  else f"他在引用{sender_display}，**不是在叫我**，别抢话")
@@ -12557,8 +12604,11 @@ def main():
                     #   此前这里引用过 `quote_forces` —— 它在 main() 里从没定义过，
                     #   每条群消息白抛一次 NameError，且"被@/叫名字/引用 → 立即建立
                     #   会话"从来没生效过。
-                    _quote_me = (bool(has_quote)
-                                 and str(quoted_sender or "") == str(BOT_QQ))
+                    # ★ 2026-10-27：直接沿用上面引用注记算出的 `quote_me`，不再算第二遍。
+                    #   上面那份含三条兜底（昵称匹配 / 自引用兜底 / "被引用原文里叫了
+                    #   Bot"）。分两处算就会出现「prompt 里写'引用我，必回'、forced 却
+                    #   按'不是我'放行给决策器」——同一件事两个消费者，结论打架。
+                    _quote_me = bool(quote_me)
                     # 触发口径（旧 10216 那个条件的反面）：任一项命中 → 免过决策器。
                     _forced = bool(is_at_bot or has_xiao_a or has_bot_nick
                                    or _quote_me or has_text_at or in_session)

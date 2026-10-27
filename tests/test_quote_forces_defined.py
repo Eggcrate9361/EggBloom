@@ -73,15 +73,24 @@ def main():
     check("_image_understanding_needed 的形参确实叫 quote_forces",
           re.search(r"def _image_understanding_needed\([^)]*quote_forces", src) is not None)
 
-    print("\n[2] 主循环改用 _quote_me，且先定义后使用")
-    def_pos = src.find("_quote_me = (bool(has_quote)")
+    print("\n[2] 主循环用 _quote_me，且先定义后使用")
+    # ★ 2026-10-27 结构变更：判据抽到引用注记那段（`quote_me`，含三条兜底），
+    #   `_quote_me` 只是它的只读副本 —— 不再在 12000 行处重算一遍。
+    #   原来分两处算，会出现「prompt 里写'引用我，必回'、forced 却按'不是我'
+    #   放行给决策器」，同一件事两个消费者结论打架。
+    init_pos = src.find("quote_me = False")
+    judge_pos = src.find('quote_me = bool(quoted_sender) and str(quoted_sender) == str(BOT_QQ)')
+    def_pos = src.find("_quote_me = bool(quote_me)")
     use_pos = src.find("or has_bot_nick or _quote_me)")
-    check("找到 _quote_me 的定义", def_pos > 0)
-    check("找到 _quote_me 的使用", use_pos > 0)
-    check("★ 定义在引用之前", 0 < def_pos < use_pos,
-          f"def@{def_pos} use@{use_pos}")
-    check("定义确实用 quoted_sender 判原主",
-          'str(quoted_sender or "") == str(BOT_QQ)' in src)
+    check("找到 quote_me 的初值（每条消息重置）", init_pos > 0, f"init@{init_pos}")
+    check("找到「原主是 Bot」的判据", judge_pos > 0, f"judge@{judge_pos}")
+    check("找到 _quote_me 的定义", def_pos > 0, f"def@{def_pos}")
+    check("找到 _quote_me 的使用", use_pos > 0, f"use@{use_pos}")
+    check("★ 初值 → 判据 → 定义 → 使用，顺序不能倒",
+          0 < init_pos < judge_pos < def_pos < use_pos,
+          f"init@{init_pos} judge@{judge_pos} def@{def_pos} use@{use_pos}")
+    check("_quote_me 只做副本，不重算判据（防两处判据打架）",
+          "_quote_me = (bool(has_quote)" not in src)
 
     print("\n[3] 结果写进缓冲区（此前 quote_me 恒 False）")
     check("缓冲区写入 quote_me", '"quote_me": _quote_me' in src)

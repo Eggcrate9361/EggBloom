@@ -4670,7 +4670,7 @@ window.FIELD_META = {
     "recall_private_post_messages": {"label": "私聊撤回反馈", "desc": "私聊撤回时的反馈语", "ctl": "editable", "panel": "recall", "mount": "recallPrivateList", "key": "recall_private_post_messages", "default": ["撤回了？我还没看到", "什么情况 手滑了？", "你撤回的速度比打字快多了", "心虚了吧", "好家伙 说撤就撤", "别撤回啊 发都发了"], "default_text": "6 项"},
     "custom_exit_phrases_short": {"label": "短退场语", "desc": "每行一条，Bot 主动离开时随机发送", "ctl": "editable", "panel": "exit", "mount": "exitShortList", "key": "custom_exit_phrases_short", "default": [], "default_text": "空"},
     "custom_exit_phrases_idle": {"label": "空闲退场语", "desc": "长时间无人对话时触发", "ctl": "editable", "panel": "exit", "mount": "exitIdleList", "key": "custom_exit_phrases_idle", "default": [], "default_text": "空", "restart": true},
-    "group_quote_mode": {"label": "群引用回复", "desc": "回复时是否引用它正在回的那条消息：off=不引用 / auto=只在对象明确时引用（合并多条历史、或对方本来就发了引用）/ always=每条都引用", "ctl": "select", "panel": "group", "unit": "", "id": "sGroupQuoteMode", "options": [["auto", "自动（推荐）"], ["always", "每条都引用"], ["off", "从不引用"]], "default": "auto", "default_text": "auto"},
+    "group_quote_mode": {"label": "群引用回复", "desc": "回复时是否引用它正在回的那条消息：off=不引用 / auto=对象明确时引用（被 @、被叫名字、合并了多条历史、或对方本来就发了引用）/ always=每条都引用", "ctl": "select", "panel": "group", "unit": "", "id": "sGroupQuoteMode", "options": [["auto", "自动（推荐）"], ["always", "每条都引用"], ["off", "从不引用"]], "default": "auto", "default_text": "auto"},
     "bot_nicknames": {"label": "Bot 昵称（每行一个）", "desc": "Bot 的全部称呼：群友叫其中任何一个都算在叫它。第一个当作网名用；留空则用群名片，再空才兜底 小a。大小写/全角/@ 不敏感", "ctl": "lines", "panel": "trigger", "unit": "", "id": "sBotNicknames", "default": [], "default_text": "空"},
   }
 };

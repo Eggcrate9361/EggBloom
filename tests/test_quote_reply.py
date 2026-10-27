@@ -98,8 +98,55 @@ def main():
               bot_core.quote_target_for({"message_id": 55, "merged_n": 2, "has_quote": False}) == 55)
         check("auto · 对方本来就发了引用 → 引用",
               bot_core.quote_target_for({"message_id": 55, "merged_n": 0, "has_quote": True}) == 55)
+        # ★ 2026-10-27：冲 Bot 来的也算"对象明确"
+        #   真机：群里几路人同时说话，Bot 回「哦 / 然后呢 / 憋半天就这？」，
+        #   上一句是别人 @ 它骂的 —— 不带引用就看不出在回哪条。
+        check("★ auto · 被 @ → 引用",
+              bot_core.quote_target_for({"message_id": 55, "merged_n": 0, "is_at_bot": True}) == 55)
+        check("★ auto · 文本里 @（段外） → 引用",
+              bot_core.quote_target_for({"message_id": 55, "merged_n": 0, "has_text_at": True}) == 55)
+        check("★ auto · 叫「小a」 → 引用",
+              bot_core.quote_target_for({"message_id": 55, "merged_n": 0, "has_xiao_a": True}) == 55)
+        check("★ auto · 含 Bot 昵称 → 引用",
+              bot_core.quote_target_for({"message_id": 55, "merged_n": 0, "has_bot_nick": True}) == 55)
+        # ★ 2026-10-27：负数 message_id 也要能用。
+        #   SnowLuma 实测 17 条被引用消息里 12 条 id 是负的；旧代码 `mid <= 0`
+        #   把它们全当"没有 id"→ 七成消息根本引不了（日志里只有 2 次引用回复）。
+        check("★ auto · 负数 id + 被 @ → 照样引用",
+              bot_core.quote_target_for({"message_id": -1031893310, "is_at_bot": True}) == -1031893310)
+        check("auto · 负数 id 但没触发也没合并 → 不引用",
+              bot_core.quote_target_for({"message_id": -1031893310, "merged_n": 0}) == 0)
         check("没有 message_id → 0", bot_core.quote_target_for({"merged_n": 3}) == 0)
         check("空 buffer → 0", bot_core.quote_target_for(None) == 0)
+    finally:
+        bot_core._config.clear()
+        bot_core._config.update(orig_cfg)
+
+    print("\n=== ③b off 时即使被 @ 也不引用 ===")
+    orig_cfg = dict(bot_core._config)
+    try:
+        bot_core._config["group_quote_mode"] = "off"
+        check("off 优先级最高（@ 也不引）",
+              bot_core.quote_target_for({"message_id": 55, "is_at_bot": True}) == 0)
+    finally:
+        bot_core._config.clear()
+        bot_core._config.update(orig_cfg)
+
+    print("\n=== ③c 被引用的原文里叫了 Bot → 按'在叫我'处理 ===")
+    # 真机：群友把自己早先那句「@AAA无理由退货 讲解一下…」引着重发一遍，
+    # 旧判据只看 quoted_sender（他自己）→ 判成"不是在叫我，别抢话"。
+    orig_cfg = dict(bot_core._config)
+    try:
+        bot_core._config["bot_group_nick"] = "AAA无理由退货"
+        bot_core._config["bot_nicknames"] = ["小a"]
+        check("★ 被引用原文 @ 了群名片 → 命中",
+              bot_core.quoted_text_calls_bot("@AAA无理由退货 讲解一下精神分析引论") == "AAA无理由退货")
+        check("被引用原文叫了「小a」 → 命中",
+              bot_core.quoted_text_calls_bot("小a 你怎么看") == "小a")
+        check("被引用原文只是闲聊 → 不命中",
+              bot_core.quoted_text_calls_bot("今天中午吃什么") == "")
+        check("空文本 → 不命中", bot_core.quoted_text_calls_bot("") == "")
+        check("None → 不命中", bot_core.quoted_text_calls_bot(None) == "")
     finally:
         bot_core._config.clear()
         bot_core._config.update(orig_cfg)
