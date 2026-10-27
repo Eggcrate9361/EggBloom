@@ -42,8 +42,11 @@ STATE_PATH = os.path.join(PUBLISHED_DIR, "state.json")
 # （用包含匹配而不是全等——节标题里可能有空格，如「【当被问是不是 AI】」）
 PRESERVE_SECTIONS = ("当被问是不是", "禁忌", "绝对不能说")
 
-_PERSONALITY_TXT = os.path.join(os.path.dirname(os.path.dirname(PLUGIN_DIR)),
-                                "personality.txt")
+# ★ 2026-10-27 修正：原来指向 `<app>/personality.txt`（仓库根）—— 不存在，
+#   蒸馏发布读不到手写人设，"要保留的硬规矩"那几段会丢。
+#   权威位置是 `<app>/plugins/personality.txt`（与 bot_core.PERSONA_CANONICAL 一致）。
+_APP_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(PLUGIN_DIR)))
+_PERSONALITY_TXT = os.path.join(_APP_ROOT, "plugins", "personality.txt")
 
 
 def _read(path):

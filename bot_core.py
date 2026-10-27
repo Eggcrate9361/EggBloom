@@ -425,7 +425,11 @@ GROUP_SEND_BLOCK_THRESHOLD = _config.get("group_send_block_threshold", 100)
 #   同一件事三个数，正是这仓库最高频的 bug 形态。
 GROUP_SEND_MAX_PARTS = _config.get("group_send_max_parts", 5)
 
-PERSONALITY_FILE = os.path.join(SCRIPT_DIR, "personality.txt")
+#: 旧包的人格文件在程序根目录 —— 只作兼容兜底，不是权威路径。
+#: ★ 2026-10-27 改名：原来叫 PERSONALITY_FILE，看着像权威路径，
+#:   实际指向的文件根本不存在 —— 写侧三处照着它写，于是人格自学习写回全废。
+#:   权威路径是 PERSONA_CANONICAL（plugins/personality.txt）。
+PERSONALITY_LEGACY_ROOT = os.path.join(SCRIPT_DIR, "personality.txt")
 
 # ★ 2026-10-27 人格来源统一到一份：`plugins/personality.txt`。
 #   事实（实测）：真正生效的从来只有它 —— EGO 的 PERSONALITY_PATH 指向它，
@@ -3915,12 +3919,13 @@ def load_personality():
     #   顺序变了（2026-10-27）：先读 plugins/personality.txt —— 与 EGO 同一个文件，
     #   保证"EGO 挂了"时读到的还是同一个人格，而不是根目录那份旧稿。
     #   后面几项保留给历史布局（老包里人格在根目录），只作兼容。
+    #   ★ 2026-10-27 收窄：原来还有两项用 `..`/`../..` 往上翻的路径
+    #   （<app>/../personality.txt、<app>/../../personality.txt）——
+    #   那是在翻程序目录的父目录找人格文件，既没意义也不安全。
+    #   兼容老包只需保留「程序根目录」这一项。
     search_paths = [
         PERSONA_CANONICAL,
-        PERSONALITY_FILE,
-        os.path.join(os.path.dirname(PERSONALITY_FILE), "..", "personality.txt"),
-        os.path.join(os.path.dirname(PERSONALITY_FILE), "..", "..", "personality.txt"),
-        os.path.join(os.path.dirname(os.path.abspath(__file__)), "personality.txt"),
+        PERSONALITY_LEGACY_ROOT,
     ]
     for path in search_paths:
         try:

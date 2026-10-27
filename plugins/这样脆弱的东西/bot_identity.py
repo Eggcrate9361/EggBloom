@@ -19,7 +19,10 @@ import re
 _PLUGIN_DIR = os.path.dirname(os.path.abspath(__file__))
 _PROJECT = os.path.dirname(os.path.dirname(_PLUGIN_DIR))
 
-_NAME_RE = re.compile(r"^你是[「\"'『]?([^\uFF0C，,。.\s！!？?】]{1,12})", re.M)
+# ★ 2026-10-27：personality.txt 现在的写法是「我叫小a，……」而不是「你是小a」，
+#   旧正则只认「你是」→ 永远匹配不到 → bot_names() 恒空。
+#   两个句式都认（人设文件改过写法，不能让解析器跟着旧格式一起死）。
+_NAME_RE = re.compile(r"^(?:你是|我叫)[「\"'『]?([^\uFF0C，,。.\s！!？?】]{1,12})", re.M)
 
 
 def bot_names():
@@ -34,7 +37,10 @@ def bot_names():
     except Exception:
         pass
 
-    p = os.path.join(_PROJECT, "personality.txt")
+    # ★ 2026-10-27 修正：原来指向 `<app>/personality.txt`（仓库根）——
+    #   那个文件不存在，于是 bot_names() 恒返回空集，读不到机器人自称。
+    #   权威位置是 `<app>/plugins/personality.txt`（与 bot_core.PERSONA_CANONICAL 一致）。
+    p = os.path.join(_PROJECT, "plugins", "personality.txt")
     try:
         with open(p, "r", encoding="utf-8") as f:
             head = f.read(400)

@@ -22,8 +22,16 @@ else:
     _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_DIR = os.path.join(_SCRIPT_DIR, "self_learning_db")
 DB_PATH = os.path.join(DB_DIR, "self_learning.db")
-PERSONALITY_FILE = os.path.join(_SCRIPT_DIR, "personality.txt")
-PERSONALITY_BACKUP_DIR = os.path.join(_SCRIPT_DIR, "personality_versions")
+# ★ 2026-10-27 修正：原来指向**仓库根**的 personality.txt —— 那个文件不存在，
+#   于是 backup() 直接 return False、apply_update() 抛 FileNotFoundError，
+#   **人格自学习写回整条链是死的**（读侧早已统一到 plugins/personality.txt，
+#   写侧漏了三处，核查报告第 2 项）。
+#   权威路径就是 bot_core.PERSONA_CANONICAL，值相同：
+#     <脚本目录>/plugins/personality.txt
+PERSONALITY_FILE = os.path.join(_SCRIPT_DIR, "plugins", "personality.txt")
+# 备份目录跟着人格文件走 —— 备份放 plugins/personality_versions/，
+#   不再往仓库根 personality_versions/ 写（那是运行态，不该在仓库里）
+PERSONALITY_BACKUP_DIR = os.path.join(_SCRIPT_DIR, "plugins", "personality_versions")
 
 # 学习参数
 MIN_MESSAGES_FOR_LEARNING = 10       # 最少消息数才触发学习

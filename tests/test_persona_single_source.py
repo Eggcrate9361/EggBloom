@@ -58,9 +58,11 @@ def main():
     check("找到 load_personality", seg_start > 0)
     seg = src[seg_start:seg_start + 6000]
     i_canon = seg.find("PERSONA_CANONICAL,")
-    i_root = seg.find("PERSONALITY_FILE,")
+    # ★ 2026-10-27：常量改名 PERSONALITY_FILE → PERSONALITY_LEGACY_ROOT
+    #   （旧名看着像权威路径，写侧三处照着它写 → 人格写回全废）
+    i_root = seg.find("PERSONALITY_LEGACY_ROOT,")
     check("search_paths 里用到了 PERSONA_CANONICAL", i_canon > 0, f"@ {i_canon}")
-    check("search_paths 里还留着 PERSONALITY_FILE（历史兼容）", i_root > 0, f"@ {i_root}")
+    check("search_paths 里还留着旧包根目录那份（历史兼容）", i_root > 0, f"@ {i_root}")
     check("★ 规范路径排在根目录之前", 0 < i_canon < i_root, f"canon@{i_canon} root@{i_root}")
     # 列表第一项必须就是它 —— 排在 PERSONALITY_FILE 前面还不够，得是首个候选
     check("★ 它是 search_paths 的第一项",
