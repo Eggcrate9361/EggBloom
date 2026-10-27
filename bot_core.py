@@ -420,6 +420,17 @@ GROUP_SEND_BLOCK_THRESHOLD = _config.get("group_send_block_threshold", 100)
 GROUP_SEND_MAX_PARTS = _config.get("group_send_max_parts", 5)
 
 PERSONALITY_FILE = os.path.join(SCRIPT_DIR, "personality.txt")
+
+# ★ 2026-10-27 人格来源统一到一份：`plugins/personality.txt`。
+#   事实（实测）：真正生效的从来只有它 —— EGO 的 PERSONALITY_PATH 指向它，
+#   配置页的人格编辑器、蒸馏人格卡也都写这一份。
+#   但兜底链原来把**根目录** personality.txt 排在第一，而根目录那份是历史遗留，
+#   内容停在 1.5.8 之前（旧版「你是小a，18 岁的网瘾青年」440 字，
+#   对比现行「我叫小a…三五个字」1350 字）。
+#   后果：EGO 一旦不可用（异常/被摘掉/文件缺失），人格会**悄悄退回旧版**，
+#   语气说变就变，而且没有任何日志提示 —— 排查时只会觉得"今天怪怪的"。
+#   现在兜底也先读 PLUGINS 那份，根目录那份只作为最后的历史兼容项。
+PERSONA_CANONICAL = os.path.join(SCRIPT_DIR, "plugins", "personality.txt")
 # 数据文件放在用户目录下，避免 PyInstaller dist 重建时丢失
 _USER_DATA_DIR = os.path.join(os.path.expanduser("~"), "AppData", "Local", "EggBloom_v3")
 os.makedirs(_USER_DATA_DIR, exist_ok=True)
@@ -3761,8 +3772,12 @@ def load_personality():
     except Exception:
         pass  # EGO 不可用 → 走文件兜底
 
-    # ── 兜底：直接读 personality.txt ──
+    # ── 兜底：直接读人格文件 ──
+    #   顺序变了（2026-10-27）：先读 plugins/personality.txt —— 与 EGO 同一个文件，
+    #   保证"EGO 挂了"时读到的还是同一个人格，而不是根目录那份旧稿。
+    #   后面几项保留给历史布局（老包里人格在根目录），只作兼容。
     search_paths = [
+        PERSONA_CANONICAL,
         PERSONALITY_FILE,
         os.path.join(os.path.dirname(PERSONALITY_FILE), "..", "personality.txt"),
         os.path.join(os.path.dirname(PERSONALITY_FILE), "..", "..", "personality.txt"),
