@@ -205,6 +205,35 @@ class TestPostProcessIntegration(unittest.TestCase):
         self.assertTrue(de_ai.DEFAULT_DE_AI_CONFIG.get("fix_question_marks"))
 
 
+class TestHonestPhrases(unittest.TestCase):
+    """1.5.9 §A.3⑤：诚实短句不许被后处理剪掉。
+
+    现象：模型说「这个我无法完成」，ban_sycophancy 命中 `replace(phrase, "")`
+    → 输出「这个我」。残句比套话更假，而且等于惩罚诚实。
+    这三句与「作为AI / 希望对你有所帮助」性质不同：前者是必要表达，后者是客服腔。
+    """
+
+    def _pp(self, text):
+        cfg = {"de_ai": {"enabled": True, "post_process": True,
+                         "ban_sycophancy": True}}
+        return de_ai.de_ai_post_process(text, cfg)
+
+    def test_honest_refusals_kept(self):
+        for s in ("这个我无法完成", "我无法做到", "这事我帮不了你"):
+            with self.subTest(s=s):
+                self.assertEqual(self._pp(s), s)
+
+    def test_real_sycophancy_still_removed(self):
+        # 不能整句都是套话：删空会触发"回退原文"保护（那是另一条既有行为）
+        out = self._pp("作为AI，这事我确实做不到")
+        self.assertNotIn("作为AI", out)
+        self.assertIn("这事我确实做不到", out)
+
+    def test_diagnose_does_not_flag_honest_refusal(self):
+        r = de_ai.de_ai_diagnose("这个我无法完成")
+        self.assertFalse(any("我无法完成" in h for h in r["hits"]), r)
+
+
 class TestHalfwidthPunctuation(unittest.TestCase):
     """半角 ? ! → 全角（2026-10-22）。
 
