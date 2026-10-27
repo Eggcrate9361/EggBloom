@@ -15,6 +15,7 @@ from socketserver import ThreadingMixIn
 import capabilities_view
 import inbound
 import reply_budget
+import speech_pace
 
 
 class ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
@@ -635,11 +636,15 @@ REPLY_PHASE_MAX = 420          # 单个相位最长持有时间（秒）
 # 改为在入口拦下、攒够时间再**重新入队**，到点后走的是原来那条完整链路
 # （记忆/画像/画图/ego/表情包/事后校验全都不动）。
 PRIVATE_MSG_BUFFER: Dict[str, Dict[str, Any]] = {}
+#: 私聊发言节奏（1.5.9 通用化）：窗口不再拍死 8 秒，按这个人的间隔中位数算。
+#: 关掉 speech_pace_enable 就回到固定 private_msg_buffer_window。
+_PRIVATE_PACE = speech_pace.SpeechPace()
 # 重新入队时打的标记：二次经过入口不再入缓冲，直接往下走
 _REQUEUE_FLAG = "_egg_merged"
 
 
-def _private_batch_delay(*, first_time, now=None, has_image=False):
+def _private_batch_delay(*, first_time, now=None, has_image=False,
+                         quiet=None, cap=None):
     """私聊这批消息该等几秒。
 
     **复用 `_batch_delay`，不另写规则** —— 用户 2026-10-23 定下的
@@ -656,8 +661,8 @@ def _private_batch_delay(*, first_time, now=None, has_image=False):
         same_sender=True, in_session=True, triggered=False,
         has_context=False, has_bare_image=has_image,
         first_time=first_time, now=now,
-        window=_delay_cfg("private_msg_buffer_window", 8),
-        hard_cap=_delay_cfg("private_batch_hard_cap", 15),
+        window=quiet if quiet is not None else _delay_cfg("private_msg_buffer_window", 8),
+        hard_cap=cap if cap is not None else _delay_cfg("private_batch_hard_cap", 15),
     )
 
 
@@ -774,9 +779,17 @@ def _buffer_private_message(sender: str, text: str, images, msg) -> bool:
             PRIVATE_MSG_BUFFER[sender] = rec
         # deadline 只算一次。第一版在这里算了两遍（if/else 各一遍），
         # 两个分支的输入完全相同 —— 纯冗余，且后人改一处忘了另一处就会分叉。
+        # 节奏判据（2026-10-27）：quiet = 他平时间隔的 2.5 倍，cap = 4 倍。
+        # 没有历史时退回固定值 —— 那是"还不知道"，不是设计值。
+        _quiet = _cap = None
+        if _config.get("speech_pace_enable", True):
+            _PRIVATE_PACE.note(sender, now)
+            _quiet = _PRIVATE_PACE.quiet_needed(sender)
+            _cap = _PRIVATE_PACE.hard_cap(sender)
         rec["deadline"] = now + _private_batch_delay(
             first_time=rec["first_time"], now=now,
-            has_image=bool(rec.get("images")))
+            has_image=bool(rec.get("images")),
+            quiet=_quiet, cap=_cap)
         _delay = max(0.5, rec["deadline"] - now)
         _t = Timer(_delay, lambda s=sender: _private_flush(s))
         try:

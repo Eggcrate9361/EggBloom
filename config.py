@@ -290,6 +290,7 @@ DEFAULT_CONFIG = {
     # 私聊合并（1.5.9 真机 2026-10-27）：连发 5 条被切成 3 批时定的参数。
     # 群里 3 秒够用，私聊是"听他把话说完"，窗口与硬顶都更松。
     "private_msg_buffer_window": 8,
+    "speech_pace_enable": True,
     "private_batch_hard_cap": 15,
     # 回复预算硬上限（1.5.9 §B3）。档位分布见 reply_budget.py：
     # A 60% 1 条 ≤8 字 / B 30% 1–2 条 ≤16 字 / C 10% 2–3 条 ≤40 字。
