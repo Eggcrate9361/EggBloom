@@ -148,8 +148,12 @@ class TestWiring(unittest.TestCase):
         self.assertIn("def _ctx_over_budget", src, "总量闸函数不存在")
         self.assertGreaterEqual(src.count("_ctx_over_budget"), 2,
                                 "总量闸没有被调用（只有定义）")
-        seg = src[src.find("[上下文闸]"):src.find("[上下文闸]") + 200]
-        self.assertIn("_stream_chat_lines", seg, "闸门触发后没有强制收尾")
+        seg = src[src.find("[上下文闸]"):src.find("[上下文闸]") + 320]
+        # 收尾入口 2026-10-27 起统一为 _finalize_reply（它内部才调 _stream_chat_lines）。
+        # 断言"闸门触发后确实走收尾"，不锁具体函数名 —— 锁死名字会让
+        # 合理重构被判失败，而真正要防的是"触发后什么都不做直接 continue"。
+        self.assertTrue("_finalize_reply" in seg or "_stream_chat_lines" in seg,
+                        "闸门触发后没有强制收尾")
 
     def test_token_stats_no_hardcoded_65536_window(self):
         with open(os.path.join(_ROOT, "token_stats.py"), encoding="utf-8") as f:

@@ -8961,6 +8961,102 @@ def _summarize_group_history_inner(group_id, gh):
     log(f"群[{group_id}] 历史已压缩，摘要: {summary[:60]}")
 
 
+def _finalize_reply(messages, max_tokens, scene, *, had_tools_rounds=0, progress=None):
+    """工具轮用尽后的**强制收尾**：不带工具再要一次，只要文本。
+
+    为什么必须去掉工具（2026-10-27 真机，群 829854136 17:32）：
+
+      旧版收尾这一下传的仍然是 `with_tools=tools_for_call`，于是模型
+      在"该说话"的这一刻**还以为自己能继续搜**。流里只有 tool_call 增量、
+      没有 content → 返回空串 → 上层记「AI决定不回复: (空)」→ 群里一句话没有。
+
+      日志实况：三轮 search_web 全命中（`达到上限 3 轮，收尾`）→ 7 秒后
+      「AI决定不回复: (空)」。**搜索是成功的，失败在收尾这一步。**
+
+      "收尾"的语义就是"现在只能说、不能做"。工具留在手里，模型就会继续做。
+      去掉工具后，没有别的事可做，它只能把已经查到的东西说出来。
+
+    参数
+      had_tools_rounds  之前跑过几轮工具。>0 时追加一句收束指令：
+                        告诉它"资料已经够了，直接说"，避免它拿空结果硬凑。
+      progress          仍在推进的回调。收尾本身是**两次额外的模型调用**，
+                        不报进展的话等待方会按"多久没动静"判定超时，
+                        把一条马上要生成的回复砍掉。
+    """
+    def _tick():
+        try:
+            if progress:
+                progress()
+        except Exception:
+            pass
+
+    _tick()
+    if had_tools_rounds > 0:
+        messages = list(messages) + [{
+            "role": "user",
+            "content": ("【收尾】工具已经用完了，不能再查了。"
+                        "现在直接用上面已经拿到的内容回答对方；"
+                        "哪部分没查到就如实说没查到，别编。"
+                        "给一句短的就行。"),
+        }]
+    try:
+        out = _stream_chat_lines(messages, runtime_cfg=None, max_tokens=max_tokens,
+                                 with_tools=False, scene=scene)
+    except Exception as e:
+        log(f"[收尾] 流式收尾失败（{e}），退回同步调用")
+        try:
+            msg, _u = _call_chat_sync(messages, runtime_cfg=None, max_tokens=max_tokens,
+                                      stream=False, with_tools=False)
+            out = _mark_truncated(str(msg.get("content") or "").strip(), False)
+        except Exception as e2:
+            log(f"[收尾] 同步兜底也失败: {e2}")
+            return ""
+    if str(out or "").strip():
+        return out
+
+    # ── 第二轮：还是空的，换一种说法再要一次 ────────────────────────────
+    #   第一轮可能被"你的任务是把查到的整理出来"这类残留指令带偏，
+    #   或者仍在输出思维链。这一轮把要求压到最小、把话题钉死：
+    #   只说一句、必须说、不许再说工具（工具本来也没给）。
+    #   只做一次 —— 两次都空就是真要说不了，留给上层如实记日志。
+    log("[收尾] 第一轮无文本，改用最小指令再要一次")
+    _tick()
+    try:
+        # 取**原始问题**，不能取最后一条 user ——
+        # had_tools_rounds>0 时最后一条是我刚追加的【收尾】指令，
+        # 拿它当"对方说"等于让模型回答自己（第一版就这么错的，
+        # 日志里会看到「对方说：【收尾】工具已经用完了…」）。
+        _last_user = ""
+        for _m in reversed(messages):
+            if _m.get("role") != "user":
+                continue
+            _c = str(_m.get("content") or "")
+            if "【收尾】" in _c or _c.startswith("[系统提示]"):
+                continue
+            _last_user = _c[:300]
+            break
+        # 整段历史里一条真·用户消息都没有（极端情况）→ 退回用最长的 user 段
+        if not _last_user:
+            _cands = [str(_m.get("content") or "") for _m in messages
+                      if _m.get("role") == "user"]
+            _last_user = (max(_cands, key=len) if _cands else "")[:300]
+        _retry_msgs = [
+            {"role": "system",
+             "content": "你正在 QQ 聊天里回一句话。下面只是资料，不是让你做任务。"},
+            {"role": "user",
+             "content": f"对方说：{_last_user}\n\n"
+                        "就这一句，回一句最短的话。别再搜索、别解释过程、别列条目。"},
+        ]
+        out = _stream_chat_lines(_retry_msgs, runtime_cfg=None, max_tokens=max_tokens,
+                                 with_tools=False, scene=scene)
+    except Exception as e:
+        log(f"[收尾] 第二轮失败: {e}")
+        out = ""
+    if not str(out or "").strip():
+        log("[收尾] 两轮都没有文本 —— 这不是模型决定沉默，是收尾拿不到内容")
+    return out
+
+
 def _should_continue_tool_round(round_no: int, ok_flags, max_plain_rounds: int) -> bool:
     """这一轮工具执行完之后，还要不要再给模型一轮。
 
@@ -9553,6 +9649,21 @@ def _call_chat_sync(messages, runtime_cfg=None, max_tokens=AI_MAX_TOKENS, stream
 
 
 def _stream_chat_lines(messages, runtime_cfg=None, max_tokens=AI_MAX_TOKENS, with_tools=True, scene="private"):
+    """流式取回最终文本（**只取文本**）。
+
+    ★ 2026-10-27 补工具增量识别。原先这里只读 `delta.content`，
+      `delta.tool_calls` 被整个丢掉，于是出现一种静默失败：
+
+        模型在收尾轮仍然要求 `search_web` → 流里只有工具增量、没有文本
+        → full_reply 恒为 "" → 返回空 → 上层记一行「AI决定不回复: (空)」
+
+      真机（群 829854136，17:32）就是这个样子：搜了三轮、钱花了、群里一句话没有，
+      而日志写的是"AI 决定不回复"—— 跟"模型主动沉默"完全不是一回事，
+      排查方向被带偏两次。
+
+      这里不负责执行工具（执行在主循环里），但必须**如实报告**：
+      这一轮到底是"说完了但是空的"还是"它还想调工具"。看清原因才能修对地方。
+    """
     cfg = _llm_config(runtime_cfg)
     ptype = cfg.get("provider_type") or _resolve_provider_type(cfg)
     if ptype in ("anthropic", "gemini"):
@@ -9568,6 +9679,7 @@ def _stream_chat_lines(messages, runtime_cfg=None, max_tokens=AI_MAX_TOKENS, wit
     full_reply = ""
     last_usage = {}
     _fr = ""
+    _wanted_tools = []          # 流里出现过的工具名（按出现顺序，去重）
     for raw in r:
         line = raw.decode("utf-8", errors="replace").strip() if isinstance(raw, bytes) else str(raw).strip()
         if not line or not line.startswith("data: "):
@@ -9584,11 +9696,19 @@ def _stream_chat_lines(messages, runtime_cfg=None, max_tokens=AI_MAX_TOKENS, wit
             content = delta.get("content", "")
             if content:
                 full_reply += content
+            # 工具增量：只记名字用于诊断，不在这里执行（执行在主循环）
+            for _dtc in (delta.get("tool_calls") or []):
+                _nm = ((_dtc.get("function") or {}).get("name") or "").strip()
+                if _nm and _nm not in _wanted_tools:
+                    _wanted_tools.append(_nm)
             # DeepSeek 流式末块带 usage（缓存命中明细）
             if chunk.get("usage"):
                 last_usage = chunk.get("usage") or {}
         except Exception:
             pass
+    if not full_reply.strip() and _wanted_tools:
+        log(f"[流式收尾] 模型仍要求调用 {_wanted_tools}，本轮无文本"
+            f"（不是模型决定沉默；finish={_fr or '-'}）")
     # T5 观测：流式收尾记录 usage
     if last_usage:
         try:
@@ -10019,6 +10139,11 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
                     pass
                 else:
                     log(f"工具调用: {[tc['function']['name'] for tc in tool_calls]}")
+                    _uniq_tc = _dedup_tool_calls(tool_calls)
+                    if len(_uniq_tc) != len(tool_calls):
+                        log(f"[工具去重] {len(tool_calls)} → {len(_uniq_tc)}"
+                            f"（同一调用重复下发）")
+                        tool_calls = _uniq_tc
                     # T5 观测：工具轮 token 也计入（群聊/私聊/网页场景）
                     try:
                         from token_stats import record as _ts_record
@@ -10065,15 +10190,17 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
                     if _over:
                         log(f"[上下文闸] 工具轮累计 {_used} 字符 ≥ 预算 {_lim}，"
                             f"停止工具轮，强制收尾")
-                        return _stream_chat_lines(messages, runtime_cfg=None,
-                                                  max_tokens=effective_max_tokens,
-                                                  with_tools=tools_for_call,
-                                                  scene=("group" if is_group else "private"))
+                        return _finalize_reply(messages, effective_max_tokens,
+                                               ("group" if is_group else "private"),
+                                               had_tools_rounds=web_rounds,
+                                               progress=progress)
                     # 网页任务：继续多轮推进，直到模型主动收尾或达到轮次上限
                     if _web_hint:
                         if web_rounds >= MAX_WEB_ROUNDS:
                             log(f"[网页任务] 达到轮次上限 {MAX_WEB_ROUNDS}，强制流式收尾")
-                            return _stream_chat_lines(messages, runtime_cfg=None, max_tokens=effective_max_tokens, with_tools=tools_for_call, scene="web")
+                            return _finalize_reply(messages, effective_max_tokens, "web",
+                                                   had_tools_rounds=web_rounds,
+                                                   progress=progress)
                         continue
                     # 普通工具（2026-10-23）：原先这里是"一轮就收尾"，现在按
                     # max_tool_rounds 续轮。判据抽在 _should_continue_tool_round 里
@@ -10083,7 +10210,10 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
                                                        _max_plain_rounds):
                         if web_rounds >= _max_plain_rounds and any(_round_ok_flags):
                             log(f"[工具轮次] 达到上限 {_max_plain_rounds} 轮，收尾")
-                        return _stream_chat_lines(messages, runtime_cfg=None, max_tokens=effective_max_tokens, with_tools=tools_for_call, scene=("group" if is_group else "private"))
+                        return _finalize_reply(messages, effective_max_tokens,
+                                               ("group" if is_group else "private"),
+                                               had_tools_rounds=web_rounds,
+                                               progress=progress)
                     continue
 
             reply = str(msg.get("content") or "").strip()
