@@ -344,7 +344,8 @@ def main():
     strict = "--strict" in sys.argv
     fields, panels = load_meta()
     defaults = config.DEFAULT_CONFIG
-    example = json.load(io.open(EXAMPLE, encoding="utf-8"))
+    # utf-8-sig：example 历史上带过 BOM，带不带都能读（json.load 遇 BOM 会炸）
+    example = json.load(io.open(EXAMPLE, encoding="utf-8-sig"))
     example_keys = set(example.keys())
 
     problems, lines, detail = audit(fields, defaults, example_keys)
