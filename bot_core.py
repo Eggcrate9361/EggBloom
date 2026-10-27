@@ -672,6 +672,13 @@ def _private_flush(sender: str):
         rec = PRIVATE_MSG_BUFFER.pop(sender, None)
     if not rec:
         return
+    # 告诉节奏器"我在这一刻判定他说完了"：他下次开口的间隔用来校准倍数。
+    # 判早了（half-quiet 内又开口）→ 倍数上调；判对了 → 缓慢回落。
+    if _config.get("speech_pace_enable", True):
+        try:
+            _PRIVATE_PACE.mark_settled(sender, time.time())
+        except Exception:
+            pass
     parts = [p for p in (rec.get("parts") or []) if str(p).strip()]
     text = "\n".join(parts).strip()
     images = list(rec.get("images") or [])
@@ -798,7 +805,9 @@ def _buffer_private_message(sender: str, text: str, images, msg) -> bool:
             pass
         rec["timer"] = _t
         _t.start()
-    log(f"私聊[{sender[:6]}] 入缓冲 等 {_delay:.1f}s（本批 {len(rec.get('parts') or [])} 条）")
+    log(f"私聊[{sender[:6]}] 入缓冲 等 {_delay:.1f}s（本批 {len(rec.get('parts') or [])} 条）"
+        + (f" 节奏 quiet={_quiet:.1f} cap={_cap:.1f} pace={_PRIVATE_PACE.median_gap(sender):.1f}"
+           if _quiet is not None else ""))
     return True
 
 
