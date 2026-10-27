@@ -48,6 +48,16 @@ DEFAULT_NODE = ""
 
 _CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
 
+# ── 初始凭据抓取的扫描预算（2026-10-27）──────────────────────────────
+# 背景：get_webui_info() 被 /api/protocol/status 按次调用，原来每次整文件读完
+# logs/ 下所有 snowluma-*.log。本机实测 23 个文件 / 1024 MB / 4.5 秒，且**一条
+# 都没命中**（密码早改过）→ 每次请求都全量扫完，协议页直接卡死。
+# 凭据是启动时打印的，必然在文件头部；所以只读头，并且把结果（含"没有"）缓存住。
+_HEAD_BYTES = 256 * 1024   # 每个文件只读头部 256KB
+_MAX_FILES = 6             # 最多看最近 6 个日志文件
+_INFO_TTL = 600.0          # 同一 logs_dir 的结果缓存 10 分钟（未命中同样缓存）
+_WEBUI_INFO_CACHE = {}     # {logs_dir: {"at": ts, "hit": {"user":..,"token":..}}}
+
 
 def _resolve_runtime(exe_path: str) -> str:
     """把 exe_path 解析为 node.exe 绝对路径。
@@ -205,6 +215,21 @@ class SnowLumaAdapter(OneBotStdAdapter):
         「initial credentials: user=admin password=xxxx」——此处按文件新→旧、行后→前
         抓取最近一次凭据。若用户已在 WebUI 手动改密则失效（以 SnowLuma 日志为准）。
         返回 {found, url, host, port, user, token}。
+
+        ★ 2026-10-27 修（真机：协议页卡在「读取中…」，切页也动不了）
+          这个函数原来**每次调用都把 logs/ 下所有 snowluma-*.log 整文件读完**。
+          本机实测：23 个文件 / 1024 MB / 4.5 秒，而且一条凭据都没命中（密码
+          早被改过，标记不在日志里）→ 每次都是全量扫完再返回。
+          `/api/protocol/status` 还叠了 is_ready() 最多 3 秒的探测，总耗时 8 秒起；
+          前端 API() 没有超时、go() 的 busy 也不会在异常时释放，于是**一页卡住
+          就锁死整个控制台的导航**。
+
+          现在两条约束：
+            ① 只读每个文件的**头部** _HEAD_BYTES —— 初始凭据是启动时打印的，
+               位于文件开头；没有理由为此读完整盘。
+            ② 结果按 logs_dir 缓存 _INFO_TTL 秒（未命中同样缓存）—— 密码要么
+               早就在，要么根本不在，10 秒内重复问一次毫无意义。
+          冷调用从 4.5 秒降到毫秒级。
         """
         import re
         info = {
@@ -217,27 +242,36 @@ class SnowLumaAdapter(OneBotStdAdapter):
         }
         try:
             logs_dir = os.path.join(self.runtime_dir, "logs")
-            if os.path.isdir(logs_dir):
-                files = sorted(
-                    (os.path.join(logs_dir, f) for f in os.listdir(logs_dir)
-                     if f.startswith("snowluma-") and f.endswith(".log")),
-                    key=os.path.getmtime, reverse=True,
-                )
-                pat = re.compile(r"initial credentials:\s*user=(\S+)\s+password=(\S+)")
-                for f in files:
-                    last = None
-                    try:
-                        with open(f, "r", encoding="utf-8", errors="replace") as fh:
-                            for line in fh:
-                                m = pat.search(line)
-                                if m:
-                                    last = (m.group(1), m.group(2))
-                    except Exception:
-                        continue
-                    if last:
-                        info["user"] = last[0]
-                        info["token"] = last[1]
-                        break
+            if not os.path.isdir(logs_dir):
+                return info
+            _cached = _WEBUI_INFO_CACHE.get(logs_dir)
+            if _cached and (time.time() - _cached["at"]) < _INFO_TTL:
+                info.update(_cached["hit"])
+                return info
+            files = sorted(
+                (os.path.join(logs_dir, f) for f in os.listdir(logs_dir)
+                 if f.startswith("snowluma-") and f.endswith(".log")),
+                key=os.path.getmtime, reverse=True,
+            )
+            pat = re.compile(r"initial credentials:\s*user=(\S+)\s+password=(\S+)")
+            hit = {}
+            for f in files[:_MAX_FILES]:
+                last = None
+                try:
+                    with open(f, "r", encoding="utf-8", errors="replace") as fh:
+                        # 只读头部：凭据是启动时打的，在文件最前面
+                        chunk = fh.read(_HEAD_BYTES)
+                    for line in chunk.splitlines():
+                        m = pat.search(line)
+                        if m:
+                            last = (m.group(1), m.group(2))
+                except Exception:
+                    continue
+                if last:
+                    hit = {"user": last[0], "token": last[1]}
+                    break
+            _WEBUI_INFO_CACHE[logs_dir] = {"at": time.time(), "hit": hit}
+            info.update(hit)
         except Exception:
             pass
         return info

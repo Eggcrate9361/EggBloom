@@ -3068,11 +3068,34 @@ body.mech-open .rack .lb{animation:fadeMark 260ms linear 420ms forwards}
 /* ═════════════ 基础设施 ═════════════ */
 const $ = (id) => document.getElementById(id);
 const qsa = (s, r = document) => Array.from(r.querySelectorAll(s));
-const API = (p, opt) => fetch('/api' + p, Object.assign({headers:{'Content-Type':'application/json'}}, opt || {}))
+/* ★ 每个请求都带超时（2026-10-27）。
+   没有超时的 fetch 会把整个控制台锁死：协议页卡在 /api/protocol/status 时
+   （服务端扫 1GB 日志，8 秒起），render() 永远不返回 → go() 的 busy 不释放 →
+   之后**所有切页都被挡下**，用户看到的就是"协议页读取中，切别的页也停在这页"。
+   默认 60s 只是兜底（启动/停止驱动这类慢操作要留够），真正的修复在服务端；
+   需要更长的调用点可以传第三个参数。 */
+const API = (p, opt, timeoutMs) => {
+  const ms = (typeof timeoutMs === 'number' && timeoutMs > 0) ? timeoutMs : 60000;
+  const o = Object.assign({headers:{'Content-Type':'application/json'}}, opt || {});
+  let ctl = null, timer = 0;
+  try {
+    if (!o.signal && typeof AbortController !== 'undefined') {
+      ctl = new AbortController();
+      o.signal = ctl.signal;
+      timer = setTimeout(() => { try { ctl.abort(); } catch (e) {} }, ms);
+    }
+  } catch (e) {}
+  return fetch('/api' + p, o)
   .then(r => r.json().then(j => {
     if (!r.ok) throw new Error((j && (j.error || j.msg)) || ('HTTP ' + r.status));
     return j;
-  }));
+  }))
+  .catch(e => {
+    if (e && e.name === 'AbortError') throw new Error('请求超时（' + Math.round(ms/1000) + 's）：/api' + p);
+    throw e;
+  })
+  .finally(() => { if (timer) clearTimeout(timer); });
+};
 const esc = (s) => String(s == null ? '' : s)
   .replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const fmt = (v) => {
@@ -9264,7 +9287,24 @@ function go(i, catchUp) {
     world.style.setProperty('--rail-w', PAGES[tgt].w + 'px');
     if (oldP && oldP.parentNode) oldP.parentNode.removeChild(oldP);
     stage.classList.toggle('upward', tgt < from);
-    await render(tgt);
+    /* ★ 2026-10-27：单页渲染出错/超时**不能**把导航锁死。
+       旧写法 `await render(tgt)` 一旦 throw，下面 setTimeout 里的 `busy = false`
+       永远不执行 → 之后每次 go() 都在 busy 检查处返回，整个控制台只剩当前页
+       （真机：协议页卡「读取中…」，切别的页也停在这一页）。
+       这里兜住异常，busy 一定释放；页面自己负责显示错误。 */
+    try {
+      await render(tgt);
+    } catch (e) {
+      console.error('[render]', e);
+      try {
+        const _p = stage.lastElementChild;
+        if (_p) {
+          _p.innerHTML = '<div class="errbox">这一页渲染失败：'
+            + esc(e && e.message ? e.message : String(e))
+            + '<br>（其它页面可以正常切换）</div>';
+        }
+      } catch (_) {}
+    }
     setTimeout(() => {
       busy = false;
       /* ★ 补切：把这轮里被挡下的最后一个目标补上（没有就不做）*/
