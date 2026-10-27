@@ -133,11 +133,14 @@ def _bigrams(s: str) -> set:
     return {t[i:i + 2] for i in range(len(t) - 1)}
 
 
-def anchor_ok(reply: str, trigger: str, *, min_chars: int = 8) -> bool:
+def anchor_ok(reply: str, trigger: str, *, min_chars: int = 5) -> bool:
     """下限检查：短不等于空。
 
     与触发消息共享至少一个 2-gram，或长度 ≥ min_chars。
     避免只压上限后退化成「哦 / 嗯 / 啊」。
+
+    min_chars 从 8 降到 5（2026-10-27 真机）：7 个字的「能，把内容给我」
+    被判成"锚点不足"。判据要挡的是「哦/嗯/行吧」，不是完整短句。
     """
     t = visible(reply)
     if len(t) >= min_chars:

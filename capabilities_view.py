@@ -185,6 +185,10 @@ def render(
     if plugins_need:
         lines.append("这些能力有，只是插件没开（**同样不是「没能力」**）："
                      + _group_how(plugins_need) + "。")
+        # 真机踩过：问了「你能发 qq 空间吗」，回「能，把内容给我」——
+        # 插件没开，最后发不出去，等于先答应再失败。答案必须从缺口开始。
+        lines.append("被问「你能做吗」时，先说什么没开、谁能开，"
+                     "**不要先答「能」再要材料**。")
     admin_need = pick(need_admin, "admin")
     if admin_need:
         lines.append("这些是管理指令，能力有、但要满足条件："

@@ -292,7 +292,7 @@ DEFAULT_CONFIG = {
     # 这里只是兜底，正常情况下档位更严。
     # 生成完成时距批次第一条超过这个秒数 → 整条丢（1.5.9 §B5）。
     # 一句 30 秒后才到的回复接的是早就过去的话头，比不回更破坏体感。
-    "reply_stale_drop_sec": 25,
+    "reply_stale_drop_sec": 40,
     "reply_max_chars": 16,
     "reply_max_parts": 3,
     "reply_max_total": 80,
