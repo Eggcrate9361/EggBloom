@@ -44,6 +44,33 @@ def _engine():
     return _mood, _NEUTRAL_FORM
 
 
+def _zero_baseline():
+    """把日内基线固定为 0。
+
+    ★ 为什么必须固定（2026-10-27 修）：`_effective()` 会叠加日内基线，
+      而基线**随当前时刻变**（晚上 +1.2、凌晨 -0.8）。
+      于是"score=-9 → valence=-0.9 → 该给负向提示"这个断言，
+      在晚上跑就变成 (-9+1.2)/10 = -0.78，**差 0.02 刚好不触发** ——
+      测试在晚上失败、白天通过，取决于跑测试的时刻。
+
+      这类"随时间漂移的判据"必须在测试里被固定住，否则它测的是钟点。
+    """
+    m, _ = _engine()
+    old = m.config.get("circadian_baseline")
+    m.config["circadian_baseline"] = {"凌晨": 0.0, "清晨": 0.0, "上午": 0.0,
+                                      "中午": 0.0, "下午": 0.0, "傍晚": 0.0,
+                                      "晚上": 0.0, "深夜": 0.0}
+    return old
+
+
+def _restore_baseline(old):
+    m, _ = _engine()
+    if old is None:
+        m.config.pop("circadian_baseline", None)
+    else:
+        m.config["circadian_baseline"] = old
+
+
 def _set(score=0.0, arousal=0.3, gid="__test_mood__"):
     import time
     m, _ = _engine()
@@ -90,16 +117,20 @@ def test_valence_drives_pool():
 
 def test_prompt_block():
     m, _ = _engine()
-    mid = _set(1.0, 0.4)
-    check("普通情绪不注入", m.get_prompt_block(mid) == "", m.get_prompt_block(mid))
-    hi = _set(9.0, 0.6)
-    blk = m.get_prompt_block(hi)
-    check("极端正向给短提示", "心情不错" in blk, blk)
-    check("提示里没有数字", not any(ch.isdigit() for ch in blk), blk)
-    lo = _set(-9.0, 0.6)
-    blk2 = m.get_prompt_block(lo)
-    check("极端负向给短提示", "烦" in blk2, blk2)
-    check("旧格式已消失", "【当前心情】" not in blk + blk2, blk + blk2)
+    _old_bl = _zero_baseline()
+    try:
+        mid = _set(1.0, 0.4)
+        check("普通情绪不注入", m.get_prompt_block(mid) == "", m.get_prompt_block(mid))
+        hi = _set(9.0, 0.6)
+        blk = m.get_prompt_block(hi)
+        check("极端正向给短提示", "心情不错" in blk, blk)
+        check("提示里没有数字", not any(ch.isdigit() for ch in blk), blk)
+        lo = _set(-9.0, 0.6)
+        blk2 = m.get_prompt_block(lo)
+        check("极端负向给短提示", "烦" in blk2, blk2)
+        check("旧格式已消失", "【当前心情】" not in blk + blk2, blk + blk2)
+    finally:
+        _restore_baseline(_old_bl)
 
 
 def test_mood_disabled():
