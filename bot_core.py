@@ -9669,8 +9669,22 @@ def _resolve_provider_type(cfg=None):
     return "openai"
 
 
+#: 最近一次实际使用的模型名（token 归因用）。
+#: ★ 2026-10-27：token_stats.record() 的 model 参数一直是死字段 ——
+#:   签名里有，三个调用点都不传，记录里恒为空串。
+#:   模型名有多个来源（远程 deepseek / 本地 llama / ollama / qwen），
+#:   `_llm_config()` 是它们**唯一**的解析出口 —— 在这里记最准，
+#:   也省得每个调用点各写一遍取模型的逻辑。
+_LAST_MODEL_NAME = ""
+
+
+def _last_model_name() -> str:
+    """最近一次实际使用的模型名（没有记录时返回空串）。"""
+    return _LAST_MODEL_NAME
+
+
 def _llm_config(runtime_cfg=None):
-    global _LLAMA_SERVER_EXE, _LLAMA_MODEL, _LLAMA_PORT
+    global _LLAMA_SERVER_EXE, _LLAMA_MODEL, _LLAMA_PORT, _LAST_MODEL_NAME
     if runtime_cfg is None:
         runtime_cfg = _config
     use_local = bool(runtime_cfg.get("use_local_llm"))
@@ -9692,6 +9706,7 @@ def _llm_config(runtime_cfg=None):
 
     if use_local and driver == "ollama":
         base_url = f"http://127.0.0.1:{port}/v1/chat/completions"
+        _LAST_MODEL_NAME = model_name or "llama3"
         return {
             "use_local": True,
             "driver": driver,
@@ -9702,6 +9717,7 @@ def _llm_config(runtime_cfg=None):
 
     if use_local and driver == "lmstudio":
         base_url = f"http://127.0.0.1:{port}/v1/chat/completions"
+        _LAST_MODEL_NAME = model_name or "local-model"
         return {
             "use_local": True,
             "driver": driver,
@@ -9741,6 +9757,7 @@ def _llm_config(runtime_cfg=None):
             except Exception:
                 ready = False
         if ready:
+            _LAST_MODEL_NAME = model_name or "qwen3.6"
             return {
                 "use_local": True,
                 "driver": driver,
@@ -9749,6 +9766,7 @@ def _llm_config(runtime_cfg=None):
                 "api_key": "",
             }
 
+    _LAST_MODEL_NAME = remote_model
     return {
         "use_local": False,
         "driver": "remote",
@@ -10006,7 +10024,8 @@ def _stream_chat_lines(messages, runtime_cfg=None, max_tokens=AI_MAX_TOKENS, wit
     if last_usage:
         try:
             from token_stats import record as _ts_record
-            _ts_record(scene, last_usage, {"stream": True}, lane="main")
+            _ts_record(scene, last_usage, {"stream": True}, lane="main",
+                        model=_last_model_name())
             # P23 锚点（实测）：流式末尾的 usage 是真实值 → 以此打上下文压力锚点。
             # 作用域用 scene（本函数拿不到群号/QQ），是有意的粗粒度锚点。
             from token_stats import note_context_anchor as _ts_anchor
@@ -10441,7 +10460,8 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
                     try:
                         from token_stats import record as _ts_record
                         _ts_record("web" if _web_hint else ("group" if is_group else "private"), usage,
-                                   {"round": "tool"}, lane="tool")
+                                   {"round": "tool"}, lane="tool",
+                                   model=_last_model_name())
                     except Exception:
                         pass
                     messages.append({"role": "assistant", "content": msg.get("content") or "", "tool_calls": tool_calls})
@@ -10587,7 +10607,8 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
             try:
                 from token_stats import record as _ts_record
                 _scene = "web" if _web_hint else ("group" if is_group else "private")
-                _ts_record(_scene, usage, {"web_rounds": web_rounds}, lane="web")
+                _ts_record(_scene, usage, {"web_rounds": web_rounds}, lane="web",
+                           model=_last_model_name())
                 # P23 锚点（实测）：用本轮的 prompt_tokens 给「这个群/这个人」打上下文压力锚点。
                 # 只认实测值；拿不到就什么都不记（不在这里退化成估算 —— 估算是调用方的事）。
                 try:
