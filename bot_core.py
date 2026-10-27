@@ -5892,8 +5892,20 @@ def _relation_tier(group_id, sender):
     try:
         if not SELF_LEARN_OK or self_learn is None:
             return ("", "", "")
-        _sc = int((self_learn.get_affection(str(group_id), str(sender)) or {}).get("score") or 0)
-    except Exception:
+        # ★ 2026-10-27 修正：方法在 `self_learn.affection` 上，
+        #   `self_learn`（SelfLearningEngine）自己没有 get_affection。
+        #   旧写法抛 AttributeError，被下面 except 吞掉 → 恒返回空三元组
+        #   → 关系行与整个意愿轴（_refuse_license）全部恒空，
+        #   而功能看起来"已实现"（提交里有、测试也有）。
+        _aff = getattr(self_learn, "affection", None)
+        if _aff is None or not hasattr(_aff, "get_affection"):
+            log(f"[关系档位] 读不到好感度：self_learn 上没有 affection 引擎")
+            return ("", "", "")
+        _sc = int((_aff.get_affection(str(group_id), str(sender)) or {}).get("score") or 0)
+    except Exception as _e:
+        # ★ 不再静默：静默 except 会把"接线断了"变成"功能不存在"，
+        #   下次断还是查不出来（这正是本次事故的成因）。
+        log(f"[关系档位] 读好感度失败（{type(_e).__name__}: {_e}）")
         return ("", "", "")
     for floor, key, note in _RELATION_TIERS:
         if _sc >= floor:

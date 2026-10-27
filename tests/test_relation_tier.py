@@ -42,7 +42,17 @@ def check(name, ok, detail=""):
         _FAIL.append(name)
 
 
-class _FakeLearn:
+class _FakeAffection:
+    """好感度引擎的替身。
+
+    ★ 2026-10-27 改结构：原来替身把 `get_affection` 放在**顶层**，
+      而真实的 SelfLearningEngine 是 `engine.affection.get_affection`。
+      替身比真机多一个顶层方法 → bot_core 那个 AttributeError
+      在测试里永远不发生 → 测试全绿、真机功能全死。
+
+      替身必须**照抄真实结构**，否则它遮住的正是要抓的 bug。
+    """
+
     def __init__(self, score=None, boom=False):
         self.score = score
         self.boom = boom
@@ -53,6 +63,13 @@ class _FakeLearn:
         if self.score is None:
             return {"score": 0, "interactions": 0}
         return {"score": self.score, "interactions": 1}
+
+
+class _FakeLearn:
+    """self_learn 的替身 —— 结构照抄 SelfLearningEngine。"""
+
+    def __init__(self, score=None, boom=False):
+        self.affection = _FakeAffection(score, boom)
 
 
 def _with(score=None, boom=False, ok=True):
@@ -66,6 +83,27 @@ def _with(score=None, boom=False, ok=True):
     finally:
         bot_core.SELF_LEARN_OK = old_ok
         bot_core.self_learn = old_learn
+
+
+def test_real_engine_shape():
+    """★ 不替换任何东西：断言真实引擎的结构与代码假设一致。
+
+    这次事故的根因就是"代码假设 self_learn 上有 get_affection"，
+    而真实结构是 self_learn.affection.get_affection。
+    这条测试不依赖任何替身 —— 替身变了它不会变，真实结构变了它会变。
+    """
+    import bot_core
+    import self_learning
+    eng = self_learning.SelfLearningEngine()
+    check("引擎有 affection 属性", hasattr(eng, "affection"),
+          [a for a in dir(eng) if not a.startswith("_")])
+    check("affection 上有 get_affection",
+          hasattr(getattr(eng, "affection", None), "get_affection"))
+    check("引擎自己没有 get_affection（所以别在引擎上找）",
+          not hasattr(eng, "get_affection"))
+    # 代码里的取法必须落到 .affection 上
+    src = io.open(os.path.join(ROOT, "bot_core.py"), encoding="utf-8").read()
+    check("代码从 .affection 取", 'getattr(self_learn, "affection"' in src)
 
 
 def test_tiers():
@@ -192,7 +230,8 @@ def main():
     print("=" * 58)
     print("关系档位（A.7.2）")
     print("=" * 58)
-    for fn in (test_tiers, test_notes, test_unknown_not_guessed,
+    for fn in (test_real_engine_shape,
+               test_tiers, test_notes, test_unknown_not_guessed,
                test_prompt_has_tier_not_score, test_switch_off,
                test_refuse_license, test_persona_conflict_removed):
         print(f"\n[{fn.__name__}]")
