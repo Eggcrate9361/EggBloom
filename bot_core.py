@@ -817,6 +817,32 @@ def _buffer_private_message(sender: str, text: str, images, msg) -> bool:
 GROUP_OBSERVE: Dict[str, Dict[str, Any]] = {}
 GROUP_RECENT_MSGS: Dict[str, List[Tuple]] = {}  # {group_id: [(timestamp, sender, text), ...]}  最近X秒消息缓存
 GROUP_TIMELINE: Dict[str, List[Tuple]] = {}  # {group_id: [(timestamp, sender_id, sender_nick, text), ...]}  全局消息时间线（概率门之前记录）
+def _drop_reason(*, new_msgs=0, age=0.0, turns=2, hard_sec=120.0, text=""):
+    """这条回复该不该整条丢。返回原因（空串 = 照发）。
+
+    主判据是**话头有没有翻篇**，不是生成花了多久（1.5.9 §B5）：
+      生成期间群里又来了 >= turns 条 -> 话题已经走了，发出去接的是旧话头。
+    时间只做兜底，防"生成卡了十分钟"这种极端情况；它不参与日常判断，
+    所以换快模型、换慢模型都不会改变行为。
+    官腔单独一条：命中就丢，与时间无关。
+    """
+    try:
+        turns = int(turns or 0)
+    except Exception:
+        turns = 0
+    if turns > 0 and int(new_msgs) >= turns:
+        return f"话头翻篇 {int(new_msgs)} 条新消息"
+    try:
+        hard = float(hard_sec or 0)
+    except Exception:
+        hard = 0.0
+    if hard > 0 and float(age) > hard:
+        return f"过时 {float(age):.1f}s"
+    if text and _OFFICIAL_RE.search(text):
+        return "官腔"
+    return ""
+
+
 #: 官腔判据（1.5.9 §B5）：命中即整条丢，不改文字。
 #: 只收"无论如何都不该由 Bot 说出口"的几句 —— 收窄是为了不误杀。
 _OFFICIAL_RE = re.compile(r"作为\s*AI|作为一个人工智能|希望(对你|可以帮到你)|"
@@ -12015,13 +12041,21 @@ def _pipeline_step(group_id):
                 # 官腔同理。两种都**整条丢**，不改文字 —— 改出来的残句更像机器。
                 _dropped = False
                 if sent_text:
-                    _age = time.time() - _seq_first
-                    _stale = float(_config.get("reply_stale_drop_sec", 25) or 0)
-                    if _stale > 0 and _age > _stale:
-                        log(f"群[{group_id}] [丢弃:过时 {_age:.1f}s] 本批不发")
-                        _dropped = True
-                    elif _OFFICIAL_RE.search(sent_text):
-                        log(f"群[{group_id}] [丢弃:官腔] {sent_text[:30]}")
+                    # 生成期间又来了几条：数时间线上的新消息，不看等了多久
+                    _new_msgs = 0
+                    try:
+                        _new_msgs = sum(1 for _e in (GROUP_TIMELINE.get(group_id) or [])
+                                        if _e and _e[0] > _seq_first)
+                    except Exception:
+                        _new_msgs = 0
+                    _why = _drop_reason(
+                        new_msgs=_new_msgs,
+                        age=time.time() - _seq_first,
+                        turns=int(_config.get("reply_stale_turns", 2) or 0),
+                        hard_sec=float(_config.get("reply_stale_drop_sec", 120) or 0),
+                        text=sent_text)
+                    if _why:
+                        log(f"群[{group_id}] [丢弃:{_why}] 本批不发")
                         _dropped = True
                 # ── 回复预算（1.5.9 §B3）──
                 # 240 字截断会产出半句，比长更假，所以超配额时取最短一条。
