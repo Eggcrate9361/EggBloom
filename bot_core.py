@@ -13,6 +13,7 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 from socketserver import ThreadingMixIn
 
 import capabilities_view
+import inbound
 
 
 class ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
@@ -788,6 +789,8 @@ def _buffer_private_message(sender: str, text: str, images, msg) -> bool:
 GROUP_OBSERVE: Dict[str, Dict[str, Any]] = {}
 GROUP_RECENT_MSGS: Dict[str, List[Tuple]] = {}  # {group_id: [(timestamp, sender, text), ...]}  最近X秒消息缓存
 GROUP_TIMELINE: Dict[str, List[Tuple]] = {}  # {group_id: [(timestamp, sender_id, sender_nick, text), ...]}  全局消息时间线（概率门之前记录）
+#: 入站内容指纹判重（1.5.9 §B0）：30 秒窗口，同人同内容只算一条
+_INBOUND_DUPE = inbound.DupeGuard(window=30.0)
 GROUP_SUMMARY: Dict[str, str] = {}  # {group_id: str}  群聊历史摘要（超过窗口的旧消息压缩）
 _GROUP_SUMMARY_PREV: Dict[str, str] = {}  # {group_id: str}  上上次摘要（E 三段式拼接用，保留主题锚）
 _GROUP_SUMMARY_AT: Dict[str, float] = {}  # {group_id: last_summary_ts}  摘要刷新节流（T2）
@@ -10449,6 +10452,35 @@ def _display_name(sender, group_id="") -> str:
     return resolve_qq_nick(s) or s
 
 
+def _identity_anchor(sender) -> str:
+    """4 位 base36 短锚：改名不变、跨群稳定，且**不是** QQ 号。
+
+    为什么不用 QQ 号做锚：群聊规则明令回复里不许出现号码，模型会把标签
+    原样复述到群里。36^4 = 1.68M，百人群撞锚概率约 0.003%（1.5.9 §B1.2）。
+    """
+    s = str(sender or "")
+    if not s:
+        return "----"
+    _h = hashlib.sha1((s + "|eggbloom").encode("utf-8")).digest()
+    _n = int.from_bytes(_h[:4], "big") % (36 ** 4)
+    _alpha = "0123456789abcdefghijklmnopqrstuvwxyz"
+    _out = ""
+    for _ in range(4):
+        _out = _alpha[_n % 36] + _out
+        _n //= 36
+    return _out
+
+
+def _speaker_tag(sender, group_id="") -> str:
+    """`名字·锚`：名字供阅读，锚供判同一人（改名片不影响）。
+
+    Bot 自己的话不加锚 —— 它只有一个身份，锚只会让模型以为还有别人。
+    """
+    if str(sender or "") == str(BOT_QQ):
+        return "我(Bot)"
+    return f"{_display_name(sender, group_id)}·{_identity_anchor(sender)}"
+
+
 def _is_short_meaningless(text: str) -> bool:
     """判断短消息是否无意义。
     只认三类：①白名单里的敷衍词（嗯/哦/哈哈/行…）②纯数字（1/2/6…）
@@ -10749,13 +10781,19 @@ def _pipeline_merge_locked(buffer, *, group_id, sender, text, now,
     _buf_dl = buffer.get("deadline")
     if not force and _buf_dl is not None and now > _buf_dl:
         return None
-    # ★ 必须用 _display_name（昵称/我(Bot)），不能用裸 QQ 号：
+    # ★ 必须用 _speaker_tag（昵称 + 4 位锚），不能用裸 QQ 号：
     #   旧版这里直接 f"[{sender}]"，模型对不上号只能猜说话人
     #   → 22:30 线上把 A 说的话扣到 B 头上（"乱扣帽子"）。
-    if sender != buffer.get("sender"):
-        buffer["text"] += f"\n[{_display_name(sender, group_id)}] {text}"
-    else:
-        buffer["text"] += f"\n{text}"
+    # ★ 2026-10-27（1.5.9 §B1.1）：**每条都带前缀**，同人续句也带。
+    #   原来同人不带：A 说一句、B 插一句、A 再接一句，第三行紧贴 B，
+    #   模型只能算成 B 说的。代价每批约 40 token。
+    _tag = _speaker_tag(sender, group_id)
+    buffer["text"] += f"\n[{_tag}] {text}"
+    _spk = buffer.get("speakers")
+    if not isinstance(_spk, dict):
+        _spk = {}
+        buffer["speakers"] = _spk
+    _spk.setdefault(str(sender), _tag)
     buffer["time"] = now
     # 更新 @ / 「小a」/ 昵称 / 引用 / 文本 @ 标记
     buffer["is_at_bot"] = buffer.get("is_at_bot", False) or at_bot
@@ -10864,11 +10902,11 @@ def _pipeline_upsert(group_id, *, sender, text, images=None, flags=None,
             # 纯图片消息（text 为空）也必须算上下文：它的"内容"在图片里
             _hhmm = datetime.datetime.fromtimestamp(t).strftime("%H:%M")
             if not (tx or "").strip() and _e_imgs:
-                line = f"[{_hhmm}] [{_display_name(s, group_id)}] [图片]"
+                line = f"[{_hhmm}] [{_speaker_tag(s, group_id)}] [图片]"
             else:
                 if is_meaningless_message(tx):
                     continue
-                line = f"[{_hhmm}] [{_display_name(s, group_id)}] {tx}"
+                line = f"[{_hhmm}] [{_speaker_tag(s, group_id)}] {tx}"
             if grabbed_chars + len(line) > GROUP_REPLY_MAX_LENGTH:
                 break  # 超X字停止
             grabbed_texts.append(line)
@@ -10882,8 +10920,9 @@ def _pipeline_upsert(group_id, *, sender, text, images=None, flags=None,
             log(f"群[{group_id}] 回抓{len(grabbed_texts)}条历史消息"
                 + (f" +{len(grabbed_images)}图" if grabbed_images else ""))
 
+    _new_tag = _speaker_tag(sender, group_id)
     buffer_text = ("\n".join(grabbed_texts) + ("\n" if grabbed_texts else "")
-                   + f"[{_display_name(sender, group_id)}] {text}")
+                   + f"[{_new_tag}] {text}")
     _merged_n = len([x for x in (grabbed_texts or []) if str(x).strip()])
     has_context = len(grabbed_texts) > 0
     buffer_images = []
@@ -10922,6 +10961,8 @@ def _pipeline_upsert(group_id, *, sender, text, images=None, flags=None,
             "in_session": in_session,
             "has_context": has_context,
             "images": buffer_images,
+            # 本批参与人：{sender: 标签}，批次头用它给名单（1.5.9 §B1.3）
+            "speakers": {str(sender): _new_tag},
             # ★ 2026-10-25 流水线：触发批次免过决策器；戳批次记下发起人。
             "forced": bool(forced),
             "poke_uid": str(poke_uid) if (source == "poke" and poke_uid) else None,
@@ -11276,7 +11317,22 @@ def _pipeline_step(group_id):
     # ── 插件钩子：before_reply（在 Bot 指向检测之前执行，让插件先决策）──
     plugin_skip = False
     plugin_reply = None
-    merged_text_for_ai = merged_text
+    # ★ 批次头给名单（1.5.9 §B1.3）：只给条数时，模型按最后一条说话人算整批。
+    #   单人不加头 —— 那是噪音，还占 token。
+    _batch_head = ""
+    try:
+        _spk = buffer.get("speakers") or {}
+        if isinstance(_spk, dict) and len(_spk) >= 2:
+            _n_lines = sum(1 for _ln in merged_text.split("\n") if _ln.strip())
+            _names = " / ".join(list(_spk.values())[:8])
+            _batch_head = f"[本批 {_n_lines} 条 · {len(_spk)} 人：{_names}]"
+    except Exception:
+        _batch_head = ""
+
+    def _ai_text(t: str) -> str:
+        return f"{_batch_head}\n{t}" if _batch_head else t
+
+    merged_text_for_ai = _ai_text(merged_text)
     # ── 群聊图片理解（用户报："群里发图打不开"）─────────────────────────
     # 主对话模型是纯文本的：原图塞进 messages 它看不到；而引用消息的 raw_message
     # 一串 CQ 里带着下载 URL，模型会去"打开"链接再回"图片我打不开啊 就一坨链接"。
@@ -11330,7 +11386,7 @@ def _pipeline_step(group_id):
             _blk = build_image_context_block(_imgs[:_max], scene="群聊")
             if _blk:
                 merged_text = merged_text + "\n" + _blk
-                merged_text_for_ai = merged_text
+                merged_text_for_ai = _ai_text(merged_text)
                 log(f"群[{group_id}] [图片理解] {min(len(_imgs), _max)} 张 · {len(_blk)} 字")
             else:
                 log(f"群[{group_id}] [图片理解] {len(_imgs)} 张全部识别失败（按没看到图处理）")
@@ -11461,9 +11517,9 @@ def _pipeline_step(group_id):
                             merged_inject = merged_inject.replace(
                                 _decider_ctx_text, "").strip("\n")
                         if merged_inject:
-                            merged_text_for_ai = merged_text + "\n" + merged_inject
+                            merged_text_for_ai = _ai_text(merged_text + "\n" + merged_inject)
                         else:
-                            merged_text_for_ai = merged_text
+                            merged_text_for_ai = _ai_text(merged_text)
                         log(f"群[{group_id}] [插件注入] {merged_inject[:60]}")
                         plugin_intervened = True
                     # ── 群聊近况注入（2026-10-10 决策重写 · 治"接不上话"）──
@@ -12826,6 +12882,13 @@ def main():
                     # 群友画像指令：优先拦截，不进入缓冲区
                     original_check = text.lstrip(f"[引用] {quoted_text}\n[当前] ") if quoted_text else text
                     oc = original_check.strip()
+                    # ── 1.5.9 §B0：内容指纹判重 ──
+                    # 同一件事换形态投递时 mid 不同、字面也不同（原文 / 引用预览 /
+                    # [图片] 占位），旧的三道判重全都放过。30 秒窗口内同人同指纹即丢。
+                    # 用去注记的原文（oc），否则引用注记一变指纹就不同。
+                    if _INBOUND_DUPE.hit(group_id, sender, oc):
+                        log(f"群[{group_id}] [重复:指纹] {oc[:30]}")
+                        continue
                     # 全群画像
                     if re.match(r'^(群友画像|画像|群友报告|群报告|group.report|群聊画像|群聊报告)\s*$', oc):
                         log(f"群[{group_id}] 群友画像指令: {oc}")

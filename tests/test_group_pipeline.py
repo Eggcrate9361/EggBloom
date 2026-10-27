@@ -16,6 +16,7 @@
 运行：python tests/test_group_pipeline.py
 """
 import os
+import re
 import sys
 import threading
 import time
@@ -261,7 +262,9 @@ def test_upsert_branches():
             flags={"at_bot": True, "quote_me": True}, forced=True)
         buf = bot_core.GROUP_MSG_BUFFER.get(GID) or {}
         check("新建返回 created", r1 == "created", r1)
-        check("文本带说话人标签", "[10001] 第一句" in str(buf.get("text")), buf.get("text"))
+        check("文本带说话人标签",
+              re.search(r"\[10001·[0-9a-z]{4}\] 第一句", str(buf.get("text"))),
+              buf.get("text"))
         check("forced 写进批次", buf.get("forced") is True, buf.get("forced"))
         expect = bot_core._batch_deadline(
             now=buf.get("time"), first_time=buf.get("time"), same_sender=False,
@@ -276,8 +279,11 @@ def test_upsert_branches():
             GID, sender="10001", text="第二句", flags={}, forced=False)
         buf2 = bot_core.GROUP_MSG_BUFFER.get(GID) or {}
         check("窗口内返回 merged", r2 == "merged", r2)
-        check("同人续话换行合并",
-              str(buf2.get("text")).endswith("第一句\n第二句"), buf2.get("text"))
+        # 1.5.9 §B1.1：同人续话现在也带前缀（原来不带，模型会把续句算成上一个人说的）
+        _t2 = str(buf2.get("text"))
+        check("同人续话也各自带前缀",
+              re.search(r"\[10001·[0-9a-z]{4}\] 第一句\n\[10001·[0-9a-z]{4}\] 第二句", _t2)
+              is not None, _t2)
         check("forced 合并取或（不回落）", buf2.get("forced") is True, buf2.get("forced"))
 
         buf2["deadline"] = time.time() - 1
@@ -291,7 +297,8 @@ def test_upsert_branches():
         buf3 = bot_core.GROUP_MSG_BUFFER.get(GID) or {}
         check("过期后返回 expired", r3 == "expired", r3)
         check("换人加标签再合并",
-              "[10002] 第三句" in str(buf3.get("text")), buf3.get("text"))
+              re.search(r"\[10002·[0-9a-z]{4}\] 第三句", str(buf3.get("text"))),
+              buf3.get("text"))
         check("过期后 deadline 被推后", float(buf3.get("deadline") or 0) > time.time())
     finally:
         _cancel(bot_core.GROUP_MSG_BUFFER.get(GID))
@@ -324,7 +331,8 @@ def test_upsert_expired_in_flight():
         new = bot_core.GROUP_MSG_BUFFER.get(GID) or {}
         check("返回 created（旧批已不在）", r == "created", r)
         check("派生的新批次只有新消息",
-              "[10002] 新消息" in str(new.get("text")), new.get("text"))
+              re.search(r"\[10002·[0-9a-z]{4}\] 新消息", str(new.get("text"))),
+              new.get("text"))
         check("没有写进已摘下的旧字典",
               "新消息" not in str(old.get("text")), old.get("text"))
     finally:
