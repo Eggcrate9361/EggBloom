@@ -5595,6 +5595,37 @@ _PLUGIN_TOOL_SCHEMAS = [
 ]
 
 
+#: 群管理工具（只在群聊注入）。自然语言走这条，命令式仍走正则。
+GROUP_ADMIN_SCHEMA = {"type": "function", "function": {
+    "name": "group_admin",
+    "description": "执行群管理操作：踢人 / 禁言 / 解除禁言 / 设管理 / 撤管理 / "
+                   "改群名片 / 改群名 / 退群。"
+                   "用户用自然语言提要求（「把群名改成 X」「禁言他十分钟」「踢了他」）"
+                   "时调用它，不要只用嘴答应。只有主人能触发；我不是群管理或没权限时，"
+                   "工具会返回原因，照原话告诉对方。",
+    "parameters": {"type": "object", "properties": {
+        "action": {"type": "string",
+                   "enum": ["kick", "ban", "unban", "set_admin", "del_admin",
+                            "set_card", "set_group_name", "leave"]},
+        "target": {"type": "string",
+                   "description": "目标 QQ 号（kick/ban/unban/set_admin/del_admin/set_card 必填）"},
+        "value": {"type": "string",
+                  "description": "禁言分钟数 / 新群名片 / 新群名"},
+    }, "required": ["action"]}}}
+
+
+def _tool_group_admin(args, *, sender="", group_id=""):
+    _a = str((args or {}).get("action") or "")
+    _ok, _msg = _do_group_admin(
+        _a,
+        target=str((args or {}).get("target") or ""),
+        value=str((args or {}).get("value") or ""),
+        sender=sender or str((args or {}).get("sender") or ""),
+        group_id=group_id or str((args or {}).get("group_id") or ""),
+    )
+    return _tool_ok(_msg) if _ok else _tool_fail(_msg)
+
+
 def _tool_plugin_list(args):
     try:
         from harness import plugin_tools as _ptf
@@ -8351,6 +8382,81 @@ def _handle_recall_event(ev):
         else:
             log(f"私聊撤回: user_id 无效({recall_uid})，跳过反馈")
 
+#: 群管理动作 → 中文（回执用）
+_ADMIN_LABELS = {
+    "kick": "踢了", "ban": "禁了", "unban": "解了",
+    "set_admin": "给管理了", "del_admin": "撤了",
+    "set_card": "名片改了", "set_group_name": "群名改了", "leave": "走了",
+}
+
+
+def _do_group_admin(action, *, target="", value="", sender="", group_id=""):
+    """群管理动作的统一执行层：正则路径与 agent 工具路径共用。
+
+    返回 (ok, msg)。msg 直接可以回给群 —— 成功、失败、没权限都说人话。
+
+    为什么要抽这一层（1.5.9 真机 2026-10-27）：
+      用户说「把群名改成外莱塔尼亚」，正则要求**开头**就是动词，匹配不上，
+      于是进了 AI 流程；而 AI 手上没有任何管理工具，只能回一句话，然后被
+      过时丢弃 —— 群里什么都没发生。
+      现在自然语言走工具、命令式走正则，两条路都落到这里，权限只在这里判。
+    """
+    if not _config.get("admin_commands_enable", True):
+        return (False, "管理指令关着，让主人去设置里开")
+    admins = set(str(q) for q in (_config.get("admin_qqs") or []))
+    admins |= _get_admin_qqs()
+    if str(sender) != str(BOT_QQ) and str(sender) not in admins:
+        return (False, "这得主人发话")
+    if not group_id or not str(group_id).isdigit():
+        return (False, "这不是群聊，没法执行群管理")
+    gid = int(group_id)
+    target = str(target or "").strip()
+    value = str(value or "").strip()
+
+    def _call(api, body):
+        try:
+            resp = api_call(api, body)
+        except Exception as e:
+            return (False, f"{_ADMIN_LABELS.get(action, '操作')}失败：{e}")
+        rc = resp.get("retcode") if isinstance(resp, dict) else resp
+        if rc == 0:
+            return (True, _ADMIN_LABELS.get(action, "办了"))
+        return (False, f"{_ADMIN_LABELS.get(action, '操作')}没办成，驱动返回 retcode={rc}")
+
+    if action in ("kick", "ban", "unban", "set_admin", "del_admin", "set_card"):
+        if not target:
+            return (False, "要@人或给QQ号")
+        if not target.isdigit():
+            return (False, f"这个人没解析出号码（{target}）")
+        uid = int(target)
+    if action == "kick":
+        return _call("set_group_kick", {"group_id": gid, "user_id": uid})
+    if action == "ban":
+        try:
+            minutes = int(value or 10)
+        except Exception:
+            minutes = 10
+        return _call("set_group_ban", {"group_id": gid, "user_id": uid,
+                                       "duration": minutes * 60})
+    if action == "unban":
+        return _call("set_group_ban", {"group_id": gid, "user_id": uid, "duration": 0})
+    if action == "set_admin":
+        return _call("set_group_admin", {"group_id": gid, "user_id": uid, "enable": True})
+    if action == "del_admin":
+        return _call("set_group_admin", {"group_id": gid, "user_id": uid, "enable": False})
+    if action == "set_card":
+        if not value:
+            return (False, "新名片是空的")
+        return _call("set_group_card", {"group_id": gid, "user_id": uid, "card": value})
+    if action == "set_group_name":
+        if not value:
+            return (False, "新群名是空的")
+        return _call("set_group_name", {"group_id": gid, "group_name": value})
+    if action == "leave":
+        return _call("set_group_leave", {"group_id": gid})
+    return (False, f"不认识的管理动作：{action}")
+
+
 #: 群管理指令正则：动词表来自 capabilities_view，避免两处各写一份。
 #: 按长度倒序，保证「踢人」不被「踢」先吃掉（原顺序有这个 bug：
 #: 输入「踢人 10001」时 verb=踢、rest=人 10001，目标号仍能捞到，
@@ -8361,11 +8467,14 @@ _ADMIN_COMMAND_RE = re.compile(
 
 
 def _handle_group_admin_command(text, msg, sender, group_id):
-    """@Bot + 群管理指令：踢人/禁言/设管理/改名片/改群名/退群。返回 True 表示已处理。"""
+    """@Bot + 群管理指令（命令式）：踢人/禁言/设管理/改名片/改群名/退群。
+
+    只认**开头就是动词**的命令式（「踢 1234567」「改群名 新名字」）。
+    自然语言（「把群名改成 X」「禁言他十分钟」）不在这里处理，走 `group_admin`
+    工具 —— 两条路最终都落到 `_do_group_admin`，权限只在那里判一次。
+    """
     if not _config.get("admin_commands_enable", True):
         return False
-    admins = set(str(q) for q in (_config.get("admin_qqs") or []))
-    admins |= _get_admin_qqs()
     t = text.strip()
     if not t:
         return False
@@ -8383,16 +8492,27 @@ def _handle_group_admin_command(text, msg, sender, group_id):
     if not m:
         return False
     verb, rest = m.group(1), (m.group(2) or "").strip()
-    # 鉴权：Bot 本人 / admin_qqs / command_admins / target_qqs
-    if str(sender) != str(BOT_QQ) and str(sender) not in admins:
-        log(f"[群管理] 权限不足: {sender} 尝试「{verb}」group={group_id}")
-        try:
-            # 这是**真拒绝**，不是"没能力"：说清谁能办，不装客服
-            smart_send_group(str(group_id), "这得主人发话，我可不听你的")
-        except Exception:
-            pass
-        return True
-    # 目标 QQ：优先 at 段，其次文本中的 QQ 号
+
+    if verb in ("踢", "踢出", "踢人"):
+        action = "kick"
+    elif verb == "禁言":
+        action = "ban"
+    elif verb in ("解除禁言", "解禁"):
+        action = "unban"
+    elif verb in ("设管理", "设管理员"):
+        action = "set_admin"
+    elif verb in ("撤管理", "撤销管理"):
+        action = "del_admin"
+    elif verb == "改名片":
+        action = "set_card"
+    elif verb == "改群名":
+        action = "set_group_name"
+    elif verb == "退群":
+        action = "leave"
+    else:
+        return False
+
+    # 目标 QQ：优先 at 段，其次文本中的号码
     at_targets = []
     for seg in (msg.get("message") or []):
         if isinstance(seg, dict) and seg.get("type") == "at":
@@ -8402,74 +8522,28 @@ def _handle_group_admin_command(text, msg, sender, group_id):
                 at_targets.append(q)
     rest_digits = re.search(r'\d{5,12}', rest)
     target = at_targets[0] if at_targets else (rest_digits.group(0) if rest_digits else "")
-    gid = int(group_id) if str(group_id).isdigit() else str(group_id)
-    def _ok(resp, act="", receipt=""):
-        rc = resp.get("retcode") if isinstance(resp, dict) else resp
-        log(f"[群管理] {verb} {act} group={group_id} target={target} retcode={rc}")
-        # 1.5.9 §A.3④：执行完必须回话。原实现只 log，群里一片安静，
-        # 用户看到的就是"它说做不了/它没反应"。
-        if not _config.get("admin_command_receipt", True):
-            return True
-        _say = receipt or act or "办了"
-        try:
-            if rc == 0:
-                smart_send_group(str(group_id), _say)
-            else:
-                # 失败要如实报，不要含糊成"好像没成功"
-                smart_send_group(str(group_id), f"{verb}没办成，驱动返回 retcode={rc}")
-        except Exception:
-            pass
-        return True
-    if verb in ("踢", "踢出", "踢人"):
-        if not target:
-            smart_send_group(str(group_id), "要踢谁？@TA 或写QQ号")
-            return True
-        return _ok(api_call("set_group_kick", {"group_id": gid, "user_id": int(target)}), "踢了")
-    if verb == "禁言":
-        if not target:
-            smart_send_group(str(group_id), "禁言谁？@TA 或写QQ号")
-            return True
-        minutes = 10
+
+    value = ""
+    if action == "ban":
         mm = re.search(r'(\d+)\s*(小时|分钟|分)', rest)
         if mm:
-            minutes = int(mm.group(1))
-            if mm.group(2) == "小时":
-                minutes = minutes * 60
-        return _ok(api_call("set_group_ban", {"group_id": gid, "user_id": int(target), "duration": minutes * 60}),
-                   receipt=f"禁了 {minutes} 分钟")
-    if verb in ("解除禁言", "解禁"):
-        if not target:
-            smart_send_group(str(group_id), "解除谁？@TA 或写QQ号")
-            return True
-        return _ok(api_call("set_group_ban", {"group_id": gid, "user_id": int(target), "duration": 0}), "解了")
-    if verb in ("设管理", "设管理员"):
-        if not target:
-            smart_send_group(str(group_id), "给谁设管理？@TA 或写QQ号")
-            return True
-        return _ok(api_call("set_group_admin", {"group_id": gid, "user_id": int(target), "enable": True}), "给管理了")
-    if verb in ("撤管理", "撤销管理"):
-        if not target:
-            smart_send_group(str(group_id), "撤谁的管理？@TA 或写QQ号")
-            return True
-        return _ok(api_call("set_group_admin", {"group_id": gid, "user_id": int(target), "enable": False}), "撤了")
-    if verb == "改名片":
-        card = re.sub(r'\d{5,12}', '', rest)
-        card = re.sub(r'@\s*', '', card).strip()
-        if not target or not card:
-            smart_send_group(str(group_id), "格式：改名片 @TA 新名片")
-            return True
-        return _ok(api_call("set_group_card", {"group_id": gid, "user_id": int(target), "card": card}), "名片改了")
-    if verb == "改群名":
-        name = rest.strip()
-        if not name:
-            smart_send_group(str(group_id), "格式：改群名 新名字")
-            return True
-        return _ok(api_call("set_group_name", {"group_id": gid, "group_name": name}), "群名改了")
-    if verb == "退群":
-        return _ok(api_call("set_group_leave", {"group_id": gid}))   # 退群后已不在群里，不回执
-    return False
+            value = str(int(mm.group(1)) * 60 if mm.group(2) == "小时" else int(mm.group(1)))
+    elif action == "set_card":
+        value = re.sub(r'@\s*', '', re.sub(r'\d{5,12}', '', rest)).strip()
+    elif action == "set_group_name":
+        value = rest.strip()
 
-
+    ok, out = _do_group_admin(action, target=target, value=value,
+                              sender=sender, group_id=group_id)
+    log(f"[群管理] {action} group={group_id} target={target} ok={ok} msg={out}")
+    if action == "leave" and ok:
+        return True          # 退群后已不在群里，发不出去
+    if _config.get("admin_command_receipt", True):
+        try:
+            smart_send_group(str(group_id), out)
+        except Exception:
+            pass
+    return True
 def try_execute_command(text, sender=""):
     """尝试匹配并执行控制指令。返回 True 表示已处理。"""
     # 帮助指令特殊处理
@@ -9735,6 +9809,9 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
             for _sch in _PLUGIN_TOOL_SCHEMAS:
                 if _sch["function"]["name"] not in _have:
                     _tfc.append(_sch)
+            # 群管理工具只在群聊给 —— 私聊没有可管理的对象
+            if is_group and GROUP_ADMIN_SCHEMA["function"]["name"] not in _have:
+                _tfc.append(GROUP_ADMIN_SCHEMA)
             tools_for_call = _tfc
     except Exception as _e:
         log(f"[插件工具] 常驻注入失败（用原工具集）: {_e}")
@@ -9850,10 +9927,18 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
                     messages.append({"role": "assistant", "content": msg.get("content") or "", "tool_calls": tool_calls})
                     web_rounds += 1
                     _round_ok_flags = []        # 这一轮每个工具的成功情况
+                    # 群管理工具要把**当前消息的发送者**带进去做权限判断。
+                    # execute_tool_call 只会自动补 group_id（来自参数），
+                    # sender 不在它的职责里，所以在这里闭包捕获。
+                    _tool_fns = dict(TOOL_FUNCTIONS)
+                    if is_group:
+                        _tool_fns["group_admin"] = (
+                            lambda a, _s=sender, _g=group_id:
+                            _tool_group_admin(a, sender=_s, group_id=_g))
                     for tc in tool_calls:
                         _r = _trunner.execute_tool_call(
                             tc,
-                            tool_functions=TOOL_FUNCTIONS,
+                            tool_functions=_tool_fns,
                             offered_names=_offered_tool_names,
                             group_id=group_id, target_qq=target_qq, is_group=is_group,
                             session_id=(f"g_{group_id}" if is_group and group_id
