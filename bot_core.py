@@ -8132,6 +8132,26 @@ _ai_task_counter: int = 0
 _ai_task_counter_lock = Lock()
 _AI_WORKERS = 3  # 并发 AI 工作线程数
 
+# ── "这次调用是不是等到超时了"（2026-10-27）─────────────────────────────
+# `call_deepseek` 超时返回 None，而模型自己回 `[不说话]` 时也可能是空 ——
+# 上层原来只能写「AI决定不回复: (空)」，把"没等到"和"不想说"混成一句话。
+# 真机后果：两次被 @ 提问没回，日志看着像模型主动沉默，实际是回复被超时丢弃，
+# 于是被判断成"决策器有问题"，查错方向整个跑偏。
+# 用线程本地保存：一次生成从头到尾在同一个线程里（worker / Timer 线程）。
+_ai_timeout_flag = threading.local()
+
+
+def _mark_ai_timeout(flag: bool) -> None:
+    try:
+        _ai_timeout_flag.timed_out = bool(flag)
+    except Exception:
+        pass
+
+
+def _ai_timed_out() -> bool:
+    """本线程最近一次 call_deepseek 是否以**超时**结束（而不是模型决定不回）。"""
+    return bool(getattr(_ai_timeout_flag, "timed_out", False))
+
 
 def _ai_worker() -> None:
     """后台线程：处理 DeepSeek API 调用，支持重试，不阻塞主循环。"""
@@ -8140,6 +8160,18 @@ def _ai_worker() -> None:
         if task is None:  # 停止信号
             break
         task_id, params, event = task
+
+        def _tick_progress(tid=task_id):
+            # 告诉等待方"这一轮还在推进"。只更新一个时间戳，不加锁竞争（走同一把锁，
+            # 但临界区极小），也不参与结果判定 —— 纯粹用来区分"慢"和"卡死"。
+            try:
+                with _ai_results_lock:
+                    _e = _ai_results.get(tid)
+                    if _e is not None:
+                        _e["progress"] = time.time()
+            except Exception:
+                pass
+
         try:
             result = _call_deepseek_sync(
                 user_msg=params["user_msg"],
@@ -8151,7 +8183,8 @@ def _ai_worker() -> None:
                 personality_temperature=params.get("personality_temperature"),
                 ego_inject_context=params.get("ego_inject_context", ""),
                 scene_context=params.get("scene_context", ""),
-                sender=params.get("sender", ""))
+                sender=params.get("sender", ""),
+                progress=_tick_progress)
             with _ai_results_lock:
                 entry = _ai_results.get(task_id)
                 if entry:
@@ -8184,24 +8217,68 @@ def _submit_ai_task(params: Dict) -> int:
         task_id = _ai_task_counter
     event = threading.Event()
     with _ai_results_lock:
-        _ai_results[task_id] = {"event": event, "result": None}
+        _ai_results[task_id] = {"event": event, "result": None,
+                                "progress": time.time()}
     _ai_task_queue.put((task_id, params, event))
     return task_id
 
 
-def _wait_ai_result(task_id: int, timeout: float = 60.0) -> Optional[str]:
-    """等待指定 AI 任务的结果，超时返回 None。超时不移除 entry，后台任务完成后仍可被后续轮询/读取。"""
+def _wait_ai_result(task_id: int, timeout: float = 60.0,
+                    idle_timeout: float = None, max_total: float = None) -> Optional[str]:
+    """等待指定 AI 任务的结果，超时返回 None。超时不移除 entry，后台任务完成后仍可被后续轮询/读取。
+
+    ★ 2026-10-27 改判据：从「总共等 timeout 秒」改成「多久没进展」。
+      真机（群 829854136，09:21 / 09:25 两次，都是被 @ 问「讲解一下精神分析引论」）：
+        09:20:50 提交 → 09:20:58 历史摘要压缩完（8s，一次独立的 LLM 调用）
+        09:21:09 首轮模型回来说"要搜索"（11s）→ 09:21:12 搜完（3s）
+        09:21:20 **30 秒到点，放弃** → 日志「AI决定不回复: (空)」，流水线回 idle
+        09:21:39 二轮模型终于返回（8712 tokens，¥0.004356）→ 结果没人要了
+      一条已经生成好的回复被扔掉，钱照付，群里一句没有；而日志写的是
+      "AI决定不回复"，看着像模型自己选择沉默 —— **两个完全不同的原因共用一句话**。
+
+      根子不在 30 这个数字，而在判据本身：用"用户说了什么"预判耗时
+      （`_is_web_task` 只看 URL / 问卷填表），而真正的耗时是"模型决定调不调工具"。
+      现在改成按**进展**判：
+        · worker 每完成一个阶段（摘要 / 每一轮模型 / 每一轮工具）打一次 progress
+        · 等待方只要在 idle_timeout 内见过 progress 就续期，最多续到 max_total
+        · 真卡死（一个 tick 都没有）仍然在 idle_timeout 后放弃，不会无限等
+    """
     with _ai_results_lock:
         entry = _ai_results.get(task_id)
     if entry is None:
+        _mark_ai_timeout(False)
         return None
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        if entry["event"].wait(timeout=5.0):
+    _idle = float(idle_timeout if idle_timeout is not None else max(timeout, 1.0))
+    _hard = float(max_total if max_total is not None else max(timeout * 4.0, _idle * 2))
+    started = time.time()
+    hard_deadline = started + _hard
+    deadline = started + timeout
+    while True:
+        # 等待粒度跟着 deadline 走：固定等 2s 会把 0.5s 这种短预算拖成 2s，
+        # 也让"到点就停"失真（真机排查时会被误读成"根本没超时"）。
+        _left = max(0.05, min(2.0, deadline - time.time()))
+        if entry["event"].wait(timeout=_left):
             with _ai_results_lock:
                 entry = _ai_results.pop(task_id, None)
+            _mark_ai_timeout(False)
             return entry["result"] if entry else None
-    log(f"AI 任务 {task_id} 等待超时（后台任务仍将继续执行）")
+        now = time.time()
+        if now >= hard_deadline:
+            break
+        # 最近 idle_timeout 内有过进展 → 续期（本次生成还没卡）
+        last = entry.get("progress") or started
+        if now - last < _idle:
+            deadline = max(deadline, now + _idle)
+        if now >= deadline:
+            break
+    _mark_ai_timeout(True)
+    _elapsed = time.time() - started
+    try:
+        _gap = time.time() - (entry.get("progress") or started)
+    except Exception:
+        _gap = _elapsed
+    log(f"AI 任务 {task_id} 等待超时（已等 {_elapsed:.0f}s，最后一次进展在 {_gap:.0f}s 前；"
+        f"后台任务仍将继续执行，但本批已放弃）")
     return None
 
 
@@ -8971,8 +9048,14 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
                         is_group: bool = False, private_memory_context: str = '',
                         personality_temperature: Optional[float] = None,
                         ego_inject_context: str = '', sender: str = '',
-                        scene_context: str = '') -> Optional[str]:
-    """同步调用 DeepSeek API（在后台线程中运行），支持工具调用和重试。"""
+                        scene_context: str = '', progress=None) -> Optional[str]:
+    """同步调用 DeepSeek API（在后台线程中运行），支持工具调用和重试。
+
+    `progress`：可选的"还在推进"回调（2026-10-27）。每完成一个阶段（摘要压缩、
+    每一轮模型调用、每一轮工具）调一次，让等待方知道该继续等而不是判超时。
+    没有它就只能用"总时长"卡，而一次生成可能因为模型自己决定联网搜索变成
+    两三轮 —— 详见 `_wait_ai_result` 的说明。
+    """
     global chat_history, group_chat_history
 
     if target_qq is None:
@@ -8992,6 +9075,12 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
     if is_group:
         if group_id:
             summarize_group_history(group_id)
+            # 摘要压缩本身是一次完整 LLM 调用（最长 15s），它占的是"等回复"的预算，
+            # 不算进展就会被误判成卡死 —— 打完这个 tick 再进正式生成。
+            try:
+                if progress: progress()
+            except Exception:
+                pass
 
     # 对象语气提示（彩蛋）：命中时只追加一句 27 字提示；不命中返回空串，零 token。
     #   优先级：focus_qq 明文 > persona_tag.TAG 派生标签 > 文本里的号码。
@@ -9328,6 +9417,13 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
     _length_retry_used = False     # 思维链吃光输出预算的加倍重试，只做一次
     while True:
         try:
+            # 每轮模型调用都是一次"有进展"（2026-10-27）：模型自己决定联网搜索时，
+            # 一次生成会变成两三轮，总时长能到 50 秒。等待方靠这个 tick 判断
+            # "还在推进 → 继续等"，而不是拿固定 30 秒砍掉一条已经生成好的回复。
+            try:
+                if progress: progress()
+            except Exception:
+                pass
             msg, usage = _call_chat_sync(messages, runtime_cfg=None, max_tokens=effective_max_tokens,
                                          stream=False, with_tools=tools_for_call,
                                          personality_temperature=personality_temperature)
@@ -9530,10 +9626,17 @@ def call_deepseek(user_msg: str, images: Optional[List[str]] = None,
         "scene_context": scene_context,
         "sender": sender,
     })
-    # 网页/问卷任务需要多轮工具链，给足更长的等待时间（与 _web_hint 判定保持一致）
+    # ★ 2026-10-27：判据从"用户消息像不像网页任务"改成"这次生成还有没有进展"。
+    #   原来只有 URL / 问卷填表才给 600 秒，其余一律 30 秒；但真正的耗时是
+    #   **模型自己决定调不调工具**（搜索一轮 = 两次模型调用 + 一次搜索），
+    #   跟用户怎么措辞无关。真机两次「讲解一下精神分析引论」都因此被 30 秒砍掉。
+    #   现在：首轮 30 秒起步，只要 worker 还在打 progress 就按 idle 续期，
+    #   最多到 hard 上限。网页任务仍然是宽预算（它本来就是多步工具链）。
     _q = user_msg or ""
     _is_web_task = bool(re.search(r'https?://\S+', _q)) or bool(re.search(r'(问卷|填表|填表单|答题|做.*?(问卷|题)|填写|表单|网页.*?(任务|操作)|帮我.*?(打开|填))', _q))
-    return _wait_ai_result(task_id, timeout=(600.0 if _is_web_task else 30.0))
+    if _is_web_task:
+        return _wait_ai_result(task_id, timeout=600.0, idle_timeout=180.0, max_total=600.0)
+    return _wait_ai_result(task_id, timeout=30.0, idle_timeout=45.0, max_total=150.0)
 
 
 def save_instruction(text, reply):
@@ -11167,7 +11270,15 @@ def _pipeline_step(group_id):
                                        ego_ctx=_ego_ctx, scene_ctx=_scene_ctx)
 
         if not reply or reply.strip() in ("[不说话]", "[跳过]"):
-            log(f"群[{group_id}] AI决定不回复: {reply[:30] if reply else '(空)'}")
+            # ★ 2026-10-27：把"没等到"和"不想说"拆开。
+            #   两者都是空字符串，但原因完全相反：一个是我们放弃了、钱已经花掉、
+            #   回复在后台还会生成；另一个是模型看完决定闭嘴。
+            #   合成一句「AI决定不回复」会把人引到"决策器有问题"上去（真机踩过）。
+            if _ai_timed_out():
+                log(f"群[{group_id}] [超时放弃] 等模型太久，本批不发"
+                    f"（不是模型决定沉默；该次生成的 token 已经计费）")
+            else:
+                log(f"群[{group_id}] AI决定不回复: {reply[:30] if reply else '(空)'}")
             return
 
         if reply:
