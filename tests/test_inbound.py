@@ -103,6 +103,10 @@ def test_wired_in_bot_core():
     check("入口做了指纹判重", "_INBOUND_DUPE.hit" in src)
     check("判重日志可检索", "[重复:指纹]" in src)
     check("用去注记原文判重", "_INBOUND_DUPE.hit(group_id, sender, oc)" in src)
+    # 2026-10-27 真机：窗口 30 秒把「我是鸡蛋」隔 3 秒说第二遍当成了重复投递。
+    # 判据要挡"同一条事件被投递两次"，不是"同一句话被说了两次"。
+    check("窗口不超过 6 秒（30 秒会误伤真人重复发言）",
+          "DupeGuard(window=6.0)" in src, "窗口太长")
 
 
 def main():
