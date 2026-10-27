@@ -42,6 +42,67 @@ def _set_cache(query: str, data: str) -> None:
     _QUERY_CACHE[query] = (_now(), data)
 
 
+def _decode_html(raw: bytes, resp=None) -> str:
+    """按 HTTP 头 / meta charset 解码 HTML。
+
+    ★ 2026-10-27：原���硬编码 `decode("utf-8", errors="ignore")`。
+      遇到 GBK/GB18030 编码的页面（国内站点很常见）就整片乱码：
+
+          ԅMMNjԩ ,\a%sމh܈vEY F>+
+
+      乱码进了搜索结果 → 模型读不到中文 → 那条结果等于白搜。
+      实测搜「明日方舟 2026 半周年 限定 干员」第一条正文就是乱码。
+
+    顺序（按可靠性）：
+      1. HTTP 头的 Content-Type charset
+      2. HTML 里的 <meta charset> / <meta http-equiv content="...charset=...">
+      3. utf-8
+      4. gb18030（中文站兜底，gb18030 是 gbk 的超集）
+    任何一步失败都退回 utf-8 + errors="replace"（不丢内容）。
+    """
+    if not raw:
+        return ""
+    # 1. HTTP 头
+    cands = []
+    try:
+        ct = ""
+        if resp is not None:
+            try:
+                ct = resp.headers.get("Content-Type", "") or ""
+            except Exception:
+                ct = ""
+        m = re.search(r"charset\s*=\s*[\"']?\s*([\w\-]+)", ct, re.I)
+        if m:
+            cands.append(m.group(1))
+    except Exception:
+        pass
+    # 2. meta 标签（只看前 2KB，charset 通常在头部）
+    try:
+        head = raw[:2048].decode("ascii", errors="ignore")
+        m = re.search(r'<meta[^>]+charset\s*=\s*["\']?\s*([\w\-]+)', head, re.I)
+        if m:
+            cands.append(m.group(1))
+    except Exception:
+        pass
+    for enc in cands:
+        e = (enc or "").strip().lower().replace("\"", "").replace("'", "")
+        if not e:
+            continue
+        try:
+            return raw.decode(e, errors="strict")
+        except Exception:
+            continue
+    # 3/4. utf-8 → gb18030
+    try:
+        return raw.decode("utf-8")
+    except Exception:
+        pass
+    try:
+        return raw.decode("gb18030", errors="replace")
+    except Exception:
+        return raw.decode("utf-8", errors="replace")
+
+
 def _fetch_html(url: str, timeout: int = 15, headers: Optional[dict] = None) -> Optional[str]:
     """带 UA 的网页抓取，失败返回 None。"""
     req_headers = {
@@ -54,7 +115,7 @@ def _fetch_html(url: str, timeout: int = 15, headers: Optional[dict] = None) -> 
     req = urllib.request.Request(url, headers=req_headers)
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return resp.read().decode("utf-8", errors="ignore")
+            return _decode_html(resp.read(), resp)
     except Exception:
         return None
 
