@@ -12649,6 +12649,12 @@ def main():
                             "user_id": sender_id,
                             "time": ev.get("time", int(time.time())),
                             "message_id": ev.get("message_id", 0),
+                            # ★ 合并后重新入队的那条必须带着这个标记穿过这一层。
+                            #   这里原来只挑固定字段，标记被丢掉 → 重新入队后又被
+                            #   当成新消息拦进缓冲 → 永远等不到回复。
+                            #   2026-10-27 实测：私聊每条都是「入缓冲 等 5.0s（本批 1 条）」，
+                            #   一条都不回，日志里连「收到:」都没有。
+                            _REQUEUE_FLAG: bool(ev.get(_REQUEUE_FLAG)),
                         })
                         if is_group:
                             event_msgs[-1]["group_id"] = group_id

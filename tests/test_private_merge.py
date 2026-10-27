@@ -247,6 +247,17 @@ def main():
     check("★ 转存被重新入队标记挡住", "_REQUEUE_FLAG" in guard, guard[-300:])
     check("转存仍在合并点之前（先存再缓冲，撤回不丢记录）", 0 < i_save < i_call, "")
 
+    print("\n[10] 重新入队标记必须穿过主循环的重新打包（2026-10-27 真机）")
+    # 主循环把队列事件重新打包成 event_msgs 时只挑固定字段。这里漏了标记，
+    # 重新入队的那条就又变成"新消息"，被 13419 再拦一次 → 永远等不到回复。
+    # 现象：私聊每条都「入缓冲 等 5.0s（本批 1 条）」，日志里连「收到:」都没有。
+    check("★ event_msgs 保留 _REQUEUE_FLAG",
+          "_REQUEUE_FLAG: bool(ev.get(_REQUEUE_FLAG))" in src,
+          "主循环只挑固定字段 → 标记丢失 → 又被拦进缓冲 → 永不出队")
+    # 第 9 节的「转存被挡住」也依赖同一个标记，两处必须都带着它
+    check("入队与重新打包两处都用同一个常量", src.count("_REQUEUE_FLAG") >= 4,
+          src.count("_REQUEUE_FLAG"))
+
     _clean()
     bot_core._config.clear()
     bot_core._config.update(orig_cfg)
