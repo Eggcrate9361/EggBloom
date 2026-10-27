@@ -5851,6 +5851,25 @@ _REFUSE_LOCK = Lock()
 _REFUSE_COEF = {"浅": 0.5, "一般": 1.0, "好": 1.5, "特别好": 2.0}
 
 
+def _budget_shift(mood_shift=0, talkativeness=0.0, rng=None):
+    """配额档位的总偏移 = 情绪短期偏移 + 人格长期系数（1.5.9 §C.2）。
+
+    人格是**概率**不是阈值：talkativeness=0.25 表示四分之一的回合往上说一档，
+    而不是"超过 0.5 就切换"。这样调参是连续的，也能用分布验证。
+    默认 0 = 保持现状分布。
+    """
+    s = int(mood_shift or 0)
+    try:
+        t = float(talkativeness or 0.0)
+    except Exception:
+        t = 0.0
+    if t > 0:
+        r = random.random() if rng is None else float(rng)
+        if r < t:
+            s += 1
+    return s
+
+
 def _refuse_license(group_id, sender):
     """这次给不给「可以不办」的许可。返回 (allowed, reason)。
 
@@ -11869,7 +11888,12 @@ def _pipeline_step(group_id):
 
             # 1.5.9 §B3：本轮回合预算。话术进 user 消息（dynamic），不进静态段 ——
             # 静态段会打断黄金哈希与前缀缓存。
-            _budget = reply_budget.pick(shift=_form.get("budget_shift", 0))
+            try:
+                _tal = float(_config.get("persona_talkativeness", 0.0) or 0.0)
+            except Exception:
+                _tal = 0.0
+            _budget = reply_budget.pick(
+                shift=_budget_shift(_form.get("budget_shift", 0), _tal))
             merged_text_for_ai = f"{merged_text_for_ai}\n[系统提示] {reply_budget.prompt_line(_budget)}"
             _phase_set(group_id, "generating")
             reply = call_deepseek(merged_text_for_ai, images, group_id=group_id, is_group=True, personality_temperature=_ST.get("personality_temperature"), ego_inject_context=_ego_ctx, scene_context=_scene_ctx, sender=sender)

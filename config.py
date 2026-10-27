@@ -291,6 +291,9 @@ DEFAULT_CONFIG = {
     # 群里 3 秒够用，私聊是"听他把话说完"，窗口与硬顶都更松。
     "private_msg_buffer_window": 8,
     "speech_pace_enable": True,
+    # 人格长期系数（1.5.9 §C.2）。0 = 保持现状分布，不偏移。
+    # 调高只会让回复配额更常往上走一档，不改任何文本内容。
+    "persona_talkativeness": 0.0,
     "private_batch_hard_cap": 15,
     # 回复预算硬上限（1.5.9 §B3）。档位分布见 reply_budget.py：
     # A 60% 1 条 ≤8 字 / B 30% 1–2 条 ≤16 字 / C 10% 2–3 条 ≤40 字。

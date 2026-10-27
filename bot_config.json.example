@@ -122,6 +122,7 @@
   "group_msg_buffer_window_trigger": 2,
   "private_msg_buffer_window": 8,
   "speech_pace_enable": true,
+  "persona_talkativeness": 0.0,
   "private_batch_hard_cap": 15,
   "reply_stale_turns": 2,
   "reply_stale_drop_sec": 120,
