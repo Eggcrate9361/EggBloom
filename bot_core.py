@@ -15,6 +15,7 @@ from socketserver import ThreadingMixIn
 import capabilities_view
 import inbound
 import reply_budget
+import reply_drop
 import speech_pace
 
 
@@ -817,30 +818,24 @@ def _buffer_private_message(sender: str, text: str, images, msg) -> bool:
 GROUP_OBSERVE: Dict[str, Dict[str, Any]] = {}
 GROUP_RECENT_MSGS: Dict[str, List[Tuple]] = {}  # {group_id: [(timestamp, sender, text), ...]}  最近X秒消息缓存
 GROUP_TIMELINE: Dict[str, List[Tuple]] = {}  # {group_id: [(timestamp, sender_id, sender_nick, text), ...]}  全局消息时间线（概率门之前记录）
-def _drop_reason(*, new_msgs=0, age=0.0, turns=2, hard_sec=120.0, text=""):
+def _drop_reason(*, new_msgs=0, age=0.0, turns=2, hard_sec=120.0, text="",
+                 addressed=False):
     """这条回复该不该整条丢。返回原因（空串 = 照发）。
 
-    主判据是**话头有没有翻篇**，不是生成花了多久（1.5.9 §B5）：
-      生成期间群里又来了 >= turns 条 -> 话题已经走了，发出去接的是旧话头。
-    时间只做兜底，防"生成卡了十分钟"这种极端情况；它不参与日常判断，
-    所以换快模型、换慢模型都不会改变行为。
-    官腔单独一条：命中就丢，与时间无关。
+    ★ 2026-10-27：判据搬到 `reply_drop.py`，这里是薄包装（保留旧签名，
+      让既有测试与调用点继续工作）。真正的说明在那边 —— 简版：
+
+      旧判据用绝对时长卡，实测把「凡搜索必丢」变成了结构性行为
+      （搜索链最低 26 秒，线画在 25）。现在主判据是**话头有没有翻篇**，
+      时间只做极端兜底，线由实测 p99 导出而不是拍。
     """
-    try:
-        turns = int(turns or 0)
-    except Exception:
-        turns = 0
-    if turns > 0 and int(new_msgs) >= turns:
-        return f"话头翻篇 {int(new_msgs)} 条新消息"
-    try:
-        hard = float(hard_sec or 0)
-    except Exception:
-        hard = 0.0
-    if hard > 0 and float(age) > hard:
-        return f"过时 {float(age):.1f}s"
-    if text and _OFFICIAL_RE.search(text):
-        return "官腔"
-    return ""
+    return reply_drop.drop_reason(
+        new_msgs=new_msgs, age=age, turns=turns, hard_sec=hard_sec,
+        addressed=addressed, text=text, official_re=_OFFICIAL_RE)
+
+
+#: 生成耗时实测分布 + 丢弃线导出（详见 reply_drop.LatencyProfile）
+_latency = reply_drop.LATENCY
 
 
 #: 官腔判据（1.5.9 §B5）：命中即整条丢，不改文字。
@@ -12224,9 +12219,18 @@ def _pipeline_step(group_id):
                 # 于是连续两条消息被覆盖成同一句。这里做**发送前**的最终比对，
                 # 与最近 2 分钟内的已发内容相同就丢掉 —— 插件和模型两侧都拦不住的东西，
                 # 只能在这一层挡。
-                # ── 丢弃（1.5.9 §B5）──
-                # 一句 30 秒后才到的回复接的是早就过去的话头，比不回更破坏体感；
-                # 官腔同理。两种都**整条丢**，不改文字 —— 改出来的残句更像机器。
+                # ── 丢弃（1.5.9 §B5，2026-10-27 改判据）──
+                # 旧判据是**绝对时长**（age > 固定秒数 → 丢），已证伪：
+                # 实测 12 次丢弃里 11 次是「过时」，值全在 26–65 秒，
+                # 而一次带搜索的回复结构上就不低于 25 秒 →
+                # 「凡搜索必丢」，用户看到的「所有调用搜索工具的问题都无法回复」
+                # 就是这么来的。判据细节见 reply_drop.py。
+                #
+                # 新判据只问一件事：**这条回复现在发出去，还接得上话吗？**
+                #   ① 话头翻篇（有新消息盖过去）→ 丢，主判据，与耗时无关
+                #   ② 官腔 → 丢
+                #   ③ 时间只做极端兜底，线由实测 p99 导出（_latency）
+                # 群里一直没人说话 → 不丢。没人被打扰，晚回不算过时。
                 _dropped = False
                 if sent_text:
                     # 生成期间又来了几条：数时间线上的新消息，不看等了多久
@@ -12236,15 +12240,49 @@ def _pipeline_step(group_id):
                                         if _e and _e[0] > _seq_first)
                     except Exception:
                         _new_msgs = 0
-                    _why = _drop_reason(
+                    # 这一轮是不是有人在等（被 @ / 点名 / 引用）。
+                    # 有人在等 → 容忍度收窄（对方以为你聋了比晚回更伤）。
+                    _addressed = bool(buffer.get("forced") or buffer.get("is_at_bot")
+                                      or buffer.get("has_xiao_a")
+                                      or buffer.get("has_text_at"))
+                    _age_now = time.time() - _seq_first
+                    _hard_line, _hard_src = _latency.hard_line(addressed=_addressed)
+                    # 配置项保留为**覆盖**：写 0 = 不用时间兜底（合法，①②仍在）。
+                    # 不配 → 用分布导出的线。这样配置不再是"设计值"，
+                    # 只是"临时拉高/关掉"的开关。
+                    _cfg_hard = _config.get("reply_stale_drop_sec", None)
+                    if _cfg_hard is not None:
+                        try:
+                            _cfg_v = float(_cfg_hard)
+                            if _cfg_v > 0:
+                                _hard_line = max(_hard_line, _cfg_v)
+                                _hard_src = f"配置{_cfg_v:.0f}s"
+                            else:
+                                _hard_line = 0.0     # 显式关掉时间兜底
+                                _hard_src = "配置关闭"
+                        except Exception:
+                            pass
+                    _why = reply_drop.drop_reason(
                         new_msgs=_new_msgs,
-                        age=time.time() - _seq_first,
+                        age=_age_now,
                         turns=int(_config.get("reply_stale_turns", 2) or 0),
-                        hard_sec=float(_config.get("reply_stale_drop_sec", 120) or 0),
-                        text=sent_text)
+                        hard_sec=_hard_line,
+                        addressed=_addressed,
+                        text=sent_text,
+                        official_re=_OFFICIAL_RE)
+                    # 观测：无论丢不丢都记一笔 —— 分布就是这么攒出来的
+                    _latency.note(_age_now, addressed=_addressed)
                     if _why:
-                        log(f"群[{group_id}] [丢弃:{_why}] 本批不发")
+                        log(f"群[{group_id}] [丢弃:{_why}] 本批不发"
+                            f"（线 {_hard_src}）")
                         _dropped = True
+                    else:
+                        _st = _latency.stats()
+                        log(f"[时序] 群{group_id} 本批 age={_age_now:.1f}s "
+                            f"线={_hard_line:.0f}({_hard_src}) "
+                            f"新消息={_new_msgs} 在等={'是' if _addressed else '否'} "
+                            f"| 样本 n={_st.get('n', 0)} p90={_st.get('p90', '-')} "
+                            f"p99={_st.get('p99', '-')}")
                 # ── 回复预算（1.5.9 §B3）──
                 # 240 字截断会产出半句，比长更假，所以超配额时取最短一条。
                 if sent_text and _budget and not _dropped:
