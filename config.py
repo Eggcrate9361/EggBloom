@@ -282,11 +282,20 @@ DEFAULT_CONFIG = {
     "group_recent_msgs_window": 30,
     "group_session_max_replies": 20,
     "group_session_idle_timeout": 300,
-    "group_msg_buffer_window_session": 5,
+    "group_msg_buffer_window_session": 3,
     # ★ 2026-10-23 15 → 8：这个值原来写 15，但整批 8 秒硬顶恒把它压成 8，
     #   于是 15 从来没生效过（第一次等 8 秒，之后每次最多 8 秒）。用户拍板统一为 8，
     #   配置与现实一致。想真的等更久要同时改 GROUP_BATCH_HARD_CAP。
-    "group_msg_buffer_window_trigger": 8,
+    "group_msg_buffer_window_trigger": 2,
+    # 回复预算硬上限（1.5.9 §B3）。档位分布见 reply_budget.py：
+    # A 60% 1 条 ≤8 字 / B 30% 1–2 条 ≤16 字 / C 10% 2–3 条 ≤40 字。
+    # 这里只是兜底，正常情况下档位更严。
+    # 生成完成时距批次第一条超过这个秒数 → 整条丢（1.5.9 §B5）。
+    # 一句 30 秒后才到的回复接的是早就过去的话头，比不回更破坏体感。
+    "reply_stale_drop_sec": 25,
+    "reply_max_chars": 16,
+    "reply_max_parts": 3,
+    "reply_max_total": 80,
     "group_last_exit_cooldown": 3000,
     # 2026-10-25：30 秒太短 —— 实测两次戳相隔 2 分钟，计数都从 1 重来，
     # 用户看到的就是"计数不动"。改为 10 分钟，覆盖正常人连续戳的间隔。

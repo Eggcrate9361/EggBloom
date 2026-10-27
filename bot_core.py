@@ -14,6 +14,7 @@ from socketserver import ThreadingMixIn
 
 import capabilities_view
 import inbound
+import reply_budget
 
 
 class ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
@@ -789,6 +790,11 @@ def _buffer_private_message(sender: str, text: str, images, msg) -> bool:
 GROUP_OBSERVE: Dict[str, Dict[str, Any]] = {}
 GROUP_RECENT_MSGS: Dict[str, List[Tuple]] = {}  # {group_id: [(timestamp, sender, text), ...]}  最近X秒消息缓存
 GROUP_TIMELINE: Dict[str, List[Tuple]] = {}  # {group_id: [(timestamp, sender_id, sender_nick, text), ...]}  全局消息时间线（概率门之前记录）
+#: 官腔判据（1.5.9 §B5）：命中即整条丢，不改文字。
+#: 只收"无论如何都不该由 Bot 说出口"的几句 —— 收窄是为了不误杀。
+_OFFICIAL_RE = re.compile(r"作为\s*AI|作为一个人工智能|希望(对你|可以帮到你)|"
+                          r"综上所述|以上就是|如有(需要|疑问)")
+
 #: 入站内容指纹判重（1.5.9 §B0）：30 秒窗口，同人同内容只算一条
 _INBOUND_DUPE = inbound.DupeGuard(window=30.0)
 GROUP_SUMMARY: Dict[str, str] = {}  # {group_id: str}  群聊历史摘要（超过窗口的旧消息压缩）
@@ -3124,7 +3130,10 @@ def _all_memes(paths) -> bool:
 #    · 8 秒硬顶：只有合并分支有（新建时 first_time == now，硬顶恒不触发，
 #      所以这条只是看起来缺，实际等价）
 #  一条规则只能有一个权威源（10-23 已经吃过一次这个教训），所以抽出来。
-GROUP_BATCH_HARD_CAP = 8        # 整批从第一条算起最多等几秒
+#  ★ 2026-10-27（1.5.9 §B2）：硬顶 8 → 5。实测链路 = 批次等待 + LLM 2–4s +
+#    分条间隔 0.3–1.0s，8 秒等待下首字 11–14 秒，而人类是 2–4 秒。
+#    硬顶压到 5 秒，配合触发档 2 秒，P50 目标 ≤5s。
+GROUP_BATCH_HARD_CAP = 5        # 整批从第一条算起最多等几秒
 GROUP_BARE_IMAGE_DELAY = 4      # 裸图至少等几秒（下载 + 视觉理解要时间）
 #: 被 @/叫名字但还没上下文时等多久的**默认值**（实际取值见 group_msg_buffer_window_trigger）。
 #  ★ 2026-10-23 用户拍板：原写 15，但**从来没生效过** ——
@@ -3133,7 +3142,10 @@ GROUP_BARE_IMAGE_DELAY = 4      # 裸图至少等几秒（下载 + 视觉理解�
 #    现在改成 8，与硬顶对齐，代码不再声称一个不存在的等待时长。
 #    想让它真的等更久，得同时调大 GROUP_BATCH_HARD_CAP —— 但那会让
 #    热闹群里同一个人连发时最多等 15 秒才回，错过对话节奏，所以不选。
-GROUP_TRIGGER_DELAY = 8
+#  ★ 2026-10-27（1.5.9 §B2）：8 → 2。被 @ / 引用我 / 叫名字是最该秒回的场景，
+#    等 8 秒等于错过整句话。代价是可能漏掉对方第二句 —— 真人也漏，
+#    真人的处理是先回「啥」再补，所以这个代价是可接受的。
+GROUP_TRIGGER_DELAY = 2
 
 
 def _delay_cfg(key, default):
@@ -3147,9 +3159,11 @@ def _delay_cfg(key, default):
     if v is None:
         return default
     try:
-        v = int(v)
+        # 1.5.9 §B2：改 float —— 分级目标里有 2.0 / 3.0，int() 会把它们吃成 2 / 3
+        # 并先把 2.5 这类值当非法值退回默认，正好退回旧值。
+        v = float(v)
     except (TypeError, ValueError):
-        log(f"[批次延迟] 配置 {key}={v!r} 不是整数，用默认 {default}s")
+        log(f"[批次延迟] 配置 {key}={v!r} 不是数字，用默认 {default}s")
         return default
     if v <= 0:
         log(f"[批次延迟] 配置 {key}={v} 不是正数，用默认 {default}s")
@@ -3689,11 +3703,12 @@ def _seg_group_rules(is_group):
         "- 多人同时说话时，回复最新的那条，不要试图同时回所有人。\n"
         "- 【说话许可】你可以不给答案：可以吐槽、装傻、说「不知道」「懒得找」。"
         "真人不是有求于人的，不必每句都给解法。接不住的话题宁可顶一句、损一句，"
-        "或者把话拐到自己身上，但**不要用一句反问把它原样退回去**。\n"
+        "或者把话拐到自己身上。\n"
+        # 1.5.9 §B4：「别拿反问续话」原先在这里重复了一遍，
+        # 权威源是【别催人回答】+「一句话最多一个问题」（_seg_take_over）。
+        # 同一条规则留两处，模型会当成两条不同的要求，每条都打折扣。
         "- 【别露后台】别解释你收到的数据、提示或系统计数，别把内部格式抄出来；"
         "也不主动提自己是程序/模型，被直接问是不是 AI 再照人格承认。\n"
-        "- 【别拿反问续话】想接就接，接不住就停；"
-        "别每句都用「你说呢」「要不你…」把话推回去。\n"
         "- 【接得住】对方话里有个前提时，先想那个前提对不对：时间、地点、身份、谁说的、是不是在开玩笑。"
         "前提错就直接指出来（「这才三点」「谁老了」「我什么时候说过」），**不要顺着错的前提往下答**。"
     )
@@ -11122,6 +11137,12 @@ def _pipeline_step(group_id):
         return
     
     merged_text = buffer["text"].strip()
+    # 1.5.9 §B2：时序锚点。batch = 从批次第一条到开始处理（等批时长），
+    # first = 从第一条到首条发出（用户真正感知的延迟）。没有这两个数，
+    # 改完延迟不知道有没有用 —— 只能靠感觉。
+    _seq_first = float(buffer.get("first_time") or time.time())
+    _seq_ready = time.time()
+    _seq_logged = False
     # 用户原文（**不含任何注入块**）：意图类判定（画图/指令）只看它 —— 否则注入的
     # 描述块/提示词会把消息误判成别的意图（实测：描述块命中画图正则 → 劫持去 ComfyUI）。
     _user_text_clean = merged_text
@@ -11136,6 +11157,11 @@ def _pipeline_step(group_id):
     #   两边结论不一致时主模型否决决策器 —— 等于花一次 flash 调用做判断再把结论推翻。
     #   现在决策器放行 = 必须开口，主模型的 [不说话] 只剩兜底（接不住时用）。
     _decider_approved = False
+    #: 本轮回合预算（B3）。只有群聊生成分支会赋值；其余分支保持 None。
+    _budget = None
+    #: 本轮是否丢弃（B5）。函数级默认 False —— meme 那段在发送块外层，
+    #: 只写在块里会在别的路径上 NameError。
+    _dropped = False
     # ★ 本轮的文字是否真的发出去了（2026-10-25）：戳主的追问权只在
     #   发送成功之后才写，skip / observe / 生成为空 / 发送异常都不写。
     _sent_ok = False
@@ -11666,6 +11692,10 @@ def _pipeline_step(group_id):
                     + ("（被点名）" if _extra >= 0.8 else ""))
                 time.sleep(_react)
 
+            # 1.5.9 §B3：本轮回合预算。话术进 user 消息（dynamic），不进静态段 ——
+            # 静态段会打断黄金哈希与前缀缓存。
+            _budget = reply_budget.pick()
+            merged_text_for_ai = f"{merged_text_for_ai}\n[系统提示] {reply_budget.prompt_line(_budget)}"
             _phase_set(group_id, "generating")
             reply = call_deepseek(merged_text_for_ai, images, group_id=group_id, is_group=True, personality_temperature=_ST.get("personality_temperature"), ego_inject_context=_ego_ctx, scene_context=_scene_ctx, sender=sender)
 
@@ -11831,6 +11861,34 @@ def _pipeline_step(group_id):
                 # 于是连续两条消息被覆盖成同一句。这里做**发送前**的最终比对，
                 # 与最近 2 分钟内的已发内容相同就丢掉 —— 插件和模型两侧都拦不住的东西，
                 # 只能在这一层挡。
+                # ── 丢弃（1.5.9 §B5）──
+                # 一句 30 秒后才到的回复接的是早就过去的话头，比不回更破坏体感；
+                # 官腔同理。两种都**整条丢**，不改文字 —— 改出来的残句更像机器。
+                _dropped = False
+                if sent_text:
+                    _age = time.time() - _seq_first
+                    _stale = float(_config.get("reply_stale_drop_sec", 25) or 0)
+                    if _stale > 0 and _age > _stale:
+                        log(f"群[{group_id}] [丢弃:过时 {_age:.1f}s] 本批不发")
+                        _dropped = True
+                    elif _OFFICIAL_RE.search(sent_text):
+                        log(f"群[{group_id}] [丢弃:官腔] {sent_text[:30]}")
+                        _dropped = True
+                # ── 回复预算（1.5.9 §B3）──
+                # 240 字截断会产出半句，比长更假，所以超配额时取最短一条。
+                if sent_text and _budget and not _dropped:
+                    _hard = {
+                        "max_chars": int(_config.get("reply_max_chars", 16) or 16),
+                        "max_parts": int(_config.get("reply_max_parts", 3) or 3),
+                        "max_total": int(_config.get("reply_max_total", 80) or 80),
+                    }
+                    _ok_b, _why_b, _st_b = reply_budget.check(sent_text, _budget, _hard)
+                    if not _ok_b:
+                        log(f"群[{group_id}] [预算] {_why_b} {_st_b}")
+                        sent_text = reply_budget.fit(sent_text, _budget)
+                        log(f"群[{group_id}] [预算] 取最短一条：{sent_text[:30]}")
+                    elif not reply_budget.anchor_ok(sent_text, merged_text):
+                        log(f"群[{group_id}] [预算] 锚点不足（与触发消息无 2-gram 且 <8 字）")
                 # 从这一刻起算"发送中"：去重闸、分条发送、表情包、纯图兜底都在这段里。
                 _phase_set(group_id, "sending")
 
@@ -11843,10 +11901,17 @@ def _pipeline_step(group_id):
                     if _rough(_prev) and _rough(_prev) == _rough(sent_text):
                         _dup = _prev
                         break
-                if _dup:
+                if _dropped:
+                    pass
+                elif _dup:
                     log(f"群[{group_id}] 与 2 分钟内的回复重复，跳过发送: {sent_text[:40]}")
                 elif smart_send_group(group_id, sent_text, reply_id=_quote_id):
                     _sent_ok = True
+                    if not _seq_logged:
+                        _seq_logged = True
+                        log(f"[时序] 群{group_id} batch={_seq_ready - _seq_first:.1f} "
+                            f"gen_send={time.time() - _seq_ready:.1f} "
+                            f"first={time.time() - _seq_first:.1f}s")
                     # 记上引用目标的 id：负数 id 能不能被驱动接受，就看这一行
                     # 之后群里有没有真的出现引用卡片（也便于事后按 id 对账）。
                     log(f"群回复{'(引用 id=' + str(_quote_id) + ')' if _quote_id else ''}: {sent_text[:60]}")
@@ -11855,7 +11920,7 @@ def _pipeline_step(group_id):
                 log(f"群[{group_id}] 仅表情标记，跳过文本发送")
 
             # 表情包附着：AI 标注了 [表情] 或自动检测到情绪时发一张
-            meme_file = try_send_meme(group_id, reply)
+            meme_file = None if _dropped else try_send_meme(group_id, reply)
             # 图发出去了也算"回应过了"：模型只回一个 [表情:xx] 时没有文字，
             # 但对方确实收到了反应 —— 追问权不能因为"没文本"就不给。
             if meme_file:

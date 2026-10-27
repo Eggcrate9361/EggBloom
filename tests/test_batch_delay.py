@@ -37,6 +37,12 @@ def check(name, cond, why=""):
 
 d = bot_core._batch_delay
 
+# ★ 测试固定 1.5.9 §B2 的分级默认值：不依赖本机 bot_config.json ——
+#   否则同一份测试在不同机器上期望值不同（实测本机配置 5/8 与默认 3/2 不一致）。
+bot_core._config["group_msg_buffer_window"] = 3
+bot_core._config["group_msg_buffer_window_session"] = 3
+bot_core._config["group_msg_buffer_window_trigger"] = 2
+
 
 def mk(**kw):
     base = dict(same_sender=False, in_session=False,
@@ -48,9 +54,9 @@ def mk(**kw):
 
 # ── 1. 基本档位 ──────────────────────────────────────────────
 check("普通消息等 3 秒", mk() == 3, f"实际={mk()}")
-check("同人续发等 5 秒", mk(same_sender=True) == 5)
-check("会话模式等 5 秒", mk(in_session=True) == 5)
-check("同人优先于会话", mk(same_sender=True, in_session=True) == 5)
+check("同人续发等 3 秒", mk(same_sender=True) == 3)
+check("会话模式等 3 秒", mk(in_session=True) == 3)
+check("同人优先于会话（同档）", mk(same_sender=True, in_session=True) == 3)
 
 # 触发但已有上下文：不该再等（他在说事，不是在等 @）
 check("触发但已有上下文 → 3 秒",
@@ -71,9 +77,9 @@ check("触发 + 硬顶不冲突",
 check("新建批次 + 裸图 → 至少 4 秒",
       mk(has_bare_image=True, first_time=0, now=0) >= 4,
       "★ 原代码只在合并分支应用这条，新建批次（本批第一条就是图）没等")
-check("合并 + 同人 + 裸图 → 5 秒（不降级）",
-      mk(same_sender=True, has_bare_image=True) == 5,
-      "同人本来等 5 秒，比 4 秒长，不该被压下来")
+check("合并 + 同人 + 裸图 → 4 秒（裸图下限）",
+      mk(same_sender=True, has_bare_image=True) == 4,
+      "同人 3 秒比裸图 4 秒短，取 4")
 check("合并 + 换人 + 裸图 → 4 秒",
       mk(has_bare_image=True) == 4)
 check("非裸图不受 4 秒影响", mk(has_bare_image=False) == 3)
@@ -83,13 +89,13 @@ check("非裸图不受 4 秒影响", mk(has_bare_image=False) == 3)
 check("硬顶：批内第 7 秒只剩 1 秒",
       mk(same_sender=True, has_context=True, first_time=0, now=7) == 1,
       "15 秒硬顶不成立，8 秒到点必须收")
-check("硬顶：批内第 3 秒剩 5 秒",
-      mk(same_sender=True, has_context=True, first_time=0, now=3) == 5)
+check("硬顶：批内第 3 秒剩 2 秒",
+      mk(same_sender=True, has_context=True, first_time=0, now=3) == 2)
 check("硬顶保底 1 秒，不会归零或负数",
       mk(same_sender=True, has_context=True, first_time=0, now=100) == 1,
       "归零会让 Timer 立刻触发，等于不合并")
 check("无 first_time 时不设硬顶",
-      mk(same_sender=True, has_context=True, first_time=None) == 5)
+      mk(same_sender=True, has_context=True, first_time=None) == 3)
 
 
 # ── 5. 新建批次这一侧的两条不变量 ───────────────────────────
@@ -118,7 +124,10 @@ check("新建批次不适用同人规则",
 vals = [mk(same_sender=True), mk(has_bare_image=True), mk(triggered=True),
         mk(first_time=0, now=99)]
 check("全部为正数", all(v > 0 for v in vals), f"实际={vals}")
-check("全部是整数秒", all(isinstance(v, int) for v in vals), f"实际={vals}")
+# 1.5.9 §B2：分级目标里有 2.0 / 3.0，返回值改 float。锁「正数且不超过硬顶」这条不变量，
+# 而不是锁类型 —— 类型不是行为。
+check("全部不超过硬顶", all(v <= bot_core.GROUP_BATCH_HARD_CAP for v in vals), f"实际={vals}")
+check("全部是数字", all(isinstance(v, (int, float)) for v in vals), f"实际={vals}")
 
 
 # ── 7. deadline 与定时器同源（本轮修的核心）──────────────────
@@ -146,9 +155,9 @@ check("裸图 deadline 晚于旧 3 秒窗口",
       "★ 旧 merge_window=3 < delay=4，窗口先到期 → 本该等 4 秒的批次 3 秒就被结算")
 
 # 硬顶必须在 deadline 上也生效（不能只有定时器受硬顶约束）
-check("deadline 受 8 秒硬顶约束",
-      dl(now=7, first_time=0, **dict(base7, same_sender=True)) == 8,
-      "第 7 秒又来一条同人消息：delay 本要 5 秒，硬顶后只剩 1 秒，deadline=8")
+check("deadline 受 5 秒硬顶约束",
+      dl(now=3, first_time=0, **dict(base7, same_sender=True)) == 5,
+      "第 3 秒又来一条同人消息：delay 本要 3 秒（到 6），硬顶压到 5")
 
 # first_time 必传：传错就等于换了批次，界面上不会有任何提示，所以只允许显式传
 try:
@@ -171,10 +180,10 @@ try:
           "设成 9 就应得 9，得 3 说明没读配置")
     _cfg["group_msg_buffer_window_session"] = 7
     check("同人档读 group_msg_buffer_window_session",
-          d(now=0, first_time=0, **dict(base7, same_sender=True)) == 7)
+          d(now=0, first_time=None, **dict(base7, same_sender=True)) == 7)
     _cfg["group_msg_buffer_window_trigger"] = 6
     check("触发档读 group_msg_buffer_window_trigger",
-          d(now=0, first_time=0, **dict(base7, triggered=True)) == 6)
+          d(now=0, first_time=None, **dict(base7, triggered=True)) == 6)
 finally:
     for k, v in _saved.items():
         if v is None:

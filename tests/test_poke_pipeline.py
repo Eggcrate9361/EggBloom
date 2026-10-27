@@ -182,7 +182,8 @@ def test_poke_event_name_appears_once():
         buf = bot_core.GROUP_MSG_BUFFER.get(GID) or {}
         txt = str(buf.get("text") or "")
         check("名字只出现一次", txt.count("小明") == 1, txt)
-        check("文本以群名片开头", txt.startswith("[小明] （戳了戳你"), txt)
+        check("文本以群名片开头（带 4 位锚）",
+              txt.startswith("[小明·") and "（戳了戳你" in txt, txt)
         check("没有括号叠括号", "][ " not in txt and "]] （" not in txt, txt)
     finally:
         bot_core._send_poke_back = orig[0]

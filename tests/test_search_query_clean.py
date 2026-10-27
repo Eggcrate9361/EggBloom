@@ -91,8 +91,10 @@ def main():
 
     print("\n[7] 主链没被改（前缀仍要给主模型看）")
     bc = open(os.path.join(ROOT, "bot_core.py"), encoding="utf-8").read()
-    check("buffer_text 仍加 [昵称] 前缀给主模型",
-          'f"[{_display_name(sender, group_id)}] {text}"' in bc,
+    # 1.5.9 §B1：前缀从 `[昵称]` 换成 `[昵称·4位锚]`，判据是"每条都带前缀"，
+    # 不是"前缀长什么样"。锚的作用是改名不变、跨群稳定。
+    check("buffer_text 仍给每条加说话人前缀",
+          '_speaker_tag(sender, group_id)' in bc and '[{_tag}] {text}' in bc,
           "删了前缀主模型就分不清谁在说话")
 
     print("\n" + "=" * 56)
