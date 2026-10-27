@@ -627,10 +627,23 @@ def _vault_file():
 
 
 def _resolve_date_targets(message):
-    """从问句里解析要查的日期 → ['YYYY-MM-DD', ...]。只认第一个命中的表达。"""
+    """从问句里解析要查的日期 → ['YYYY-MM-DD', ...]。
+
+    ★ 2026-10-27 扩口语相对时间。
+      原表只认 `前天/昨天/今天`，而真人问法多半是：
+        「我一天前说过什么」「前天晚上」「上周三」「大前天」
+      真机（18:55）用户问「我一天前说过什么」→ 解析不出日期 →
+      `recall_by_date` 返回空 → 机器人答「记不住，我又不是录音机」。
+      —— 明明有 `recall_by_date` 这个能力，只是没被触发。
+
+    相对时间按**关键词出现顺序**都收，不再只取第一个 ——
+    「昨天和前天都说了啥」要查两天。
+    """
     if not message:
         return []
     now = datetime.now()
+    out = []
+    # 1. 绝对日期（优先，精度最高）
     m = re.search(r"(\d{4})\s*[-/年]\s*(\d{1,2})\s*[-/月]\s*(\d{1,2})", message)
     if m:
         y, mo, d = (int(x) for x in m.groups())
@@ -642,10 +655,65 @@ def _resolve_date_targets(message):
         if 1 <= mo <= 12 and 1 <= d <= 31:
             y = now.year if (mo, d) <= (now.month, now.day) else now.year - 1
             return ["%04d-%02d-%02d" % (y, mo, d)]
-    for kw, back in (("前天", 2), ("昨天", 1), ("今天", 0)):
-        if kw in message:
-            return [(now - timedelta(days=back)).strftime("%Y-%m-%d")]
-    return []
+
+    # 2. 相对时间（口语）。按关键词在句中出现的顺序收集。
+    #    长词优先匹配，避免「前天」被「天前」抢走。
+    _REL = (
+        ("大前天", 3), ("前天", 2), ("昨天", 1), ("今天", 0), ("今早", 0),
+        ("昨晚", 1), ("前晚", 2), ("上上周", 14), ("上周", 7),
+        ("上个月", 30),
+    )
+    hits = []
+    # ── 2a. 「N天前 / N天以前」，N 支持阿拉伯数字与中文数字 ──
+    #    「我一天前说过什么」是真人最常见的问法，原表只认「昨天」，
+    #    于是解析不出 → 召回为空 → 机器人答「记不住」。
+    _CN_NUM = {"一": 1, "两": 2, "二": 2, "三": 3, "四": 4, "五": 5,
+               "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
+    for m in re.finditer(r"(\d+|[一两二三四五六七八九十])\s*天\s*(?:前|以前|之前)",
+                         message):
+        _tok = m.group(1)
+        _n = int(_tok) if _tok.isdigit() else _CN_NUM.get(_tok, 0)
+        if _n > 0:
+            hits.append((m.start(), _n))
+    # ── 2b. 星期几（带/不带"周"）──
+    _WD = {"一": 0, "二": 1, "三": 2, "四": 3, "五": 4, "六": 5, "日": 6, "天": 6}
+    _week_hit = False
+    for m in re.finditer(r"(上上?个?周|这周|本周|上星期|这星期)\s*([一二三四五六日天])",
+                         message):
+        base = m.group(1)
+        wd = _WD.get(m.group(2), 0)
+        today_wd = now.weekday()
+        if base.startswith("上上"):
+            back = today_wd - wd + 14
+        elif base.startswith("上"):
+            back = today_wd - wd + 7
+        else:
+            back = today_wd - wd
+        hits.append((m.start(), max(0, back)))
+        _week_hit = True
+    # ── 2c. 粗粒度关键词 ──
+    for kw, back in _REL:
+        pos = message.find(kw)
+        if pos < 0:
+            continue
+        # 「上周三」已经被星期几那条覆盖 → 别再加「上周」的粗粒度 7 天前
+        if kw == "上周" and _week_hit:
+            continue
+        if kw == "上上周" and _week_hit:
+            continue
+        # 「大前天」里含「前天」→ 别再额外加一天
+        if kw == "前天" and "大前天" in message:
+            continue
+        hits.append((pos, back))
+    if hits:
+        hits.sort()
+        seen = set()
+        for _pos, back in hits:
+            d = (now - timedelta(days=back)).strftime("%Y-%m-%d")
+            if d not in seen:
+                seen.add(d)
+                out.append(d)
+    return out[:3]      # 最多查 3 天，再多会把 prompt 撑爆
 
 
 def recall_by_date(message, limit=12):

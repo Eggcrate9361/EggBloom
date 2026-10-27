@@ -184,7 +184,27 @@ def collect(message, scope="group", scope_id="", ctx=None, sources=("sand", "sm"
 
 
 def build_block(message, scope="group", scope_id="", ctx=None, sources=("sand", "sm")):
-    """产出一个包装块字符串；无可注入条目 → ""（零成本）。"""
+    """产出一个包装块字符串；无可注入条目 → ""（零成本）。
+
+    ★ 2026-10-27 加**日期类召回**：问句里出现日期表达时，
+      语义检索是瞎的（"我一天前说过什么"的向量跟任何具体内容都不像），
+      必须按时间戳取。`sandglass_bridge.recall_by_date` 早就有这个能力，
+      但它只接在私聊的 `get_memory_prompt_block` 上 —— 群聊走的是本函数，
+      于是群聊问「昨天/一天前说过什么」永远是"记不住"。
+
+      真机（18:55）：用户 @Bot 问「我一天前说过什么」→ 答「记不住，我又不是录音机」。
+      数据在沙漏里（10-27 有 874 条），是**查不到**不是**没有**。
+    """
+    # ① 日期类召回（先做：它是"确定性命中"，语义检索给不了）
+    _bydate = ""
+    try:
+        import sandglass_bridge as _sb
+        _bydate = _sb.recall_by_date(message) or ""
+    except Exception:
+        _bydate = ""
+    if _bydate:
+        return _HEAD + "\n" + _bydate
+    # ② 常规语义召回
     items = collect(message, scope=scope, scope_id=scope_id, ctx=ctx, sources=sources)
     if not items:
         return ""
