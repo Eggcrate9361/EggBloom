@@ -4344,8 +4344,42 @@ def cq_image_urls(text: str) -> List[str]:
     return out
 
 
+def _dedup_tool_calls(tool_calls):
+    """同一轮里 (name, arguments) 完全相同的调用只留第一个。
+
+    实测（2026-10-27 真机）：模型连着三轮返回 `['search_web', 'search_web']`，
+    同一个查询执行两次 —— 一倍时间、一倍搜索请求、两份重复结果塞进上下文。
+    参数不同的并行调用照常保留（那是合法的并行）。
+    """
+    seen, out = set(), []
+    for _tc in (tool_calls or []):
+        _fn = _tc.get("function") or {}
+        _sig = (_fn.get("name"), str(_fn.get("arguments") or ""))
+        if _sig in seen:
+            continue
+        seen.add(_sig)
+        out.append(_tc)
+    return out
+
+
+def _clean_url(url: str) -> str:
+    """还原 CQ 码 URL 里的 XML 实体。
+
+    实测（2026-10-27 真机）：引用消息的图片 URL 是
+        .../download?appid=1407&amp;fileid=EhT...
+    直接请求 → HTTP 400，因为 `fileid` 变成了 `amp;fileid`。
+    这类实体来自 CQ 码的 XML 转义，下载前必须还原。
+    """
+    u = str(url or "").strip()
+    for a, b in (("&amp;", "&"), ("&#38;", "&"), ("&#x26;", "&"),
+                 ("&quot;", '"'), ("&#39;", "'")):
+        u = u.replace(a, b)
+    return u
+
+
 def download_image_url(url: str):
     """下载一张图到 IMAGE_CACHE（与 extract_images 同一落盘约定），返回本地路径或 None。"""
+    url = _clean_url(url)
     if not url or not str(url).startswith("http"):
         return None
     try:
