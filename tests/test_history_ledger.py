@@ -54,6 +54,22 @@ def _summary_of(messages):
 
 
 def main():
+    # ★ 2026-10-27：默认近轮数从 4 降到 2（1.5.9 §C.3.5，键 history_recent_turns）。
+    #   这个文件测的是**账本机制**（前缀逐字节稳定、断代重建、不重复入账），
+    #   它的断言数字（账本 4 行、最后 8 条原文）依赖轮数 ——
+    #   显式配 4，把"轮数"从"账本行为"的测试里摘出去。
+    _old_turns = bot_core._config.get("history_recent_turns")
+    bot_core._config["history_recent_turns"] = 4
+    try:
+        _run()
+    finally:
+        if _old_turns is None:
+            bot_core._config.pop("history_recent_turns", None)
+        else:
+            bot_core._config["history_recent_turns"] = _old_turns
+
+
+def _run():
     key = "g_ledger_test"
     for d in (bot_core._HISTORY_SUMMARY_LINES, bot_core._HISTORY_LAST_WINDOW,
               bot_core._HISTORY_SUMMARY_TEXT):

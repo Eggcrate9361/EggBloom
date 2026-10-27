@@ -9505,12 +9505,21 @@ def _build_cached_messages(history: List[Dict], cache_key: str,
       （实测命中额钉死 ~3200）。账本模式下每条历史只入账一次、行永不
       清除/重排，窗口滑动只是尾部追加 → 命中区从 3.2K 扩到"static+全部摘要"。
     """
-    RECENT_TURNS = 4  # 最近几轮保留原文（变化部分）
-    # ★ 2026-10-21 修：下面三处切片用的都是"条数"，而 history 是
-    #   [user, assistant, user, assistant…] —— 直接切 4 条其实只有 **2 轮**原文，
-    #   其余全被压成摘要行。变量名/注释说 4 轮，行为是 2 轮，属名实不符。
-    #   一轮=两条，所以这里显式换算；成本靠"有界窗口 + 摘要"控制，
-    #   不靠少给原文来省（结构优化，不是使用降级）。
+    # 最近几轮保留原文（其余压成摘要账本）
+    # ★ 2026-10-27 改成可配，默认 2 轮（1.5.9 §C.3.5）：
+    #   方案要求历史原文 4 轮 → 2 轮。这里原来是硬编码 4 轮。
+    #   单位是**轮**，不是条数 —— history 是 [user, assistant, user, assistant…]，
+    #   一轮两条，所以下面要 ×2 换成条数。
+    #   成本靠"有界窗口 + 摘要账本"控制：轮数越少，后面那段的缓存命中率越高
+    #   （每轮都变 → 排在它后面的块永远不可命中）。
+    try:
+        # ★ 不能用 `or 2`：配 0（全部压成摘要）时 0 是 falsy → `0 or 2` = 2，
+        #   "配了就等于没配"。要显式判 None。
+        _rt = _config.get("history_recent_turns", 2)
+        RECENT_TURNS = 2 if _rt is None else int(_rt)
+    except (TypeError, ValueError):
+        RECENT_TURNS = 2
+    RECENT_TURNS = max(0, min(8, RECENT_TURNS))   # 0=全压成摘要；封顶防手滑
     _RECENT_ENTRIES = RECENT_TURNS * 2
     #: 自己说过的话放宽到 100 字（立场句通常在开头，30/60 字会被砍掉）
     _OWN_LIMIT = 100
@@ -9526,7 +9535,11 @@ def _build_cached_messages(history: List[Dict], cache_key: str,
 
     # 历史处理：旧轮次进 append-only 摘要账本，最近几轮保留原文
     if len(history) > _RECENT_ENTRIES:
-        old = history[:-_RECENT_ENTRIES]
+        # ★ 用显式下标，不用 history[:-N]：
+        #   N=0 时 `[:-0]` 等于 `[:0]` → 空列表（不是"去掉最后 0 个"），
+        #   同理 `[-0:]` 等于 `[0:]` → 全部。
+        #   近轮数允许配到 0（全部压成摘要），这两个坑会直接让历史丢失。
+        old = history[:len(history) - _RECENT_ENTRIES]
 
         _limit = 40   # 别人的话：一行 40 字（摘要用，够看出在聊什么）
         _own_limit = _OWN_LIMIT   # 自己的话：100 字（立场/态度要能对上）
@@ -9610,7 +9623,7 @@ def _build_cached_messages(history: List[Dict], cache_key: str,
     #   注意截断**不能改变角色顺序**，也不能把 assistant/user 配错 —— 所以只截内容，
     #   不删中间条目。
     if len(history) > _RECENT_ENTRIES:
-        _recent = history[-_RECENT_ENTRIES:]
+        _recent = history[len(history) - _RECENT_ENTRIES:]
     else:
         _recent = history
 

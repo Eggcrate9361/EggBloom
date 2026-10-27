@@ -311,6 +311,10 @@ DEFAULT_CONFIG = {
     #   → 「凡搜索必丢」。阈值不是误伤，是把搜索链整体判死。
     #   判据改为"没人说话就不算过时"，线交给分布，不再拍数字。
     "reply_stale_drop_sec": None,
+    # 最近几轮保留原文（其余压成摘要账本）。单位=轮。
+    # 1.5.9 §C.3.5：4 轮 → 2 轮。近轮每轮都变，排在它后面的块永远不可命中，
+    # 少一轮就多一段能吃到缓存的静态前缀。
+    "history_recent_turns": 2,
     "reply_max_chars": 16,
     "reply_max_parts": 3,
     "reply_max_total": 80,

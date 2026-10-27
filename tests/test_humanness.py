@@ -187,14 +187,20 @@ class TestLedgerRole(unittest.TestCase):
 
 
 class TestRecentTurns(unittest.TestCase):
-    """RECENT_TURNS=4 必须真的是 4 轮（8 条），不是 4 条（2 轮）。
+    """配 N 轮就必须真的有 N 轮（2N 条）原文，不是 N 条（N/2 轮）。
 
     2026-10-21 修：原实现直接拿 4 去切 messages 列表，而列表是一问一答交替的
     → 实际只有 2 轮原文，其余全被压成摘要行。
+
+    ★ 2026-10-27：默认轮数从 4 降到 2（1.5.9 §C.3.5，键 history_recent_turns），
+      所以这里**显式配 4** 来测换算 —— 本意是"轮数与条数换算对不对"，
+      不该跟着默认值变。
     """
 
     def setUp(self):
         self.key = "g_recent_test"
+        self._old_turns = bc._config.get("history_recent_turns")
+        bc._config["history_recent_turns"] = 4
         hist = []
         for i in range(10):
             hist.append({"role": "user", "content": f"[小明(10001)] 问{i}"})
@@ -204,9 +210,14 @@ class TestRecentTurns(unittest.TestCase):
                   bc._HISTORY_LAST_WINDOW):
             d.pop(self.key, None)
 
-    tearDown = lambda self: [d.pop(self.key, None) for d in
-                             (bc._HISTORY_SUMMARY_LINES, bc._HISTORY_SUMMARY_TEXT,
-                              bc._HISTORY_LAST_WINDOW)]
+    def tearDown(self):
+        for d in (bc._HISTORY_SUMMARY_LINES, bc._HISTORY_SUMMARY_TEXT,
+                  bc._HISTORY_LAST_WINDOW):
+            d.pop(self.key, None)
+        if self._old_turns is None:
+            bc._config.pop("history_recent_turns", None)
+        else:
+            bc._config["history_recent_turns"] = self._old_turns
 
     def test_eight_entries_keep_verbatim(self):
         msgs = bc._build_cached_messages(self.hist, self.key, "SYS", [], "现在")
