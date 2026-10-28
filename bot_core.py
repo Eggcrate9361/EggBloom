@@ -895,17 +895,61 @@ _SPEAK_WIN_SEC = 1800
 _INBOUND_DUPE = inbound.DupeGuard(window=1.0)
 
 
-def _speak_note(group_id, kind: str):
-    """记一次入站（in）或出站（out），返回 30 分钟窗口内的 (in, out)。"""
+#: 连说计数（1.5.9 §3.8 提交 6）：{gid: n}。有人说话即清零。
+#: 只在这里维护，读的人走 `_speak_stats()`；别再从时间戳里反推"谁先说"——
+#: in/out 两个列表的先后关系在合并后就丢了。
+_CONSEC_REPLY: Dict[str, int] = {}
+
+
+def _speak_note(group_id, kind: str, forced: bool = False):
+    """记一次入站（in）或出站（out），返回窗口内的 (in, out)。
+
+    `forced`：这条回复是不是"被点名"换来的（@ / 叫小a / 引用 / 戳）。
+    ★ 2026-10-28 真机回放补的参数：发言率上限算的是**主动插话**的比例，
+      被点名答话不该占这份额度 —— 否则群里喊它 10 次，它就把后面闲聊的额度用光了。
+
+    ★ 2026-10-28（提交 6）：窗口从硬编码 30 分钟改成读 `speak_rate_window_min`，
+      并维护"连续说了几条"。1.5.9 之前这里**只记不改**，现在给 `speak_gate`
+      当频控输入 —— 数据口径必须和配置一致，否则调窗口等于没调。
+    """
     gid = str(group_id or "")
     if not gid or kind not in ("in", "out"):
         return (0, 0)
     now = time.time()
+    try:
+        win = float(_config.get("speak_rate_window_min", 30) or 30) * 60.0
+    except (TypeError, ValueError):
+        win = _SPEAK_WIN_SEC
     with _SPEAK_LOCK:
         rec = _SPEAK_WINDOW.setdefault(gid, {"in": [], "out": []})
-        rec[kind] = [t for t in rec[kind] if now - t < _SPEAK_WIN_SEC]
+        rec[kind] = [t for t in rec[kind] if now - t < win]
         rec[kind].append(now)
+        if kind == "in":
+            _CONSEC_REPLY[gid] = 0
+        else:
+            _CONSEC_REPLY[gid] = int(_CONSEC_REPLY.get(gid) or 0) + 1
+            if forced:
+                rec["out_forced"] = [t for t in rec.get("out_forced", []) if now - t < win]
+                rec["out_forced"].append(now)
         return (len(rec["in"]), len(rec["out"]))
+
+
+def _speak_stats(group_id) -> Dict[str, Any]:
+    """发言闸的输入：窗口内 (in, out)、连说条数、上次开口距今秒数（只读）。"""
+    gid = str(group_id or "")
+    with _SPEAK_LOCK:
+        rec = _SPEAK_WINDOW.get(gid) or {"in": [], "out": []}
+        n_in = len(rec.get("in") or [])
+        n_out_all = len(rec.get("out") or [])
+        n_forced = len(rec.get("out_forced") or [])
+        # 发言率只看**主动插话**：被点名答话不占额度（真机回放发现 33% 的窗口
+        # 是被"喊它"的回复把比例顶上去的，结果闲聊全被锁死）
+        n_out = max(0, n_out_all - n_forced)
+        consec = int(_CONSEC_REPLY.get(gid) or 0)
+    last = GROUP_LAST_BOT_MSG.get(gid)
+    ago = -1.0 if not last else round(max(0.0, time.time() - float(last)), 1)
+    return {"in": n_in, "out": n_out, "out_all": n_out_all,
+            "forced_out": n_forced, "consecutive": consec, "last_out_ago": ago}
 GROUP_SUMMARY: Dict[str, str] = {}  # {group_id: str}  群聊历史摘要（超过窗口的旧消息压缩）
 _GROUP_SUMMARY_PREV: Dict[str, str] = {}  # {group_id: str}  上上次摘要（E 三段式拼接用，保留主题锚）
 _GROUP_SUMMARY_AT: Dict[str, float] = {}  # {group_id: last_summary_ts}  摘要刷新节流（T2）
@@ -3050,13 +3094,16 @@ def send_group_image(group_id, file_path):
                 pass
 
 
-def try_send_meme(group_id, reply_text):
+def try_send_meme(group_id, reply_text, prob_bonus=0.0):
     """
     尝试匹配并发送表情包。
     优先级：
     1. [表情:xxx] → 精确匹配
     2. [表情] → 自动检测情绪
     3. 自动检测（低阈值兜底）
+    prob_bonus：没有检测到情绪时的**概率性兜底**（1.5.9 §C.1/#4）。
+    情绪形式参数里的 emoji_bonus 与 persona_warmth 都从这里落地 ——
+    原来这两个数是死字段，谁也不读。
     返回实际发送的表情文件 basename，未发送返回 None。
     """
     if not _config.get("meme_enable", True):
@@ -3098,6 +3145,17 @@ def try_send_meme(group_id, reply_text):
                                 break
             except Exception:
                 pass
+        if emotion is None and prob_bonus > 0:
+            # 情绪形式参数的落地口：兴奋/亲近度越高，越会在"没情绪"时也甩一张。
+            # 概率封顶 0.6 —— 表情包是调味，不是主菜。
+            _p = min(0.6, float(prob_bonus))
+            try:
+                _hit = random.random() < _p
+            except Exception:
+                _hit = False
+            if _hit:
+                emotion = random.choice(_MEME_BACK_EMOTIONS)
+                log(f"[表情] 概率加成命中（{_p:.2f}）→ {emotion}")
         if emotion is None:
             log("[表情] 无情绪，跳过")
             return None
@@ -7833,6 +7891,41 @@ def _friend_restriction(qq, key, default=None):
     return default
 
 
+def _qq_of(uid) -> str:
+    """把 UID 形态收敛成数字 QQ 号；取不到返回空串。
+
+    可能收到三种形态：
+      · `123456`            数字 QQ（NapCat / SnowLuma 常态）
+      · `昵称(123456)`      日志或部分驱动带出来的展示形态
+      · `u_xxxx`            NT 协议的随机 UID —— 取不到 QQ 号，返回空串
+                            （比"猜成列表第一人"安全：猜错就是把陌生人的回复
+                             发进主人私聊，还会白烧 token）
+    """
+    s = str(uid or "").strip()
+    if not s or s.startswith("u_"):
+        return ""
+    m = re.search(r"\((\d{5,})\)", s)
+    if m:
+        s = m.group(1)
+    return s if s.isdigit() else ""
+
+
+def _private_allowed(qq) -> bool:
+    """私聊名单判定（`target_qqs`）—— 私聊消息与私聊戳一戳共用同一条门槛。
+
+    2026-10-28：此前只有**私聊消息**过这道门，`_handle_poke_event` 的私聊分支
+    完全没判 —— 任何陌生人都能靠戳一戳叫出 AI 回复（真机 00:08 实测：
+    非名单用户 poke → 回复 + 反戳 + 表情包，全流程走完）。
+    """
+    num = _qq_of(qq)
+    if not num:
+        return False
+    try:
+        return num in {str(x).strip() for x in (TARGET_QQS or [])}
+    except Exception:
+        return False
+
+
 def _set_friend_restrictions(qq, **kw):
     """更新某好友限制配置并落盘 + 热重载（免重启生效）。"""
     qq = str(qq)
@@ -8257,14 +8350,20 @@ def _handle_poke_event(ev):
             log(f"[事件] 戳一戳忽略: 目标非 Bot (target={_poke_target}) user={poke_uid}")
             return
     log(f"[事件] 戳一戳: user_id={poke_uid} group_id={poke_gid or '私聊'}")
-    # 反戳：先戳回去，让对方知道 Bot 反应了
-    _send_poke_back(poke_uid, poke_gid)
     if poke_gid:
         # 群戳一戳 → 进群回复流水线（2026-10-25）。
         # 旧版这里自己拼 prompt、同步调模型、发送、再发一张表情包，全程不碰
         # 缓冲区 —— 同一秒内"戳 + 消息"会并行生成两条；主循环还被这 9 秒占住
         # （真机 17:05:22→17:05:31），事件收取跟着滞后。
         # 现在只做两件事：记一次计数（分级文案用）、把"被戳"当成一条入站事件。
+        #
+        # ★ 2026-10-28：这条入口此前绕开了消息路径的 `_group_allowed`，
+        #   不在群名单里的群戳一下照样进流水线。补上，判定点仍是那一个函数。
+        if not _group_allowed(poke_gid):
+            _notice_group_blocked(str(poke_gid), _group_block_reason(str(poke_gid)))
+            return
+        # 反戳：先戳回去，让对方知道 Bot 反应了
+        _send_poke_back(poke_uid, poke_gid)
         gid_str = str(poke_gid)
         # 戳一戳计数（同一人同一群，poke_timeout 内累计）
         _poke_key = f"{gid_str}_{poke_uid}"
@@ -8290,15 +8389,23 @@ def _handle_poke_event(ev):
             forced=False, source="poke", poke_uid=poke_uid)
     else:
         # 私聊戳一戳
-        # poke_uid 可能是 NT UID（u_xxx），需要转成 QQ 号
-        if poke_uid.startswith("u_"):
-            poke_qq = TARGET_QQS[0] if TARGET_QQS else ""
-        else:
-            poke_qq = poke_uid
+        # ★ 2026-10-28：先过私聊名单（与私聊消息同一条门槛），再谈反戳。
+        #   反戳也是回应：名单外的人连"Bot 在线"都不该被确认。
+        #   旧版这里是 `u_xxx → TARGET_QQS[0]` 的兜底，等于把陌生人的戳
+        #   记到主人头上，回复也发进主人私聊 —— 已删。
+        poke_qq = _qq_of(poke_uid)
+        if not _private_allowed(poke_qq):
+            log(f"[事件] 私聊戳一戳忽略: 不在私聊名单 user={poke_uid}")
+            return
+        if _friend_restriction(poke_qq, "reply_enabled", True) is False:
+            log(f"[事件] 私聊戳一戳忽略: 好友自动回复已关闭 user={poke_qq}")
+            return
+        # 名单内才反戳
+        _send_poke_back(poke_qq, None)
         # 戳一戳 = 主动互动，登记私聊活跃会话（撤回反馈门槛）
         try:
             with _session_lock:
-                if poke_qq and not poke_uid.startswith("u_"):
+                if poke_qq:
                     PRIVATE_SESSION[poke_qq] = {"last_msg_time": time.time()}
         except Exception:
             pass
@@ -8785,18 +8892,20 @@ def _do_group_admin(action, *, target="", value="", sender="", group_id="",
             if _now == value:
                 return (True, _ADMIN_LABELS.get(action, "办了"))
             # ★ 没生效 —— 说清原因，别只说"没改成"（2026-10-27）
-            #   真机：set_group_name 返回 retcode=0 但群名没变（QQ 侧拒绝）。
-            #   原因多半是身份不够：bot 是 admin 不是 owner。
-            #   查一次自己的角色，把"为什么不行"说清楚，
-            #   否则用户只能自己去猜。
+            #   只有**普通成员**身份才谈得上权限不够（QQ 规则：
+            #   群主和管理员都能改群名）。
+            #   ★ 修正：原先这里写的是"我不是群主，QQ 那边不让改，得群主来"，
+            #     对 admin 也这么说 —— 那是从一次**错误实测**得出的
+            #     （读群名没带 no_cache，读到旧缓存 → 误判成没生效）。
+            #     把错误原因说给用户，比不说更糟。
             _role = ""
             try:
                 _role = _bot_group_role(str(gid))
             except Exception:
                 _role = ""
-            if _role and _role != "owner":
+            if _role and _role not in ("owner", "admin"):
                 return (False, f"没改成，现在这群还叫「{_now}」"
-                               f"（我不是群主，QQ 那边不让改，得群主来）")
+                               f"（我在群里只是普通成员，QQ 不让改）")
             return (False, f"没改成，现在这群还叫「{_now}」")
         # 回读失败（网络/接口问题）——不能因此说成功
         return (False, f"{_ADMIN_LABELS.get(action, '操作')}的返回是成功了，"
@@ -9002,6 +9111,31 @@ def _mark_ai_timeout(flag: bool) -> None:
         pass
 
 
+def _mark_ai_error(err: str = "") -> None:
+    """记下"这次为什么没结果"里的**异常**分支（2026-10-28）。
+
+    此前 worker 捕获异常后把 result 置 None 并 set()，等待方看到的是
+    "正常取回一个 None"，于是 `_mark_ai_timeout(False)`，上层打印
+    「AI决定不回复: (空)」—— **崩溃被完整伪装成模型主动沉默**。
+    真机表现：群里连着三条被 @ 提问全都没回，日志只写"不回复"，
+    排查方向直接跑偏到决策器/闸门上去。
+    """
+    try:
+        # 空串是**合法值**（= 本轮没有异常），不能写成 `err or "unknown"`——
+        # 那会让每一轮正常取回都被判成崩溃（被本文件的回归测试当场抓到）。
+        _ai_timeout_flag.error = str(err or "")
+    except Exception:
+        pass
+
+
+def _ai_error() -> str:
+    """本线程最近一次 AI 调用的异常信息（空串 = 没有异常）。"""
+    try:
+        return str(getattr(_ai_timeout_flag, "error", "") or "")
+    except Exception:
+        return ""
+
+
 def _ai_timed_out() -> bool:
     """本线程最近一次 call_deepseek 是否以**超时**结束（而不是模型决定不回）。"""
     return bool(getattr(_ai_timeout_flag, "timed_out", False))
@@ -9050,6 +9184,9 @@ def _ai_worker() -> None:
                 entry = _ai_results.get(task_id)
                 if entry:
                     entry["result"] = None
+                    # ★ 2026-10-28：把异常本身带给等待方，别让上层把它
+                    #   当成"模型决定不回复"。见 _mark_ai_error 的注释。
+                    entry["error"] = f"{type(e).__name__}: {e}"
             event.set()
         finally:
             _ai_task_queue.task_done()
@@ -9115,6 +9252,9 @@ def _wait_ai_result(task_id: int, timeout: float = 60.0,
             with _ai_results_lock:
                 entry = _ai_results.pop(task_id, None)
             _mark_ai_timeout(False)
+            # ★ 2026-10-28：取回的是**异常导致的 None**时，必须把原因带上去。
+            #   否则上层只能说"AI决定不回复"，把崩溃说成沉默（真机踩过）。
+            _mark_ai_error((entry or {}).get("error") or "")
             return entry["result"] if entry else None
         now = time.time()
         if now >= hard_deadline:
@@ -10491,8 +10631,14 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
                     if is_group:
                         # user_msg 传原话 —— group_admin 要用它核对
                         # 「模型填的群名是不是用户原话里的」（见 _do_group_admin）
+                        # ★ 2026-10-28 修：这里原本写的是 `_m=merged_text`，
+                        #   但本函数（_call_deepseek_sync）里没有这个变量 ——
+                        #   lambda 的默认参数在**创建时**求值，于是每次群聊只要
+                        #   模型发了工具调用就 NameError，被上层吞成
+                        #   「AI决定不回复: (空)」，群里表现为"它突然不说话了"。
+                        #   本函数里当前批次的原话就是 user_msg。
                         _tool_fns["group_admin"] = (
-                            lambda a, _s=sender, _g=group_id, _m=merged_text:
+                            lambda a, _s=sender, _g=group_id, _m=user_msg:
                             _tool_group_admin(a, sender=_s, group_id=_g,
                                               user_msg=_m))
                     for tc in tool_calls:
@@ -11873,6 +12019,10 @@ def _decide(group_id, batch):
                     #   消息（_remember_own_group_msg 写入），会猜成 bot 自己。
                     "bot_qq": BOT_QQ, "bot_name": _bot_nicknames()[0],
                     "bot_nicknames": _bot_nicknames(),
+                    # 放行线（1.5.9 §3.8 提交 6）：0.35 → 0.5。
+                    # 由主配置下发，决策器不再自己写死一个数 ——
+                    # 两处各写一个阈值就是"同一概念两处定义"。
+                    "min_score": float(_config.get("decider_min_score", 0.5) or 0.5),
                 }
                 _res = pm.execute_hooks("before_reply", message=merged_text,
                                         group_id=group_id, context=_decider_ctx)
@@ -11955,6 +12105,15 @@ def _pipeline_step(group_id):
         _form = _mood_form(group_id)
     except Exception as e:
         log(f"[情绪] 形式参数读取失败（用中性值）: {e}")
+    # ── persona 三系数叠到同一组形式参数上（1.5.9 §C.2，#9）──
+    #   必须叠在**情绪给的那份**上，不能另建一套：同一概念两处定义，
+    #   下一个接手的人就会改一处漏一处（关系档位那次就是这么坏的）。
+    #   系数默认 0.0 → 这一行对默认行为是恒等变换。
+    try:
+        from persona_form import apply as _persona_apply
+        _form = _persona_apply(_form, _config)
+    except Exception as e:
+        log(f"[persona] 系数叠加失败（用情绪原值）: {e}")
     # ★ 本轮的文字是否真的发出去了（2026-10-25）：戳主的追问权只在
     #   发送成功之后才写，skip / observe / 生成为空 / 发送异常都不写。
     _sent_ok = False
@@ -12028,6 +12187,20 @@ def _pipeline_step(group_id):
     # forced=True 时短路为 reply，日志多一行「[决策放行] 触发」，用来回答
     # "这轮为什么回"。副作用（排观察、打日志）留在本函数，_decide 只读数据。
     in_session = buffer.get("in_session", False)
+    # ── 发言闸（1.5.9 §3.8，提交 6）────────────────────────────────
+    #   在**决策器之前**判：没命中就一次模型都不调（决策器本身是 AI）。
+    #   被点名（forced）在这之前就返回了，此处 force 只作兜底。
+    _gate_ok, _gate_why = True, ""
+    try:
+        from speak_gate import allow as _speak_allow
+        _gate_ok, _gate_why = _speak_allow(
+            buffer, _config, stats=_speak_stats(group_id))
+    except Exception as _ge:
+        log(f"[发言闸] 判定失败（按放行处理）: {_ge}")
+        _gate_ok, _gate_why = True, ""
+    if not _gate_ok:
+        log(f"群[{group_id}] [跳过:{_gate_why}] 不进决策器: {merged_text[:60]}")
+        return
     _decision = _decide(group_id, buffer)
     _decider_ctx_text = str(_decision.get("ctx") or "")
     if _decision["act"] == "observe":
@@ -12510,7 +12683,8 @@ def _pipeline_step(group_id):
             except Exception:
                 _tal = 0.0
             _budget = reply_budget.pick(
-                shift=_budget_shift(_form.get("budget_shift", 0), _tal))
+                shift=_budget_shift(_form.get("budget_shift", 0), _tal),
+                long_ratio=_config.get("reply_long_ratio", 0.1))
             merged_text_for_ai = f"{merged_text_for_ai}\n[系统提示] {reply_budget.prompt_line(_budget)}"
             _phase_set(group_id, "generating")
             reply = call_deepseek(merged_text_for_ai, images, group_id=group_id, is_group=True, personality_temperature=_ST.get("personality_temperature"), ego_inject_context=_ego_ctx, scene_context=_scene_ctx, sender=sender)
@@ -12526,7 +12700,14 @@ def _pipeline_step(group_id):
             #   两者都是空字符串，但原因完全相反：一个是我们放弃了、钱已经花掉、
             #   回复在后台还会生成；另一个是模型看完决定闭嘴。
             #   合成一句「AI决定不回复」会把人引到"决策器有问题"上去（真机踩过）。
-            if _ai_timed_out():
+            # ★ 2026-10-28 再拆第三种：**代码抛异常**。它同样是"空回复"，
+            #   但既不是超时也不是模型沉默，而且必须让人一眼看到 ——
+            #   1.5.9 发布前就是这条被伪装成"不回复"，导致排查方向完全跑偏。
+            _ai_err = _ai_error()
+            if _ai_err:
+                log(f"群[{group_id}] [崩溃] AI 调用异常，本批不发: {_ai_err}"
+                    f"（不是模型决定沉默，也不是超时）")
+            elif _ai_timed_out():
                 log(f"群[{group_id}] [超时放弃] 等模型太久，本批不发"
                     f"（不是模型决定沉默；该次生成的 token 已经计费）")
             else:
@@ -12539,6 +12720,32 @@ def _pipeline_step(group_id):
             if not reply or not reply.strip():
                 log(f"群[{group_id}] 剥离退场语后为空，跳过")
                 return
+
+            # ── 反问闸（1.5.9 §3.6，2026-10-28）──
+            #   默认 off：只打一行 [口癖]，一个字都不改。开 regen 才重生一次。
+            #   放在"入历史"之前 —— 历史里要记的是真正会发出去的那条。
+            try:
+                from reply_gate import guard_mode, should_regen, habit_line, regen_hint
+                _qmode = guard_mode(_config)
+                _qline = habit_line(reply)
+                if _qline:
+                    log(f"群[{group_id}] [口癖] {_qline}")
+                _qaddr = bool(is_at_bot or has_xiao_a or has_bot_nick
+                              or buffer.get("has_quote"))
+                if should_regen(_qmode, reply, addressed=_qaddr):
+                    log(f"群[{group_id}] [反问闸] 末句是问号 → 重生一次（{_qmode}）")
+                    _qr = call_deepseek(
+                        regen_hint() + "\n" + merged_text_for_ai, images,
+                        group_id=group_id, is_group=True,
+                        personality_temperature=_ST.get("personality_temperature"),
+                        ego_inject_context=_ego_ctx, scene_context=_scene_ctx,
+                        sender=sender)
+                    if _qr and _qr.strip() not in ("[不说话]", "[跳过]"):
+                        _qr = strip_exit_phrases(_qr)
+                        if _qr and _qr.strip():
+                            reply = _qr
+            except Exception as _qe:
+                log(f"[反问闸] 跳过: {_qe}")
 
             # ── 回复预算超了 → **重生**（1.5.9 §B3，2026-10-27 接上）──
             #   docstring 一直写着"调用方应当带『N 字超上限，重写』重生一次"，
@@ -12721,6 +12928,18 @@ def _pipeline_step(group_id):
                             sent_text = _before      # 改空了就保留原文，宁可发也别吞
                 except Exception as e:
                     log(f"[reply_audit] 校验跳过: {e}")
+                # ── persona 形式微调（1.5.9 §C.2，#9）──
+                #   放在所有改写**之后**：判/改的是最终要发出去的那串字。
+                #   只动形式（句末软化 / 句首语气词 / 追加一句短追问），
+                #   不动语义；系数默认 0.0 时这段是恒等变换。
+                try:
+                    from persona_form import decorate as _persona_decorate
+                    _dec = _persona_decorate(sent_text, _form, merged_text)
+                    if _dec != sent_text:
+                        log(f"群[{group_id}] [persona] 形式微调: {sent_text[:24]} → {_dec[:34]}")
+                        sent_text = _dec
+                except Exception as e:
+                    log(f"[persona] 形式微调跳过: {e}")
                 # ── 重复回复闸（2026-10-23 真机反馈）──
                 # 症状：11:17:10 和 11:17:18 各发一次完全相同的三行，群里看是复读机，
                 # 又因为中间夹了一条自己发的表情包，像是"bot 在评论自己发的图"。
@@ -12829,7 +13048,10 @@ def _pipeline_step(group_id):
                     log(f"群[{group_id}] 与 2 分钟内的回复重复，跳过发送: {sent_text[:40]}")
                 elif smart_send_group(group_id, sent_text, reply_id=_quote_id):
                     _sent_ok = True
-                    _speak_note(group_id, "out")
+                    _speak_note(group_id, "out", forced=bool(
+                        buffer.get("forced") or buffer.get("is_at_bot")
+                        or buffer.get("has_xiao_a") or buffer.get("has_bot_nick")
+                        or buffer.get("source") == "poke" or buffer.get("poke_uid")))
                     if not _seq_logged:
                         _seq_logged = True
                         log(f"[时序] 群{group_id} batch={_seq_ready - _seq_first:.1f} "
@@ -12843,7 +13065,10 @@ def _pipeline_step(group_id):
                 log(f"群[{group_id}] 仅表情标记，跳过文本发送")
 
             # 表情包附着：AI 标注了 [表情] 或自动检测到情绪时发一张
-            meme_file = None if _dropped else try_send_meme(group_id, reply)
+            # emoji_bonus 来自情绪形式参数（兴奋）+ persona_warmth（亲近），
+            # 只在"没检测到情绪"时当概率兜底用（见 try_send_meme）。
+            meme_file = None if _dropped else try_send_meme(
+                group_id, reply, prob_bonus=float(_form.get("emoji_bonus") or 0.0))
             # 图发出去了也算"回应过了"：模型只回一个 [表情:xx] 时没有文字，
             # 但对方确实收到了反应 —— 追问权不能因为"没文本"就不给。
             if meme_file:
@@ -14518,6 +14743,25 @@ def main():
                 reply = _apply_search_tag_loop(reply, text, group_id=None,
                                                is_group=False, temperature=_ego_temp,
                                                target_qq=sender, ego_ctx=_ego_ctx)
+                # ── 反问闸（私聊，1.5.9 §3.6）──
+                #   私聊是被点名的一对一，regen_private 在这里算"该重生"。
+                try:
+                    from reply_gate import guard_mode, should_regen, habit_line, regen_hint
+                    _qmode = guard_mode(_config)
+                    _qline = habit_line(reply)
+                    if _qline:
+                        log(f"私聊[{sender}] [口癖] {_qline}")
+                    if should_regen(_qmode, reply, is_private=True):
+                        log(f"私聊[{sender}] [反问闸] 末句是问号 → 重生一次（{_qmode}）")
+                        _qr = call_deepseek(
+                            regen_hint() + "\n" + text, _pm_call_images, sender,
+                            private_memory_context=pm_ctx,
+                            personality_temperature=_ego_temp,
+                            ego_inject_context=_ego_ctx)
+                        if _qr and _qr.strip() not in ("[不说话]", "[跳过]"):
+                            reply = _qr
+                except Exception as _qe:
+                    log(f"[反问闸] 跳过: {_qe}")
                 if reply:
                     log(f"私聊AI回复({sender[:6]}): {reply[:80]}")
                     # 表情包匹配：剥离 [表情] 标记后发送文本
