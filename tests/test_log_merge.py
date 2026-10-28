@@ -75,13 +75,13 @@ class _TempLogs:
 def test_order_level_source():
     print("\n[1] 排序 / 级别抽取 / 来源标签")
     a = (
-        "[12:00:01] [事件] [事件] 收到: post_type=message uid=小明(10001) gid=829854136\n"
+        "[12:00:01] [事件] [事件] 收到: post_type=message uid=小明(10001) gid=123456789\n"
         "[12:00:03] 第三条\n"
     )
     b = (
         "2026-10-25 12:00:00,900 [INFO] Sandglass 人物画像已载入\n"
         "2026-10-25 12:00:02,100 [ERROR] ONEBOT API 失败 [get_stranger_info]\n"
-        "2026-10-25 12:00:01,500 [事件] [事件] 收到: post_type=message uid=小明(10001) gid=829854136\n"
+        "2026-10-25 12:00:01,500 [事件] [事件] 收到: post_type=message uid=小明(10001) gid=123456789\n"
     )
     with _TempLogs(a, b):
         rows = ws._read_log_rows(1000, with_meta=True)
@@ -96,7 +96,7 @@ def test_order_level_source():
     check("level: ERROR→err", rows[2][2] == "err", rows[2][2])
     check("来源: A 文件=data", rows[0][3] == "temp" and rows[1][3] == "data", rows)
     check("来源: B 文件=temp", rows[2][3] == "temp" and rows[0][3] == "temp", rows)
-    check("重复标签折叠", texts[1] == "[事件] 收到: post_type=message uid=小明(10001) gid=829854136",
+    check("重复标签折叠", texts[1] == "[事件] 收到: post_type=message uid=小明(10001) gid=123456789",
           texts[1])
     check("跨文件重复行只留一条",
           sum(1 for x in texts if "收到:" in x) == 1, texts)

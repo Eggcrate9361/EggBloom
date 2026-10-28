@@ -35,10 +35,10 @@ sandbox_neurobase()
 
 import bot_core  # noqa: E402
 
-OWNER = "3150007406"
-FRIEND2 = "2872362241"
-STRANGER = "2011257385"
-GID_OK = "829854136"
+OWNER = "1234567890"
+FRIEND2 = "1234567891"
+STRANGER = "1234567892"
+GID_OK = "123456789"
 GID_NO = "111111111"
 
 _fail = []
@@ -131,8 +131,8 @@ def test_qq_of():
     print("\n[1] _qq_of：三种 UID 形态的收敛")
     check("数字原样", bot_core._qq_of("123456") == "123456", bot_core._qq_of("123456"))
     check("昵称(QQ) 抠出数字",
-          bot_core._qq_of("Texas(2011257385)") == "2011257385",
-          bot_core._qq_of("Texas(2011257385)"))
+          bot_core._qq_of("Texas(1234567892)") == "1234567892",
+          bot_core._qq_of("Texas(1234567892)"))
     check("u_ UID 取不到 → 空串", bot_core._qq_of("u_abc123") == "", bot_core._qq_of("u_abc123"))
     check("空值 → 空串", bot_core._qq_of("") == "", bot_core._qq_of(""))
 
@@ -144,9 +144,9 @@ def test_private_allowed():
         check("名单内（第二人）", bot_core._private_allowed(FRIEND2) is True)
         check("名单外 → False", bot_core._private_allowed(STRANGER) is False)
         check("名单外展示形态 → False",
-              bot_core._private_allowed("Texas(2011257385)") is False)
+              bot_core._private_allowed("Texas(1234567892)") is False)
         check("名单内展示形态 → True",
-              bot_core._private_allowed("大鱼(3150007406)") is True)
+              bot_core._private_allowed("大鱼(1234567890)") is True)
         check("u_ UID → False（不猜身份）", bot_core._private_allowed("u_abc") is False)
 
 

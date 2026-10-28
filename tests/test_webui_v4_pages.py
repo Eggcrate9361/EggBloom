@@ -92,9 +92,9 @@ LOGS = {"logs": [
 EVENTS = {
     "events": [
         {"kind": "message", "time": "16:01:10", "text": "今天去不去",
-         "dir": "in", "scope": "群 829854136", "who": "小明"},
+         "dir": "in", "scope": "群 123456789", "who": "小明"},
         {"kind": "message", "time": "16:01:12", "text": "去啊 几点", "dir": "out",
-         "scope": "群 829854136", "who": "水星"},
+         "scope": "群 123456789", "who": "水星"},
         {"kind": "decision", "time": "16:01:11",
          "text": "无触发消息，决策插件建议插话: 今天去不去",
          "tag": "决策放行"},
@@ -112,14 +112,14 @@ EVENTS = {
 # 一轮问答：问 → 处理 → 决策 → 工具与记录 → 回复。成本行服务端已丢弃。
 ROUNDS = {
     "rounds": [
-        {"time": "16:01:10", "scope": "829854136", "who": "小明",
+        {"time": "16:01:10", "scope": "123456789", "who": "小明",
          "ask": "养大肥鱼是什么", "route": "进入 AI 聊天流程",
          "decisions": [],
          "tools": [{"name": "search_web", "q": "养大肥鱼", "note": "自家搜索命中"}],
          "reply": "DeepSeek 的桌面宠物，不是真鱼"},
-        {"time": "16:01:14", "scope": "829854136", "who": "小明",
+        {"time": "16:01:14", "scope": "123456789", "who": "小明",
          "ask": "那你在干嘛", "route": "进入 AI 聊天流程",
-         "decisions": ["群[829854136] [观察] 暂不插话，300s 后再看一眼"],
+         "decisions": ["群[123456789] [观察] 暂不插话，300s 后再看一眼"],
          "tools": [], "reply": "吃饭啊，刚坐下"},
         {"time": "16:01:20", "scope": "pm", "who": "/ω＼",
          "ask": "你看现在养大肥鱼很火诶", "route": "进入 AI 聊天流程",
@@ -129,7 +129,7 @@ ROUNDS = {
     ],
     "scopes": [
         {"key": "pm", "label": "私聊", "count": 1},
-        {"key": "829854136", "label": "群 829854136", "count": 2},
+        {"key": "123456789", "label": "群 123456789", "count": 2},
     ],
     "total": 3,
 }
@@ -580,8 +580,8 @@ with sync_playwright() as pw:
     # 会话分开：全部 / 私聊 / 各群
     chip_keys = pg.eval_on_selector_all("#evChips .evt-chip", "e=>e.map(x=>x.dataset.k)")
     ck("★ chip 有「全部」与「私聊」两个", "" in chip_keys and "pm" in chip_keys, chip_keys)
-    ck("★ chip 还按群分开", "829854136" in chip_keys, chip_keys)
-    pg.click('[data-k="829854136"]')
+    ck("★ chip 还按群分开", "123456789" in chip_keys, chip_keys)
+    pg.click('[data-k="123456789"]')
     pg.wait_for_timeout(350)
     only_grp = pg.inner_text("#evList")
     ck("★ 点群聊 chip 只留该群", "养大肥鱼是什么" in only_grp

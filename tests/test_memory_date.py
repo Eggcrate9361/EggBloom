@@ -3,7 +3,7 @@
 
 ## 事故
 
-群 829854136，18:55。用户 @Bot 问「我一天前说过什么」，机器人答：
+群 123456789，18:55。用户 @Bot 问「我一天前说过什么」，机器人答：
 
     记不住，我又不是录音机
 
@@ -124,7 +124,7 @@ def test_group_path_can_recall():
           src[:200])
     # 实际调用：问一个昨天有数据的日期（沙漏里 10-25 有 74 条）
     blk = mc.build_block("2026-10-25 说了什么", scope="group",
-                         scope_id="829854136", sources=("sand",))
+                         scope_id="123456789", sources=("sand",))
     check("群聊能召回那天的记录", bool(blk) and ("10-25" in blk or "记录" in blk),
           repr(blk)[:160])
 
@@ -133,7 +133,7 @@ def test_no_record_still_returns_block():
     """没有记录时也要产出块（让模型知道"查过了，确实没有"）。"""
     import harness.memory_context as mc
     blk = mc.build_block("我一天前说过什么", scope="group",
-                         scope_id="829854136", sources=("sand",))
+                         scope_id="123456789", sources=("sand",))
     check("无记录也产出块（明确告知）", bool(blk), repr(blk)[:120])
     check("块里写明没有", "没有" in blk, repr(blk)[:160])
 

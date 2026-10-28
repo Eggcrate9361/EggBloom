@@ -4,9 +4,9 @@
 背景（2026-10-25 实测）
     用户报「没有触发统一记忆」。查下来**存没问题**：
 
-        2026-10-24 23:52:11 | user | [(/ω＼)(3150007406)] 你看现在养大肥鱼很火诶
-        2026-10-25 11:39:18 | user | [(/ω＼)(3150007406)] [引用] 你看现在养大肥鱼很火诶
-        2026-10-25 11:44:45 | user | [群:829854136] [(/ω＼)(3150007406)] 你想不想养大肥鱼
+        2026-10-24 23:52:11 | user | [(/ω＼)(1234567890)] 你看现在养大肥鱼很火诶
+        2026-10-25 11:39:18 | user | [(/ω＼)(1234567890)] [引用] 你看现在养大肥鱼很火诶
+        2026-10-25 11:44:45 | user | [群:123456789] [(/ω＼)(1234567890)] 你想不想养大肥鱼
 
     三条都在库里。**坏在取**：`_scope_match` 把群聊和私聊硬隔开，
     群聊检索只认 `[群:{gid}]` 行 —— 于是 11:40 刚在私聊学会「不是真鱼，
@@ -49,9 +49,9 @@ def check(name, cond, extra=""):
         print(f"  [FAIL] {name}  {extra}")
 
 
-GROUP_A = "[群:829854136] [小明(10001)] 群A 里说的话"
-GROUP_B = "[群:920305727] [小红(10002)] 群B 里说的话"
-PM_ME = "[(/ω＼)(3150007406)] 我私聊说的话"
+GROUP_A = "[群:123456789] [小明(10001)] 群A 里说的话"
+GROUP_B = "[群:123456787] [小红(10002)] 群B 里说的话"
+PM_ME = "[(/ω＼)(1234567890)] 我私聊说的话"
 PM_OTHER = "[(别的)(999999)] 别人私聊说的话"
 
 
@@ -64,27 +64,27 @@ def main():
     try:
         print("[1] 默认（关）—— 与改前完全一致")
         with_share(False)
-        check("群聊保留本群行", sb._scope_match(GROUP_A, ("group", "829854136")))
-        check("群聊排除他群行", not sb._scope_match(GROUP_B, ("group", "829854136")))
-        check("群聊排除私聊行", not sb._scope_match(PM_ME, ("group", "829854136")))
-        check("私聊保留本人行", sb._scope_match(PM_ME, ("private", "3150007406")))
-        check("私聊排除群行", not sb._scope_match(GROUP_A, ("private", "3150007406")))
-        check("私聊排除别人的行", not sb._scope_match(PM_OTHER, ("private", "3150007406")))
+        check("群聊保留本群行", sb._scope_match(GROUP_A, ("group", "123456789")))
+        check("群聊排除他群行", not sb._scope_match(GROUP_B, ("group", "123456789")))
+        check("群聊排除私聊行", not sb._scope_match(PM_ME, ("group", "123456789")))
+        check("私聊保留本人行", sb._scope_match(PM_ME, ("private", "1234567890")))
+        check("私聊排除群行", not sb._scope_match(GROUP_A, ("private", "1234567890")))
+        check("私聊排除别人的行", not sb._scope_match(PM_OTHER, ("private", "1234567890")))
 
         print("\n[2] 打开后 —— 私聊与群互通")
         with_share(True)
-        check("群聊能召回私聊行", sb._scope_match(PM_ME, ("group", "829854136")))
-        check("私聊能召回群行", sb._scope_match(GROUP_A, ("private", "3150007406")))
-        check("群聊仍保留本群行", sb._scope_match(GROUP_A, ("group", "829854136")))
-        check("私聊仍保留本人行", sb._scope_match(PM_ME, ("private", "3150007406")))
+        check("群聊能召回私聊行", sb._scope_match(PM_ME, ("group", "123456789")))
+        check("私聊能召回群行", sb._scope_match(GROUP_A, ("private", "1234567890")))
+        check("群聊仍保留本群行", sb._scope_match(GROUP_A, ("group", "123456789")))
+        check("私聊仍保留本人行", sb._scope_match(PM_ME, ("private", "1234567890")))
 
         print("\n[3] 打开后 —— 群与群之间仍然隔离")
-        check("A 群看不到 B 群", not sb._scope_match(GROUP_B, ("group", "829854136")))
-        check("B 群看不到 A 群", not sb._scope_match(GROUP_A, ("group", "920305727")))
+        check("A 群看不到 B 群", not sb._scope_match(GROUP_B, ("group", "123456789")))
+        check("B 群看不到 A 群", not sb._scope_match(GROUP_A, ("group", "123456787")))
 
         print("\n[4] 打开后 —— 别人的私聊仍然隔离")
         check("私聊看不到别人的私聊",
-              not sb._scope_match(PM_OTHER, ("private", "3150007406")))
+              not sb._scope_match(PM_OTHER, ("private", "1234567890")))
 
         print("\n[5] 边界")
         with_share(False)

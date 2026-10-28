@@ -79,7 +79,7 @@ def _with(score=None, boom=False, ok=True):
     bot_core.SELF_LEARN_OK = ok
     bot_core.self_learn = _FakeLearn(score, boom)
     try:
-        return bot_core._relation_tier("829854136", "3150007406")
+        return bot_core._relation_tier("123456789", "1234567890")
     finally:
         bot_core.SELF_LEARN_OK = old_ok
         bot_core.self_learn = old_learn
@@ -126,7 +126,7 @@ def test_unknown_not_guessed():
     old = bot_core.self_learn
     bot_core.self_learn = None
     try:
-        got = bot_core._relation_tier("829854136", "3150007406")
+        got = bot_core._relation_tier("123456789", "1234567890")
     finally:
         bot_core.self_learn = old
     check("引擎为 None → 空档", got[0] == "", got)
@@ -142,10 +142,10 @@ def test_prompt_has_tier_not_score():
     bot_core._config["persona_relation_enable"] = True
     bot_core.resolve_qq_nick = lambda q: "德州"
     # 预填角色缓存：否则会真打 OneBot（502，白等 3 秒）
-    bot_core._BOT_ROLE_CACHE["829854136"] = (9e18, "member")
+    bot_core._BOT_ROLE_CACHE["123456789"] = (9e18, "member")
     try:
-        blk = bot_core._capability_block(is_group=True, group_id="829854136",
-                                         sender="3150007406", tool_names=())
+        blk = bot_core._capability_block(is_group=True, group_id="123456789",
+                                         sender="1234567890", tool_names=())
     finally:
         bot_core.SELF_LEARN_OK, bot_core.self_learn = old_ok, old_learn
         bot_core._config.clear()
@@ -163,10 +163,10 @@ def test_switch_off():
     bot_core._RELATION_CACHE.clear()
     bot_core._config["persona_relation_enable"] = False
     bot_core.resolve_qq_nick = lambda q: "德州"
-    bot_core._BOT_ROLE_CACHE["829854136"] = (9e18, "member")
+    bot_core._BOT_ROLE_CACHE["123456789"] = (9e18, "member")
     try:
-        blk = bot_core._capability_block(is_group=True, group_id="829854136",
-                                         sender="3150007406", tool_names=())
+        blk = bot_core._capability_block(is_group=True, group_id="123456789",
+                                         sender="1234567890", tool_names=())
     finally:
         bot_core.SELF_LEARN_OK, bot_core.self_learn = old_ok, old_learn
         bot_core._config.clear()
@@ -186,16 +186,16 @@ def test_refuse_license():
     bot_core._RELATION_CACHE.clear()
     try:
         bot_core.random.random = lambda: 0.0        # 必过概率闸
-        r1 = bot_core._refuse_license("829854136", "3150007406")
-        r2 = bot_core._refuse_license("829854136", "3150007406")
-        r3 = bot_core._refuse_license("829854136", "3150007406")
+        r1 = bot_core._refuse_license("123456789", "1234567890")
+        r2 = bot_core._refuse_license("123456789", "1234567890")
+        r3 = bot_core._refuse_license("123456789", "1234567890")
         check("前两次给许可", r1[0] and r2[0], (r1, r2))
         check("第三次被额度挡住", (not r3[0]) and r3[1] == "quota", r3)
 
         bot_core._REFUSE_LEDGER.clear()
         for _ in range(3):
-            bot_core._note_evade("3150007406")
-        r4 = bot_core._refuse_license("829854136", "3150007406")
+            bot_core._note_evade("1234567890")
+        r4 = bot_core._refuse_license("123456789", "1234567890")
         check("逃避到上限后概率归零", (not r4[0]) and r4[1] == "evade-limit", r4)
 
         bot_core._REFUSE_LEDGER.clear()
@@ -203,11 +203,11 @@ def test_refuse_license():
         bot_core._RELATION_CACHE.clear()
         bot_core.random.random = lambda: 0.05
         bot_core.self_learn = _FakeLearn(5)
-        r5 = bot_core._refuse_license("829854136", "3150007406")
+        r5 = bot_core._refuse_license("123456789", "1234567890")
         check("浅档基本不给（p=0.04 < 0.05）", not r5[0], r5)
         bot_core.self_learn = _FakeLearn(95)
         bot_core._RELATION_CACHE.clear()
-        r6 = bot_core._refuse_license("829854136", "3150007406")
+        r6 = bot_core._refuse_license("123456789", "1234567890")
         check("特别好档更容易给（p=0.16 > 0.05）", r6[0], r6)
     finally:
         bot_core.self_learn, bot_core.SELF_LEARN_OK = old_learn, old_ok

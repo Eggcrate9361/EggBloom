@@ -15,7 +15,7 @@
 把假插件改成返回 `inject` → 必须真的调到主模型。
 没有这组对照，①"没调用主模型"可能只是因为流程在别处就断了。
 
-事故路径复刻（日志群 829854136 11:46）：`in_session=True` → 走的是
+事故路径复刻（日志群 123456789 11:46）：`in_session=True` → 走的是
 10293 那一段插件裁决循环，而不是前面"无触发预决策"那一段。
 
 运行：python tests/test_observe_e2e.py
@@ -128,7 +128,7 @@ def _run(plugin_results, *, in_session=True):
     bot_core.GROUP_SESSION[GID] = {"remaining": 9, "last_msg_time": time.time()}
     bot_core.GROUP_OBSERVE.pop(GID, None)
     bot_core.GROUP_MSG_BUFFER[GID] = {
-        "text": "[碱式碳酸大脑] #sl", "sender": "2047271391", "time": time.time(),
+        "text": "[碱式碳酸大脑] #sl", "sender": "1234567894", "time": time.time(),
         "deadline": time.time() + 5,
         "is_at_bot": False, "has_xiao_a": False, "has_bot_nick": False,
         "has_quote": False, "quote_me": False, "has_text_at": False,

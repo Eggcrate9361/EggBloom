@@ -263,7 +263,7 @@ class TestRecency(unittest.TestCase):
         self.assertEqual(sc.query_years("没有年份"), set())
         # 不是年份的数字不能误判
         self.assertEqual(sc.query_years("明日方舟 版本 3.8"), set())
-        self.assertEqual(sc.query_years("QQ 3865661256"), set())
+        self.assertEqual(sc.query_years("QQ 1234567893"), set())
 
     def test_stale_year_verdict(self):
         """问 2026、结果全是 2025 → 判 stale_year（不是 good）。"""

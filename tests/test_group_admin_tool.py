@@ -41,9 +41,9 @@ def check(name, ok, detail=""):
         _FAIL.append(name)
 
 
-GID = "829854136"
-MASTER = "3150007406"
-OTHER = "2011257385"
+GID = "123456789"
+MASTER = "1234567890"
+OTHER = "1234567892"
 
 
 def _stub(retcode=0, raise_exc=False):
@@ -116,7 +116,7 @@ def test_master_ok():
 def test_driver_fail():
     bc, calls, old = _with(retcode=1200)
     try:
-        ok, msg = bc._do_group_admin("kick", target="2047271391",
+        ok, msg = bc._do_group_admin("kick", target="1234567894",
                                      sender=MASTER, group_id=GID)
         check("驱动失败判失败", not ok, (ok, msg))
         check("失败带 retcode", "1200" in msg, msg)
@@ -124,7 +124,7 @@ def test_driver_fail():
         _restore(old)
     bc, calls, old = _with(raise_exc=True)
     try:
-        ok, msg = bc._do_group_admin("kick", target="2047271391",
+        ok, msg = bc._do_group_admin("kick", target="1234567894",
                                      sender=MASTER, group_id=GID)
         check("异常不抛到调用方", not ok and "失败" in msg, (ok, msg))
     finally:
@@ -147,7 +147,7 @@ def test_missing_args():
 def test_ban_minutes():
     bc, calls, old = _with()
     try:
-        ok, _ = bc._do_group_admin("ban", target="2047271391", value="10",
+        ok, _ = bc._do_group_admin("ban", target="1234567894", value="10",
                                    sender=MASTER, group_id=GID)
         check("禁言 10 分钟 → 600 秒", ok and calls[0][1].get("duration") == 600, calls)
     finally:

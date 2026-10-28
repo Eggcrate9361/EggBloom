@@ -196,13 +196,13 @@ def test_test_groups_do_not_pollute():
     check("测试群样本不进分桶", not p._by_group, p._by_group)
 
     # 真实群的慢样本要能正常进池
-    p.note(58.0, group_id="829854136")
+    p.note(58.0, group_id="123456789")
     check("真实群样本进池", p.stats().get("n", 0) == 1, p.stats())
 
     # 前缀判定
     check("_test_ 前缀识别", reply_drop.LatencyProfile.is_test_group("_test_x"))
     check("test_ 前缀识别", reply_drop.LatencyProfile.is_test_group("test_x"))
-    check("真实群号不误判", not reply_drop.LatencyProfile.is_test_group("829854136"))
+    check("真实群号不误判", not reply_drop.LatencyProfile.is_test_group("123456789"))
     check("空群号不误判", not reply_drop.LatencyProfile.is_test_group(""))
 
 

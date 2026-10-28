@@ -4,7 +4,7 @@
 ## 真机
 
     20:33:35  → group_admin: action=set_group_name (第1轮) → ✅ 群名改了
-    20:34:31  群[829854136] 文本: '额，把群名改回去'
+    20:34:31  群[123456789] 文本: '额，把群名改回去'
     20:34:42  [观察] 暂不插话，25s 后再看一眼 · …bot 刚插过话且没有改群名权限…
     20:37:54  → group_admin: action=set_group_name (第1轮) → ✅ 群名改了
 
@@ -86,7 +86,7 @@ def _install(monkey_name="高浓度神金矿区"):
     fake = _FakeApi()
     bc.api_call = fake
     # 权限：把发话人当成主人
-    bc._get_admin_qqs = lambda: {bc.BOT_QQ, "3150007406"}
+    bc._get_admin_qqs = lambda: {bc.BOT_QQ, "1234567890"}
     bc._GROUP_NAME_HISTORY.clear()
     return bc, fake
 
@@ -97,16 +97,16 @@ def test_remembers_original_name():
     bc, fake = _install()
     fake.name = "原群名"
     ok, msg = bc._do_group_admin("set_group_name", value="新群名",
-                                 sender="3150007406", group_id="829854136",
+                                 sender="1234567890", group_id="123456789",
                                  user_msg="把群名改成新群名")
     check("改名为成功", ok, msg)
-    check("记住了原名", bc._last_group_name("829854136") == "原群名",
-          bc._last_group_name("829854136"))
+    check("记住了原名", bc._last_group_name("123456789") == "原群名",
+          bc._last_group_name("123456789"))
 
     # 「改回去」应该还原成原名
     fake.name = "新群名"
     ok2, msg2 = bc._do_group_admin("set_group_name", value="改回去",
-                                   sender="3150007406", group_id="829854136",
+                                   sender="1234567890", group_id="123456789",
                                    user_msg="把群名改回去")
     check("「改回去」执行成功", ok2, msg2)
     check("「改回去」还原成原名", fake.name == "原群名", fake.name)
@@ -122,16 +122,16 @@ def test_history_is_list_semantics():
     bc, fake = _install()
     # 记忆是「读到就插到头」→ 顺序 = 读到的先后（倒序存）
     # 真实经过：bot 先改成了「高浓度神金矿产区」，用户又自己改回「高浓度神金矿区」
-    bc._remember_group_name("829854136", "高浓度神金矿产区")   # 先读到的
-    bc._remember_group_name("829854136", "高浓度神金矿区")     # 后读到的 = [0] 当前
+    bc._remember_group_name("123456789", "高浓度神金矿产区")   # 先读到的
+    bc._remember_group_name("123456789", "高浓度神金矿区")     # 后读到的 = [0] 当前
     check("列表[1] 是上一个群名",
-          bc._last_group_name("829854136") == "高浓度神金矿产区",
-          bc._last_group_name("829854136"))
+          bc._last_group_name("123456789") == "高浓度神金矿产区",
+          bc._last_group_name("123456789"))
 
     # 「改回去」应还原成「高浓度神金矿产区」
     fake.name = "高浓度神金矿区"
     ok, msg = bc._do_group_admin("set_group_name", value="改回去",
-                                 sender="3150007406", group_id="829854136",
+                                 sender="1234567890", group_id="123456789",
                                  user_msg="把群名改回去")
     check("「改回去」执行成功", ok, msg)
     check("还原成上一个群名", fake.name == "高浓度神金矿产区", fake.name)
@@ -140,8 +140,8 @@ def test_history_is_list_semantics():
 def test_history_persists():
     """★ 群名历史要落盘 —— 内存版重启就失忆。"""
     bc, fake = _install()
-    bc._remember_group_name("829854136", "名字甲")
-    bc._remember_group_name("829854136", "名字乙")
+    bc._remember_group_name("123456789", "名字甲")
+    bc._remember_group_name("123456789", "名字乙")
     import os
     check("state 文件写出来了", os.path.isfile(bc._GROUP_NAME_STATE),
           bc._GROUP_NAME_STATE)
@@ -149,8 +149,8 @@ def test_history_persists():
     bc._GROUP_NAME_HISTORY.clear()
     bc._load_group_names()
     check("重载后历史还在",
-          bc._last_group_name("829854136") == "名字甲",
-          bc._last_group_name("829854136"))
+          bc._last_group_name("123456789") == "名字甲",
+          bc._last_group_name("123456789"))
 
 
 def test_backref_without_record():
@@ -158,7 +158,7 @@ def test_backref_without_record():
     bc, fake = _install()
     fake.name = "当前群名"
     ok, msg = bc._do_group_admin("set_group_name", value="改回去",
-                                 sender="3150007406", group_id="829854136",
+                                 sender="1234567890", group_id="123456789",
                                  user_msg="把群名改回去")
     check("没记录 → 失败", not ok, msg)
     check("说了不知道原来叫什么", "原来叫什么" in msg or "不记得" in msg, msg)
@@ -180,7 +180,7 @@ def test_value_must_come_from_user_msg():
     bc, fake = _install()
     fake.name = "当前群名"
     ok, msg = bc._do_group_admin("set_group_name", value="高浓度神金矿产区",
-                                 sender="3150007406", group_id="829854136",
+                                 sender="1234567890", group_id="123456789",
                                  user_msg="把群名改成高浓度神金矿区")
     check("模型润色的名字被拦下", not ok, msg)
     check("回执说清了原话里没有", "没这么写" in msg, msg)
@@ -193,7 +193,7 @@ def test_value_in_user_msg_passes():
     bc, fake = _install()
     fake.name = "当前群名"
     ok, msg = bc._do_group_admin("set_group_name", value="高浓度神金矿区",
-                                 sender="3150007406", group_id="829854136",
+                                 sender="1234567890", group_id="123456789",
                                  user_msg="把群名改成高浓度神金矿区")
     check("原话里的名字放行", ok, msg)
     check("群名真改成了", fake.name == "高浓度神金矿区", fake.name)
@@ -208,7 +208,7 @@ def test_readback_detects_silent_noop():
     fake.set_result = {"retcode": 0}
     fake.set_is_noop = True          # API 返回成功但实际没生效
     ok, msg = bc._do_group_admin("set_group_name", value="新名字",
-                                 sender="3150007406", group_id="829854136",
+                                 sender="1234567890", group_id="123456789",
                                  user_msg="把群名改成新名字")
     check("没真改 → 不报成功", not ok, msg)
     check("回执说了现在叫什么", "还是老名字" in msg, msg)
@@ -219,7 +219,7 @@ def test_readback_failure_not_success():
     bc, fake = _install()
     fake.read_fails = True
     ok, msg = bc._do_group_admin("set_group_name", value="新名字",
-                                 sender="3150007406", group_id="829854136",
+                                 sender="1234567890", group_id="123456789",
                                  user_msg="把群名改成新名字")
     check("回读失败 → 不报成功", not ok, msg)
     check("回执说了不确定", "确认" in msg or "不确定" in msg, msg)
@@ -235,7 +235,7 @@ def test_readback_uses_no_cache():
     """
     bc, fake = _install()
     fake.name = "当前群名"
-    bc._read_group_name(829854136)
+    bc._read_group_name(123456789)
     _reads = [c for c in fake.calls if c[0] == "get_group_info"]
     check("读了群信息", bool(_reads), fake.calls)
     check("带 no_cache", _reads and _reads[0][1].get("no_cache") is True,
@@ -269,7 +269,7 @@ def test_nl_path_not_through_model():
     fake.name = "当前群名"
     handled = bc._handle_group_admin_command(
         "把群名改成高浓度神金矿区", {"message": []},
-        "3150007406", "829854136")
+        "1234567890", "123456789")
     check("句式被接住", handled)
     check("群名改成了原话里的名字", fake.name == "高浓度神金矿区", fake.name)
     check("没有经过模型参数",
@@ -283,10 +283,10 @@ def test_nl_path_backref_works():
     bc, fake = _install()
     fake.name = "原群名"
     bc._handle_group_admin_command("把群名改成新群名", {"message": []},
-                                   "3150007406", "829854136")
+                                   "1234567890", "123456789")
     fake.name = "新群名"
     handled = bc._handle_group_admin_command(
-        "把群名改回去", {"message": []}, "3150007406", "829854136")
+        "把群名改回去", {"message": []}, "1234567890", "123456789")
     check("「改回去」被接住", handled)
     check("还原成原群名", fake.name == "原群名", fake.name)
 

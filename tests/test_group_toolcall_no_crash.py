@@ -11,7 +11,7 @@
 ```
 [16:46:27] 工具调用: ['search_web', 'search_web']
 [16:46:27] AI 失败: name 'merged_text' is not defined
-[16:46:27] 群[829854136] AI决定不回复: (空)
+[16:46:27] 群[123456789] AI决定不回复: (空)
 ```
 
 前两行是真相，第三行是假象。线上看到的是"它不说话"，日志给的结论是"模型决定沉默"，
@@ -124,8 +124,8 @@ def test_group_toolcall_does_not_crash():
     seq, seen, orig = _stub(token_stats)
     try:
         out = bc._call_deepseek_sync("明日方舟今年半周年限定是谁",
-                                     group_id="829854136", is_group=True,
-                                     sender="3150007406")
+                                     group_id="123456789", is_group=True,
+                                     sender="1234567890")
         check("★ 返回了文本（修复前是 None：异常被内部吞成一行'AI 失败'）",
               bool(out and out.strip()), repr(out))
         check("文本内容正确", "维什戴尔" in str(out), repr(out))
@@ -147,8 +147,8 @@ def test_private_still_works():
     seq, seen, orig = _stub(token_stats)
     try:
         out = bc._call_deepseek_sync("明日方舟今年半周年限定是谁",
-                                     target_qq="3150007406", is_group=False,
-                                     sender="3150007406")
+                                     target_qq="1234567890", is_group=False,
+                                     sender="1234567890")
         check("私聊返回文本", bool(out and out.strip()), repr(out))
         check("私聊工具被执行", seen["tools"] == ["search_web"], seen["tools"])
     except Exception as e:

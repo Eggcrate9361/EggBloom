@@ -546,15 +546,15 @@ class TestPokeEvent(_EventHandlersBase):
         只接了一根线。这里钉住"名单外没有任何回应"。
         """
         bot_core.PRIVATE_SESSION.clear()
-        with mock.patch.object(bot_core, "TARGET_QQS", ["3150007406"]), \
+        with mock.patch.object(bot_core, "TARGET_QQS", ["1234567890"]), \
                 mock.patch.object(bot_core, "_send_poke_back") as _pb:
             bot_core._handle_poke_event({"post_type": "notice", "notice_type": "notify",
-                                         "sub_type": "poke", "user_id": "2011257385",
+                                         "sub_type": "poke", "user_id": "1234567892",
                                          "target_id": ""})
         self.send_message.assert_not_called()
         self.call_deepseek.assert_not_called()
         _pb.assert_not_called()
-        self.assertNotIn("2011257385", bot_core.PRIVATE_SESSION)
+        self.assertNotIn("1234567892", bot_core.PRIVATE_SESSION)
         bot_core.PRIVATE_SESSION.clear()
 
     def test_private_poke_nt_uid_not_guessed(self):

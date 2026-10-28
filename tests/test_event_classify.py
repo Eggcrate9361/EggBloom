@@ -55,17 +55,17 @@ def classify(text, **kw):
 # ── 真实日志样本（原文照抄，不改格式）──────────────────────────────
 REAL = {
     "message_in_private":
-        "[事件] 收到: post_type=message msg_type=private uid=(/ω＼)(3150007406) gid=",
+        "[事件] 收到: post_type=message msg_type=private uid=(/ω＼)(1234567890) gid=",
     "message_in_notice":
-        "[事件] 收到: post_type=notice msg_type= uid=(/ω＼)(3150007406) gid=",
+        "[事件] 收到: post_type=notice msg_type= uid=(/ω＼)(1234567890) gid=",
     "message_in_group":
-        "[事件] 收到: post_type=message msg_type=group uid=小明(10001) gid=829854136",
+        "[事件] 收到: post_type=message msg_type=group uid=小明(10001) gid=123456789",
     "message_poke":
-        "[事件] 戳一戳: user_id=(/ω＼)(3150007406) group_id=私聊",
+        "[事件] 戳一戳: user_id=(/ω＼)(1234567890) group_id=私聊",
     "message_poke_back":
-        "[事件] 反戳 send_poke user=(/ω＼)(3150007406) group=私聊 retcode=0",
+        "[事件] 反戳 send_poke user=(/ω＼)(1234567890) group=私聊 retcode=0",
     "message_send_private":
-        "[发送] 私聊 → (/ω＼)(3150007406): retcode=0 msg=",
+        "[发送] 私聊 → (/ω＼)(1234567890): retcode=0 msg=",
     "message_send_group":
         "[发送] 群[1] → 小明(10001): retcode=0",
     "message_reply_text":
@@ -73,17 +73,17 @@ REAL = {
     "message_emoji":
         "私聊戳一戳表情包: 炸毛",
     "message_image":
-        "发送图片成功: zhenxun_rl_22625868_014.gif → (/ω＼)(3150007406)",
+        "发送图片成功: zhenxun_rl_22625868_014.gif → (/ω＼)(1234567890)",
     "message_merge":
-        "群[829854136] 合并消息: [小明] [引用:小红] [图片]",
+        "群[123456789] 合并消息: [小明] [引用:小红] [图片]",
     "decision_no_interrupt":
         "群[_test_pacing_] [观察] 暂不插话，300s 后再看一眼 · 氛围不适合",
     "decision_skip":
-        "群[829854136] [跳过] 无触发条件，忽略消息 · 决策理由：氛围不适合: 今天吃啥",
+        "群[123456789] [跳过] 无触发条件，忽略消息 · 决策理由：氛围不适合: 今天吃啥",
     "decision_approve":
-        "群[829854136] [决策放行] 无触发消息，决策插件建议插话: 今天吃啥",
+        "群[123456789] [决策放行] 无触发消息，决策插件建议插话: 今天吃啥",
     "decision_typed":
-        "群[829854136] [typed 决策] sandglass 建议插话",
+        "群[123456789] [typed 决策] sandglass 建议插话",
     "tool_catalog":
         "sandglass_recent、sandglass_search",
     "cost_ai":
@@ -167,7 +167,7 @@ def main():
     check("私聊收到：dir=in", m["dir"] == "in", m)
     m = ws._norm_event({"text": REAL["message_in_group"], "time": "23:44:23"}, "message")
     check("群收到：who=小明", m["who"] == "小明", m)
-    check("群收到：scope 带群号", m["scope"] == "群 829854136", m)
+    check("群收到：scope 带群号", m["scope"] == "群 123456789", m)
     m = ws._norm_event({"text": REAL["message_send_private"], "time": "23:44:30"}, "message")
     check("私聊发出：dir=out", m["dir"] == "out", m)
     check("私聊发出：who=(/ω＼)（不带尾部冒号）", m["who"] == "(/ω＼)", m)

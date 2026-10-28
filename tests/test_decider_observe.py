@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """决策器 `observe` 必须被每一个消费者认（2026-10-25 新增）。
 
-线上事故（群 829854136，11:46）：
+线上事故（群 123456789，11:46）：
 
     [11:47:11] [调试] interventions=[('group_chat_decider',
                     {'action': 'observe', 'after': 25, 'reason': '[Decider v3] …'}),
