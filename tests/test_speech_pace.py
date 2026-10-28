@@ -169,13 +169,41 @@ def test_wired():
     check("有开关可退回固定值", "speech_pace_enable" in src)
 
 
+def test_conversation_gap_not_burst():
+    """2026-10-28 真机事故回归：对话轮间隔不能当成连发样本。
+
+    Texas（2011257385）的真实节奏：每 27-31 秒发一条，发完**等回复**。
+    旧版 MAX_SAMPLE=120 把这些间隔全进了样本 → P90≈30s →
+    quiet=69-93s、cap=300s+，私聊回复等 2 分 14 秒，
+    对方等不到只好自问自答，bot 的回复变成复读用户自己给的答案。
+    """
+    print("对话轮间隔（~30s）不得抬高连发窗口")
+    # 复刻今晚的真实节奏：27-31 秒一条，连续 6 轮
+    p = _seeded([27.0, 31.0, 28.0, 30.0, 29.0, 30.0])
+    q = p.quiet_needed("u")
+    cap = p.hard_cap("u")
+    check("quiet 不超过 10 秒（冷启动兜底）", q <= 10.0, f"quiet={q:.1f}")
+    check("cap 不超过 20 秒", cap <= 20.0, f"cap={cap:.1f}")
+    check("30s 间隔没有进样本", p.median_gap("u") == 5.0,
+          f"median={p.median_gap('u')}")
+    # 真连发（1-3 秒）仍然被学习
+    p2 = _seeded([2.0, 2.5, 3.0, 2.0, 2.5])
+    q2 = p2.quiet_needed("u")
+    check("真连发仍会学习（quiet≈3-8s）", 3.0 <= q2 <= 8.0, f"quiet={q2:.1f}")
+    # 混合：先连发几句、再用 30s 间隔聊 —— 连发样本仍在，窗口不夸张
+    p3 = _seeded([2.0, 2.0, 2.0, 30.0, 30.0])
+    q3 = p3.quiet_needed("u")
+    check("混合节奏下 quiet 有界（≤15s）", q3 <= 15.0, f"quiet={q3:.1f}")
+
+
 def main():
     print("=" * 58)
     print("说话节奏（全动态）")
     print("=" * 58)
     for fn in (test_cold_start, test_three_judges, test_replay_one_batch,
                test_ratio_learning, test_ratio_bounds, test_no_deadlock,
-               test_per_person_isolated, test_wired):
+               test_per_person_isolated, test_wired,
+               test_conversation_gap_not_burst):
         print(f"\n[{fn.__name__}]")
         fn()
     print("\n" + "=" * 58)
