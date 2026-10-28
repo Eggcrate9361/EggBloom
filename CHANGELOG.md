@@ -73,12 +73,26 @@
 - **搜索结果**：年份对不上换词重搜（`0824d86`）、GBK 页面乱码（`aa3f48b`）、
   天气城市取错（`eac3d73`）、360 解析读错属性（`08b7996`）。
 - **预算与锚点**：超配额先重生（`7d3c246`）、锚点与过时判据放宽（`956f685`）。
+- **连续追问只增不减，话题永久冻结**（ego `personality_engine`）：
+  `_is_follow_up` 末尾带了 `or self.turn_count > 0` —— 只要追问过一次，
+  之后每一句都被判成追问。于是计数变成棘轮（真机涨到 `连续追问=93`），
+  而且永远走不到 `else` 分支，`current_topic` 从此**永不更新**
+  （日志里话题长期停在 `[(/ω＼)]` 这种旧昵称上，模型每轮都被误导）。
+  现改为：判据只看**这一句**；空闲超过 30 分钟重置计数与话题；计数封顶 9；
+  旧状态文件载入时即夹住（否则重启第一轮还会把 93 写进提示词）。
+- **日志行没有日期**：`qq_bot.log` 只写 `[HH:MM:SS]`，5MB 轮转后今天的 18:44
+  与三天前的 18:44 无法区分，跨天只能靠"时钟回绕 6 小时"猜。
+  排查 1.5.9 事故时按小时 grep 把两天的会话串成了一条。现写入端
+  （`bot_core.log` / `utils.log`）改带 `YYYY-MM-DD`，读取端两处同步改：
+  `log_levels._TS`（不改则行首标签会被当成日期串、所有日志退化成 INFO）、
+  `webui._ROW_TS_BRACKET`（不改则新格式整行被当作续行丢掉）。
 
 ### 测试
 
 - 新增：`test_speak_gate`、`test_reply_gate`、`test_persona_form`、`test_poke_private_gate`、
   `test_mood_decay_config`、`test_time_single_source`、`test_ai_error_not_silence`、
-  `test_group_toolcall_no_crash`；`test_mood_form` 改到新值域；`test_reply_budget` 补长档概率用例。
+  `test_group_toolcall_no_crash`、`test_log_date_prefix`、`test_ego_turn_ratchet`；
+  `test_mood_form` 改到新值域；`test_reply_budget` 补长档概率用例。
 - `test_ai_error_not_silence` 锁两件事：worker 的异常必须传到等待方（不能变成"沉默"）、
   日志必须三分（崩溃 / 超时 / 沉默）且崩溃判定排在超时之前。
   **它当场抓到了修复本身的 bug**：`_mark_ai_error` 里写成 `err or "unknown"`，
@@ -87,7 +101,13 @@
   （打桩 `_call_chat_sync` 与工具执行，不联网）。已实测：把闭包改回
   `_m=merged_text` 时它 4 项失败，而同一文件里的私聊组仍通过 ——
   与真机日志"私聊正常、群聊一搜就死"完全吻合。
-- 全量 144 个测试文件；已知长期失败 1 个：`test_search_core::test_download_site_demoted`
+- `test_log_date_prefix` 锁"写入端改了读取端必须跟着"：`log_levels` 的标签
+  抽不出来、`webui` 把新格式当续行丢掉，两者都**不抛异常**，只是颜色失灵 /
+  日志页少行。已实测：把两处正则回退，对应断言立刻变红。
+- `test_ego_turn_ratchet` 用 AST 守源码（`_is_follow_up` 体内不许出现
+  `turn_count`），并覆盖"旧状态文件里 93 在载入时被夹住"。
+  已实测：把判据换回带 `or self.turn_count > 0` 的版本，4 项断言失败。
+- 全量 147 个测试文件；已知长期失败 1 个：`test_search_core::test_download_site_demoted`
   （搜索排序随年份漂移，与上述改动无关）。
 
 ### 未做 / 已知限制

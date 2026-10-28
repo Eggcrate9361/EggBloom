@@ -249,6 +249,16 @@ def _strip_sender_prefix(text: str) -> str:
     return "" if not t else t
 
 
+#: 多久没说话就当作新会话（秒）。超过它，连续追问计数归零、话题重取。
+#: 30 分钟是群聊里"这一轮还算同一段对话"的经验值：比它长的间隔，
+#: 上一句的追问链已经断了，硬接着数只会让注入的话题停在几天前。
+_IDLE_RESET_SEC = 30 * 60
+
+#: 连续追问计数的封顶。它只用于给提示词一点"聊到第几轮"的氛围，
+#: 不是审计数据 —— 无限涨没有信息量，还会白占 token（真机到过 93）。
+_TURN_CAP = 9
+
+
 class ConversationState:
     """轻量会话状态，不搞复杂权重。"""
 
@@ -281,6 +291,13 @@ class ConversationState:
         ]:
             if key in data:
                 setattr(self, key, data[key])
+        # ★ 2026-10-28：老状态文件里存着棘轮涨上去的值（真机到过 93）。
+        #   不夹一下的话，进程重启后第一轮 to_prompt() 仍会把 93 写进提示词，
+        #   要等下一次 after_reply 才自愈 —— 而那一轮已经说错话了。
+        try:
+            self.turn_count = max(0, min(int(self.turn_count or 0), _TURN_CAP))
+        except (TypeError, ValueError):
+            self.turn_count = 0
 
     def _save(self):
         _save_json(self._path(), {
@@ -295,12 +312,28 @@ class ConversationState:
         })
 
     def update(self, user_msg: str, bot_reply: str):
+        # ★ 2026-10-28：先判"隔了多久"，再改 last_update。
+        #   顺序反了的话 gap 恒为 0，超时重置永远不触发。
+        _now = time.time()
+        try:
+            _gap = _now - float(self.last_update or 0)
+        except (TypeError, ValueError):
+            _gap = _IDLE_RESET_SEC + 1          # 时间戳坏了 → 当新会话处理
+        if _gap > _IDLE_RESET_SEC:
+            # 半小时以上没说话，上一句接不上了：计数归零、话题重取。
+            # 不重置的话，跨天的两段对话会被当成"同一次追问链"。
+            self.turn_count = 0
+            self.current_topic = None
+
         self.last_user_msg = user_msg
         self.last_bot_reply = bot_reply
-        self.last_update = time.time()
+        self.last_update = _now
 
         if self._is_follow_up(user_msg):
-            self.turn_count += 1
+            # 封顶：这个数字只用来给提示词一点"聊到第几轮"的氛围，
+            # 不是审计数据。真机曾涨到 93 —— 每轮都在告诉模型
+            # 「你已经连续追问 93 次」，既假又白占 token。
+            self.turn_count = min(self.turn_count + 1, _TURN_CAP)
         else:
             self.turn_count = 0
             self.current_topic = self._extract_topic(user_msg)
@@ -316,8 +349,19 @@ class ConversationState:
         self._save()
 
     def _is_follow_up(self, msg: str) -> bool:
+        """这一句**本身**是不是追问。只看消息，不看历史。
+
+        ★ 2026-10-28 修：原实现末尾带了 `or self.turn_count > 0`，
+          于是**只要追问过一次，之后每一句都算追问** —— turn_count
+          变成只升不降的棘轮（真机涨到 93），更糟的是走不到 else 分支，
+          `current_topic` 从此**永不更新**（日志里话题长期停在
+          「[(/ω＼)]」这种旧昵称上，模型一直被告知"你们在聊这个"）。
+
+          判据必须只依赖入参：一句是不是追问，跟上一句有没有追问无关。
+          连续段落的延续性交给 `update()` 里的空闲重置 + 计数封顶处理。
+        """
         follow_up_hints = ["呢", "那", "然后", "还有", "再说", "再说说", "往下", "继续"]
-        return any(msg.endswith(h) or f" {h}" in msg for h in follow_up_hints) or self.turn_count > 0
+        return any(msg.endswith(h) or f" {h}" in msg for h in follow_up_hints)
 
     def _extract_topic(self, msg: str) -> str:
         """取一句能代表"在聊什么"的短句。
