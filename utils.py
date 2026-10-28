@@ -27,14 +27,17 @@ _logger.setLevel(logging.INFO)
 if not _logger.handlers:
     try:
         _handler = RotatingFileHandler(LOG_FILE, maxBytes=5 * 1024 * 1024, backupCount=5, encoding="utf-8")
-        _handler.setFormatter(logging.Formatter("[%(asctime)s] %(message)s", datefmt="%H:%M:%S"))
+        # 2026-10-28：带日期（与 bot_core.log 统一）。日志轮转后跨天的行
+        # 只靠 HH:MM:SS 分辨不出是哪天，排查时会串会话。
+        _handler.setFormatter(logging.Formatter("[%(asctime)s] %(message)s",
+                                                datefmt="%Y-%m-%d %H:%M:%S"))
         _logger.addHandler(_handler)
     except Exception:
         pass
 
 
 def log(msg):
-    ts = datetime.datetime.now().strftime("%H:%M:%S")
+    ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     line = f"[{ts}] {msg}"
     try: print(line, flush=True)
     except Exception: pass

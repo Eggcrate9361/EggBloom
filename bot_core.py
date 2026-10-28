@@ -1882,7 +1882,14 @@ def _replace_qq_with_nick(msg):
 
 
 def log(msg):
-    ts = datetime.datetime.now().strftime("%H:%M:%S")
+    # ★ 2026-10-28：时间戳带日期。
+    #   原来只有 `[18:44:45]`，日志 5MB 轮转一次、一次运行跨天是常事 →
+    #   文件里今天的 18:44 和三天前的 18:44 长得一模一样，只能靠"时钟回绕
+    #   超过 6 小时"去猜跨天（webui 的 _assign_dates 就是这么猜的）。
+    #   真机排查时按小时 grep 会把不同日期串成一个会话，绕了大弯。
+    #   写入端改了，读取端（log_levels._TS / webui._ROW_TS_BRACKET）必须同步，
+    #   否则所有靠**行首标签**分级的日志会退化成 INFO —— 见这两处的注释。
+    ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     msg = _replace_qq_with_nick(msg)
     line = f"[{ts}] {msg}"
     try:

@@ -1503,7 +1503,14 @@ def _assign_dates(local, base_date):
 
 
 # 行首时间戳的三种写法（2026-10-25）
-_ROW_TS_BRACKET = re.compile(r"^\[(\d{2}:\d{2}:\d{2})\]\s?(.*)$")
+#
+# 2026-10-28：`[HH:MM:SS]` 之外再认 `[YYYY-MM-DD HH:MM:SS]` —— bot_core.log
+# 改成带日期了。**这里必须跟着改**：`_ROW_TS_BRACKET` 认不出新格式的话，
+# 整行会被当成"续行"（return None）而丢掉，日志页直接少掉所有业务日志。
+# 带上日期之后，`_assign_dates` 的"时钟回绕 6 小时"启发式对这些行不再生效
+# （它遇到 r["date"] 非空就跳过）—— 这正是我们要的：日期由写的人负责，不靠猜。
+_ROW_TS_BRACKET = re.compile(
+    r"^\[(?:(\d{4}-\d{2}-\d{2})[ T])?(\d{2}:\d{2}:\d{2})(?:[.,]\d+)?\]\s?(.*)$")
 _ROW_TS_FULL = re.compile(
     r"^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})(?:[.,]\d+)?\s*(.*)$")
 _ROW_TS_BARE = re.compile(r"^(\d{2}:\d{2}:\d{2})\s+(.*)$")
@@ -1523,7 +1530,10 @@ def _parse_log_row(line, base_date, source):
     date = base_date
     m = _ROW_TS_BRACKET.match(line)
     if m:
-        t, body = m.group(1), m.group(2)
+        # 第 1 组是可选日期（新格式才有），第 2 组时间，第 3 组正文
+        if m.group(1):
+            date = m.group(1)
+        t, body = m.group(2), m.group(3)
     else:
         m = _ROW_TS_FULL.match(line)
         if m:
