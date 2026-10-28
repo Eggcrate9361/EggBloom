@@ -528,21 +528,50 @@ class TestPokeEvent(_EventHandlersBase):
 
     def test_private_poke_numeric_sends_and_registers_session(self):
         bot_core.PRIVATE_SESSION.clear()
-        bot_core._handle_poke_event({"post_type": "notice", "notice_type": "notify",
-                                     "sub_type": "poke", "user_id": "10086001"})
+        # 2026-10-28：私聊戳一戳要过私聊名单（与私聊消息同一条门槛）。
+        # 名单内的人戳 → 照旧回复 + 登记会话。
+        with mock.patch.object(bot_core, "TARGET_QQS", ["10086001"]):
+            bot_core._handle_poke_event({"post_type": "notice", "notice_type": "notify",
+                                         "sub_type": "poke", "user_id": "10086001"})
         self.send_message.assert_called_once()
         self.assertEqual(self.send_message.call_args[0][1], "10086001")
         self.assertIn("10086001", bot_core.PRIVATE_SESSION)  # 登记私聊活跃会话
         bot_core.PRIVATE_SESSION.clear()
 
-    def test_private_poke_nt_uid_uses_target(self):
-        with mock.patch.object(bot_core, "TARGET_QQS", ["100"]):
+    def test_private_poke_stranger_ignored(self):
+        """名单外的人戳一戳：不回复、不反戳、不登记会话。
+
+        2026-10-28 线上：非名单用户（Texas）戳一下就走完了「反戳 + 调模型 +
+        回复 + 表情包」，而同一批人发私聊消息是被名单挡住的 —— 两条入口，
+        只接了一根线。这里钉住"名单外没有任何回应"。
+        """
+        bot_core.PRIVATE_SESSION.clear()
+        with mock.patch.object(bot_core, "TARGET_QQS", ["3150007406"]), \
+                mock.patch.object(bot_core, "_send_poke_back") as _pb:
+            bot_core._handle_poke_event({"post_type": "notice", "notice_type": "notify",
+                                         "sub_type": "poke", "user_id": "2011257385",
+                                         "target_id": ""})
+        self.send_message.assert_not_called()
+        self.call_deepseek.assert_not_called()
+        _pb.assert_not_called()
+        self.assertNotIn("2011257385", bot_core.PRIVATE_SESSION)
+        bot_core.PRIVATE_SESSION.clear()
+
+    def test_private_poke_nt_uid_not_guessed(self):
+        """NT UID（u_xxx）取不到 QQ 号 → 判为不在名单，不猜成 TARGET_QQS[0]。
+
+        旧版把 u_ 兜底成监听目标，等于把陌生人的戳记到主人头上：回复会发进
+        主人私聊，还白烧一次模型。取不到身份就别回应，比猜错安全。
+        """
+        with mock.patch.object(bot_core, "TARGET_QQS", ["100"]), \
+                mock.patch.object(bot_core, "_send_poke_back") as _pb:
             bot_core.PRIVATE_SESSION.clear()
             bot_core._handle_poke_event({"post_type": "notice", "notice_type": "notify",
                                          "sub_type": "poke", "user_id": "u_abc", "target_id": "u_abc"})
-            self.send_message.assert_called_once()
-            self.assertEqual(self.send_message.call_args[0][1], "100")  # 回给监听目标
-            self.assertNotIn("u_abc", bot_core.PRIVATE_SESSION)  # u_ 格式不登记
+            self.send_message.assert_not_called()
+            self.call_deepseek.assert_not_called()
+            _pb.assert_not_called()
+            self.assertNotIn("u_abc", bot_core.PRIVATE_SESSION)
             bot_core.PRIVATE_SESSION.clear()
 
 

@@ -199,15 +199,15 @@ def render(
         if label:
             extra = ""
             if bot_role in ("owner", "admin"):
-                extra = "，踢人/禁言/改名片我都能执行"
-                # ★ 2026-10-27：改群名单独说 —— 实测 admin 身份调
-                #   set_group_name 返回 retcode=0 但**群名根本没变**（QQ 侧拒绝，
-                #   18 秒后回读仍是旧名）。所以 admin 不能说"我都能执行"，
-                #   否则机器人就是在承诺一件它做不到的事 —— 违反诚实铁律。
-                if bot_role == "owner":
-                    extra = "，改群名我也能执行"
-                else:
-                    extra += "；改群名我多半改不了（要群主来改）"
+                # ★ 2026-10-27 修正：这里原先写成"只有 owner 能改群名，
+                #   admin 说『多半改不了（要群主来改）』"——
+                #   那是**错的**，而且是从一次错误的实测得出的：
+                #     当时读群名用的 get_group_info 没带 no_cache，
+                #     读到的是 OneBot 侧旧缓存 → 误判成"改了没生效"。
+                #   重测（带 no_cache）：admin 改群名**立刻生效**。
+                #   QQ 规则：群主和管理员都能改群名。
+                #   把假话塞进能力清单，比漏说更糟 —— 违反诚实铁律。
+                extra = "，踢人/禁言/改名片/改群名我都能执行"
             lines.append(f"我在这个群的身份：{label}{extra}。")
 
     if need_enable or need_admin:

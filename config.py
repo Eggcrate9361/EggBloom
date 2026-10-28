@@ -294,6 +294,13 @@ DEFAULT_CONFIG = {
     # 人格长期系数（1.5.9 §C.2）。0 = 保持现状分布，不偏移。
     # 调高只会让回复配额更常往上走一档，不改任何文本内容。
     "persona_talkativeness": 0.0,
+    # 另外三个系数（1.5.9 §5.2，0–1，默认值按方案）。消费点见 persona_form.py：
+    #   sharpness  0.75  嘴毒：语气词池分档 + 句首语气词（0.18×系数 ≈ 每 7~8 条一次）
+    #   curiosity  0.55  好奇：对方说**陈述句**时概率追问（0.30×系数）
+    #   warmth     0.35  温度：表情概率（+0.20×系数）+ 句末句号→～ 的软化
+    "persona_sharpness": 0.75,
+    "persona_curiosity": 0.55,
+    "persona_warmth": 0.35,
     "private_batch_hard_cap": 15,
     # 回复预算硬上限（1.5.9 §B3）。档位分布见 reply_budget.py：
     # A 60% 1 条 ≤8 字 / B 30% 1–2 条 ≤16 字 / C 10% 2–3 条 ≤40 字。
@@ -318,10 +325,34 @@ DEFAULT_CONFIG = {
     "reply_max_chars": 16,
     "reply_max_parts": 3,
     "reply_max_total": 80,
+    # ── 反问闸（1.5.9 §3.6，2026-10-28 按方案归位）────────────────
+    # 只管**末句问号**，默认 off。重生会把首字从 5s 推回 7–8s，速度与零问号
+    # 不能同时要，取舍留给配置。实现见 reply_gate.py。
+    #   off（默认）    只记 [口癖]，不改
+    #   regen          末句是问号就重生一次
+    #   regen_private  只在私聊 / 被 @ 时重生
+    # ★ 方案明确撤销"剪文本"（末句删除 / 问号改句号）：残句比反问更像人机。
+    "reply_question_guard": "off",
+    # 抽到长句档（档 C，2–3 条 ≤40 字）的概率。1.5.9 §3.3 三档分布：
+    # A 60% / B 30% / C 10%，这个键只调 C 的权重，A:B 比例不变。0–0.5。
+    "reply_long_ratio": 0.1,
     "group_last_exit_cooldown": 3000,
     # 2026-10-25：30 秒太短 —— 实测两次戳相隔 2 分钟，计数都从 1 重来，
     # 用户看到的就是"计数不动"。改为 10 分钟，覆盖正常人连续戳的间隔。
     "poke_timeout": 600,
+    # ── 发言闸（1.5.9 §3.8，提交 6，2026-10-28）────────────────────
+    # 在决策器之前用纯代码判"要不要进模型"：没命中就一次调用都不花。
+    # 档位：1 只认点名 / 2 关键词 / 3 关键词+概率（默认）/ 4 全响应。
+    # 被点名（@、叫小a、引用我）一律放行，任何频控都拦不住。
+    "speak_gate_tier": 3,
+    "speak_probability": 0.15,
+    # 发言率上限：窗口内 回复数/消息数 超过 N/100 → 静默（样本 <20 不判）
+    "speak_rate_max_per_100": 10,
+    "speak_rate_window_min": 30,
+    # 连说 N 条后强制静默 5 分钟（有人说话即清零）
+    "consecutive_reply_limit": 2,
+    # 决策器放行线（原硬编码 0.35）。临界区 = 放行线 ±0.1，交给 AI 表态。
+    "decider_min_score": 0.5,
     "group_idle_exit_enable": True,
     "group_idle_exit_probability": 0.3,
     "group_idle_exit_min_silence": 600,

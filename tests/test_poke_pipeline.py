@@ -123,8 +123,11 @@ def _run(plugin_results, *, poke_text=None, merge_text=None, merge_sender=OTHER,
     bot_core.MEME_OK = True
     bot_core.match_meme = lambda x: "/fake/meme.png"
     bot_core.send_group_image = fake_send_img
-    bot_core.try_send_meme = lambda gid, txt: None
+    bot_core.try_send_meme = lambda gid, txt, prob_bonus=0.0: None
     bot_core._config["quiet_hours"] = ""
+    # 发言闸（1.5.9 §3.8 提交 6）在决策器之前就拦非触发批次；
+    # 这两个用例测的是决策/观察链本身，把档位开到 4（全响应）绕开它。
+    bot_core._config["speak_gate_tier"] = 4
     bot_core._config["meme_enable"] = False
     bot_core._config["reply_reaction_delay"] = 0
     try:

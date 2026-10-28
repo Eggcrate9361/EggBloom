@@ -89,8 +89,12 @@ def load_meta():
 
 
 #: 参与"这个键还有没有人读"判定的源码目录。不含 tests / scripts / _ref / 第三方 venv。
+#: ★ 新增"独立模块消费配置"时**必须加进这张表**：漏一个模块，文档就会把
+#:   活键标成「0 处」，下一个接手的人会把它当死键删掉（reply_gate 就是这么漏的）。
 SCAN_DIRS = ("bot_core.py", "config.py", "comfyui_client.py", "logger_setup.py",
-             "web_access.py", "webui", "protocols", "plugins", "harness")
+             "web_access.py", "webui", "protocols", "plugins", "harness",
+             "reply_gate.py", "reply_drop.py", "reply_budget.py", "persona_form.py",
+             "speak_gate.py")
 
 #: 配置对象的变量名白名单。**必须限定变量名**，不能只匹配 `.get("key")`：
 #   `free_llm.py` 里有 `r.get("model", "")` —— 那是读 API 响应字段，不是读配置。
