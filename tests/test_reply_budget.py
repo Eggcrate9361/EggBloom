@@ -41,6 +41,17 @@ def check(name, ok, detail=""):
 def test_distribution():
     total = sum(b[1] for b in rb.BUDGETS)
     check("概率合计为 1", abs(total - 1.0) < 1e-9, total)
+    # 1.5.9 §3.3：档 C 的概率由 reply_long_ratio 决定（默认 0.1），A:B 比例不变
+    check("long_ratio=0.1 → 权重 0.6/0.3/0.1",
+          all(abs(a - b) < 1e-9 for a, b in zip(rb.weights(0.1), (0.6, 0.3, 0.1))),
+          rb.weights(0.1))
+    check("long_ratio=0.3 → 权重 0.467/0.233/0.3",
+          all(abs(a - b) < 0.01 for a, b in zip(rb.weights(0.3), (0.4667, 0.2333, 0.3))),
+          rb.weights(0.3))
+    check("long_ratio=0.3 时 rng=0.75 抽到 C", rb.pick(0.75, long_ratio=0.3)["name"] == "C",
+          rb.pick(0.75, long_ratio=0.3))
+    check("long_ratio 越界被夹住", rb.weights(9.9)[2] == 0.5 and rb.weights(-1)[2] == 0.0,
+          rb.weights(9.9))
     check("rng=0 → A", rb.pick(0.0)["name"] == "A", rb.pick(0.0))
     check("rng=0.59 → A", rb.pick(0.59)["name"] == "A", rb.pick(0.59))
     check("rng=0.60 → B", rb.pick(0.60)["name"] == "B", rb.pick(0.60))

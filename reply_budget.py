@@ -33,6 +33,9 @@ BUDGETS: Tuple[Tuple[str, float, int, int, int, int], ...] = (
     ("C", 0.10, 2, 3, 40, 80),
 )
 
+#: 档 C（长句档）的默认概率。配置项 `reply_long_ratio` 覆盖它（0–0.5）。
+DEFAULT_LONG_RATIO = BUDGETS[-1][1]
+
 #: 硬上限兜底（配置项同名）
 HARD_MAX_CHARS = 16
 HARD_MAX_PARTS = 3
@@ -44,17 +47,39 @@ _MEME_TAG = re.compile(r"\[表情[:：][^\]]*\]")
 _MARKUP = re.compile(r"\[(图片|引用|搜索|不说话)[^\]]*\]")
 
 
-def pick(rng: Optional[float] = None, shift: int = 0) -> Dict:
+def weights(long_ratio: Optional[float] = None) -> Tuple[float, float, float]:
+    """三档权重。`long_ratio` 只换档 C 的权重，A:B 比例保持不变。
+
+    1.5.9 §3.3：`reply_long_ratio` 就是"抽到长句档的概率"（默认 0.1，0–0.5）。
+    之前它被硬编码在 BUDGETS 里，配置项并不存在 —— 属于"配了也不生效"。
+    """
+    try:
+        c = float(long_ratio) if long_ratio is not None else DEFAULT_LONG_RATIO
+    except (TypeError, ValueError):
+        c = DEFAULT_LONG_RATIO
+    c = max(0.0, min(0.5, c))
+    a0, b0 = float(BUDGETS[0][1]), float(BUDGETS[1][1])
+    rest = 1.0 - c
+    scale = a0 + b0
+    # round：不取整会出现 0.6000000000000001，把 `rng=0.60` 判回 A 档
+    # （边界值必须精确落在 0.6 / 0.9 上，否则"抽签分布"对不上文档）
+    return (round(rest * a0 / scale, 6), round(rest * b0 / scale, 6), round(c, 6))
+
+
+def pick(rng: Optional[float] = None, shift: int = 0,
+         long_ratio: Optional[float] = None) -> Dict:
     """按分布抽一档。传入 rng 便于测试复现。
 
     shift：情绪兴奋度给的偏移（+1 上移一档 / -1 下移）。夹在首尾之间，
     不会因为一次激动就突破 A 档 —— 档位是分布，不是滑杆。
+    long_ratio：档 C 的目标概率（见 `weights()`）。
     """
     r = random.random() if rng is None else float(rng)
+    w = weights(long_ratio)
     acc = 0.0
     idx = len(BUDGETS) - 1
-    for i, (_n, prob, _lo, _hi, _per, _tot) in enumerate(BUDGETS):
-        acc += prob
+    for i, _item in enumerate(BUDGETS):
+        acc += w[i]
         if r < acc:
             idx = i
             break
