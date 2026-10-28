@@ -413,27 +413,53 @@ def _add_missing_question_marks(text: str) -> str:
 #
 # 为什么删而不改：改成正确时段会破坏原句的语义（"大清早不干正事"→"下午不干
 # 正事"不通顺），而删掉这个词或整句，剩下的部分仍然成立。**宁短勿错**。
-_TIME_PERIOD_WORDS = (
-    # (词, 合法小时区间)
-    ("大清早", lambda h: 5 <= h <= 9),
-    ("一大清早", lambda h: 5 <= h <= 9),
-    ("大早上", lambda h: 5 <= h <= 9),
-    ("清早", lambda h: 4 <= h <= 9),
-    ("凌晨", lambda h: h <= 5),
-    ("半夜", lambda h: h <= 5),
-    ("深更半夜", lambda h: h <= 5),
-    ("早上", lambda h: 4 <= h <= 10),
-    ("早晨", lambda h: 4 <= h <= 10),
-    ("上午", lambda h: 7 <= h <= 11),
-    ("中午", lambda h: 10 <= h <= 13),
-    ("大中午", lambda h: 10 <= h <= 13),
-    ("下午", lambda h: 11 <= h <= 17),
-    ("大下午", lambda h: 11 <= h <= 17),
-    ("傍晚", lambda h: 16 <= h <= 19),
-    ("晚上", lambda h: h >= 17 or h <= 3),
-    ("大晚上", lambda h: h >= 17 or h <= 3),
-    ("深夜", lambda h: h >= 21 or h <= 3),
+#: 时段词 → 它属于 time_ctx 的哪几个时段。
+#: ★ 2026-10-28（1.5.9 提交 9「时间线单一来源」）：这里原来写的是**自己的一套
+#:   小时区间**（上午 7–11、中午 10–13、下午 11–17…），而 `harness/time_ctx._PERIODS`
+#:   是 8/11/14/17/19/23 —— 同一时刻两个模块能判出相反结论。
+#:   现在只声明"这个词算哪个时段"，边界一律从 `time_ctx.hours_of()` 取。
+#:
+#: 映射原则：**宁可放宽，不可误删**。删掉一个正确的时段词（"下午一点四十"）比
+#: 放过一个模糊的（"快中午了"在 10:30）伤害大得多，所以词都尽量盖住相邻时段。
+_TIME_PERIOD_SPEC = (
+    # 词, 属于哪些时段
+    ("大清早", ("清晨",)),
+    ("一大清早", ("清晨",)),
+    ("大早上", ("清晨",)),
+    ("清早", ("清晨",)),
+    ("凌晨", ("凌晨",)),
+    ("深更半夜", ("凌晨", "深夜")),
+    ("大半夜", ("凌晨", "深夜")),
+    ("半夜", ("凌晨", "深夜")),
+    ("早上", ("清晨", "上午")),
+    ("早晨", ("清晨", "上午")),
+    ("上午", ("清晨", "上午")),
+    ("大中午", ("上午", "中午")),
+    ("中午", ("上午", "中午")),
+    ("大下午", ("中午", "下午")),
+    ("下午", ("中午", "下午")),
+    ("傍晚", ("下午", "傍晚", "晚上")),
+    ("大晚上", ("傍晚", "晚上", "深夜")),
+    ("晚上", ("傍晚", "晚上", "深夜")),
+    ("深夜", ("晚上", "深夜")),
 )
+
+
+def _load_period_hours():
+    """从 time_ctx 拿每个词的合法小时集合（唯一权威）。
+
+    导入失败（比如单独跑 de_ai 的单元测试）时退回**空集** —— 空集表示"总是矛盾"，
+    会把词删光，太危险；所以退成 None，调用方据此跳过整条判据。
+    """
+    try:
+        from harness.time_ctx import hours_of
+    except Exception:
+        return None
+    return tuple((w, hours_of(*names)) for w, names in _TIME_PERIOD_SPEC)
+
+
+_TIME_PERIOD_WORDS = _load_period_hours()
+
 #: 「自我纠正」的典型句式：模型发现前文不对、于是补一句纠正自己。
 #: 这类句子本身就是"自相矛盾"的信号 —— 哪怕时段词都对，只要出现
 #: "还有，现在…谁…"这种结构，就是在群里公开打自己脸。
@@ -460,8 +486,8 @@ def _is_self_correction(s: str, hour: int) -> bool:
     反例（必须不判）：`现在三点了，谁还上班`（无矛盾时段词）、
     `大晚上不睡觉`（时段词合法，在 13 点则只删词不删句）。
     """
-    has_bad_word = any(w in s and not ok(hour)
-                       for w, ok in _TIME_PERIOD_WORDS)
+    has_bad_word = any(w in s and hour not in hours
+                       for w, hours in (_TIME_PERIOD_WORDS or ()))
     if not has_bad_word:
         return False
     if not _CLOCK_RE.search(s):
@@ -500,8 +526,11 @@ def _strip_time_contradictions(text: str, ts=None) -> str:
         # ② 句中的时段词跟钟点矛盾 → 只删词，不删句。
         #    判据用词本身的合法区间；`大清早` 在 13 点就是矛盾，`下午` 在 13 点就合法。
         _hit_bad = False
-        for word, ok in _TIME_PERIOD_WORDS:
-            if word not in s or ok(hour):
+        if not _TIME_PERIOD_WORDS:
+            out_lines.append(line)
+            continue
+        for word, hours in _TIME_PERIOD_WORDS:
+            if word not in s or hour in hours:
                 continue
             # 例外：问候语里的时段词不删（"晚上好""早安"是寒暄，不是时间判断；
             # 跟钟点对不上的问候由 time_ctx.mismatch_note 走"点出来"的路径，

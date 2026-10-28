@@ -67,6 +67,34 @@ def period_of(ts):
     return row[1], row[2]
 
 
+def hours_of(*names):
+    """这些时段覆盖的小时集合（24 小时制，左闭右开，跨天自动折回 0–23）。
+
+    ★ 2026-10-28（1.5.9 提交 9「时间线单一来源」）：
+      `de_ai._TIME_PERIOD_WORDS` 原来自己写了一张小时区间表，与这里的
+      `_PERIODS` 边界**不一致**（time_ctx 上午从 8 点，de_ai 从 7 点）——
+      同一时刻两个模块能判出相反结论。现在那张表只声明"这个词属于哪个时段"，
+      边界一律从这里取。
+    """
+    want = {str(n) for n in (names or ()) if n}
+    if not want:
+        return frozenset()
+    out = set()
+    for i, row in enumerate(_PERIODS):
+        if row[1] not in want:
+            continue
+        start = row[0]
+        end = _PERIODS[i + 1][0] if i + 1 < len(_PERIODS) else _PERIODS[0][0] + 24
+        for h in range(start, end):
+            out.add(h % 24)
+    return frozenset(out)
+
+
+def period_names():
+    """全部时段名（按一天中的顺序）。"""
+    return tuple(row[1] for row in _PERIODS)
+
+
 def activity_of(ts):
     """这会儿在做什么（一句人话，已含"在"或动作本身）。
 
