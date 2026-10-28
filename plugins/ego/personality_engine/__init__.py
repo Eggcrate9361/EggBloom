@@ -226,6 +226,59 @@ _PLACEHOLDER_RE = re.compile(
     r"^\s*(?:\[图片\]|\[卡片\]|\[分享\].*|\[语音\]|\[视频\]|\[表情\]|\[动画表情\]|\[文件\])\s*$"
 )
 
+#: 行内占位符（2026-10-28）。整行是占位符时上面那条管用，但
+#: `[A] 你和他们去吃饭了吗 [图片]` 这种"正文 + 图片"的形态它拦不住，
+#: 于是取 12 字会切在 `[图片]` 中间，话题变成 `你和他们去吃饭了吗 [图`
+#: —— 真机 1499 条里 141 条（9.4%）长这样。所以正文里的占位符要**先删掉**。
+_INLINE_PLACEHOLDER_RE = re.compile(
+    r"\[(?:图片|卡片|分享|语音|视频|表情|动画表情|文件|引用)[^\]]{0,40}\]"
+)
+
+#: 系统生成的文本，不是用户说的话（2026-10-28）。
+#: 戳一戳会被 bot_core 合成为 `（戳了戳你，这是第 N 次）` 塞进 merged_text，
+#: 真机 1499 条里 305 条（20.3%）的话题就是这个 —— 同一句、可预测、零信息。
+_SYS_TEXT_RE = re.compile(r"^[（(]?\s*戳了戳你")
+
+#: 指令型短句（`#sl` / `/help`）不是话题。真机 207 条（13.8%）是 `#sl`：
+#: 一个词、没有语义，当话题只会让模型每轮都被告知"你们在聊 #sl"。
+_CMD_RE = re.compile(r"^[#/／][A-Za-z0-9_\-]{1,24}$")
+
+#: Bot 自己说的话在 merged_text 里带 `[我(Bot)]` 前缀。话题应该是**对方的**
+#: 关注点，拿自己的话当话题会让下一轮自己接自己（真机 9 条，量小但错得明确）。
+#:
+#: ★ 注意 merged_text 的完整形态是 `[HH:MM] [昵称] 正文`
+#:   （真机实证：`合并消息: [09:24] [我(Bot)] 然后呢`），
+#:   时间标签在昵称前面，所以必须先剥掉它才认得出"是我自己说的"。
+_SELF_LINE_RE = re.compile(r"^\s*\[我\s*\(?Bot\)?\]")
+_TIME_TAG_RE = re.compile(r"^(?:\[\d{1,2}:\d{2}(?::\d{2})?\]\s*)+")
+
+#: 开头的 @ 提及（可能叠多个）。`@AAA无理由退货   ` 剥完是空串，
+#: 应当跳过而不是当成话题。
+#:
+#: ★ 必须用 `(?=\s|$)` 收尾：中文没有空格，裸写 `@\S{1,30}` 会把
+#:   `@小a帮我看看这个` 整句吃掉，话题直接变空（真机没出现是因为 QQ
+#:   总在 @ 后面补空格 —— 实测 40 个 @ 全部带空格，但不能靠这个巧合）。
+_AT_PREFIX_RE = re.compile(r"^(?:@[^\s@]{1,40}(?=\s|$)\s*)+")
+#: 没有任何分隔的 @（`@小a帮我看看`）：只剥掉 @ 本身，不猜名字在哪结束。
+_BARE_AT_RE = re.compile(r"^@+")
+
+
+def _clip_topic(s: str, n: int = 12) -> str:
+    """截到 n 字，但不把话题切在一个没闭合的 `[` 里。
+
+    中文没有空格可切，硬截是常态；唯一必须处理的是"截断后留下半个占位符"，
+    那看起来像乱码，还会让模型以为话题里有个方括号。
+    """
+    s = (s or "").strip()
+    if len(s) <= n:
+        return s
+    cut = s[:n]
+    i = cut.rfind("[")
+    if i >= 0 and "]" not in cut[i:]:
+        # 截断点落在一个未闭合的 `[` 里 → 退回到它之前
+        cut = cut[:i].rstrip()
+    return cut
+
 
 def _strip_sender_prefix(text: str) -> str:
     """剥掉消息开头的昵称前缀。没有前缀就原样返回。"""
@@ -336,7 +389,15 @@ class ConversationState:
             self.turn_count = min(self.turn_count + 1, _TURN_CAP)
         else:
             self.turn_count = 0
-            self.current_topic = self._extract_topic(user_msg)
+            # ★ 2026-10-28：抽不出话题时**保留**上一个，不要清空。
+            #   真机 1499 条合并消息里 584 条（39%）是纯图片/表情，
+            #   `_extract_topic` 对它们返回空串 —— 直接赋值等于每发一张图
+            #   就把"在聊什么"抹掉，下一轮模型完全失去上下文。
+            #   话题的失效交给 `_IDLE_RESET_SEC`（半小时没说话就重开），
+            #   而不是交给"这条消息没有文字"。
+            _new_topic = self._extract_topic(user_msg)
+            if _new_topic:
+                self.current_topic = _new_topic
 
         if self._is_serious(user_msg):
             self.mode = "serious"
@@ -376,18 +437,51 @@ class ConversationState:
           形如 `[A] 你在哪\n[B] 你认识群主吗`。取 12 字会跨到换行后面，
           又截到 `[B]`。所以只能取**第一行**，且跳过 `[图片]`/`[分享]`
           这类占位符（它们不是内容，拿来当话题等于没话题）。
+
+        ★ 2026-10-28 第三轮（真机 1499 条合并消息逐条跑出来的）：
+          前两轮只解决了"别把昵称当话题"，剩下四类垃圾占了近一半 ——
+            · `（戳了戳你，这是第 1 次）`  305 条（20.3%），系统生成，零信息
+            · `#sl`                        207 条（13.8%），指令词，没有语义
+            · `你和他们去吃饭了吗 [图`      141 条（9.4%），切在占位符中间
+            · `@AAA无理由退货   `            39 条（2.6%），只剩一个 @
+          另外 584 条（39.0%）是纯图片/表情，返回空串 —— 这是对的，
+          但 `update()` 会因此把话题**清空**，下一轮模型就完全不知道在聊什么。
+          现在：跳过前两类、先删行内占位符再截断、剥掉 @、不清空只覆盖。
         """
-        text = _strip_sender_prefix(msg)
+        # ★ 不要在这里先对整个 text 剥一次前缀（2026-10-28）：
+        #   那样 `[我(Bot)] xxx` 会被剥成 `xxx`，下面 `_SELF_LINE_RE` 就认
+        #   不出"这是我自己说的话"，反而把它当成了话题。
+        #   剥前缀只需要逐行做（`_strip_sender_prefix` 内部已经循环两次）。
+        text = str(msg or "").strip()
         if not text:
             return ""
         # 只取第一条有实际内容的消息行
         for line in text.split("\n"):
+            line = _TIME_TAG_RE.sub("", line)
+            if _SELF_LINE_RE.match(line):
+                continue
             s = _strip_sender_prefix(line).strip()
+            if not s:
+                continue
+            # @ 提及可能叠多个，剥完只剩空就跳过这一行
+            _s2 = _AT_PREFIX_RE.sub("", s).strip()
+            if _s2 == s and s.startswith("@"):
+                # 没匹配上"@ + 名字 + 空格"的形态（例如 `@小a帮我看看`）：
+                # 只剥 @ 本身，别把正文一起吃掉
+                _s2 = _BARE_AT_RE.sub("", s).strip()
+            s = _s2
             if not s:
                 continue
             if _PLACEHOLDER_RE.fullmatch(s):
                 continue
-            return s[:12]
+            # 正文里的占位符先删（`... [图片]` → `...`），再判断是不是空
+            s = _INLINE_PLACEHOLDER_RE.sub("", s).strip()
+            if not s:
+                continue
+            # 系统生成的戳一戳文本、纯指令词，都不是话题
+            if _SYS_TEXT_RE.match(s) or _CMD_RE.match(s):
+                continue
+            return _clip_topic(s, 12)
         return ""
 
     def _is_serious(self, msg: str) -> bool:

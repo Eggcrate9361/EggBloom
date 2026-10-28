@@ -80,6 +80,16 @@
   （日志里话题长期停在 `[(/ω＼)]` 这种旧昵称上，模型每轮都被误导）。
   现改为：判据只看**这一句**；空闲超过 30 分钟重置计数与话题；计数封顶 9；
   旧状态文件载入时即夹住（否则重启第一轮还会把 93 写进提示词）。
+- **话题提取一半是垃圾**（同上，修完棘轮后才暴露）：把运行日志里 1499 条
+  `合并消息` 原文逐条喂给 `_extract_topic`，四类垃圾合计 592 条（39.5%）——
+  `（戳了戳你，这是第 1 次）` 305 条（系统生成）、`#sl` 207 条（指令词）、
+  `你和他们去吃饭了吗 [图` 141 条（12 字截断切进 `[图片]`）、
+  纯 `@` 39 条。修完垃圾 0 条。
+  同时发现 `merged_text` 的完整形态是 `[HH:MM] [昵称] 正文`，
+  时间标签挡在昵称前面，导致"这是 Bot 自己说的"识别不到。
+  另外 73.9% 的消息（纯图片/表情）本来就抽不出话题，而 `update()` 是**直接赋值**
+  —— 等于每发一张图就把"在聊什么"抹掉。现改为抽不出时**保留上一个**，
+  话题失效只交给 30 分钟空闲重置。
 - **日志行没有日期**：`qq_bot.log` 只写 `[HH:MM:SS]`，5MB 轮转后今天的 18:44
   与三天前的 18:44 无法区分，跨天只能靠"时钟回绕 6 小时"猜。
   排查 1.5.9 事故时按小时 grep 把两天的会话串成了一条。现写入端
@@ -91,7 +101,8 @@
 
 - 新增：`test_speak_gate`、`test_reply_gate`、`test_persona_form`、`test_poke_private_gate`、
   `test_mood_decay_config`、`test_time_single_source`、`test_ai_error_not_silence`、
-  `test_group_toolcall_no_crash`、`test_log_date_prefix`、`test_ego_turn_ratchet`；
+  `test_group_toolcall_no_crash`、`test_log_date_prefix`、`test_ego_turn_ratchet`、
+  `test_ego_topic_real`；
   `test_mood_form` 改到新值域；`test_reply_budget` 补长档概率用例。
 - `test_ai_error_not_silence` 锁两件事：worker 的异常必须传到等待方（不能变成"沉默"）、
   日志必须三分（崩溃 / 超时 / 沉默）且崩溃判定排在超时之前。
@@ -107,7 +118,9 @@
 - `test_ego_turn_ratchet` 用 AST 守源码（`_is_follow_up` 体内不许出现
   `turn_count`），并覆盖"旧状态文件里 93 在载入时被夹住"。
   已实测：把判据换回带 `or self.turn_count > 0` 的版本，4 项断言失败。
-- 全量 147 个测试文件；已知长期失败 1 个：`test_search_core::test_download_site_demoted`
+- `test_ego_topic_real` 的样本是**日志原文逐字复制**，不是构造的理想输入；
+  已实测：把 `_extract_topic` 换回旧实现，四类垃圾全部重新出现（7 项断言变红）。
+- 全量 148 个测试文件；已知长期失败 1 个：`test_search_core::test_download_site_demoted`
   （搜索排序随年份漂移，与上述改动无关）。
 
 ### 未做 / 已知限制
