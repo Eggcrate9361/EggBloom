@@ -33,6 +33,10 @@ PLUGIN_META = {
 DEFAULT_CONFIG = {
     "mood_enabled": True,
     "decay_seconds": 600,        # 情绪回归中性的速度（秒），越小衰减越快
+    # 兴奋度回落（1.5.9 §C.1，2026-10-28）：此前只在 _decay_arousal 里硬编码 900，
+    # 而 set_config 按 `if k in DEFAULT_CONFIG` 过滤 → **运行时根本改不动**。
+    # 兴奋比情绪回落更慢：人激动起来没那么快平复。
+    "arousal_decay_seconds": 900,
     "max_boost": 8,              # 单次事件最大情绪冲击
     "temperature_range": 0.6,    # 情绪影响温度的最大偏移量
 }
@@ -111,6 +115,7 @@ class MoodEngine:
         if not isinstance(self.moods, dict):
             self.moods = {}
         self._normalize()
+        self._migrate_arousal_domain()
 
     def _normalize(self):
         for gid, m in self.moods.items():
@@ -119,6 +124,27 @@ class MoodEngine:
             else:
                 m.setdefault("score", 0)
                 m.setdefault("updated", time.time())
+
+    def _migrate_arousal_domain(self):
+        """arousal 值域 0–1 → −1~1 的一次性迁移（1.5.9 §C.1 / #4）。
+
+        旧数据里 0.3 = 中性；新域里 0 = 中性。不迁移的话，历史情绪
+        全部会被读成"轻度亢奋"（配额偏上一档），而用户根本没做任何操作。
+
+        ★ 只改内存、**不在这里 save**：构造函数在 import 时就跑，
+          写盘会让"仅仅 import 一次"也改用户数据。下一次 update()/set_config
+          会带着新值落盘；在那之前读取路径用的也是迁移后的内存值。
+        """
+        if self.config.get("_arousal_domain") == "bipolar":
+            return
+        for m in self.moods.values():
+            if not isinstance(m, dict) or "arousal" not in m:
+                continue
+            try:
+                m["arousal"] = round(max(-1.0, min(1.0, float(m["arousal"]) - 0.3)), 3)
+            except (TypeError, ValueError):
+                m.pop("arousal", None)
+        self.config["_arousal_domain"] = "bipolar"
 
     def _save(self):
         _save_json(MOOD_PATH, {"config": self.config, "moods": self.moods})
@@ -181,15 +207,22 @@ class MoodEngine:
         return score * ratio
 
     def _decay_arousal(self, m: dict) -> float:
-        """兴奋度向 0.3 回落。半衰比 score 慢 —— 人激动起来没那么快平复。"""
-        a = float(m.get("arousal", 0.3))
+        """兴奋度向 0 回落。半衰比 score 慢 —— 人激动起来没那么快平复。
+
+        ★ 2026-10-28（1.5.9 §C.1 / #4）：值域从 0–1 改成 **−1~1**，中性是 0。
+          旧域里中性是 0.3，于是每个消费点都要写 `(a - 0.3) / 0.7` 这种换算，
+          而且"中性"根本不是 0 —— 读代码的人要时刻记得这个偏移。
+          现在 0 就是中性，正=亢奋、负=萎靡，与 valence 同一个原点。
+          旧数据在 `_migrate_arousal_domain()` 里 −0.3 迁移一次。
+        """
+        a = float(m.get("arousal", 0.0))
         updated = float(m.get("updated", time.time()))
         elapsed = max(0.0, time.time() - updated)
         decay_sec = float(self.config.get("arousal_decay_seconds", 900))
         if decay_sec <= 0:
-            return max(0.0, min(1.0, a))
+            return max(-1.0, min(1.0, a))
         ratio = 1.0 - min(1.0, elapsed / decay_sec)
-        return max(0.0, min(1.0, 0.3 + (a - 0.3) * ratio))
+        return max(-1.0, min(1.0, a * ratio))
 
     def _baseline_score(self) -> float:
         """日内情绪基线（2026-10-24）。
@@ -227,10 +260,10 @@ class MoodEngine:
     def _format(self, score: float, arousal: Optional[float] = None) -> dict:
         """score → 标签 + 二维形式参数（C.1）。
 
-        `arousal`（0–1）才决定长短快慢，`valence` 决定语气。旧实现只有
+        `arousal`（−1~1，中性 0）才决定长短快慢，`valence` 决定语气。旧实现只有
         score 一维，于是"开心"和"激动"共用同一个出口 —— 实际效果是情绪
         只能改语气，改不了说话长度。
-        没有独立 arousal 记录时按 |score|/10 推导，保证旧数据也能读出二维。
+        没有独立 arousal 记录时按 |score| 推一个正向值，保证旧数据也能读出二维。
         """
         if score >= 6:
             label = "very_happy"
@@ -245,17 +278,17 @@ class MoodEngine:
         else:
             label = "neutral"
         if arousal is None:
-            # 旧数据没有独立 arousal：中性给 0.3，越极端越高，最高 0.8。
-            # 不能直接拿 |score|/10 —— 那样"平静"会读成 0.02，落进"低迷"档，
-            # 把配额压到最低，等于一上线就让机器人变哑。
-            arousal = 0.3 + 0.5 * min(1.0, abs(float(score)) / 10.0)
-        arousal = max(0.0, min(1.0, float(arousal)))
+            # 旧数据没有独立 arousal：从 |score| 推一个**正向**兴奋度，
+            # 中性 0、极端 +0.5。绝不能拿 |score|/10 直接当 arousal 再取负，
+            # 那样"平静"会读成 0，虽然对，但"难过"会被读成 +0.9 的亢奋。
+            arousal = 0.5 * min(1.0, abs(float(score)) / 10.0)
+        arousal = max(-1.0, min(1.0, float(arousal)))
         return {
             "label": label,
             "text": MOOD_LABELS.get(label, "平静"),
             "score": round(score, 2),
             "valence": round(score / 10.0, 3),   # -1 ~ 1
-            "arousal": round(arousal, 3),        # 0 ~ 1
+            "arousal": round(arousal, 3),        # −1 ~ 1（0 = 中性）
             "boost": round(score / 10.0, 2),     # 旧字段，保留给温度与前端
         }
 
@@ -275,12 +308,18 @@ class MoodEngine:
         delta = self._delta_from_text(message)
         new_score = current + delta
         new_score = max(-10, min(10, new_score))
-        # arousal：感叹号、惊叹、长句让它上冲；每轮回落 0.05。
+        # arousal：感叹号、惊叹、长句让它上冲；每轮向 0 回落 0.05（**不越过 0**）。
+        # 旧版直接 `+ _burst - 0.05`，在 0–1 域里有 0.3 的中性垫着不会跑到负数；
+        # 换成 −1~1 之后若不夹住，连续短句会把兴奋度一路拖到 −1（假性萎靡）。
         _a = self._decay_arousal(m)
         _t = str(message or "")
         _burst = min(0.5, 0.06 * _t.count("！") + 0.06 * _t.count("!")
                      + 0.02 * min(60, len(_t)))
-        _a = max(0.0, min(1.0, _a + _burst - 0.05))
+        if _a > 0:
+            _a = max(0.0, _a - 0.05)
+        elif _a < 0:
+            _a = min(0.0, _a + 0.05)
+        _a = max(-1.0, min(1.0, _a + _burst))
         self.moods[gid] = {"score": new_score, "arousal": round(_a, 3),
                            "updated": time.time()}
         self._save()
@@ -341,16 +380,19 @@ class MoodEngine:
         except Exception:
             return dict(_NEUTRAL_FORM)
         v = float(m.get("valence") or 0.0)
-        a = float(m.get("arousal") or 0.3)
+        a = float(m.get("arousal") or 0.0)
+        # ★ 2026-10-28：#4 值域改 −1~1，中性 0。下面所有阈值的**实际落点**
+        #   与旧的 0–1 域逐点等价：旧 0.7 / 0.2（中性 0.3 两侧各 0.4）→ 新 ±0.4；
+        #   延迟与表情的斜率也按同一比例重算，避免"改了值域顺便改了行为"。
         return {
             "valence": round(v, 3),
             "arousal": round(a, 3),
-            # 兴奋 → 配额上移一档；低迷 → 下移一档
-            "budget_shift": 1 if a >= 0.7 else (-1 if a <= 0.2 else 0),
-            # 以 0.3 为中性基准：中性必须正好是 1.0 / 0，否则"没情绪"也在改行为
-            "delay_scale": round(max(0.5, 1.0 - 0.35 * (a - 0.3) / 0.7), 3),
-            "emoji_bonus": round(0.15 * (a - 0.3) / 0.7, 3),
-            "soft_punct": a < 0.3,
+            # 兴奋 → 配额上移一档；萎靡 → 下移一档
+            "budget_shift": 1 if a >= 0.4 else (-1 if a <= -0.4 else 0),
+            # 中性必须正好是 1.0 / 0 —— 否则"没情绪"也在改行为
+            "delay_scale": round(max(0.5, 1.0 - 0.35 * a), 3),
+            "emoji_bonus": round(0.15 * a, 3),
+            "soft_punct": a < 0.0,
             "filler_pool": "high" if v > 0.3 else ("low" if v < -0.3 else "mid"),
         }
 
@@ -365,7 +407,7 @@ class MoodEngine:
 
 #: 情绪关闭 / 读不到时的形式参数。所有偏移必须是 0，否则"关了情绪"仍有行为差异。
 _NEUTRAL_FORM = {
-    "valence": 0.0, "arousal": 0.3, "budget_shift": 0,
+    "valence": 0.0, "arousal": 0.0, "budget_shift": 0,
     "delay_scale": 1.0, "emoji_bonus": 0.0,
     "soft_punct": False, "filler_pool": "mid",
 }

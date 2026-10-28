@@ -71,7 +71,7 @@ def _restore_baseline(old):
         m.config["circadian_baseline"] = old
 
 
-def _set(score=0.0, arousal=0.3, gid="__test_mood__"):
+def _set(score=0.0, arousal=0.0, gid="__test_mood__"):
     import time
     m, _ = _engine()
     m.moods[gid] = {"score": float(score), "arousal": float(arousal),
@@ -81,7 +81,7 @@ def _set(score=0.0, arousal=0.3, gid="__test_mood__"):
 
 def test_neutral_is_zero():
     m, neutral = _engine()
-    gid = _set(0.0, 0.3)
+    gid = _set(0.0, 0.0)
     f = m.get_form_params(gid)
     check("中性档位不偏移", f["budget_shift"] == 0, f)
     check("中性延迟系数为 1", abs(f["delay_scale"] - 1.0) < 0.02, f)
@@ -94,23 +94,26 @@ def test_neutral_is_zero():
 
 def test_arousal_drives_form():
     m, _ = _engine()
-    hi = _set(4.0, 0.85)
+    # 1.5.9 §C.1 / #4：arousal 值域改 −1~1（0 = 中性），旧的 0.85/0.15
+    # 要减 0.3 才是新域里的同一个点。
+    hi = _set(4.0, 0.55)
     f_hi = m.get_form_params(hi)
     check("高兴奋 → 档位上移", f_hi["budget_shift"] == 1, f_hi)
     check("高兴奋 → 延迟更短", f_hi["delay_scale"] < 0.9, f_hi)
-    lo = _set(-2.0, 0.15)
+    lo = _set(-2.0, -0.5)
     f_lo = m.get_form_params(lo)
     check("低兴奋 → 档位下移", f_lo["budget_shift"] == -1, f_lo)
     check("低兴奋 → 软标点", f_lo["soft_punct"] is True, f_lo)
     check("低兴奋 → 延迟更长", f_lo["delay_scale"] >= 0.99, f_lo)
+    check("低兴奋 → 表情加成不为正", f_lo["emoji_bonus"] <= 0, f_lo)
 
 
 def test_valence_drives_pool():
     m, _ = _engine()
-    g1 = _set(6.0, 0.5)
+    g1 = _set(6.0, 0.2)
     check("正向 → high 语气池", m.get_form_params(g1)["filler_pool"] == "high",
           m.get_form_params(g1))
-    g2 = _set(-6.0, 0.5)
+    g2 = _set(-6.0, 0.2)
     check("负向 → low 语气池", m.get_form_params(g2)["filler_pool"] == "low",
           m.get_form_params(g2))
 
@@ -119,13 +122,13 @@ def test_prompt_block():
     m, _ = _engine()
     _old_bl = _zero_baseline()
     try:
-        mid = _set(1.0, 0.4)
+        mid = _set(1.0, 0.1)
         check("普通情绪不注入", m.get_prompt_block(mid) == "", m.get_prompt_block(mid))
-        hi = _set(9.0, 0.6)
+        hi = _set(9.0, 0.3)
         blk = m.get_prompt_block(hi)
         check("极端正向给短提示", "心情不错" in blk, blk)
         check("提示里没有数字", not any(ch.isdigit() for ch in blk), blk)
-        lo = _set(-9.0, 0.6)
+        lo = _set(-9.0, 0.3)
         blk2 = m.get_prompt_block(lo)
         check("极端负向给短提示", "烦" in blk2, blk2)
         check("旧格式已消失", "【当前心情】" not in blk + blk2, blk + blk2)
@@ -135,7 +138,7 @@ def test_prompt_block():
 
 def test_mood_disabled():
     m, _ = _engine()
-    gid = _set(9.0, 0.9)
+    gid = _set(9.0, 0.6)
     old = m.config.get("mood_enabled", True)
     m.config["mood_enabled"] = False
     try:
@@ -154,7 +157,34 @@ def test_old_data_compat():
     m.moods[gid] = {"score": 0.0, "updated": time.time()}
     f = m.get_form_params(gid)
     check("旧数据中性不落到下移档", f["budget_shift"] == 0, f)
-    check("旧数据 arousal 落在 0.3 附近", 0.25 <= f["arousal"] <= 0.45, f)
+    check("旧数据中性 arousal = 0（新域原点）", abs(f["arousal"]) <= 0.02, f)
+
+
+def test_arousal_domain_migration():
+    """旧 mood.json 里 0.3 = 中性；迁移后必须是 0，否则历史情绪全被读成亢奋。"""
+    import time
+    m, _ = _engine()
+    gid = "__test_mood_migrate__"
+    old_marker = m.config.pop("_arousal_domain", None)
+    old_mood = m.moods.get(gid)
+    m.moods[gid] = {"score": 0.0, "arousal": 0.3, "updated": time.time()}
+    try:
+        m._migrate_arousal_domain()
+        check("★ 0.3 → 0.0", abs(m.moods[gid]["arousal"]) < 1e-6, m.moods[gid])
+        m._migrate_arousal_domain()          # 第二次：标记已写，不该再减
+        check("幂等：第二次不再减 0.3", abs(m.moods[gid]["arousal"]) < 1e-6, m.moods[gid])
+        check("标记已写", m.config.get("_arousal_domain") == "bipolar", m.config.get("_arousal_domain"))
+        f = m.get_form_params(gid)
+        check("迁移后是中性档", f["budget_shift"] == 0 and f["soft_punct"] is False, f)
+    finally:
+        if old_mood is None:
+            m.moods.pop(gid, None)
+        else:
+            m.moods[gid] = old_mood
+        if old_marker is None:
+            m.config.pop("_arousal_domain", None)
+        else:
+            m.config["_arousal_domain"] = old_marker
 
 
 def main():
@@ -163,7 +193,8 @@ def main():
     print("=" * 58)
     for fn in (test_neutral_is_zero, test_arousal_drives_form,
                test_valence_drives_pool, test_prompt_block,
-               test_mood_disabled, test_old_data_compat):
+               test_mood_disabled, test_old_data_compat,
+               test_arousal_domain_migration):
         print(f"\n[{fn.__name__}]")
         fn()
     print("\n" + "=" * 58)
