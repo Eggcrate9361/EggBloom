@@ -133,17 +133,34 @@ def _matches_any(text: str, keywords):
 #
 # 只剥**行首的昵称前缀**，不动正文里方的方括号（`[图片]`、`[表情]` 之类
 # 由其他层处理；这里改了会影响模型看到的原文）。
-_NICK_PREFIX_RE = re.compile(r"^\s*\[[^\[\]\n]{1,30}\]\s*")
+_NICK_PREFIX_RE = re.compile(
+    r"^\s*(?:"
+    r"\[[^\[\]\n]{1,30}\]\s*"                       # [昵称] 正文
+    r"|"                                            # 或
+    r"[^\s：:\[\]]{1,16}\s*[：:](?!//)\s*"          # 昵称：正文（:(?!//) 防止吃掉 http://）
+    r")")
 
 
 def _strip_nick_prefixes(message: str) -> str:
     """把多行合并消息里每行的 `[昵称]` 前缀去掉，用于构造检索词。
 
     多行时保留分行（多条消息一起搜，语义更完整），只清前缀。
+
+    ★ 2026-10-28 修：每行**循环剥到剥不动为止**（上限 3 层）。
+      原来只剥一次，而 merged_text 的真实形态是双层前缀
+      `[(/ω＼)·8zff] [༺Matchman༻·fdma] 论文写不完了救命`
+      （外层是发送者显示名，内层是消息归属）——剥完一层检索词还带着
+      `[༺Matchman༻·fdma]`，拿这玩意去搜索必然返回垃圾。
+      真机 1.5.9 压测（20:24）实证，这就是"明明没搜到"的直接原因之一。
     """
     out = []
     for line in (message or "").replace("\r\n", "\n").split("\n"):
-        line = _NICK_PREFIX_RE.sub("", line).strip()
+        # 循环剥（_NICK_PREFIX_RE 每次只匹配行首一个 `[...]` 块）
+        for _ in range(3):
+            new = _NICK_PREFIX_RE.sub("", line).strip()
+            if new == line:
+                break
+            line = new
         if line:
             out.append(line)
     return "\n".join(out).strip()
@@ -169,6 +186,35 @@ def _needs_search(message: str) -> bool:
     return _matches_any(msg, DEFAULT_NEED_SEARCH_KEYWORDS)
 
 
+def _pick_search_query(message: str) -> str:
+    """从合并批次里挑**一行**做检索词（2026-10-28）。
+
+    依据（用户此前实测 + web_access.search_web 注释里的 4 个真机样本）：
+    自有搜索对"一个提示词"的结果明显好于整句/整批 ——
+    口语修饰词会把实体淹掉，整句得分 0.93-0.99（搜错），砍短后 1.68-1.87（搜对）。
+
+    normalize_query 只会删虚词，**不会从三条不同话题里挑一条**；
+    兜底拿整个合并批次当检索词时，批次里混着的别人闲聊就成了主语。
+    所以多行批次必须在进搜索前就收敛成一行。
+
+    挑选顺序：
+      1. 第一条**单独命中** strong/need 关键词的行（最可能是触发源）
+      2. 兜底：第一条非空行
+    长度截到 40 字（再长交给 normalize_query 也提炼不动）。
+    """
+    cfg = get_config()
+    strong = cfg.get("strong_search_keywords") or DEFAULT_STRONG_SEARCH_KEYWORDS
+    need = cfg.get("need_search_keywords") or DEFAULT_NEED_SEARCH_KEYWORDS
+    cleaned = _strip_nick_prefixes(message or "")
+    lines = [ln.strip() for ln in cleaned.split("\n") if ln.strip()]
+    if not lines:
+        return ""
+    for ln in lines:
+        if _matches_any(ln, strong) or _matches_any(ln, need):
+            return ln[:40]
+    return lines[0][:40]
+
+
 def _is_uncertain_reply(reply: str) -> bool:
     reply = (reply or "").strip()
     if not reply:
@@ -184,13 +230,12 @@ def before_reply(message: str = "", group_id: str = "", context: dict = None, **
     if not msg:
         return None
 
-    # 判定用原文，检索用去前缀后的文本。
+    # 判定用原文（整批），检索词用**挑出来的一行**（见 _pick_search_query）。
     # 判定不能改用清理后的文本：清理只删前缀，不影响关键词命中，但保留原文
     # 更符合"这条消息本身要不要查"的语义，改动面也最小。
-    query = _strip_nick_prefixes(msg) or msg
-
     if not _needs_search(msg):
         return None
+    query = _pick_search_query(msg) or _strip_nick_prefixes(msg) or msg
 
     try:
         search_result = search_web(query)
