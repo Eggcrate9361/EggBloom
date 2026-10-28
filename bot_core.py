@@ -690,7 +690,7 @@ def _private_flush(sender: str):
     if not text and not images:
         return
     if len(parts) > 1:
-        log(f"私聊[{sender[:6]}] 合并 {len(parts)} 条为一条: {text[:60]}")
+        log(f"私聊[{sender}] 合并 {len(parts)} 条为一条: {text[:60]}")
     # 造一条"像协议层推来的"消息重新入队。原 msg 里只保留 message 段：
     # 其余字段（post_type/message_type/time）由入口自己补齐。
     _msg = {
@@ -758,7 +758,7 @@ def _cancel_private_buffer(sender: str) -> int:
         except Exception:
             pass
     n = len([x for x in (rec.get("parts") or []) if str(x).strip()])
-    log(f"[撤回] 私聊[{str(sender)[:6]}] 已取消未处理合并批次（{n} 条），不回复已撤回内容")
+    log(f"[撤回] 私聊[{str(sender)}] 已取消未处理合并批次（{n} 条），不回复已撤回内容")
     return n
 
 
@@ -810,7 +810,7 @@ def _buffer_private_message(sender: str, text: str, images, msg) -> bool:
             pass
         rec["timer"] = _t
         _t.start()
-    log(f"私聊[{sender[:6]}] 入缓冲 等 {_delay:.1f}s（本批 {len(rec.get('parts') or [])} 条）"
+    log(f"私聊[{sender}] 入缓冲 等 {_delay:.1f}s（本批 {len(rec.get('parts') or [])} 条）"
         + (f" 节奏 quiet={_quiet:.1f} cap={_cap:.1f} pace={_PRIVATE_PACE.median_gap(sender):.1f}"
            if _quiet is not None else ""))
     return True
@@ -14551,7 +14551,7 @@ def main():
                         continue
                 except Exception as _bf_e:
                     # 合并机制自己坏了不能让私聊整个不回 —— 退化成旧行为
-                    log(f"私聊[{sender[:6]}] 合并不可用，按原样立刻处理: {_bf_e}")
+                    log(f"私聊[{sender}] 合并不可用，按原样立刻处理: {_bf_e}")
 
                 # 私聊活跃会话登记：对方在主动对话（私聊撤回反馈的会话门槛，与群会话一致）
                 try:
@@ -14621,7 +14621,7 @@ def main():
                             _p_allowed, _p_why = _pagent.private_gate(
                                 text=text, sender=sender)
                             if _p_allowed:
-                                log(f"[Agent] 私聊[{sender[:6]}] 触发（{_p_why}）: {text[:60]}")
+                                log(f"[Agent] 私聊[{sender}] 触发（{_p_why}）: {text[:60]}")
                                 # 会话按人 + 日期复用：同一天的多次指令共享上下文，
                                 # 跨天换新会话，避免历史无限增长。
                                 _p_day = time.strftime("%Y%m%d")
@@ -14743,7 +14743,7 @@ def main():
                 _p_react = float(_config.get("private_reply_reaction_delay", 1.2))
                 if _p_react > 0:
                     _p_delay = _p_react + (0.5 if len(text) > 50 else 0) + random.uniform(0, 0.5)
-                    log(f"私聊[{sender[:6]}] [反应延迟] {_p_delay:.1f}s")
+                    log(f"私聊[{sender}] [反应延迟] {_p_delay:.1f}s")
                     time.sleep(_p_delay)
                 reply = call_deepseek(text, _pm_call_images, sender, private_memory_context=pm_ctx, personality_temperature=_ego_temp, ego_inject_context=_ego_ctx)
                 # 私聊联网搜索标记循环（与群聊共用函数；旧版私聊吐 [搜索:] 会原样漏发）
@@ -14770,7 +14770,7 @@ def main():
                 except Exception as _qe:
                     log(f"[反问闸] 跳过: {_qe}")
                 if reply:
-                    log(f"私聊AI回复({sender[:6]}): {reply[:80]}")
+                    log(f"私聊AI回复({sender}): {reply[:80]}")
                     # 表情包匹配：剥离 [表情] 标记后发送文本
                     clean_reply, _meme_emotion = parse_meme_intent(reply)
                     sent_text = clean_reply.strip() if clean_reply else ""
