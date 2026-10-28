@@ -20,7 +20,8 @@
   默认 off；末句问号才重生一次，**不剪文本**；无条件记 `[口癖] 问号=N 收尾=M 原文=…`。
 - **persona 四参数**（`persona_form.py`）：sharpness / curiosity / warmth 三个 0–1 系数
   接上真实消费点（句首语气词、叙事陈述后的追问、表情概率与句末软化），
-  与情绪偏移叠在**同一组**形式参数上。
+  与情绪偏移叠在**同一组**形式参数上；`persona_talkativeness` 接进配额偏移
+  （`974d322`，默认 0.0 = 不偏移）。
 - **情绪二维**：`arousal` 值域 0–1 → **−1~1（中性 0）**，旧数据自动迁移；
   `emoji_bonus` / `soft_punct` / `filler_pool` 三个死字段接上消费者。
 - **能力三态 / 关系档位 / 意愿轴**（`e9709f7` / `eb27b9c`）：读好感度改到 `.affection`，
@@ -30,6 +31,10 @@
 - **私聊合并**（`217badf` / `d6bd15b`）：窗口按说话节奏算，不再拍死 8 秒。
 - **历史原文轮数可配**（`655fded`）：4 → 2 轮，多出的前缀可吃缓存。
 - **时间线单一来源**（`harness/time_ctx.hours_of`）：de_ai 的时段词表不再自带边界。
+- **入站指纹判重 + 身份锚**（`398fda2` / `98bb9b4` / `d3e42ce`）：每条消息带
+  发送者身份锚；判重窗口 30 秒 → 6 秒 → 1 秒（同一秒多条靠 message_id），
+  附真实批次回放测试。
+- **配置中心「人格与人设」区块**（`8e62a25`）：按真实段名编辑人格文本。
 - 新增配置项：`speak_gate_tier` / `speak_probability` / `speak_rate_max_per_100` /
   `speak_rate_window_min` / `consecutive_reply_limit` / `decider_min_score` /
   `reply_question_guard` / `reply_long_ratio` /
@@ -95,6 +100,17 @@
 - **搜索结果**：年份对不上换词重搜（`0824d86`）、GBK 页面乱码（`aa3f48b`）、
   天气城市取错（`eac3d73`）、360 解析读错属性（`08b7996`）。
 - **预算与锚点**：超配额先重生（`7d3c246`）、锚点与过时判据放宽（`956f685`）。
+- **回复里剥掉模型模仿来的时间戳与说话人标签**（`ce07606`）：prompt 里注入的
+  时间锚点与 `[昵称]` 形态会被模型原样复读，发送层负责剥离。
+- **工具轮收尾不带工具**（`f47c2f4`）：搜索后模型还有一轮续写，该轮不再携带
+  工具定义 —— 否则模型继续调工具、迟迟不出文本。
+- **等待判据改为按进展续期**（`bd0e13d`）：拆开"超时丢弃"与"模型不回复"
+  两条路径，工具轮有进展就不算超时。
+- **协议页卡死**（`f2ff25a`）：凭据抓取只读文件头并缓存，导航不再被单页锁死。
+- **丢弃线加结构性地板、按群取**（`f667885` / `6900011`）：真机两次全丢；
+  测试样本不进分布池。
+- **配置导出两处**（`30243d8` / `949ebbd`）：读 example 改用 utf-8-sig（带 BOM
+  也能读）；example 里 `reply_stale_drop_sec` 与新语义对齐。
 - **连续追问只增不减，话题永久冻结**（ego `personality_engine`）：
   `_is_follow_up` 末尾带了 `or self.turn_count > 0` —— 只要追问过一次，
   之后每一句都被判成追问。于是计数变成棘轮（真机涨到 `连续追问=93`），
@@ -125,7 +141,8 @@
   `test_mood_decay_config`、`test_time_single_source`、`test_ai_error_not_silence`、
   `test_group_toolcall_no_crash`、`test_log_date_prefix`、`test_ego_turn_ratchet`、
   `test_ego_topic_real`；
-  `test_mood_form` 改到新值域；`test_reply_budget` 补长档概率用例。
+  `test_mood_form` 改到新值域；`test_reply_budget` 补长档概率用例；
+  情绪测试固定日内基线，不再随跑测时刻漂移（`f729aca`）。
 - `test_ai_error_not_silence` 锁两件事：worker 的异常必须传到等待方（不能变成"沉默"）、
   日志必须三分（崩溃 / 超时 / 沉默）且崩溃判定排在超时之前。
   **它当场抓到了修复本身的 bug**：`_mark_ai_error` 里写成 `err or "unknown"`，
