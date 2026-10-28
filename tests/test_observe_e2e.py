@@ -117,6 +117,9 @@ def _run(plugin_results, *, in_session=True):
     bot_core.startup_time = time.time() - 10 ** 6
     # 关掉一切会干扰判定的旁路（生图/表情/静默时段/搜索）
     bot_core._config["quiet_hours"] = ""
+    # 发言闸（1.5.9 §3.8 提交 6）在决策器之前就拦非触发批次；
+    # 这两个用例测的是决策/观察链本身，把档位开到 4（全响应）绕开它。
+    bot_core._config["speak_gate_tier"] = 4
     bot_core._config["meme_enable"] = False
     bot_core._config["memory_scope_share"] = False
     # 回复延迟清零，测试别等

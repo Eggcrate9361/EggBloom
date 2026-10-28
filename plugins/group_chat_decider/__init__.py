@@ -817,7 +817,9 @@ def _get_participation() -> str:
 # ═══════════════════════════════════════════
 
 DECISION_PARAMS_DEFAULTS = {
-    "confidence_threshold": 0.3,    # AI 读空气低置信度放行阈值（低于此值默认放行）
+    # AI 读空气置信度阈值。★ 2026-10-28（提交 6）：语义从"低于此值默认放行"
+    # 改成"低于此值默认跳过"—— 看不懂氛围时插话比不说话更容易冒犯。
+    "confidence_threshold": 0.3,
     "max_context_messages": 5,      # 送入 AI 的最近消息条数
     # 2026-10-13 用户定调：「决策不需要考虑任何冷却」—— 群里另一个 AI 聊得流畅，
     # 而我们的 90s 冷却把 71 秒前的回复当成"不该再说"的依据，整轮被跳过。
@@ -1555,9 +1557,17 @@ def decide(message: str, group_id: str, context: dict = None) -> Optional[Decisi
         should_reply = bool(data.get("should_reply", True))
         reason = str(data.get("reason", ""))[:200]
         atmosphere = str(data.get("atmosphere", "闲聊"))
-        atmosphere_confidence = float(data.get("atmosphere_confidence", 0.0))
+        # ★ 2026-10-28（提交 6）：缺失 ≠ 低。模型没给这个字段时不能当成
+        #   "0 置信"直接跳过 —— 那会把"格式偶尔少一个键"放大成"整段不回复"。
+        #   只有**明确给了且低于阈值**才按低置信度处理。
+        _conf_raw = data.get("atmosphere_confidence")
+        try:
+            atmosphere_confidence = float(_conf_raw) if _conf_raw is not None else None
+        except (TypeError, ValueError):
+            atmosphere_confidence = None
         # 记下这次看到的氛围：下一轮 AI 失败时沿用（别退化成"未知"）
-        _remember_atmosphere(group_id, atmosphere, atmosphere_confidence)
+        _remember_atmosphere(group_id, atmosphere,
+                             float(atmosphere_confidence or 0.0))
         strategy = str(data.get("strategy", "轻松闲聊"))
         strategy_detail = str(data.get("strategy_detail", ""))[:200]
         suggested_tone = str(data.get("suggested_tone", "normal"))
@@ -1570,30 +1580,34 @@ def decide(message: str, group_id: str, context: dict = None) -> Optional[Decisi
         # AI 提供多维评分时：综合评分 + 参与度偏移决定
         has_scores = any(k in data for k in ("participate_value", "timing_score", "risk_score"))
         if has_scores:
-            scored, score_suffix, scores = _score_to_decision(data, participation,
-                                                              asked=_question_soft)
-            # 低置信度时仍默认放行（保留原保护逻辑）
+            scored, score_suffix, scores = _score_to_decision(
+                data, participation, asked=_question_soft,
+                min_score=float((context or {}).get("min_score", 0.5) or 0.5))
+            # ★ 2026-10-28（提交 6）：低置信度**默认跳过**。
+            #   旧版是"没看懂也硬回"（低置信度强制放行）—— 方案 §3.8 把它列为
+            #   "必答改成默认不回"的第一条：看不懂氛围时插话，比不说话更容易冒犯。
             conf_threshold = float(_get_decision_params()["confidence_threshold"])
-            if atmosphere_confidence < conf_threshold and not scored:
-                scored = True
-                score_suffix = f"[低置信度({atmosphere_confidence:.2f})放行] {score_suffix}"
+            if atmosphere_confidence is not None and atmosphere_confidence < conf_threshold:
+                scored = False
+                score_suffix = (f"[低置信度({atmosphere_confidence:.2f})→跳过] "
+                                f"{score_suffix}")
             should_reply = scored
             if thinking:
                 reason = f"{score_suffix} {reason} | 思考:{thinking}"
             else:
                 reason = f"{score_suffix} {reason}"
         else:
-            # 旧输出降级：低置信度时默认放行
+            # 旧输出降级：低置信度同样改为跳过（与评分分支同一口径）
             conf_threshold = float(_get_decision_params()["confidence_threshold"])
-            if atmosphere_confidence < conf_threshold:
-                should_reply = True
-                reason = f"[低置信度({atmosphere_confidence:.2f})放行] {reason}"
+            if atmosphere_confidence is not None and atmosphere_confidence < conf_threshold:
+                should_reply = False
+                reason = f"[低置信度({atmosphere_confidence:.2f})→跳过] {reason}"
 
         return DecisionV3(
             should_reply=should_reply,
             reason=reason,
             atmosphere=atmosphere,
-            atmosphere_confidence=atmosphere_confidence,
+            atmosphere_confidence=float(atmosphere_confidence or 0.0),
             strategy=strategy,
             strategy_detail=strategy_detail,
             topic=topic,
@@ -1706,7 +1720,8 @@ def _find_recent_image(ctx: dict) -> str:
     return ""
 
 
-def _score_to_decision(data: dict, participation: str, asked: bool = False) -> tuple:
+def _score_to_decision(data: dict, participation: str, asked: bool = False,
+                       min_score: float = 0.5) -> tuple:
     """基于 AI 多维评分计算最终 should_reply 与 reason 后缀。
 
     综合分 = 参与价值 * 时机 - 风险 * 风险权重(0.6)，再按参与度档位加偏移。
@@ -1748,13 +1763,18 @@ def _score_to_decision(data: dict, participation: str, asked: bool = False) -> t
     elif participation == "conservative":
         score -= 0.15
 
-    # 临界区由 AI 明确表态主导
-    if 0.25 <= score <= 0.45:
+    # 临界区由 AI 明确表态主导。
+    # ★ 2026-10-28（1.5.9 §3.8 提交 6）：放行线由主配置下发（`decider_min_score`，
+    #   默认 0.5，原硬编码 0.35）。临界区跟着放行线走 ±0.1 ——
+    #   写死 0.25~0.45 会在放行线抬到 0.5 之后变成"整段偏向不回"。
+    _ms = max(0.0, min(1.0, float(min_score if min_score is not None else 0.5)))
+    if abs(score - _ms) <= 0.1:
         should = ai_want
-        reason_suffix = f"[临界区由AI表态:{'参与' if ai_want else '不参与'}]"
+        reason_suffix = f"[临界区由AI表态:{'参与' if ai_want else '不参与'} 分={score:.2f}]"
     else:
-        should = score >= 0.35
-        reason_suffix = f"[评分 价值{value:.2f}×时机{timing:.2f}-风险{risk:.2f}={score:.2f}]"
+        should = score >= _ms
+        reason_suffix = (f"[评分 价值{value:.2f}×时机{timing:.2f}-风险{risk:.2f}"
+                         f"={score:.2f} 线{_ms:.2f}]")
 
     return should, reason_suffix, {"participate_value": value, "timing_score": timing, "risk_score": risk}
 
