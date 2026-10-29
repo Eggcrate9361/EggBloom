@@ -2892,6 +2892,8 @@ body.mech-open .rack .lb{animation:fadeMark 260ms linear 420ms forwards}
   .dial .face,.dial .face b,.axle::after{transition:none}
 }
 /* ═══ 人格页卡片化（2026-10-29）══════════════════════════════════ */
+/* hidden 属性会被 author 的 textarea{display:block} 覆盖，必须强制 */
+.pc-card textarea[hidden],.pc-card [hidden]{display:none!important}
 .pc-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
 @media (max-width:900px){.pc-grid{grid-template-columns:1fr}}
 .pc-card{background:#181512;border:1px solid rgba(232,226,214,.10);border-radius:10px;
@@ -2919,6 +2921,13 @@ body.mech-open .rack .lb{animation:fadeMark 260ms linear 420ms forwards}
 .pc-chip .row .btn{padding:3px 8px;font-size:10px}
 .pc-chip .x{margin-left:auto;color:#7d7466;cursor:pointer;font-size:11px;padding:2px 4px}
 .pc-chip .x:hover{color:#d97b6c}
+.pc-card .btn,.pc-chip .btn{color:#d8b877!important;border-color:rgba(216,184,119,.45)!important;
+  background:rgba(216,184,119,.06)!important}
+.pc-card .btn:hover,.pc-chip .btn:hover{background:rgba(216,184,119,.16)!important;color:#e3c68a!important}
+.pc-card .btn.primary{background:linear-gradient(180deg,#e3c68a,#c9a463)!important;color:#161310!important;
+  border-color:transparent!important}
+.pc-card{color:#efe9dd}
+
 
 </style>
 
@@ -5463,7 +5472,8 @@ async function pageConfig(el) {
           +     '<span class="pc-meta">' + v.length + ' 字</span></div>'
           +   '<div class="pc-prev" data-prev="' + esc(k) + '">' + esc(prev || '（空段）') + '</div>'
           +   '<textarea class="pc-edit" data-sec="' + esc(k) + '" rows="' + rows + '" spellcheck="false" hidden></textarea>'
-          +   '<div class="pc-foot"><button class="btn sm" data-pc-edit="' + esc(k) + '">编辑</button></div>'
+          +   '<div style="display:flex;gap:8px;margin-top:10px">'
+          +     '<button class="btn sm" data-pc-edit="' + esc(k) + '">编辑</button></div>'
           + '</div>';
       });
       html += '</div>';
@@ -5515,6 +5525,13 @@ async function pageConfig(el) {
           应用卡在后端只走 EGO save_personality 一个写入口（同步 ego）；
           应用后 loadCards()/load() 从 EGO 重新读回 —— 蒸馏卡等更高优先级源
           存在时后端会给 warning，这里如实转述。 ── */
+      function fmtCardTime(v) {
+        const t = Number(v);
+        if (!t || !isFinite(t)) return '—';
+        const d = new Date(t * 1000);
+        const p = n => String(n).padStart(2, '0');
+        return (d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
+      }
       async function loadCards() {
         const host = $('cCards');
         if (!host) return;
@@ -5530,8 +5547,11 @@ async function pageConfig(el) {
           '<div class="pc-chip" data-card="' + esc(c.id) + '">'
           + '<div class="n" title="' + esc(c.name) + '">' + esc(c.name) + '</div>'
           +   (c.note ? '<div class="note" title="' + esc(c.note) + '">' + esc(c.note) + '</div>' : '')
-          + '<div class="m">' + (c.sections_count || c.sections || 0) + ' 段 · '
-          +   (c.chars || 0) + ' 字 · ' + esc(String(c.updated || '').slice(5, 16) || '—') + '</div>'
+          + '<div class="m">' + (c.sections_count || 0) + ' 段 · ' + (c.chars || 0) + ' 字 · '
+          +   esc(fmtCardTime(c.updated)) + '</div>'
+          + ((c.sections_count || 0) < names.length
+              ? '<div class="m" style="color:#d97b6c">仅 ' + (c.sections_count || 0)
+                + ' 段，当前 ' + names.length + ' 段 —— 应用会丢段</div>' : '')
           + '<div class="row"><button class="btn sm primary" data-apply="' + esc(c.id) + '">应用</button>'
           +   '<span class="x" data-del="' + esc(c.id) + '" title="删除此卡">删除</span></div>'
           + '</div>'

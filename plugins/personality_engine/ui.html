@@ -387,6 +387,11 @@ async function load(){
     :'<div class="pv-msg err">没读到段落，先别保存 —— 去 plugins/personality.txt 确认内容。</div>';
   await loadCards();
 }
+function fmtTime(v){
+  const t=Number(v); if(!t||!isFinite(t)) return '—';
+  const d=new Date(t*1000), p=n=>String(n).padStart(2,'0');
+  return (d.getMonth()+1)+'-'+p(d.getDate())+' '+p(d.getHours())+':'+p(d.getMinutes());
+}
 async function loadCards(){
   let r=null; try{ r=await get(CARDS); }catch(e){ return; }
   const cards=(r&&r.cards)||[];
@@ -400,7 +405,10 @@ async function loadCards(){
     +  '<span class="pv-count">'+(c.chars||0)+' 字</span></div>'
     +(c.note?'<div class="pv-hint" style="margin-top:4px">'+esc(c.note)+'</div>':'')
     +'<div class="pv-count" style="margin-top:6px">'+(c.sections_count||0)+' 段 · '
-    +  esc(String(c.updated||'').slice(5,16)||'—')+'</div>'
+    +  esc(fmtTime(c.updated))+'</div>'
+    +(((c.sections_count||0)<Object.keys(SECTIONS).length)
+      ? '<div class="pv-count" style="color:var(--pv-bad)">仅 '+(c.sections_count||0)
+        +' 段，当前 '+Object.keys(SECTIONS).length+' 段 —— 应用会丢段</div>' : '')
     +'<div class="pv-flex" style="margin-top:10px">'
     +  '<button class="primary sm" data-apply="'+esc(c.id)+'">应用</button>'
     +  '<button class="danger sm" data-del="'+esc(c.id)+'">删除</button></div>'
