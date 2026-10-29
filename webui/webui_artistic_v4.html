@@ -3583,7 +3583,7 @@ async function pagePlugins(el) {
     ov.innerHTML = '<div class="fb" style="width:min(1080px,96vw)">'
       + '<div class="fb-hd"><b>插件 UI · ' + esc(pid) + '</b>'
       + '<button class="btn sm" data-pc>关闭</button></div>'
-      + '<iframe src="/page?plugin_id=' + encodeURIComponent(pid) + '"'
+      + '<iframe src="/page?plugin_id=' + encodeURIComponent(pid) + '&t=' + Date.now() + '"'
       + ' style="width:100%;height:72vh;border:0;background:var(--bg)"></iframe></div>';
     document.body.appendChild(ov);
     ov.querySelector('[data-pc]').onclick = () => ov.remove();
