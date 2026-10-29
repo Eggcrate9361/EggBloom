@@ -365,10 +365,15 @@ class MoodEngine:
             return ""
         f = self.get_form_params(group_id)
         v = float(f.get("valence") or 0.0)
-        if v >= 0.8:
-            return "【今天心情不错】"
-        if v <= -0.8:
-            return "【现在有点烦，别哄我】"
+        # ★ 2026-10-29（1.5.10 C3）：极端分支是**死代码** —— 真机上 valence
+        #   从没到过 ±0.8（情绪是滑动平均，越接近极值越难再涨）。
+        #   留着它只会让人以为"还有一条注入路径"，所以删分支、只留日志：
+        #   以后真出现极端值，从日志能看见，而不是悄悄改变 prompt。
+        if v >= 0.8 or v <= -0.8:
+            try:
+                print(f"[MoodEngine] 极端 valence={v:.2f}（注入分支已删，仅记录）")
+            except Exception:
+                pass
         return ""
 
     def get_form_params(self, group_id: str = "") -> dict:
@@ -397,11 +402,17 @@ class MoodEngine:
         }
 
     def get_temperature(self, group_id: str = "", base: float = None) -> float:
-        """按情绪微调温度（happy 更发散，低落更收敛）"""
+        """按情绪微调温度（happy 更发散，低落更收敛）。
+
+        ★ 2026-10-29（1.5.10 C3）：旧实现 base=None 时直接 `1.0 + shift`，
+          把全局 `ai_temperature`（默认 0.7）**整个覆盖**掉 —— 用户把温度调成
+          0.4，只要有一点情绪就变回 1.0 附近。现在改**叠加**：默认以全局温度
+          为底，再加情绪偏移；base 显式传入时行为不变。
+        """
         mood = self.get_mood(group_id)
         shift = mood["boost"] * float(self.config.get("temperature_range", 0.6))
         if base is None:
-            return 1.0 + shift
+            base = float(self.config.get("ai_temperature", 0.7) or 0.7)
         return max(0.2, min(2.0, float(base) + shift))
 
 

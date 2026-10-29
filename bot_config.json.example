@@ -122,7 +122,7 @@
   "group_msg_buffer_window_trigger": 2,
   "private_msg_buffer_window": 8,
   "speech_pace_enable": true,
-  "persona_talkativeness": 0.0,
+  "persona_talkativeness": 0.25,
   "persona_sharpness": 0.75,
   "persona_curiosity": 0.55,
   "persona_warmth": 0.35,

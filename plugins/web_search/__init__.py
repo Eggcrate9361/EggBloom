@@ -210,6 +210,19 @@ def _strip_nick_prefixes(message: str) -> str:
     return "\n".join(out).strip()
 
 
+#: 信息需求判据（1.5.10 C5b）：问号或疑问词。
+#: 真机压测里「论文写不完了救命」这类吐槽被注入了【联网搜索结果】——
+#: 关键词表里的"今天/现在"会把感叹句也当成查询，白花一次搜索和延迟。
+_INFO_NEED_RE = re.compile(
+    r"[?？]|吗|呢|怎么|怎样|为什么|为啥|多少|哪[里个些]|谁|是不是|有没有|能不能|"
+    r"可不可以|多久|几点|如何|什么"
+)
+
+
+def _looks_like_info_need(message: str) -> bool:
+    return bool(_INFO_NEED_RE.search(str(message or "")))
+
+
 def _needs_search(message: str) -> bool:
     """判断这条消息是否该联网查证。
 
@@ -226,6 +239,10 @@ def _needs_search(message: str) -> bool:
     if _matches_any(msg, DEFAULT_STRONG_SEARCH_KEYWORDS):
         return True
     if _matches_any(msg, DEFAULT_SKIP_PATTERNS):
+        return False
+    # ★ 2026-10-29（1.5.10 C5b）：普通触发词只对**问句/信息需求**生效。
+    #   感叹、吐槽、自言自语不搜 —— 否则"今天好累"也会因为命中"今天"去联网。
+    if not _looks_like_info_need(msg):
         return False
     return _matches_any(msg, DEFAULT_NEED_SEARCH_KEYWORDS)
 

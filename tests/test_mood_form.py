@@ -126,11 +126,13 @@ def test_prompt_block():
         check("普通情绪不注入", m.get_prompt_block(mid) == "", m.get_prompt_block(mid))
         hi = _set(9.0, 0.3)
         blk = m.get_prompt_block(hi)
-        check("极端正向给短提示", "心情不错" in blk, blk)
+        # 2026-10-29（1.5.10 C3）：极端注入分支是死代码（真机 valence 从未到 ±0.8），
+        # 已删分支只留日志 —— 极端值也不再进 prompt，行为影响只走 form_params。
+        check("极端正向不再注入（分支已删）", blk == "", blk)
         check("提示里没有数字", not any(ch.isdigit() for ch in blk), blk)
         lo = _set(-9.0, 0.3)
         blk2 = m.get_prompt_block(lo)
-        check("极端负向给短提示", "烦" in blk2, blk2)
+        check("极端负向不再注入（分支已删）", blk2 == "", blk2)
         check("旧格式已消失", "【当前心情】" not in blk + blk2, blk + blk2)
     finally:
         _restore_baseline(_old_bl)

@@ -293,7 +293,7 @@ DEFAULT_CONFIG = {
     "speech_pace_enable": True,
     # 人格长期系数（1.5.9 §C.2）。0 = 保持现状分布，不偏移。
     # 调高只会让回复配额更常往上走一档，不改任何文本内容。
-    "persona_talkativeness": 0.0,
+    "persona_talkativeness": 0.25,   # 1.5.10 C1：方案 §5.2 的推荐默认（0 = 永不偏移）
     # 另外三个系数（1.5.9 §5.2，0–1，默认值按方案）。消费点见 persona_form.py：
     #   sharpness  0.75  嘴毒：语气词池分档 + 句首语气词（0.18×系数 ≈ 每 7~8 条一次）
     #   curiosity  0.55  好奇：对方说**陈述句**时概率追问（0.30×系数）

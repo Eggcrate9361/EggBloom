@@ -83,7 +83,7 @@ def test_wired():
     check("pipeline 用统一入口", "_budget_shift(_form.get(\"budget_shift\", 0), _tal)" in src)
     check("配置键存在", "persona_talkativeness" in src)
     check("默认 0（保持现状）",
-          '"persona_talkativeness": 0.0' in io.open(os.path.join(ROOT, "config.py"),
+          '"persona_talkativeness": 0.25' in io.open(os.path.join(ROOT, "config.py"),
                                                     encoding="utf-8").read())
 
 

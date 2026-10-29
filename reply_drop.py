@@ -246,9 +246,16 @@ class LatencyProfile:
 LATENCY = LatencyProfile()
 
 
+#: 1.5.10 C5：新消息超过这个绝对数就**不再丢**，直接发（认了）。
+#: 真机压测：8 msg/s × 5–20s 生成 = 40–160 条新消息，比例判据下 12/12 全丢，
+#: out=0。"话头翻篇"在高压下退化成"永不回复"，这比发一句略旧的话更糟。
+_SEND_ANYWAY_OVER = 30
+
+
 def drop_reason(*, new_msgs: int = 0, age: float = 0.0, turns: int = 2,
                 hard_sec: float = 0.0, addressed: bool = False,
-                text: str = "", official_re=None) -> str:
+                text: str = "", official_re=None,
+                send_anyway_over: int = 0) -> str:
     """这条回复该不该整条丢。返回原因（空串 = 照发）。
 
     判据顺序（先问最要紧的）：
@@ -274,7 +281,14 @@ def drop_reason(*, new_msgs: int = 0, age: float = 0.0, turns: int = 2,
     except Exception:
         new_i = 0
     # ① 话头翻篇
+    #    2026-10-29（1.5.10 C5）：加绝对上限 —— 新消息超过上限时**发出去**。
+    #    理由：高频群里按比例判据永远不会满足"话头没翻"，
+    #    结果是每条回复都丢（压测 out=0）。宁可发一句接旧话头的回复，
+    #    也不能让 Bot 在热闹的群里彻底哑掉。
+    _over = int(send_anyway_over or _SEND_ANYWAY_OVER)
     if turns_i > 0 and new_i >= turns_i:
+        if _over > 0 and new_i >= _over:
+            return ""
         return f"话头翻篇 {new_i} 条新消息"
     # ② 官腔
     if text and official_re is not None:

@@ -8,7 +8,7 @@
 | 参数 | 含义 | 默认 | 影响的出口（本模块） |
 |---|---|---|---|
 | `persona_sharpness`     | 嘴毒程度 | **0.75** | 语气词池分档 + 句首语气词概率 |
-| `persona_talkativeness` | 话多程度 | 0.00 | 不在本职（`bot_core._budget_shift` 管配额档位） |
+| `persona_talkativeness` | 话多程度 | **0.25** | 不在本职（`bot_core._budget_shift` 管配额档位） |
 | `persona_curiosity`     | 好奇程度 | **0.55** | 陈述句上的追问概率 |
 | `persona_warmth`        | 温度     | **0.35** | 表情概率 + 句末软化 |
 

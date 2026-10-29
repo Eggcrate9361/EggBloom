@@ -12810,7 +12810,7 @@ def _pipeline_step(group_id):
             # 1.5.9 §B3：本轮回合预算。话术进 user 消息（dynamic），不进静态段 ——
             # 静态段会打断黄金哈希与前缀缓存。
             try:
-                _tal = float(_config.get("persona_talkativeness", 0.0) or 0.0)
+                _tal = float(_config.get("persona_talkativeness", 0.25) or 0.0)
             except Exception:
                 _tal = 0.0
             _budget = reply_budget.pick(
