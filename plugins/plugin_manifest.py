@@ -31,6 +31,8 @@ def validate(m: dict):
         return ["清单不是对象"]
     if not isinstance(m.get("id"), str) or not m.get("id", "").strip():
         errs.append("缺少 id")
+    if m.get("title") is not None and not isinstance(m.get("title"), str):
+        errs.append("title 必须是字符串")
     for key in ("provides", "requires", "permissions"):
         v = m.get(key, [])
         if v is None:

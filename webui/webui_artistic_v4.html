@@ -3508,7 +3508,8 @@ async function pagePlugins(el) {
      **空位**：斜纹底 + 插件名首字母 + 右下角「1:1」角标。空位要让人看出是
      "留给插图的位置"，就不能是纯空白 —— 纯空白会被当成图片加载失败。 */
   const card = (p, i) => {
-    const name = p.name || p.id || ('#' + i);
+    /* 1.5.10：插件统一显示中文名（display_name，来自清单 title 或内置映射） */
+    const name = p.display_name || p.name || p.id || ('#' + i);
     const en = p.enabled !== false && p.已启用 !== false;
     const desc = String(p.description || '').trim();
     const tags = Array.isArray(p.tags) ? p.tags.slice(0, 4) : [];

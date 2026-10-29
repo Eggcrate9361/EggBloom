@@ -75,6 +75,22 @@ check("★ web_search 有清单且能力声明正确",
       real.get("web_search", {}).get("provides") == ["web.search"], real.get("web_search"))
 check("无清单的旧插件不在 read_all 里（照常加载）", "proactive_talk" not in real, sorted(real))
 
+
+print("\n[4] 中文显示名（1.5.10）")
+from plugins.plugin_manager import display_name_of
+
+check("manifest.title 优先", display_name_of("vitals", {"title": "疾病与精神疾病"}) == "疾病与精神疾病")
+check("无 title 用内置映射", display_name_of("ego", None) == "人格引擎")
+check("未知插件回退原名", display_name_of("no_such_plugin", None) == "no_such_plugin")
+check("title 类型校验", "title 必须是字符串" in pmf.validate({"id": "x", "title": 1}))
+
+import json as _json
+_v = _json.load(io.open(os.path.join(ROOT, "plugins", "vitals", "plugin.json"), encoding="utf-8"))
+check("★ vitals 叫「疾病与精神疾病」", _v.get("title") == "疾病与精神疾病", _v.get("title"))
+check("★ vitals 简介「为什么会这样呢」", _v.get("description") == "为什么会这样呢", _v.get("description"))
+_s = _json.load(io.open(os.path.join(ROOT, "plugins", "schedule", "plugin.json"), encoding="utf-8"))
+check("schedule 有中文名", _s.get("title") == "日程表", _s.get("title"))
+
 print("\n" + "=" * 56)
 print(f"通过 {len(PASS)} / 失败 {len(FAIL)}")
 if FAIL:

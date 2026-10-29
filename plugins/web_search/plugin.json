@@ -1,10 +1,17 @@
-{
-  "id": "web_search",
-  "version": "1.1.0",
-  "description": "联网兜底：只在信息需求时触发搜索，先模型搜索后自家抓取",
-  "provides": ["web.search"],
-  "requires": [],
-  "budget": {"max_chars": 200},
-  "permissions": ["network"],
-  "scope": "global"
-}
+{
+  "id": "web_search",
+  "version": "1.1.0",
+  "description": "联网兜底：只在信息需求时触发搜索，先模型搜索后自家抓取",
+  "provides": [
+    "web.search"
+  ],
+  "requires": [],
+  "budget": {
+    "max_chars": 200
+  },
+  "permissions": [
+    "network"
+  ],
+  "scope": "global",
+  "title": "联网搜索"
+}

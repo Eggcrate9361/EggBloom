@@ -1,10 +1,19 @@
 {
   "id": "vitals",
   "version": "1.0.0",
-  "description": "身体与心理状态：互动有后果，只改形式不动人格",
-  "provides": ["life.vitals"],
+  "description": "为什么会这样呢",
+  "provides": [
+    "life.vitals"
+  ],
   "requires": [],
-  "budget": {"max_chars": 80, "max_parts": 1, "max_tokens": 200},
-  "permissions": ["network"],
-  "scope": "global"
-}
+  "budget": {
+    "max_chars": 80,
+    "max_parts": 1,
+    "max_tokens": 200
+  },
+  "permissions": [
+    "network"
+  ],
+  "scope": "global",
+  "title": "疾病与精神疾病"
+}

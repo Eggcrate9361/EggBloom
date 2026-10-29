@@ -109,6 +109,37 @@ def _noop(*args, **kwargs):
     return None
 
 
+#: 1.5.10：插件列表统一显示中文名（manifest 的 title 优先，其次这张表）。
+#: 只影响展示层（/api/plugins 的 display_name），不改插件 id 与任何行为。
+_DISPLAY_NAMES = {
+    "ego": "人格引擎",
+    "web_search": "联网搜索",
+    "group_chat_decider": "群聊决策器",
+    "proactive_talk": "主动消息",
+    "capabilities": "能力面板",
+    "qzone": "QQ空间",
+    "scheduler": "定时调度",
+    "slang_learner": "黑话学习",
+    "board_voice": "语音看板",
+    "echo_plugin": "回声示例",
+    "demo_typed_hook": "钩子示例",
+    "web_operator": "浏览器操作",
+    "这样脆弱的东西": "人格蒸馏",
+    "vitals": "疾病与精神疾病",
+    "schedule": "日程表",
+    "recall_manager": "撤回处理",
+    "proactive_poke": "主动戳一戳",
+}
+
+
+def display_name_of(name: str, manifest: dict = None, fallback: str = "") -> str:
+    """插件中文显示名：manifest.title > 内置映射 > 原名。"""
+    title = str((manifest or {}).get("title") or "").strip()
+    if title:
+        return title
+    return _DISPLAY_NAMES.get(str(name), fallback or str(name))
+
+
 class PluginManager:
     """插件管理器（单例）"""
 
@@ -532,6 +563,9 @@ class PluginManager:
             meta["_budget"] = dict((_mf or {}).get("budget") or {})
             meta["_permissions"] = list((_mf or {}).get("permissions") or [])
             meta["_scope"] = (_mf or {}).get("scope")
+            # 1.5.10：中文显示名（插件页按这个渲染，id 仍是英文）
+            meta["display_name"] = display_name_of(name, _mf, meta.get("name") or name)
+            meta["id"] = name
             result.append(meta)
         return result
 
