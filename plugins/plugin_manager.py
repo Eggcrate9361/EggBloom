@@ -116,6 +116,10 @@ class PluginManager:
 
     def __init__(self):
         self._plugins: Dict[str, dict] = {}           # name → {module, meta, hooks, error?}
+        # 1.5.10 H1：插件清单（plugins/<id>/plugin.json）。只读层，未接入任何运行行为。
+        self._manifests: Dict[str, dict] = {}
+        self._manifest_errors: Dict[str, list] = {}
+        self._manifest_conflicts: dict = {}
         self._ai_client: Any = None
         self._host_api: Dict[str, Any] = {}            # ABI v2：宿主注入的能力（api_call 等）
         self._emit_depth: int = 0                      # 事件总线递归保护
@@ -240,12 +244,60 @@ class PluginManager:
 
     def load_all(self) -> int:
         """发现并加载所有插件。返回成功加载的数量。"""
+        self._reload_manifests()
         count = 0
         for name in self.discover():
             ok = self.load(name)
             if ok:
                 count += 1
+        self._check_manifest_conflicts()
         return count
+
+    # ── 插件清单（1.5.10 H1/H2，只读）──────────────────────────
+    def _reload_manifests(self) -> None:
+        """读 plugins/<id>/plugin.json；无清单的老插件照常加载（兼容层）。"""
+        try:
+            from plugins import plugin_manifest as _pmf
+        except Exception as e:
+            print(f"[PluginManifest] 读取层不可用: {e}")
+            return
+        self._manifests, self._manifest_errors = {}, {}
+        for name in self.discover():
+            m, errs = _pmf.load(os.path.join(PLUGIN_DIR, name), fallback_id=name)
+            if m:
+                self._manifests[name] = m
+            if errs:
+                self._manifest_errors[name] = errs
+                print(f"[PluginManifest] {name} 清单无效（按无清单处理）: {'; '.join(errs)}")
+        if self._manifests:
+            print(f"[PluginManifest] 已读取 {len(self._manifests)} 份清单: "
+                  f"{sorted(self._manifests)}")
+
+    def _check_manifest_conflicts(self) -> None:
+        """provides/requires 冲突检查：**只警告不拒绝**（1.6.0 才改成拒绝加载）。"""
+        try:
+            from plugins import plugin_manifest as _pmf
+            self._manifest_conflicts = _pmf.check(self._manifests)
+        except Exception as e:
+            print(f"[PluginManifest] 冲突检查失败（已忽略）: {e}")
+            return
+        c = self._manifest_conflicts
+        for cap, ids in (c.get("duplicate_provides") or {}).items():
+            print(f"[PluginManifest] 能力冲突：{cap} 被多个插件声明 → {ids}")
+        for pid, cap in (c.get("missing_requires") or []):
+            print(f"[PluginManifest] 缺失依赖：{pid} 需要 {cap}，但没有插件提供")
+        for cyc in (c.get("cycles") or []):
+            print(f"[PluginManifest] 依赖环：{' → '.join(cyc)}")
+
+    def get_manifests(self) -> Dict[str, dict]:
+        return dict(self._manifests)
+
+    def get_manifest_report(self) -> dict:
+        return {
+            "manifests": dict(self._manifests),
+            "errors": dict(self._manifest_errors),
+            "conflicts": dict(self._manifest_conflicts),
+        }
 
     # ── 真插件 ABI（PLUGIN_SPEC=1）────────────────────────
 
@@ -472,6 +524,14 @@ class PluginManager:
             meta["_api_status"] = entry.get("api_status")
             mod = entry.get("module")
             meta["_api_capable"] = bool(mod) and callable(getattr(mod, "get_api_status", None))
+            # 1.5.10 H1：清单字段（无清单 = None，前端/API 可据此区分旧插件）
+            _mf = (self._manifests or {}).get(name)
+            meta["_manifest"] = _mf
+            meta["_provides"] = list((_mf or {}).get("provides") or [])
+            meta["_requires"] = list((_mf or {}).get("requires") or [])
+            meta["_budget"] = dict((_mf or {}).get("budget") or {})
+            meta["_permissions"] = list((_mf or {}).get("permissions") or [])
+            meta["_scope"] = (_mf or {}).get("scope")
             result.append(meta)
         return result
 

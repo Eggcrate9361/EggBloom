@@ -526,6 +526,21 @@ def job_start(args):
             f"用 job_output(job_id='{j.id}') 增量读取输出；job_kill 结束它。")
 
 
+#: job_output 的等待上限（1.5.10 H6）。
+#: 默认 5s 与改前一致；环境变量可放到 1800s —— 1.6.0 的 job_wait(max_sec=1800) 就在这层之上。
+JOB_WAIT_DEFAULT_MS = 5000
+JOB_WAIT_MAX_MS = int(os.environ.get("EGGBLOOM_JOB_WAIT_MAX_MS", "5000") or 5000)
+
+
+def _job_wait_ms(raw) -> int:
+    """把调用方给的 timeout_ms 夹到 [0, JOB_WAIT_MAX_MS]，缺省用默认值。"""
+    try:
+        ms = int(raw) if raw not in (None, "") else JOB_WAIT_DEFAULT_MS
+    except Exception:
+        ms = JOB_WAIT_DEFAULT_MS
+    return max(0, min(ms, JOB_WAIT_MAX_MS))
+
+
 def job_output(args):
     """读取后台任务的**新增**输出（增量，不重复返回已读过的内容）。"""
     args = args or {}
@@ -535,7 +550,7 @@ def job_output(args):
         alive = ", ".join(f"{k}({v.status})" for k, v in _JOBS.items()) or "无"
         return f"[错误] 没有后台任务 {jid}。当前任务：{alive}"
 
-    new, st = j.tail(wait=bool(args.get("wait")), timeout=float(args.get("timeout_ms") or 5000) / 1000.0)
+    new, st = j.tail(wait=bool(args.get("wait")), timeout=_job_wait_ms(args.get("timeout_ms")) / 1000.0)
     head = f"{jid} [{st}] — {j.label}（增量 {len(new)} 行）"
     body = "\n".join(new) if new else "（本次无新增输出）"
     out = head + "\n" + body
