@@ -96,6 +96,28 @@ check("PLUGIN_ACTIONS 声明", isinstance(getattr(vp, "PLUGIN_ACTIONS", None), d
 check("动作可调用且返回 dict", isinstance(vp.PLUGIN_ACTIONS["get_vitals"]({}), dict))
 check("ui.html 存在", os.path.isfile(os.path.join(ROOT, "plugins", "vitals", "ui.html")))
 
+
+print("\n[8] 历史采样与手动微调")
+import json as _json2, tempfile, shutil  # noqa: E402
+_tmp2 = tempfile.mkdtemp(prefix="vitals_")
+vp2 = vp
+_old_state = vp2._STATE_PATH
+try:
+    vp2._STATE_PATH = os.path.join(_tmp2, "vitals.json")
+    vp2._STATE = None
+    vp2.save_state(core.default_state())
+    vp2.save_state({**core.default_state(), "cold": 0.4})
+    hist = vp2._load_history()
+    check("历史有采样", len(hist) >= 1, hist)
+    r = vp2.nudge_vitals({"state": "wounded", "delta": 0.3})
+    check("nudge 生效", r.get("ok") and r["vitals"]["wounded"] >= 0.29, r)
+    bad = vp2.nudge_vitals({"state": "no_such", "delta": 1})
+    check("未知状态被拒", bad.get("ok") is False, bad)
+finally:
+    vp2._STATE_PATH = _old_state
+    vp2._STATE = None
+    shutil.rmtree(_tmp2, ignore_errors=True)
+
 print("\n" + "=" * 56)
 print(f"通过 {len(PASS)} / 失败 {len(FAIL)}")
 if FAIL:

@@ -1,3 +1,4 @@
+import io
 # -*- coding: utf-8 -*-
 """1.5.10 schedule 插件回归：周表解析 / 当前状态 / 一行 prompt / 空表零注入。"""
 import datetime
@@ -95,6 +96,35 @@ check("PLUGIN_ACTIONS 声明", isinstance(getattr(sp2, "PLUGIN_ACTIONS", None), 
       and {"get_config", "set_config", "today"} <= set(sp2.PLUGIN_ACTIONS))
 check("get_config 动作返回 dict", isinstance(sp2.PLUGIN_ACTIONS["get_config"]({}), dict))
 check("ui.html 存在", os.path.isfile(os.path.join(ROOT, "plugins", "schedule", "ui.html")))
+
+
+print("\n[7] 周视图与增删（临时配置）")
+import json as _json, tempfile, shutil  # noqa: E402
+_tmp = tempfile.mkdtemp(prefix="sched_")
+sp3 = sp2
+_old_cfg = sp3._CONFIG_PATH
+try:
+    sp3._CONFIG_PATH = os.path.join(_tmp, "config.json")
+    io.open(sp3._CONFIG_PATH, "w", encoding="utf-8").write(_json.dumps(
+        {"entries": [], "exceptions": [], "state_when_free": "在家"}))
+    sp3._CACHE["key"] = None
+    r1 = sp3.add_entry({"days": [1, 2, 3], "start": "08:00", "end": "11:40",
+                        "title": "上课", "place": "教室"})
+    check("add_entry 成功", r1.get("ok") and len(r1["config"]["entries"]) == 1, r1)
+    wk = sp3.week_view()
+    check("周视图 7 天", len(wk) == 7 and wk[0]["label"] == "周一", wk[:1])
+    check("周一有课", any(e["title"] == "上课" for e in wk[0]["entries"]), wk[0])
+    r2 = sp3.add_exception({"date": "2026-11-01"})
+    check("add_exception 成功", r2.get("ok") and "2026-11-01" in r2["config"]["exceptions"], r2)
+    r3 = sp3.remove_exception({"date": "2026-11-01"})
+    check("remove_exception 成功", r3.get("ok") and not r3["config"]["exceptions"], r3)
+    r4 = sp3.delete_entry({"index": 0})
+    check("delete_entry 成功", r4.get("ok") and not r4["config"]["entries"], r4)
+    bad = sp3.add_entry({"days": [1], "start": "10:00", "end": "09:00", "title": "x"})
+    check("非法条目被拒（不静默写坏）", bad.get("ok") is False and "结束" in bad.get("error", ""), bad)
+finally:
+    sp3._CONFIG_PATH = _old_cfg
+    shutil.rmtree(_tmp, ignore_errors=True)
 
 print("\n" + "=" * 56)
 print(f"通过 {len(PASS)} / 失败 {len(FAIL)}")

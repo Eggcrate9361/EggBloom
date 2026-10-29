@@ -137,7 +137,9 @@ def set_config(params: dict) -> dict:
 
 
 def _act_get_config(_params=None) -> dict:
-    return get_config()
+    cfg = get_config()
+    cfg["week"] = week_view()
+    return cfg
 
 
 def _act_set_config(params=None) -> dict:
@@ -148,8 +150,101 @@ def _act_today(_params=None) -> dict:
     return get_today()
 
 
+def week_view() -> list:
+    """7 天网格：[{day:1..7, label:"周一", entries:[{start,end,title,place}]}]。"""
+    cfg = load_config()
+    try:
+        entries, _exc, _free = core.parse_config(cfg)
+    except Exception:
+        return []
+    labels = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
+    out = []
+    for day in range(1, 8):
+        day_entries = sorted([e for e in entries if day in e["days"]], key=lambda x: x["start"])
+        out.append({"day": day, "label": labels[day - 1],
+                    "entries": [{"start": e["start_hm"], "end": e["end_hm"],
+                                 "title": e["title"], "place": e["place"]} for e in day_entries]})
+    return out
+
+
+def add_entry(params=None) -> dict:
+    p = params or {}
+    cfg = load_config()
+    try:
+        entry = core.parse_entry(p)
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+    cfg.setdefault("entries", []).append(
+        {"days": entry["days"], "start": entry["start_hm"], "end": entry["end_hm"],
+         "title": entry["title"], "place": entry["place"]})
+    save_config(cfg)
+    return {"ok": True, "config": get_config()}
+
+
+def delete_entry(params=None) -> dict:
+    p = params or {}
+    try:
+        idx = int(p.get("index"))
+    except Exception:
+        return {"ok": False, "error": "缺少 index"}
+    cfg = load_config()
+    entries = cfg.get("entries") or []
+    if not (0 <= idx < len(entries)):
+        return {"ok": False, "error": "index 越界"}
+    entries.pop(idx)
+    cfg["entries"] = entries
+    save_config(cfg)
+    return {"ok": True, "config": get_config()}
+
+
+def add_exception(params=None) -> dict:
+    p = params or {}
+    day = str(p.get("date") or "").strip()[:10]
+    try:
+        import datetime as _dt
+        _dt.date.fromisoformat(day)
+    except Exception:
+        return {"ok": False, "error": "日期应为 YYYY-MM-DD"}
+    cfg = load_config()
+    exc = list(cfg.get("exceptions") or [])
+    if day not in exc:
+        exc.append(day)
+    cfg["exceptions"] = exc
+    save_config(cfg)
+    return {"ok": True, "config": get_config()}
+
+
+def remove_exception(params=None) -> dict:
+    day = str((params or {}).get("date") or "").strip()[:10]
+    cfg = load_config()
+    cfg["exceptions"] = [d for d in (cfg.get("exceptions") or []) if d != day]
+    save_config(cfg)
+    return {"ok": True, "config": get_config()}
+
+
+def _act_add_entry(params=None) -> dict:
+    return add_entry(params)
+
+
+def _act_delete_entry(params=None) -> dict:
+    return delete_entry(params)
+
+
+def _act_add_exception(params=None) -> dict:
+    return add_exception(params)
+
+
+def _act_remove_exception(params=None) -> dict:
+    return remove_exception(params)
+
+
 PLUGIN_ACTIONS = {
     "get_config": _act_get_config,
     "set_config": _act_set_config,
     "today": _act_today,
+    "week": lambda _p=None: {"week": week_view()},
+    "add_entry": _act_add_entry,
+    "delete_entry": _act_delete_entry,
+    "add_exception": _act_add_exception,
+    "remove_exception": _act_remove_exception,
 }

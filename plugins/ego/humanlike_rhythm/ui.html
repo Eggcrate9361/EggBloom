@@ -52,6 +52,113 @@
   .panel:hover .panel-title::after{width:60px}
   
   </style>
+<style id="pv-kit">/*PV-KIT*/
+/* ═══════════════════════════════════════════════════════════════
+   EggBloom 插件 UI 套件（1.5.10）
+   目标：所有插件页共用一套 token 与组件，不再各写各的配色。
+   用法：插件 ui.html 里 <style> 之前引入（构建期会内联），
+        结构用 .pv-* 类；没有类的旧页面也会被基础层统一。
+   ═══════════════════════════════════════════════════════════════ */
+:root{
+  --pv-bg:#141210; --pv-panel:#1b1815; --pv-panel2:#211d18;
+  --pv-line:#332c23; --pv-line2:#3f3629;
+  --pv-ink:#e8e2d6; --pv-dim:#9a8f7d; --pv-faint:#6f6657;
+  --pv-gold:#c9a96e; --pv-gold-d:#8d6b3f;
+  --pv-ok:#7fae8a; --pv-warn:#c9935f; --pv-bad:#c96e5f;
+  --pv-r:8px; --pv-r2:6px;
+  --pv-font:'Segoe UI','Microsoft YaHei',system-ui,sans-serif;
+  --pv-mono:'Consolas','JetBrains Mono',monospace;
+}
+html,body{background:var(--pv-bg)!important;color:var(--pv-ink)}
+body{font:13px/1.65 var(--pv-font)!important;margin:0;padding:20px 22px 40px!important;
+  -webkit-font-smoothing:antialiased}
+h1,h2,h3{margin:0;font-weight:600;letter-spacing:.06em;color:var(--pv-ink)}
+h1{font-size:16px;letter-spacing:.14em;color:var(--pv-gold)}
+h2{font-size:12px;letter-spacing:.18em;color:var(--pv-dim);font-weight:500}
+code,.mono{font-family:var(--pv-mono);font-size:12px}
+a{color:var(--pv-gold)}
+
+/* ── 页头 ── */
+.pv-head{margin-bottom:16px}
+.pv-sub{color:var(--pv-dim);font-size:12px;margin-top:6px;letter-spacing:.03em}
+
+/* ── 面板 ── */
+.pv-panel{background:var(--pv-panel);border:1px solid var(--pv-line);border-radius:var(--pv-r);
+  padding:14px 16px;margin-bottom:14px}
+.pv-panel>.pv-panel-h{display:flex;align-items:center;gap:10px;margin-bottom:12px}
+.pv-panel>.pv-panel-h h2{flex:none}
+.pv-rule{flex:1;height:1px;background:var(--pv-line);opacity:.8}
+.pv-count{color:var(--pv-faint);font-size:11px;letter-spacing:.08em}
+
+/* ── 表单 ── */
+.pv-field{margin-bottom:12px}
+.pv-label{display:block;color:var(--pv-dim);font-size:12px;margin-bottom:6px;letter-spacing:.04em}
+.pv-input,.pv-textarea,.pv-select{
+  width:100%;box-sizing:border-box;background:var(--pv-panel2);color:var(--pv-ink);
+  border:1px solid var(--pv-line);border-radius:var(--pv-r2);padding:8px 10px;
+  font:12px/1.6 var(--pv-mono);outline:none;transition:border-color .15s,box-shadow .15s}
+.pv-textarea{min-height:120px;resize:vertical;font-family:var(--pv-mono)}
+.pv-input:focus,.pv-textarea:focus,.pv-select:focus{
+  border-color:var(--pv-gold);box-shadow:0 0 0 3px rgba(201,169,110,.12)}
+.pv-hint{color:var(--pv-faint);font-size:11px;margin-top:6px;line-height:1.6}
+
+/* ── 按钮 ── */
+button,.pv-btn{background:var(--pv-panel2);color:var(--pv-ink);border:1px solid var(--pv-line);
+  border-radius:var(--pv-r2);padding:7px 14px;cursor:pointer;
+  font:12px/1 var(--pv-font);letter-spacing:.04em;transition:all .15s}
+button:hover,.pv-btn:hover{border-color:var(--pv-gold);color:var(--pv-gold)}
+button:active{transform:translateY(1px)}
+button:disabled{opacity:.45;cursor:not-allowed}
+button.primary,.pv-btn.primary{background:var(--pv-gold);color:#141210;border-color:var(--pv-gold);font-weight:600}
+button.primary:hover{background:#d8bb85;color:#141210}
+button.danger:hover{border-color:var(--pv-bad);color:var(--pv-bad)}
+
+/* ── 数据条（状态/进度）── */
+.pv-rows{display:grid;gap:10px}
+.pv-row{display:grid;grid-template-columns:104px 1fr 56px;align-items:center;gap:10px}
+.pv-row .pv-lab{color:var(--pv-dim);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pv-bar{height:8px;background:#241f19;border:1px solid #2b251e;border-radius:6px;overflow:hidden}
+.pv-bar>i{display:block;height:100%;width:0;border-radius:6px;
+  background:linear-gradient(90deg,var(--pv-gold-d),var(--pv-gold));transition:width .35s ease}
+.pv-bar.warn>i{background:linear-gradient(90deg,#8d5a3f,var(--pv-warn))}
+.pv-bar.bad>i{background:linear-gradient(90deg,#8d3f3f,var(--pv-bad))}
+.pv-val{text-align:right;font-variant-numeric:tabular-nums;font-size:12px;color:var(--pv-ink)}
+
+/* ── 统计块 ── */
+.pv-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px}
+.pv-stat{background:var(--pv-panel2);border:1px solid var(--pv-line);border-radius:var(--pv-r2);
+  padding:10px 12px;text-align:center}
+.pv-stat b{display:block;font-size:20px;color:var(--pv-gold);font-variant-numeric:tabular-nums}
+.pv-stat span{display:block;color:var(--pv-faint);font-size:11px;margin-top:2px;letter-spacing:.08em}
+
+/* ── 表格 ── */
+.pv-table{width:100%;border-collapse:collapse;font-size:12px}
+.pv-table th,.pv-table td{text-align:left;padding:7px 9px;border-bottom:1px solid #272219}
+.pv-table th{color:var(--pv-dim);font-weight:500;letter-spacing:.06em;white-space:nowrap}
+.pv-table tr:last-child td{border-bottom:0}
+.pv-table td.k{color:var(--pv-gold);white-space:nowrap}
+
+/* ── 标签 / 空态 / 提示 ── */
+.pv-tag{display:inline-block;padding:2px 8px;border:1px solid var(--pv-line2);border-radius:999px;
+  color:var(--pv-dim);font-size:11px;letter-spacing:.04em}
+.pv-tag.ok{border-color:rgba(127,174,138,.45);color:var(--pv-ok)}
+.pv-tag.bad{border-color:rgba(201,110,95,.45);color:var(--pv-bad)}
+.pv-empty{color:var(--pv-faint);font-size:12px;text-align:center;padding:22px 10px}
+.pv-msg{color:var(--pv-dim);font-size:12px;margin-top:10px;min-height:18px}
+.pv-msg.ok{color:var(--pv-ok)}
+.pv-msg.err{color:var(--pv-bad)}
+.pv-flex{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.pv-grid7{display:grid;grid-template-columns:repeat(7,1fr);gap:8px}
+.pv-day{background:var(--pv-panel2);border:1px solid var(--pv-line);border-radius:var(--pv-r2);
+  padding:8px;min-height:92px}
+.pv-day h3{font-size:11px;color:var(--pv-dim);letter-spacing:.1em;margin-bottom:6px}
+.pv-day .pv-slot{font-size:11px;line-height:1.5;color:var(--pv-ink);padding:3px 0;
+  border-bottom:1px dashed #2b251e}
+.pv-day .pv-slot:last-child{border-bottom:0}
+.pv-day .pv-slot em{color:var(--pv-faint);font-style:normal;font-family:var(--pv-mono);font-size:10px}
+.pv-day.today{border-color:var(--pv-gold)}
+.pv-day.now .pv-slot.cur{color:var(--pv-gold)}
+</style>
 </head>
 <body>
   <div class="wrap">

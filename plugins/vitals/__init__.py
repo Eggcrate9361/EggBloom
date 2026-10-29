@@ -74,15 +74,38 @@ def load_state() -> dict:
         return dict(st)
 
 
+#: 历史采样上限（插件页画趋势用）。每 10 分钟最多一条，约保留 20 小时。
+_HISTORY_MAX = 120
+_HISTORY_MIN_GAP = 600
+
+
+def _load_history() -> list:
+    try:
+        raw = json.load(open(_STATE_PATH, encoding="utf-8"))
+        h = raw.get("history")
+        return [x for x in (h or []) if isinstance(x, dict)][-_HISTORY_MAX:]
+    except Exception:
+        return []
+
+
 def save_state(st: dict) -> None:
     global _STATE
     with _LOCK:
         _STATE = core.normalize(st)
         try:
             os.makedirs(_DATA, exist_ok=True)
+            hist = _load_history()
+            now = time.time()
+            if not hist or (now - float(hist[-1].get("t") or 0)) >= _HISTORY_MIN_GAP:
+                snap = {k: round(_STATE[k], 3) for k in core.STATES}
+                snap["t"] = int(now)
+                hist.append(snap)
+                hist = hist[-_HISTORY_MAX:]
+            out = dict(_STATE)
+            out["history"] = hist
             tmp = _STATE_PATH + ".tmp"
             with open(tmp, "w", encoding="utf-8") as f:
-                json.dump(_STATE, f, ensure_ascii=False, indent=1)
+                json.dump(out, f, ensure_ascii=False, indent=1)
             os.replace(tmp, _STATE_PATH)
         except Exception as e:
             print(f"[vitals] 落盘失败: {e}")
@@ -295,7 +318,24 @@ def reset_vitals(_params=None) -> dict:
 def _act_get_vitals(_params=None) -> dict:
     if not _DISEASES:
         load_diseases()
-    return {"vitals": get_vitals(), "form": get_form_params(), "diseases": len(_DISEASES)}
+    return {"vitals": get_vitals(), "form": get_form_params(),
+            "diseases": len(_DISEASES), "history": _load_history()}
+
+
+def nudge_vitals(params=None) -> dict:
+    """手动微调（插件页调试/管理员安抚）：{"state": "wounded", "delta": -0.2}。"""
+    p = params or {}
+    key = str(p.get("state") or "")
+    if key not in core.STATES:
+        return {"ok": False, "error": f"未知状态 {key}"}
+    try:
+        delta = float(p.get("delta") or 0.0)
+    except Exception:
+        return {"ok": False, "error": "delta 必须是数字"}
+    st = load_state()
+    st[key] = core.clamp(st[key] + delta)
+    save_state(st)
+    return {"ok": True, "vitals": get_vitals()}
 
 
 def _act_get_diseases(_params=None) -> dict:
@@ -306,8 +346,13 @@ def _act_reset(_params=None) -> dict:
     return reset_vitals()
 
 
+def _act_nudge(params=None) -> dict:
+    return nudge_vitals(params)
+
+
 PLUGIN_ACTIONS = {
     "get_vitals": _act_get_vitals,
     "get_diseases": _act_get_diseases,
     "reset_vitals": _act_reset,
+    "nudge_vitals": _act_nudge,
 }
