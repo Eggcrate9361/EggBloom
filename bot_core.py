@@ -1707,12 +1707,19 @@ def start_event_server():
                         # 同步性核查：应用后**从 EGO 读回来**比对 —— 不一致说明有
                         # 更高优先级人格源（如「这样脆弱的东西」已发布的蒸馏卡）在校验
                         # personality.txt，光改文件等于没改。这里必须如实告诉用户。
+                        # ★ 2026-10-29 B4：只核对**卡里那些段**。应用卡会保留【不许】
+                        #   规则层，读回来必然多出规则段 —— 那是设计，不是"另有源"，
+                        #   整体相等比较会天天误报，用户就会学会无视这条警告。
                         try:
                             _back = (_ego_get() or {}).get("sections") or {}
-                            _same = (_back == (_c.get("sections") or {}))
+                            _want = _c.get("sections") or {}
+                            _same = bool(_want) and all(
+                                str(_back.get(k) or "").strip() == str(v or "").strip()
+                                for k, v in _want.items())
                         except Exception:
                             _back, _same = {}, None
                         res = {"ok": _r.get("ok"), "card": _c, "result": _r.get("result"),
+                               "kept_rule_layer": _r.get("kept_rule_layer"),
                                "synced": _same, "sections_now": _back,
                                "warning": ("" if _same else
                                            "EGO 读回的分段与卡不一致 —— 可能另有更高优先级人格源"

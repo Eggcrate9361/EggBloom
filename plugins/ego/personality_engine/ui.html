@@ -407,7 +407,7 @@ async function loadCards(){
     +  esc(fmtTime(c.updated))+'</div>'
     +(((c.sections_count||0)<Object.keys(SECTIONS).length)
       ? '<div class="pv-count" style="color:var(--pv-bad)">仅 '+(c.sections_count||0)
-        +' 段，当前 '+Object.keys(SECTIONS).length+' 段 —— 应用会丢段</div>' : '')
+        +' 段，当前 '+Object.keys(SECTIONS).length+' 段 —— 只换人格段，规则层自动保留</div>' : '')
     +'<div class="pv-flex" style="margin-top:10px">'
     +  '<button class="primary sm" data-apply="'+esc(c.id)+'">应用</button>'
     +  '<button class="danger sm" data-del="'+esc(c.id)+'">删除</button></div>'

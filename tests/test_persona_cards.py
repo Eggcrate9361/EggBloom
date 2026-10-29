@@ -120,6 +120,64 @@ try:
     r5 = pc.save_card("防御卡", "", None)
     check("None sections 存成空卡", pc.get_card(r5["id"])["sections"] == {})
 
+    # ── 6b. 应用卡保留规则层（2026-10-29 B4：卡不能把【不许】吃掉）──────
+    #   真实事故：应用 6 段示例卡 → 诚实铁律/怎么接话/群聊规则一起消失，
+    #   因为 save_personality 只按卡里的段重写整个文件。
+    _RAW_RULES = (
+        "【我是谁】\n旧的我\n"
+        "【不许】\n"
+        "# 规则层：bot_core 按 ### 分块读取并注入 prompt\n"
+        "### 诚实铁律\n"
+        "【诚实铁律】五条同级。\n"
+        "### 群聊规则 | scope=group\n"
+        "【群里什么样】别露后台。")
+    _RULE_TAIL = _RAW_RULES.split("【不许】\n", 1)[1]
+
+    _hist = []
+
+    def _rec_save(sections):
+        _hist.append(dict(sections))
+        return {"success": True}
+
+    _fish = pc.save_card("鱼卡-测", "", {"【我是谁】": "一条鱼。", "【爱吃】": "虾干。"})
+    _r6 = pc.apply_card(_fish["id"], _rec_save, lambda: _RAW_RULES)
+    check("应用卡：人格段来自卡", _hist[-1].get("【我是谁】") == "一条鱼。")
+    check("应用卡：规则层整段逐字保留",
+          (_hist[-1].get(pc.RULE_HEADER) or "") == _RULE_TAIL)
+    check("应用卡：报告已保留规则层", _r6.get("kept_rule_layer") is True)
+
+    # 卡自带【不许】（完整快照卡）→ 用卡里的，不叠旧规则
+    _full = pc.save_card("鱼卡-完整", "", {
+        "【我是谁】": "鱼。", pc.RULE_HEADER: "### 我的规矩\n【我的规矩】x"})
+    _r6b = pc.apply_card(_full["id"], _rec_save, lambda: _RAW_RULES)
+    _sent = _hist[-1]
+    check("卡自带规则层：用卡的", "### 我的规矩" in (_sent.get(pc.RULE_HEADER) or ""))
+    check("卡自带规则层：不叠旧规则", "### 诚实铁律" not in (_sent.get(pc.RULE_HEADER) or ""))
+    check("卡自带规则层：报告未保留", _r6b.get("kept_rule_layer") is False)
+
+    # 卡里【不许】是空白 → 当没带，仍用当前文件的规则层
+    _blank = pc.save_card("鱼卡-空规则", "", {"【我是谁】": "鱼。", pc.RULE_HEADER: "  "})
+    pc.apply_card(_blank["id"], _rec_save, lambda: _RAW_RULES)
+    check("卡里规则层为空 → 仍保留",
+          (_hist[-1].get(pc.RULE_HEADER) or "") == _RULE_TAIL)
+
+    # 逃生阀：keep_rule_layer=False → 回到"卡即全集"的旧行为
+    pc.apply_card(_fish["id"], _rec_save, lambda: _RAW_RULES, keep_rule_layer=False)
+    check("关掉保留 → 只写卡的段",
+          _hist[-1] == {"【我是谁】": "一条鱼。", "【爱吃】": "虾干。"})
+
+    # 老文件没有【不许】→ 不凭空造段
+    _r7 = pc.apply_card(_fish["id"], _rec_save, lambda: "【我是谁】\n没规则层")
+    check("无规则层 → 不造假段",
+          _hist[-1] == {"【我是谁】": "一条鱼。", "【爱吃】": "虾干。"})
+    check("无规则层 → 报告未保留", _r7.get("kept_rule_layer") is False)
+
+    # split_rule_layer 契约（与 bot_core._strip_rule_layer 同：尾部切割）
+    _body, _rule = pc.split_rule_layer(_RAW_RULES)
+    check("split：正文不含【不许】", "【不许】" not in _body and "旧的我" in _body)
+    check("split：规则层含标题行", _rule.startswith("【不许】") and "### 诚实铁律" in _rule)
+    check("split：无规则层返回空串", pc.split_rule_layer("【我是谁】\n我")[1] == "")
+
     # ── 7. seed_fn 抛异常 → 只有大肥鱼 ───────────────────────────────
     _tmp2 = tempfile.mkdtemp(prefix="pcards2_")
     pc._CARDS_DIR = os.path.join(_tmp2, "persona_cards")

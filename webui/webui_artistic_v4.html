@@ -5499,7 +5499,7 @@ async function pageConfig(el) {
       const curN = Object.keys(SECTIONS).length;
       const fewer = (!active && count < curN)
         ? '<div class="pc-persona-note" style="color:var(--err)">仅 ' + count
-          + ' 段，当前 ' + curN + ' 段 —— 应用会丢段</div>' : '';
+          + ' 段，当前 ' + curN + ' 段 —— 只换人格段，规则层自动保留</div>' : '';
       return '<article class="pc-persona' + (active ? ' active' : '') + '">'
         + '<div class="pc-persona-hd"><span class="pc-persona-nm">' + esc(card.name) + '</span>'
         +   (active ? '<span class="pc-badge">当前生效</span>' : '')

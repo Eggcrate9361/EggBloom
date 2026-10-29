@@ -11,6 +11,15 @@
     本模块绝不自己打开 `personality.txt` 写文件 —— 人格卡、v4 人格编辑器、
     EGO 自带页面共用同一数据源，出现第二双写点就是事故（同步 ego 的含义）。
 
+规则层不随卡走（2026-10-29 B4）
+    `personality.txt` 里的 【不许】 段（`### 诚实铁律` / `### 怎么接话` /
+    `### 群聊规则` …）是 bot_core 直接从这个文件按 `###` 分块读的**基础设施**，
+    不是人格的一部分。所以 `apply_card` 默认把**当前文件的** 【不许】尾部原样
+    带回去：卡只负责"换成谁"，规则层负责"别把底线换没了"。
+    （真实事故：应用 6 段示例卡，诚实铁律/群聊规则一起消失，日志刷
+    "人格文件缺少规则块「X」，该段不注入"。）
+    卡自己带了 【不许】（完整快照卡）时用卡里的 —— 完整卡说了算，不混。
+
 落盘
     `data/persona_cards/<id>.json`：`{id, name, note, created, updated, sections}`。
     `data/` 是运行态目录（提交规范 §4.2）：不进 git、不进发行包。
@@ -24,6 +33,7 @@
 """
 import json
 import os
+import re
 import time
 import threading
 
@@ -47,7 +57,8 @@ def _card_path(cid):
     return os.path.join(_CARDS_DIR, f"{safe}.json")
 
 # ── 内置示例卡：大肥鱼 ────────────────────────────────────────────────
-# 段名沿用小a 的结构（save_personality 对未知段名原样保留，两卡可互换）。
+# 段名沿用小a 的结构（卡只描述"是谁 / 怎么说话"；规则层由 apply_card 自动保留，
+# 所以两卡互换也不会把【不许】弄丢）。
 # 内容刻意与小a 同族不同种：同一套"话少、一行一条"的骨架，换一条鱼进去。
 TEMPLATE_DAFEIYU = {
     "【我是谁】": (
@@ -293,20 +304,77 @@ def backup_current(raw_fn, card_id=""):
         return ""
 
 
-def apply_card(cid, save_fn, backup_raw_fn=None):
+#: 规则层标题段名。与 bot_core 的段注入契约一致：它**永远在人格文件尾部**
+#: （`bot_core._persona_rule_blocks` 就是从这一行往后按 `###` 分块读的）。
+RULE_HEADER = "【不许】"
+
+_RULE_HEADER_RE = re.compile(r"(?m)^[ \t]*【不许】[ \t]*$")
+
+
+def split_rule_layer(raw):
+    """把人格原文切成 (身份正文, 规则层原文)。
+
+    规则层 = 从 【不许】 那一行到文件末尾（**含标题行**）。文件里没有这一段时
+    返回 (raw, "")。切割契约与 `bot_core._strip_rule_layer` 相同 —— 规则层是
+    尾部，这样才能"只换人格、规则层逐字节不动"地拼回去。
+    """
+    s = str(raw or "")
+    m = _RULE_HEADER_RE.search(s)
+    if not m:
+        return s, ""
+    return s[:m.start()], s[m.start():]
+
+
+def _rule_content(rule_block):
+    """规则层原文 → 能直接塞进 sections 的正文（去掉标题行本身）。"""
+    s = str(rule_block or "")
+    if not s:
+        return ""
+    nl = s.find("\n")
+    return "" if nl < 0 else s[nl + 1:]
+
+
+def apply_card(cid, save_fn, backup_raw_fn=None, keep_rule_layer=True):
     """把卡应用为人格：**唯一写回口是注入的 save_fn**（生产 = EGO save_personality）。
 
-    返回 {"ok": bool, "result": <save_fn 返回值>}。模块不做任何 prompt/预算逻辑。
+    keep_rule_layer=True（默认）：卡里没有 【不许】 时，把**当前文件的**规则层
+    原样补回去 —— 卡负责换人，规则层负责别把底线换没了。卡自己带了 【不许】
+    （完整快照卡）就用卡里的，不叠两份。
+    关掉的唯一理由是测试/迁移要用"卡即全集"的旧行为。
+
+    返回 {"ok": bool, "result": <save_fn 返回值>, "kept_rule_layer": bool}。
+    模块不做任何 prompt/预算逻辑。
     """
     c = get_card(cid)
     if not c:
-        return {"ok": False, "result": {"error": "卡不存在"}}
+        return {"ok": False, "result": {"error": "卡不存在"}, "kept_rule_layer": False}
     if save_fn is None:
-        return {"ok": False, "result": {"error": "写入口未注入（必须走 EGO save_personality）"}}
-    backup_current(backup_raw_fn, cid)
+        return {"ok": False,
+                "result": {"error": "写入口未注入（必须走 EGO save_personality）"},
+                "kept_rule_layer": False}
+
+    # 原文只读一次：备份与规则层必须是同一份内容（两次读之间文件可能正被编辑）
     try:
-        r = save_fn(dict(c.get("sections") or {}))
+        raw_now = str((backup_raw_fn() if backup_raw_fn else "") or "")
+    except Exception:
+        raw_now = ""
+    backup_current(lambda: raw_now, cid)
+
+    secs = dict(c.get("sections") or {})
+    kept = False
+    # 卡里的【不许】是空白等于没带 —— 照样用当前文件的，别把规则层写成空标题
+    if keep_rule_layer and not str(secs.get(RULE_HEADER) or "").strip():
+        _body, _rule = split_rule_layer(raw_now)
+        _content = _rule_content(_rule)
+        if _content.strip():
+            secs[RULE_HEADER] = _content
+            kept = True
+
+    try:
+        r = save_fn(secs)
     except Exception as e:
-        return {"ok": False, "result": {"error": f"{type(e).__name__}: {e}"}}
+        return {"ok": False, "result": {"error": f"{type(e).__name__}: {e}"},
+                "kept_rule_layer": kept}
     ok = bool(isinstance(r, dict) and r.get("success"))
-    return {"ok": ok, "result": r if isinstance(r, dict) else {}}
+    return {"ok": ok, "result": r if isinstance(r, dict) else {},
+            "kept_rule_layer": kept}
