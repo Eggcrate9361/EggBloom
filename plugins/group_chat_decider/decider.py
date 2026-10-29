@@ -11,7 +11,6 @@ import json
 import sys
 import os
 import time
-import random
 import traceback
 from dataclasses import dataclass, asdict
 from typing import Optional
@@ -138,35 +137,8 @@ def _parse_json_output(text: str) -> Optional[dict]:
     return None
 
 
-# ═══════ 概率筛选层 ═══════
-
-def _probability_gate(group_id: str, user_id: str) -> bool:
-    """
-    概率门：决定是否允许进入AI决策阶段。
-    返回 True = 允许通过，False = 被概率门拦截。
-    """
-    if not plugin_config.PROBABILITY_ENABLED:
-        return True
-
-    now = time.time()
-
-    # 计算当前概率
-    prob = plugin_config.INITIAL_PROBABILITY
-
-    # 回复后临时提升
-    last_reply = _last_reply_time.get(group_id, 0)
-    if now - last_reply < plugin_config.AFTER_REPLY_DURATION:
-        elapsed = now - last_reply
-        # 从 AFTER_REPLY_BOOST 线性衰减到 INITIAL_PROBABILITY
-        ratio = elapsed / plugin_config.AFTER_REPLY_DURATION
-        prob = plugin_config.AFTER_REPLY_BOOST * (1 - ratio) + prob * ratio
-
-    # 概率门
-    if random.random() < prob:
-        return True
-    return False
-
-
+# 概率筛选层已删除（1.5.10 E4）：旧实现是 PROBABILITY_ENABLED=False 的死分支，
+# 配置与函数都删了；判断权统一在 v3 评分 + 发言闸。
 def record_reply(group_id: str, user_id: str = ""):
     """Bot 回复后记录时间（用于概率提升）"""
     _last_reply_time[group_id] = time.time()

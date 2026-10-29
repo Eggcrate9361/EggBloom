@@ -104,7 +104,61 @@ def cfg_fixture():
     }
 
 
+
+# ═══════════════════════════════════════════════════════════════════
+# 1.5.10 E 批：有键必有读取点（纯代码静态检查，不启浏览器）
+# ═══════════════════════════════════════════════════════════════════
+#: 已知 0 读取点、但暂不删的键（写了理由才允许留在这里）
+_READPOINT_ALLOW = {
+    "refuse_soften_ratio": "1.5.9 遗留，未接进 reply_gate；1.5.11 决定删除或接线",
+    "refuse_nag_after_done": "同上",
+}
+
+
+def _config_readpoints():
+    """扫 .py 源码，统计 DEFAULT_CONFIG 的每个键有没有"读取点"。
+
+    读取点 = 源码里出现 `get("key"` / `["key"]` / `config.get("key")` 形态。
+    只在 config.py 里定义、其它地方一次都没读的键，就是"配了不生效"。
+    """
+    import config as _cfgmod
+    src = ""
+    for root, _dirs, files in os.walk(ROOT):
+        if any(x in root for x in (".git", "data", "__pycache__", "node_modules", "_fontwalk")):
+            continue
+        for f in files:
+            if not f.endswith(".py"):
+                continue
+            p = os.path.join(root, f)
+            if os.path.abspath(p) == os.path.abspath(os.path.join(ROOT, "config.py")):
+                continue
+            try:
+                src += io.open(p, encoding="utf-8", errors="replace").read()
+            except OSError:
+                continue
+    missing = []
+    for key in _cfgmod.DEFAULT_CONFIG:
+        # 读取点包括：get("k") / 下标 / 作为函数参数传字面量（_delay_cfg("k", …)）
+        pats = (f'get("{key}"', f"get('{key}'", f'["{key}"]', f"['{key}']",
+                f'("{key}"', f"('{key}'")
+        if not any(p in src for p in pats):
+            missing.append(key)
+    return missing
+
+
+def check_config_readpoints():
+    missing = _config_readpoints()
+    real = [k for k in missing if k not in _READPOINT_ALLOW]
+    for k in missing:
+        if k in _READPOINT_ALLOW:
+            print(f"  [SKIP] {k}：{_READPOINT_ALLOW[k]}")
+    check("★ 每个配置键都有读取点（允许清单 %d 条）" % len(_READPOINT_ALLOW),
+          not real, real)
+
+
 def main():
+    check_config_readpoints()
+    print()
     meta = json.load(io.open(META, encoding="utf-8"))
     want_panels = [p[0] for p in meta["panels"] if any(
         f["panel"] == p[0] for f in meta["fields"].values())]

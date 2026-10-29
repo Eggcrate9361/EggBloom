@@ -74,5 +74,31 @@ class TestSmartSendSplit(unittest.TestCase):
         self.assertEqual(split_keep("真的假的。。\n走吧"), ["真的假的。。", "走吧"])
 
 
+
+
+# ── 1.5.10 E6 / E1（2026-10-29）──────────────────────────────────────
+# 旧单测用的是文件内的 split_keep 副本，测不到真代码；这里改成直接导入
+# bot_core 的实现，并补"标点在不在"的判据。
+
+class TestPunctKeptAndPrivateSplit(unittest.TestCase):
+    def test_keep_punct_keeps_question_and_period(self):
+        import bot_core
+        got = bot_core.split_sentences_keep_punct("吃了吗？吃了。")
+        self.assertEqual(got, ["吃了吗？", "吃了。"], got)
+
+    def test_keep_punct_with_newlines_and_bangs(self):
+        import bot_core
+        got = bot_core.split_sentences_keep_punct("行！\n别闹\n好吧？")
+        self.assertIn("！", got[0], got)
+        self.assertIn("？", got[-1], got)
+
+    def test_private_split_respects_limit_and_punct(self):
+        import bot_core
+        parts = bot_core.split_private_reply("吃了吗？吃了。还有吗？没呢。", limit=12)
+        self.assertGreaterEqual(len(parts), 2, parts)
+        self.assertTrue(all(p.endswith(("？", "。", "！")) for p in parts), parts)
+        self.assertEqual(bot_core.split_private_reply("abcdef", 0), ["abcdef"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

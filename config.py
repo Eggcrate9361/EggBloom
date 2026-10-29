@@ -239,11 +239,17 @@ DEFAULT_CONFIG = {
 
     # AI 行为
     "ai_temperature": 0.7,
+    # 私聊单次生成上限（token）。1.5.10 E2：原本只在 example/运行时配置里，
+    # DEFAULT_CONFIG 缺这个键 → 代码里 200 的兜底与配置 800 长期不一致。
+    "ai_private_max_tokens": 800,
+    # 私聊单次生成上限（token）。1.5.10 E2：原本只在 example/运行时配置里，
+    # DEFAULT_CONFIG 缺这个键 → 代码里 200 的兜底与配置 800 长期不一致。
+    "ai_private_max_tokens": 800,
     "ai_max_tokens": 800,
     "idle_timeout": 120,
-    "ai_top_p": 0.9,
-    "ai_frequency_penalty": 0.0,
-    "ai_presence_penalty": 0.0,
+    "ai_top_p": 1.0,          # 1.5.10 E：1.0 等价"未设置"，不改变采样
+    "ai_frequency_penalty": 0.1,   # 1.5.10 E：与 payload 原写死值一致
+    "ai_presence_penalty": 0.15,    # 同上
     # 工具最多调几轮（2026-10-23）。此前非网页任务**只给一轮**：
     # 模型调完一个工具就强制收尾，「先搜 → 读正文 → 再总结」这种三拍活走不完。
     # 3 轮够覆盖绝大多数情况，且每轮都过上下文总量闸，不会失控。

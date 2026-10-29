@@ -94,9 +94,9 @@ python test_decider.py
 |   |   |  |
 |------|--------|------|
 | ENABLED | True |    |
-| MAX_TOKENS | 200 |    token |
+| MAX_TOKENS | 800 |    token（1.5.10 E3：README 旧值 200，代码已是 800） |
 | TEMPERATURE | 0.3 |     |
-| CONFIDENCE_THRESHOLD | 0.6 |    |
+| CONFIDENCE_THRESHOLD | 0.3 |    1.5.10 E3：README 旧值 0.6，代码已是 0.3 |
 | MAX_RECENT_MSGS | 5 |     |
 
 ##  

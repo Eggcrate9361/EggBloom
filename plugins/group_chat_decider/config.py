@@ -40,12 +40,10 @@ DEGRADE_FAIL_WINDOW = 300      # 断路器统计窗口（秒）
 DEGRADE_FAIL_THRESHOLD = 3     # 窗口内失败次数 ≥ 此值 → 断路器打开
 ATMOSPHERE_TTL = 900           # "沿用上次氛围"的有效期（秒）
 
-# ═══════ 概率筛选层 ═══════
-PROBABILITY_ENABLED = False       # 关闭随机概率门——每条消息都进判断
-INITIAL_PROBABILITY = 0.25        # 基础回复概率 25%（已关闭）
-AFTER_REPLY_BOOST = 0.9           # 刚回复后临时提升到 90%
-AFTER_REPLY_DURATION = 60         # 提升持续 60 秒
-IDLE_GROUP_BOOST = 0.15
+# ═══════ 概率筛选层：已删除（1.5.10 E4）═══════
+# 旧的随机概率门（0.25/0.9/60s）从 1.5.9 起就是 PROBABILITY_ENABLED=False，
+# 代码分支永不执行，配置却还在 → "配了不生效"。这里连同 decider.py 的
+# `_probability_gate` 一起删掉；要恢复概率门，请显式加回并接进 v3。
 
 # ═══════ 注意力机制 ═══════
 ATTENTION_ENABLED = True

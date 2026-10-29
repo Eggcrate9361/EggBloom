@@ -2351,22 +2351,16 @@ def send_message(text, target_qq=None):
     if _f:
         log(f"[出站审计] 私聊已脱敏: {'; '.join(_f)}")
     chat_log("out", "private", target_qq, text, _bot_nicknames()[0])
-    if len(text) <= MSG_SPLIT_LEN:
+    # ★ 1.5.10 E1：`private_reply_max_length` 此前**只有定义没有消费点**
+    #   （UI 写着"超出会按句子拆分多条发送"，实际走的是 MSG_SPLIT_LEN 硬切）。
+    #   现在真正接上：超过这个字数 → 按句（保留标点）拼成 ≤ 上限的多条，
+    #   条数上限 4，剩余并进最后一条。设 0 则退回旧的按 MSG_SPLIT_LEN 硬切。
+    parts = split_private_reply(text, _private_reply_cap(), hard_limit=MSG_SPLIT_LEN)
+    if len(parts) <= 1:
         resp = api_call("send_private_msg",
             {"user_id": int(target_qq), "message": text})
         log(f"[发送] 私聊 → {target_qq}: retcode={resp.get('retcode')} msg={resp.get('msg','')}")
         return resp.get("retcode") == 0
-
-    # 分段发送
-    parts = []
-    while len(text) > MSG_SPLIT_LEN:
-        split_at = text.rfind("\n", 0, MSG_SPLIT_LEN)
-        if split_at == -1:
-            split_at = MSG_SPLIT_LEN
-        parts.append(text[:split_at])
-        text = text[split_at:].lstrip()
-    if text:
-        parts.append(text)
 
     for i, part in enumerate(parts):
         prefix = f"({i+1}/{len(parts)}) " if len(parts) > 1 else ""
@@ -2525,6 +2519,69 @@ def _restore_kaomoji(text, placeholders):
     return text
 
 
+def split_sentences_keep_punct(text: str):
+    """按句末标点切句，**标点留在前一句**（1.5.10 E6）。
+
+    旧实现 `re.split(r"[。！？!?\n]+")` 把分隔符一起吃掉：
+    "吃了吗？吃了。" → ["吃了吗", "吃了"]，问号和句号都没了 ——
+    群里连发时语气全靠标点，丢标点等于换了个人说话。
+    """
+    parts = re.split(r"([。！？!?；;\n]+)", str(text or ""))
+    out, buf = [], ""
+    for p in parts:
+        if p and re.fullmatch(r"[。！？!?；;\n]+", p):
+            buf += p                       # 标点/换行归前一句
+        else:
+            if buf.strip():
+                out.append(buf.strip())
+            buf = p or ""
+    if buf.strip():
+        out.append(buf.strip())
+    return out
+
+
+def _private_reply_cap() -> int:
+    """私聊单条上限（1.5.10 E1）：读 private_reply_max_length，0/非法 → 0。"""
+    try:
+        return int(_config.get("private_reply_max_length", 500) or 0)
+    except Exception:
+        return 0
+
+
+def split_private_reply(text: str, limit: int, max_parts: int = 4, hard_limit: int = 0):
+    """私聊回复拆条（1.5.10 E1）：按句拼成 ≤ limit 的多条，标点保留。
+
+    limit <= 0 → 返回 [text]（调用方走旧行为）。
+    条数超过 max_parts → 尾部并成一条；单条仍超 hard_limit → 硬切。
+    """
+    text = str(text or "")
+    if limit <= 0 or len(text) <= limit:
+        return [text]
+    sents = split_sentences_keep_punct(text)
+    parts, buf = [], ""
+    for s in sents:
+        if buf and len(buf) + len(s) > limit:
+            parts.append(buf)
+            buf = s
+        else:
+            buf += s
+    if buf:
+        parts.append(buf)
+    if len(parts) > max_parts:
+        parts = parts[:max_parts - 1] + ["".join(parts[max_parts - 1:])]
+    out = []
+    for c in parts:
+        while hard_limit > 0 and len(c) > hard_limit:
+            cut = c.rfind("\n", 0, hard_limit)
+            if cut <= 0:
+                cut = hard_limit
+            out.append(c[:cut])
+            c = c[cut:].lstrip()
+        if c:
+            out.append(c)
+    return out or [text]
+
+
 def smart_send_group(group_id, text, reply_id: int = 0):
     """群聊 AI 回复专用：按「条」发送。符号不计入字数，颜文字不拆分。自动 @QQ号 转 CQ at
 
@@ -2665,8 +2722,10 @@ def smart_send_group(group_id, text, reply_id: int = 0):
 
     # 短消息：保护颜文字 → 拆分 → 恢复
     protected_text, kaomoji_map = _protect_kaomoji(text)
-    sentences = re.split(r'[。！？!?\n]+', protected_text)
-    sentences = [_restore_kaomoji(s.strip(), kaomoji_map) for s in sentences if s.strip()]
+    # ★ 1.5.10 E6：旧写法 `re.split(r'[。！？!?\n]+')` 会把分隔符**丢掉** ——
+    #   "吃了吗？吃了。" 拆成两条后问号句号没了，语气全丢。改用保留标点的切分。
+    sentences = [_restore_kaomoji(s, kaomoji_map).strip()
+                 for s in split_sentences_keep_punct(protected_text) if s.strip()]
 
     # 兜底（1.5.7）：拆完只剩一条且明显偏长 → 说话人一口气说了几十字没有标点，
     # 真人不会这么发。按逗号/空格硬切（阈值仍是 30，但在总闸 100 以内才走到这）。
@@ -2686,7 +2745,9 @@ def smart_send_group(group_id, text, reply_id: int = 0):
     # ── 条数上限（1.5.7）──
     #    "拆得越碎越像人"有边界：模型偶尔会输出 10+ 个短句（尤其争吵/复读时），
     #    逐句发就是刷屏 10 条，比一整段更烦人。超过上限时把尾部合并成一条。
-    #    上限只约束**标点拆分**这条路径；模型自己分行的（上面 return）不受影响。
+    # 上限对两条路径都生效：模型自己分行的批次在发送前也按 GROUP_SEND_MAX_PARTS
+    # 合并（见上面 `if len(_out_lines) > GROUP_SEND_MAX_PARTS`），这里再说"不受影响"
+    # 是错的（1.5.10 E5 更正）。
     if len(sentences) > GROUP_SEND_MAX_PARTS:
         _keep = sentences[:GROUP_SEND_MAX_PARTS - 1]
         _rest = "".join(sentences[GROUP_SEND_MAX_PARTS - 1:])
@@ -10190,13 +10251,17 @@ def _call_chat_sync(messages, runtime_cfg=None, max_tokens=AI_MAX_TOKENS, stream
         tools = with_tools if isinstance(with_tools, list) else TOOLS
         content, tool_calls, usage = prov.chat(messages, tools=tools, stream=False, max_tokens=max_tokens)
         return {"content": content or "", "tool_calls": tool_calls}, usage
+    # ★ 1.5.10 E（审计补）：这三个键此前"配了不生效" —— presence/frequency 在
+    #   payload 里写死 0.15/0.1，top_p 压根没发。现在统一读配置；默认值与原来
+    #   实际行为一致（0.15 / 0.1 / 1.0），所以不改变现有输出。
     payload = {
         "model": model_name,
         "messages": messages,
         "max_tokens": max_tokens,
         "temperature": effective_temperature,
-        "presence_penalty": 0.15,
-        "frequency_penalty": 0.1,
+        "presence_penalty": float(_config.get("ai_presence_penalty", 0.15) or 0.0),
+        "frequency_penalty": float(_config.get("ai_frequency_penalty", 0.1) or 0.0),
+        "top_p": float(_config.get("ai_top_p", 1.0) or 1.0),
         "stream": stream,
     }
     if with_tools:
@@ -10656,7 +10721,8 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
     _is_reasoning_model = any(t in _mn for t in
                               ("r1", "v4", "qwq", "think", "reason", "o1-", "o3"))
     if not is_group and not _llm_config().get("use_local") and not _is_reasoning_model:
-        effective_max_tokens = min(effective_max_tokens, _config.get("ai_private_max_tokens", 200))
+        effective_max_tokens = min(effective_max_tokens,
+                                   int(_config.get("ai_private_max_tokens", 800) or 800))
     # 网页操作任务需要更大的输出预算（工具调用链 + 结果汇总）
     if _web_hint:
         effective_max_tokens = max(effective_max_tokens, _config.get("ai_web_task_max_tokens", 1500))
@@ -14785,24 +14851,27 @@ def main():
                 #   「相关记忆」只在 message 非空且 light=False 时才做检索；
                 #   传 "" 或 light=True 只剩一行元信息（实测 48 字符），等于没注入。
                 pm_ctx = ""
-                try:
-                    from sandglass_bridge import get_memory_prompt_block as _mpb
-                    # 2.0 阶段C：私聊检索层换 builder（沙漏带分 + super_memory 向量，
-                    #   scope_id=sender 与 EGO after_reply 写入侧同 key）；
-                    #   旧函数只留画像/日期/元信息层（skip_search 摘掉它的无阈值检索层，
-                    #   防双注）。builder 异常才退回旧全量路径，链路不断。
-                    from harness import memory_context as _mc
-                    _mblk = _mc.build_block(text or "", scope="private",
-                                            scope_id=str(sender), sources=("sand", "sm"))
-                    _old = (_mpb(text or "", light=False, skip_search=True) or "").strip()
-                    pm_ctx = ((_mblk + "\n\n" + _old) if _mblk else _old)[:1200]
-                except Exception:
+                # ★ 1.5.10 E（审计补）：private_memory_enable 此前无人读取。
+                #   默认 True 保持现状；关掉后不注入【用户画像】。
+                if bool(_config.get("private_memory_enable", True)):
                     try:
                         from sandglass_bridge import get_memory_prompt_block as _mpb
-                        pm_ctx = (_mpb(text or "", light=False) or "").strip()[:1200]
-                    except Exception as _e:
-                        pm_ctx = ""
-                        log(f"[私聊画像] 组装失败（已降级为空）: {_e}")
+                        # 2.0 阶段C：私聊检索层换 builder（沙漏带分 + super_memory 向量，
+                        #   scope_id=sender 与 EGO after_reply 写入侧同 key）；
+                        #   旧函数只留画像/日期/元信息层（skip_search 摘掉它的无阈值检索层，
+                        #   防双注）。builder 异常才退回旧全量路径，链路不断。
+                        from harness import memory_context as _mc
+                        _mblk = _mc.build_block(text or "", scope="private",
+                                                scope_id=str(sender), sources=("sand", "sm"))
+                        _old = (_mpb(text or "", light=False, skip_search=True) or "").strip()
+                        pm_ctx = ((_mblk + "\n\n" + _old) if _mblk else _old)[:1200]
+                    except Exception:
+                        try:
+                            from sandglass_bridge import get_memory_prompt_block as _mpb
+                            pm_ctx = (_mpb(text or "", light=False) or "").strip()[:1200]
+                        except Exception as _e:
+                            pm_ctx = ""
+                            log(f"[私聊画像] 组装失败（已降级为空）: {_e}")
 
                 # ── 画图意图检测 ──
                 draw_pattern = re.compile(r'(帮我画|给我画|给我一[张只]|画一[张只]|来一[张只]|整一[张只]|出图|画个|画只|画张|画\b|生成.*?图|的图片|生辰.*?图|生日.*?图|做个.*?图|做.*?图)', re.IGNORECASE)
