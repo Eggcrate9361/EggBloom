@@ -28,6 +28,9 @@ PLUGIN_META = {
     "description": "Bot 情绪状态机：心情曲线、自然衰减、影响语气与温度",
     "author": "EggBloom",
     "enabled": True,
+    # ★ 2026-10-30：原来没有 page 字段，插件列表里这一项没有"打开页面"入口 ——
+    #   而 plugins/mood_engine/ui.html 一直存在。补上即可（与另四个模块同构）。
+    "page": "plugins/mood_engine/ui.html",
 }
 
 DEFAULT_CONFIG = {

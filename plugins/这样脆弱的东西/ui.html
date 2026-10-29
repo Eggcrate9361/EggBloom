@@ -911,8 +911,15 @@ function fmtTokens(n) {
 }
 
 // Format date
+// ★ 2026-10-30：后端 history.json 的 timestamp 是**秒**（float，如 1790515091.18），
+//   直接 new Date() 会当毫秒解析 → 全部显示成 1970/1/22。这里按量级判一次：
+//   秒级（约 1e9）补成毫秒，毫秒级（约 1.7e12）原样用；空值给占位符，不伪装成 1970。
 function fmtDate(ts) {
-  const d = new Date(ts);
+  let v = Number(ts);
+  if (!isFinite(v) || v <= 0) return '—';
+  if (v < 1e11) v *= 1000;
+  const d = new Date(v);
+  if (isNaN(d.getTime())) return '—';
   return d.toLocaleDateString('zh-CN') + ' ' + d.toLocaleTimeString('zh-CN', {hour:'2-digit',minute:'2-digit'});
 }
 
