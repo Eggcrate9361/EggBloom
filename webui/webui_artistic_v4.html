@@ -2891,6 +2891,35 @@ body.mech-open .rack .lb{animation:fadeMark 260ms linear 420ms forwards}
 @media (prefers-reduced-motion: reduce){
   .dial .face,.dial .face b,.axle::after{transition:none}
 }
+/* ═══ 人格页卡片化（2026-10-29）══════════════════════════════════ */
+.pc-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+@media (max-width:900px){.pc-grid{grid-template-columns:1fr}}
+.pc-card{background:#181512;border:1px solid rgba(232,226,214,.10);border-radius:10px;
+  padding:12px 14px;transition:border-color .18s ease,background .18s ease;min-width:0}
+.pc-card:hover{border-color:rgba(232,226,214,.2)}
+.pc-card.open{border-color:rgba(216,184,119,.55);background:#1d1a15}
+.pc-hd{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+.pc-name{color:var(--gold,#d8b877);font-size:12px;letter-spacing:.04em}
+.pc-meta{margin-left:auto;color:var(--ink4,#7d7466);font-size:10px;font-variant-numeric:tabular-nums}
+.pc-prev{color:var(--ink3,#b9b0a0);font-size:11px;line-height:1.7;
+  display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;white-space:pre-wrap}
+.pc-edit{width:100%;min-height:120px;margin-top:8px;background:#141210;color:#efe9dd;
+  border:1px solid rgba(232,226,214,.16);border-radius:6px;padding:8px 10px;
+  font:11px/1.7 Consolas,monospace;resize:vertical;outline:none}
+.pc-edit:focus{border-color:#d8b877;box-shadow:0 0 0 3px rgba(216,184,119,.12)}
+.pc-foot{display:flex;gap:8px;margin-top:8px}
+.pc-chips{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:10px;margin-top:8px}
+.pc-chip{background:#1b1815;border:1px solid rgba(232,226,214,.12);border-radius:10px;padding:10px 12px;
+  display:flex;flex-direction:column;gap:6px;min-width:0}
+.pc-chip:hover{border-color:rgba(216,184,119,.5)}
+.pc-chip .n{color:#efe9dd;font-size:12px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pc-chip .m{color:#7d7466;font-size:10px}
+.pc-chip .note{color:#b9b0a0;font-size:10px;line-height:1.6;max-height:32px;overflow:hidden}
+.pc-chip .row{display:flex;gap:6px;align-items:center;margin-top:auto}
+.pc-chip .row .btn{padding:3px 8px;font-size:10px}
+.pc-chip .x{margin-left:auto;color:#7d7466;cursor:pointer;font-size:11px;padding:2px 4px}
+.pc-chip .x:hover{color:#d97b6c}
+
 </style>
 
 </head><body>
@@ -5416,22 +5445,28 @@ async function pageConfig(el) {
         +     '</div><div class="c" id="cPersonaTotal">当前生效内容</div></div>'
         +   '<div class="st"><div class="lab">示例注入</div><div class="v">'
         +     (conf.example_enabled === false ? '关' : '开') + '</div><div class="c">few-shot</div></div>'
-        + '</div>';
-
+        + '</div>'
+        /* 人格卡：真卡片（应用/删除），不再是"一排按钮" */
         + '<div class="fld" style="margin-bottom:var(--s4)">'
-        +   '<label>人格卡 <span class="dim">· 点卡名应用（先备份当前人格）；存为卡 = 把编辑器当前内容存成快照</span>'
+        +   '<label>人格卡 <span class="dim">· 点「应用」覆盖当前人格（先自动备份）；「存为卡」= 把当前编辑内容存成快照</span>'
         +     '<button class="btn sm" id="cCardSave" style="float:right">存为卡</button></label>'
-        +   '<div id="cCards" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">'
-        +     '<span class="dim">读取中…</span></div></div>';
+        +   '<div id="cCards"><span class="dim">读取中…</span></div></div>'
+        /* 人格段：2 列卡片 */
+        + '<div class="pc-grid" id="pcGrid">';
 
       names.forEach(function (k) {
         const v = String(secs[k] || '');
-        const rows = Math.min(16, Math.max(3, Math.ceil(v.length / 38)));
-        html += '<div class="fld" style="margin-bottom:var(--s4)">'
-          + '<label>' + esc(k) + ' <span class="dim">· ' + v.length + ' 字</span></label>'
-          + '<textarea data-sec="' + esc(k) + '" rows="' + rows + '" spellcheck="false"></textarea>'
+        const prev = v.replace(/\s+/g, ' ').slice(0, 120);
+        const rows = Math.min(16, Math.max(4, Math.ceil(v.length / 42)));
+        html += '<div class="pc-card" data-pc="' + esc(k) + '">'
+          +   '<div class="pc-hd"><span class="pc-name">' + esc(k) + '</span>'
+          +     '<span class="pc-meta">' + v.length + ' 字</span></div>'
+          +   '<div class="pc-prev" data-prev="' + esc(k) + '">' + esc(prev || '（空段）') + '</div>'
+          +   '<textarea class="pc-edit" data-sec="' + esc(k) + '" rows="' + rows + '" spellcheck="false" hidden></textarea>'
+          +   '<div class="pc-foot"><button class="btn sm" data-pc-edit="' + esc(k) + '">编辑</button></div>'
           + '</div>';
       });
+      html += '</div>';
       if (!names.length) {
         html += '<div class="errbox">没读到任何段落。人格文件可能是空的 —— '
           + '先别保存，去 plugins/personality.txt 确认内容。</div>';
@@ -5454,6 +5489,16 @@ async function pageConfig(el) {
 
       inner.innerHTML = html;
       // 值用 property 写入，避免把人格正文塞进 HTML 属性里被转义破坏
+      qsa('[data-pc-edit]').forEach(function (b) {
+        b.onclick = function () {
+          const card = b.closest('.pc-card');
+          const ta = card.querySelector('textarea[data-sec]');
+          const open = card.classList.toggle('open');
+          ta.hidden = !open;
+          b.textContent = open ? '收起' : '编辑';
+          if (open) { ta.focus(); ta.selectionStart = ta.selectionEnd = 0; }
+        };
+      });
       qsa('#cPersonaBody textarea[data-sec]').forEach(function (t) {
         t.value = String(secs[t.dataset.sec] || '');
         t.addEventListener('input', function () {
@@ -5461,6 +5506,8 @@ async function pageConfig(el) {
             .reduce((s, x) => s + x.value.length, 0);
           const tot = $('cPersonaTotal');
           if (tot) tot.textContent = '改后 ' + n + ' 字';
+          const prev = document.querySelector('[data-prev="' + t.dataset.sec + '"]');
+          if (prev) prev.textContent = t.value.replace(/\s+/g, ' ').slice(0, 120) || '（空段）';
         });
       });
 
@@ -5479,13 +5526,17 @@ async function pageConfig(el) {
           host.innerHTML = '<span class="dim">还没有卡 —— 点「存为卡」把当前人格存成快照</span>';
           return;
         }
-        host.innerHTML = cards.map(c =>
-          '<span class="btn sm" data-card="' + esc(c.id) + '" title="' + esc(c.note || '') + '"'
-          + ' style="display:inline-flex;align-items:center;gap:6px;padding-right:6px">'
-          + esc(c.name) + '<i class="dim" style="font-style:normal;font-size:9px">' + (c.chars || 0) + '</i>'
-          + '<b data-del="' + esc(c.id) + '" style="cursor:pointer;font-weight:400;color:var(--ink4)" title="删除此卡">✕</b></span>'
-        ).join('') + (r.seeded && r.seeded.length
-          ? '<span class="dim" style="font-size:9px">首启已生成：' + esc(r.seeded.join('、')) + '</span>' : '');
+        host.innerHTML = '<div class="pc-chips">' + cards.map(c =>
+          '<div class="pc-chip" data-card="' + esc(c.id) + '">'
+          + '<div class="n" title="' + esc(c.name) + '">' + esc(c.name) + '</div>'
+          +   (c.note ? '<div class="note" title="' + esc(c.note) + '">' + esc(c.note) + '</div>' : '')
+          + '<div class="m">' + (c.sections_count || c.sections || 0) + ' 段 · '
+          +   (c.chars || 0) + ' 字 · ' + esc(String(c.updated || '').slice(5, 16) || '—') + '</div>'
+          + '<div class="row"><button class="btn sm primary" data-apply="' + esc(c.id) + '">应用</button>'
+          +   '<span class="x" data-del="' + esc(c.id) + '" title="删除此卡">删除</span></div>'
+          + '</div>'
+        ).join('') + '</div>' + (r.seeded && r.seeded.length
+          ? '<div class="dim" style="font-size:9px;margin-top:6px">首启已生成：' + esc(r.seeded.join('、')) + '</div>' : '');
         qsa('[data-card]', host).forEach(ch => ch.onclick = async (e) => {
           if (e.target.dataset.del) return;      /* 点的是 ✕ 删除钮 */
           const id = ch.dataset.card;
