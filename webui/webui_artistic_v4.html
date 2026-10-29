@@ -5416,6 +5416,12 @@ async function pageConfig(el) {
         +     (conf.example_enabled === false ? '关' : '开') + '</div><div class="c">few-shot</div></div>'
         + '</div>';
 
+        + '<div class="fld" style="margin-bottom:var(--s4)">'
+        +   '<label>人格卡 <span class="dim">· 点卡名应用（先备份当前人格）；存为卡 = 把编辑器当前内容存成快照</span>'
+        +     '<button class="btn sm" id="cCardSave" style="float:right">存为卡</button></label>'
+        +   '<div id="cCards" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">'
+        +     '<span class="dim">读取中…</span></div></div>';
+
       names.forEach(function (k) {
         const v = String(secs[k] || '');
         const rows = Math.min(16, Math.max(3, Math.ceil(v.length / 38)));
@@ -5588,6 +5594,7 @@ async function pageConfig(el) {
       };
       const re = $('cPersonaReload');
       if (re) re.onclick = function () { load(); };
+      await loadCards();               /* 人格卡条（I1）：随人格一起刷新 */
     }
 
     hd.onclick = function () {
