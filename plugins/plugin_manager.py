@@ -20,6 +20,8 @@ EggBloom 插件管理器
 """
 
 import importlib
+import io
+import re
 import json
 import os
 import sys
@@ -50,6 +52,57 @@ HOOK_SEMANTICS = ("waterfall", "guard", "observe")
 # （失败关闭：宁可拒绝，也不静默放行一个不安全的卸载）。
 _INFLIGHT: Dict[str, int] = {}
 _INFLIGHT_CV = threading.Condition(threading.Lock())
+
+
+#: 1.5.10 F1：插件源码里出现这些直连发送接口 → 拒绝加载。
+#: 它们绕过 outbound 队列（串行/限频/去重/日志），等于把 §3 立的闸推倒。
+_FORBIDDEN_SEND_RE = re.compile(
+    r"send_(?:private|group)_msg|/send_private_msg|/send_group_msg"
+)
+
+
+def scan_forbidden_send(plugin_dir: str):
+    """扫插件目录里的 .py，返回 [(相对路径, 行号, 行内容)]。空 = 通过。"""
+    hits = []
+    for root, dirs, files in os.walk(plugin_dir):
+        dirs[:] = [d for d in dirs if d not in ("__pycache__", "data", "assets")]
+        for f in files:
+            if not f.endswith(".py"):
+                continue
+            p = os.path.join(root, f)
+            try:
+                text = io.open(p, encoding="utf-8", errors="replace").read()
+            except OSError:
+                continue
+            # 只查**代码**：注释与文档字符串里提到旧接口名不算违规
+            # （否则一份说明文档就能让插件加载失败 —— 反而逼人删注释）。
+            Q = chr(34) * 3
+            QS = chr(39) * 3
+            in_doc = None
+            for lineno, line in enumerate(text.splitlines(), 1):
+                stripped = line.strip()
+                if in_doc:
+                    if in_doc in stripped:
+                        in_doc = None
+                    continue
+                if stripped.startswith("#"):
+                    continue
+                opened = None
+                for quote in (Q, QS):
+                    if stripped.startswith(quote):
+                        # 文档字符串行：单行（开头即结尾）直接跳过；
+                        # 多行则记住状态，直到闭合行
+                        if stripped.count(quote) == 1:
+                            opened = quote
+                        break
+                if opened:
+                    in_doc = opened
+                    continue
+                if stripped.startswith(Q) or stripped.startswith(QS):
+                    continue
+                if _FORBIDDEN_SEND_RE.search(line):
+                    hits.append((os.path.relpath(p, plugin_dir), lineno, stripped[:120]))
+    return hits
 
 
 def _noop(*args, **kwargs):
@@ -122,6 +175,20 @@ class PluginManager:
                 mod = sys.modules[name]
             else:
                 mod = importlib.import_module(f"plugins.{name}")
+
+            # 1.5.10 F1：直连发送 = 拒绝加载（先查源码再谈 manifest）
+            try:
+                _hit = scan_forbidden_send(os.path.join(PLUGIN_DIR, name))
+            except Exception:
+                _hit = []
+            if _hit:
+                _p, _ln, _txt = _hit[0]
+                self._plugins[name] = {
+                    "module": mod, "meta": {"name": name, "version": "?"},
+                    "hooks": {}, "error": f"直连发送接口被拒（{_p}:{_ln} {_txt}）",
+                }
+                print(f"[Plugin:{name}] 拒绝加载：直连发送接口 {_p}:{_ln} —— 请改 ctx.send_text()")
+                return False
 
             spec = getattr(mod, "PLUGIN_SPEC", None)
             if spec is not None:

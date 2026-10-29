@@ -194,6 +194,24 @@ class PluginContext:
         except Exception:
             return None
 
+    # ── 统一出口（1.5.10 F1）：插件发消息只准走这里 ──
+    def send_text(self, text: str, target: Optional[str] = None,
+                  group_id: Optional[str] = None) -> bool:
+        """发一条文本，走主程序 outbound 队列（限频/去重/日志都在那里）。
+
+        群聊传 group_id，私聊传 target。宿主没注入时返回 False 并告警 ——
+        插件应据此降级，**不要**自己拼 OneBot HTTP（加载期扫描会拒绝）。
+        """
+        fn = self._host("send_text")
+        if not fn:
+            self.log("send_text 未注入（宿主未提供该能力）", "warn")
+            return False
+        try:
+            return bool(fn(text, target=target, group_id=group_id))
+        except Exception as e:
+            self.log(f"send_text 失败: {e}", "warn")
+            return False
+
     def api_call(self, action: str, params: Optional[dict] = None) -> Optional[dict]:
         """调用 OneBot 动作 —— 走主程序唯一出口（含 token 与信任处理）。
 

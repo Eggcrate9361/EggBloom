@@ -4,13 +4,13 @@
 无人触发时，按心跳 + 状态主动给目标私聊开口，补齐「被动响应」之外的另一半：
   - 心跳定时评估：用户沉默冷却 / 两次开口最小间隔 / 静默时段 / 概率闸门
   - 生成时注入：当前时段、沉默时长、最近对话摘录、上次主动说过的话、惦记的事
-  - 发送时按行切气泡，逐条 send_private_msg + 打字延时，模拟真人发消息节奏
+  - 发送时按行切气泡，逐条 ctx.send_text + 打字延时，模拟真人发消息节奏
 
 人设中立（非恋爱向），可通过配置 persona_extra 追加定制；
 nickname 配置怎么称呼对方。
 
 遵守 ABI 三原则：不 import 主程序，只经 ctx 拿能力，声明式 manifest + hooks。
-发消息走 ctx.http_post → OneBot v11 HTTP 动作（onebot_url/send_private_msg）。
+发消息走 ctx.send_text → 主程序 outbound 队列（1.5.10 F1 起不再直连 OneBot）。
 """
 from __future__ import annotations
 
@@ -269,11 +269,13 @@ def _fetch_memory_rounds(cfg: dict, qq: str) -> list:
 
 
 def _send_private(qq: str, text: str) -> bool:
+    """走宿主统一出口（1.5.10 F1）：不再自己拼 OneBot HTTP。
+
+    直连 OneBot 发送接口会绕过 outbound 队列的串行/限频/去重/日志，
+    而且加载期静态扫描会直接拒绝这类插件。
+    """
     try:
-        base = str(_ctx.get_config("onebot_url", "http://127.0.0.1:3000")).rstrip("/")
-        resp = _ctx.http_post(f"{base}/send_private_msg",
-                              {"user_id": int(qq), "message": text}, timeout=10)
-        return bool(resp) and resp.get("retcode") == 0
+        return bool(_ctx.send_text(text, target=str(qq)))
     except Exception as e:
         _log(f"发送失败 qq={qq}: {e}", "warn")
         return False

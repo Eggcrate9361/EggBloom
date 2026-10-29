@@ -455,7 +455,9 @@ class TestPokeEvent(_EventHandlersBase):
         self.assertIsNotNone(buf, "戳没有写进群缓冲区")
         self.assertIn("戳了戳你，这是第 1 次", buf["text"])
         # 关键：不过决策器的那条路要留着，所以 forced 必须是 False
-        self.assertFalse(buf["forced"])
+        # 2026-10-29（1.5.10）：戳一戳改成"视同点名" —— 原实现 forced=False，
+        # 要过决策器 observe + 发言闸概率两道闸，真机多次"戳了不理"。
+        self.assertTrue(buf["forced"])
         self.assertEqual(buf["poke_uid"], "10086001")
         self.assertIsNotNone(buf["timer"])
         self.call_deepseek.assert_not_called()

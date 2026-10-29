@@ -124,6 +124,41 @@ except Exception as e:
     print(f"[MemeEngine] 加载失败: {e}")
 
 # ── 插件系统 ──
+def _plugin_send_text(text, target=None, group_id=None) -> bool:
+    """插件发文本的唯一出口（1.5.10 F1）。群/私聊分别走 smart_send_group / smart_send。
+
+    ★ 必须定义在插件初始化之前：宿主 init 时把这个函数注入为能力，
+      晚定义就是 NameError（真机 16:47 报过一次）。
+      内部用 globals() 取发送函数 —— 调用发生在运行时，那时它们已定义好。
+    """
+    text = str(text or "").strip()
+    if not text:
+        return False
+    try:
+        if group_id:
+            return bool(globals()["smart_send_group"](str(group_id), text))
+        return bool(globals()["smart_send"](text, str(target) if target else None))
+    except Exception as e:
+        try:
+            globals()["log"](f"[插件出口] 发送失败: {e}")
+        except Exception:
+            print(f"[插件出口] 发送失败: {e}")
+        return False
+
+
+def _emit_plugin_event(event_name: str, payload: dict) -> None:
+    """向插件总线发事件（1.5.10 F2）。异常一律吞掉：事件不能影响主流程。"""
+    try:
+        pm = globals()["get_plugin_manager"]()
+        if pm:
+            pm.emit_event(event_name, payload)
+    except Exception as e:
+        try:
+            globals()["log"](f"[插件事件] {event_name} 派发失败（已忽略）: {e}")
+        except Exception:
+            pass
+
+
 try:
     from plugins.plugin_manager import init_plugin_manager, get_plugin_manager
     _pm = init_plugin_manager()
@@ -133,6 +168,9 @@ try:
     try:
         _caps = _pm.set_host_api(
             api_call=lambda action, params=None: api_call(action, params or {}),
+            # 1.5.10 F1：插件唯一发送出口 —— 内部走 smart_send / smart_send_group，
+            # 串行、限频、去重、出站审计全都在那条路上。
+            send_text=_plugin_send_text,
         )
         print(f"[PluginSystem] 已注入宿主能力: {_caps}")
     except Exception as _ce:
@@ -2133,13 +2171,31 @@ def api_call(endpoint: str, data: Optional[Dict] = None, timeout: float = 15) ->
     try:
         if REQUESTS_OK:
             r = _get_session().post(url, data=body, headers=headers, timeout=timeout)
-            return json.loads(r.content.decode("utf-8"))
-        req = urllib.request.Request(url, data=body, headers=headers)
-        with urllib.request.urlopen(req, timeout=timeout, context=LOCAL_CTX) as r:
-            return json.loads(r.read().decode("utf-8"))
+            resp = json.loads(r.content.decode("utf-8"))
+        else:
+            req = urllib.request.Request(url, data=body, headers=headers)
+            with urllib.request.urlopen(req, timeout=timeout, context=LOCAL_CTX) as r:
+                resp = json.loads(r.read().decode("utf-8"))
     except Exception as e:
         log(f"OneBot API 失败 [{endpoint}]: {e}")
         return {"retcode": -1}
+    # ★ 1.5.10 F2：`bot.replied` 只在**真的发出去**时发一次。
+    #   挂在这里而不是逐条发送函数里：多气泡、长文拆条、插件出口全都覆盖，
+    #   也不会出现"某个分支忘了发事件"。
+    try:
+        if endpoint in ("send_private_msg", "send_group_msg") and isinstance(resp, dict) \
+                and resp.get("retcode") == 0:
+            _msg = (data or {}).get("message")
+            _text = _msg if isinstance(_msg, str) else ""
+            _emit_plugin_event("bot.replied", {
+                "group_id": str((data or {}).get("group_id") or ""),
+                "text": _text,
+                "ts": time.time(),
+                "reply_to": int((data or {}).get("message_id") or 0),
+            })
+    except Exception:
+        pass
+    return resp
 
 
 def _group_action(kind: str, req: dict) -> dict:
@@ -11984,6 +12040,16 @@ def _pipeline_upsert(group_id, *, sender, text, images=None, flags=None,
     text_at = bool(flags.get("text_at"))
     in_session = bool(flags.get("in_session"))
     quote_me = bool(flags.get("quote_me"))
+    # ★ 1.5.10 F2：入站事件（只两个核心事件之一）。放在并批/新建之前 ——
+    #   每条真实消息都该被订阅方看到，不管它最后并进哪个批次。
+    if source == "message":
+        _emit_plugin_event("message.in", {
+            "group_id": str(group_id),
+            "sender": str(sender),
+            "text": str(text),
+            "ts": now,
+            "at_bot": bool(at_bot or xiao_a or bot_nick or text_at),
+        })
 
     def _merge(buf, force=False):
         return _pipeline_merge_locked(
