@@ -1763,6 +1763,39 @@ def start_event_server():
                         self.end_headers()
                         self.wfile.write(body)
                         return
+                if self.path == "/api/plugins/action":
+                    # 1.5.10：插件动作在 **bot 进程**里执行（_ctx / 状态都在这边）。
+                    #   webui 的动作入口会先转发到这里；不认识的动作回 handled=false，
+                    #   由 webui 自己兜底（保持旧行为）。
+                    try:
+                        length = int(self.headers.get("Content-Length", 0))
+                        req = {}
+                        if 0 < length < 262144:
+                            req = json.loads(self.rfile.read(length).decode("utf-8"))
+                        pid = str((req or {}).get("plugin_id") or "").strip()
+                        act = str((req or {}).get("action") or "").strip()
+                        params = (req or {}).get("params") or {}
+                        res = {"handled": False, "ok": False, "error": "unknown action"}
+                        if pid and act:
+                            try:
+                                import importlib
+                                mod = importlib.import_module(f"plugins.{pid}")
+                                acts = getattr(mod, "PLUGIN_ACTIONS", None) or {}
+                                if isinstance(acts, dict) and callable(acts.get(act)):
+                                    out = acts[act](params or {})
+                                    res = dict(out) if isinstance(out, dict) else {"ok": True, "result": out}
+                                    res["handled"] = True
+                            except Exception as _pe:
+                                res = {"handled": True, "ok": False, "error": f"{type(_pe).__name__}: {_pe}"}
+                        body = json.dumps(res, ensure_ascii=False).encode("utf-8")
+                        self.send_response(200)
+                        self.send_header("Content-Type", "application/json")
+                        self.send_header("Content-Length", str(len(body)))
+                        self.end_headers()
+                        self.wfile.write(body)
+                    except Exception as e:
+                        log(f"[plugins/action] 处理失败: {e}")
+                    return
                 if self.path == "/api/plugins/test":
                     try:
                         length = int(self.headers.get("Content-Length", 0))

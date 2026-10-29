@@ -524,6 +524,21 @@ except Exception:
     pass
 
 
+def _post_bot_core_json(path, payload, timeout=8.0):
+    """向 bot_core POST 一份 JSON（插件动作转发用）。bot 不在线返回 None。"""
+    if not _is_bot_core_alive():
+        return None
+    try:
+        data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        req = urllib.request.Request(
+            f"{BOT_CORE_URL}{path}", data=data,
+            headers={"Content-Type": "application/json"}, method="POST")
+        with _local_open(req, timeout=timeout) as r:
+            return json.loads(r.read().decode("utf-8"))
+    except Exception:
+        return None
+
+
 def _invoke_generic_plugin(plugin_id, action, params):
     """通用插件通道：按统一标准调用任意插件，不修改主程序。
 
@@ -534,6 +549,13 @@ def _invoke_generic_plugin(plugin_id, action, params):
     只有声明了 PLUGIN_ACTIONS 或 execute_action 的新标准插件会走此通道；
     其余插件返回 None，继续交由硬编码分支/旧 fallback 处理，保持完全兼容。
     """
+    # 1.5.10：先交给 **bot 进程**（插件 ctx/状态都在那边）。
+    #   只有 bot 明确说"不认识这个动作"才继续走本地兜底。
+    _remote = _post_bot_core_json("/api/plugins/action",
+                                  {"plugin_id": plugin_id, "action": action, "params": params or {}})
+    if isinstance(_remote, dict) and _remote.get("handled"):
+        _remote.pop("handled", None)
+        return _remote
     try:
         mod = __import__(f"plugins.{plugin_id}", fromlist=["PLUGIN_ACTIONS", "execute_action"])
     except Exception:

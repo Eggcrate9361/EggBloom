@@ -1,51 +1,9 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>主动消息 · proactive_talk</title>
-<style>
-  :root{
-    --bg:#0a0a0f;--surface:#111118;--paper:#16161f;--elevated:#1e1e28;--input:#14141b;
-    --ink:#f0f0f5;--ink2:#b8b8c8;--ink3:#8a8f9a;--ink4:#3a3f48;--ink5:#26262f;
-    --gold:#c9a96e;--gold-dim:#8a7350;--red:#b54a4a;--green:#4a9b6a;
-    --font-d:'Outfit','Noto Sans SC','PingFang SC',system-ui,sans-serif;
-    --font-m:'JetBrains Mono','Consolas',monospace;--radius:12px;
-  }
-  *{box-sizing:border-box;margin:0;padding:0}
-  body{background:var(--bg);color:var(--ink);font-family:var(--font-d);font-size:14px;line-height:1.6;padding:18px}
-  .wrap{max-width:860px;margin:0 auto}
-  .head{margin-bottom:16px}
-  .head .t{font-size:18px;font-weight:800}
-  .head .m{font-size:12px;color:var(--ink3);margin-top:2px}
-  .panel{background:var(--paper);border:1px solid var(--ink5);border-radius:var(--radius);padding:16px;margin-bottom:14px}
-  .panel-title{font-weight:700;font-size:15px;margin-bottom:10px}
-  .panel-title .meta{font-size:12px;color:var(--ink3);font-weight:400;margin-left:8px}
-  .row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
-  .muted{color:var(--ink3);font-size:12px}
-  .badge{display:inline-block;padding:4px 14px;border-radius:999px;font-size:13px;font-weight:600}
-  .badge.ok{background:rgba(74,155,106,0.18);color:#7fd7a5;border:1px solid rgba(74,155,106,0.4)}
-  .badge.err{background:rgba(181,74,74,0.18);color:#ff9a9a;border:1px solid rgba(181,74,74,0.4)}
-  .badge.flat{background:var(--input);color:var(--ink2);border:1px solid var(--ink5)}
-  button.btn{background:var(--input);color:var(--ink);border:1px solid var(--ink5);padding:7px 16px;border-radius:8px;cursor:pointer;font-size:13px;transition:all .15s ease}
-  button.btn.primary{background:var(--gold);color:#0a0a0f;border-color:var(--gold);font-weight:700}
-  button.btn:hover{filter:brightness(1.1)}
-  input[type=text],input[type=number],textarea{
-    background:var(--input);color:var(--ink);border:1px solid var(--ink5);border-radius:8px;
-    padding:7px 10px;font-size:13px;width:100%;font-family:var(--font-d)}
-  input[type=number]{font-family:var(--font-m)}
-  textarea{min-height:80px;resize:vertical}
-  .field{margin-bottom:10px}
-  .field .lb{font-size:12px;color:var(--ink3);margin-bottom:4px}
-  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
-  @media(max-width:640px){.grid2{grid-template-columns:1fr}}
-  .chk{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--ink2);cursor:pointer}
-  .chk input{accent-color:var(--gold)}
-  .hist{padding:8px 12px;background:var(--surface);border:1px solid var(--ink5);border-radius:8px;margin-bottom:8px;font-size:12px;color:var(--ink2)}
-  .hist .ts{font-family:var(--font-m);color:var(--ink3);margin-right:8px}
-  .log{background:var(--surface);border:1px solid var(--ink5);border-radius:8px;padding:8px 12px;
-       font-family:var(--font-m);font-size:12px;color:var(--ink2);max-height:150px;overflow-y:auto;white-space:pre-wrap;margin-top:10px}
-</style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>主动消息</title>
 <style id="pv-kit">/*PV-KIT*/
 /* ═══════════════════════════════════════════════════════════════
    EggBloom 插件 UI 套件（1.5.10）
@@ -155,240 +113,167 @@ button.danger:hover{border-color:var(--pv-bad);color:var(--pv-bad)}
 </style>
 </head>
 <body>
-<div class="wrap">
-  <div class="head">
-    <div class="t">主动消息 · proactive_talk</div>
-    <div class="m">私聊无人触发时按心跳 + 状态主动开口 · 群聊里观察，私聊里找你 · 拟人化非恋爱向</div>
+  <div class="pv-head">
+    <h1>主动消息</h1>
+    <div class="pv-sub">心跳评估：沉默够久、时间合适、概率过了，就主动开口一次；不连发、不群发</div>
   </div>
 
-  <div class="panel">
-    <div class="panel-title">运行状态</div>
-    <div class="row">
-      <span class="badge flat" id="pt-alive">心跳：检测中</span>
-      <span class="badge flat" id="pt-target">目标：-</span>
-      <button class="btn primary" onclick="sendNow()">立即发一条</button>
-      <button class="btn" onclick="testDecision()">模拟决策</button>
-      <button class="btn" onclick="loadAll()">刷新</button>
+  <div class="pv-panel">
+    <div class="pv-panel-h"><h2>运行状态</h2><i class="pv-rule"></i><span class="pv-count" id="hb">—</span></div>
+    <div class="pv-stats">
+      <div class="pv-stat"><b id="s-last">—</b><span>上次主动</span></div>
+      <div class="pv-stat"><b id="s-next">—</b><span>下次最早</span></div>
+      <div class="pv-stat"><b id="s-user">—</b><span>对方上次说话</span></div>
+      <div class="pv-stat"><b id="s-chance">—</b><span>当前开口概率</span></div>
     </div>
-    <div class="muted" id="pt-last" style="margin-top:10px">上次主动开口：-</div>
-    <div class="muted" id="pt-topic">惦记的事：-</div>
-    <div id="pt-history" style="margin-top:8px"></div>
-    <div class="log" id="pt-log">就绪</div>
+    <div class="pv-flex" style="margin-top:14px">
+      <button class="primary" id="send-now">立即发一条</button>
+      <button id="probe">试跑一次决策</button>
+      <button id="refresh">刷新</button>
+      <span class="pv-hint" style="margin:0">试跑不发送，只回各闸门结果</span>
+    </div>
+    <div class="pv-msg" id="msg"></div>
+    <div id="probe-box"></div>
   </div>
 
-  <div class="panel">
-    <div class="panel-title">目标与称呼</div>
-    <div class="grid2">
-      <div class="field">
-        <div class="lb">目标 QQ（留空 = 主配置 target_qqs 第一个）</div>
-        <input type="text" id="pt-target-qq" placeholder="例如 10001">
+  <div class="pv-panel">
+    <div class="pv-panel-h"><h2>节奏</h2><i class="pv-rule"></i></div>
+    <table class="pv-table">
+      <thead><tr><th>项</th><th style="width:170px">值</th><th>说明</th></tr></thead>
+      <tbody id="rhythm"></tbody>
+    </table>
+  </div>
+
+  <div class="pv-panel">
+    <div class="pv-panel-h"><h2>对象与话术</h2><i class="pv-rule"></i></div>
+    <div class="pv-flex" style="align-items:flex-start">
+      <div class="pv-field" style="flex:1;min-width:170px;margin:0">
+        <label class="pv-label">目标私聊 QQ（空 = 主配置第一个）</label>
+        <input class="pv-input" id="f-target" placeholder="10003">
       </div>
-      <div class="field">
-        <div class="lb">怎么称呼对方（可空）</div>
-        <input type="text" id="pt-nickname" placeholder="例如 老板 / 阿祥">
+      <div class="pv-field" style="flex:1;min-width:150px;margin:0">
+        <label class="pv-label">称呼</label>
+        <input class="pv-input" id="f-nick" placeholder="（可空）">
+      </div>
+      <div style="display:flex;align-items:flex-end;padding-bottom:2px">
+        <button id="save-basic">保存</button>
       </div>
     </div>
-  </div>
-
-  <div class="panel">
-    <div class="panel-title">节奏</div>
-    <div class="grid2">
-      <div class="field">
-        <div class="lb">心跳间隔（秒）</div>
-        <input type="number" id="pt-heartbeat" min="60">
-      </div>
-      <div class="field">
-        <div class="lb">两次开口最小间隔（分钟）</div>
-        <input type="number" id="pt-min-interval" min="1">
-      </div>
-      <div class="field">
-        <div class="lb">用户私聊后冷却（分钟）</div>
-        <input type="number" id="pt-cooldown" min="0">
-      </div>
-      <div class="field">
-        <div class="lb">开口概率（0~1）</div>
-        <input type="number" id="pt-chance" min="0" max="1" step="0.05">
-      </div>
-      <div class="field">
-        <div class="lb">静默时段（如 2:00-7:00，空 = 不静默）</div>
-        <input type="text" id="pt-quiet" placeholder="留空则凌晨也会开口">
-      </div>
-      <div class="field">
-        <div class="lb">按时段作息调整概率（一般精度）</div>
-        <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--ink3)">
-          <input type="checkbox" id="pt-bio"> 开启：凌晨 ×0.15、上午 ×0.9、晚上 ×1.2
-        </label>
-        <div class="hint" style="font-size:11px;color:var(--ink4);margin-top:4px">
-          静默时段是硬闸（配了完全不开口）；这里是软闸，只改概率。关掉则全天同一概率。
-        </div>
-      </div>
-      <div class="field">
-        <div class="lb">一次最多几个气泡</div>
-        <input type="number" id="pt-max-bubbles" min="1" max="8">
-      </div>
+    <div class="pv-field" style="margin-top:12px">
+      <label class="pv-label">追加人设（接在默认风格约束后面）</label>
+      <textarea class="pv-textarea" id="f-persona" style="min-height:90px"></textarea>
     </div>
   </div>
 
-  <div class="panel">
-    <div class="panel-title">联动 EggBloom<span class="meta">任一通道失败自动降级，不影响开口</span></div>
-    <div class="field">
-      <div class="lb">EggBloom WebUI 地址</div>
-      <input type="text" id="pt-webui-url" placeholder="http://127.0.0.1:8080">
-    </div>
-    <div class="row" style="margin-bottom:10px">
-      <label class="chk"><input type="checkbox" id="pt-use-personality"> 人设（personality_engine）</label>
-      <label class="chk"><input type="checkbox" id="pt-use-mood"> 情绪（mood_engine）</label>
-      <label class="chk"><input type="checkbox" id="pt-use-memory"> 私聊记忆（super_memory）</label>
-    </div>
-    <div class="grid2">
-      <div class="field">
-        <div class="lb">注入最近几轮私聊</div>
-        <input type="number" id="pt-memory-rounds" min="1" max="10">
-      </div>
-      <div class="field" style="display:flex;align-items:flex-end">
-        <button class="btn" onclick="testLinks()">检测联动</button>
-      </div>
-    </div>
+  <div class="pv-panel">
+    <div class="pv-panel-h"><h2>最近主动记录</h2><i class="pv-rule"></i>
+      <span class="pv-count" id="hist-n">—</span></div>
+    <table class="pv-table">
+      <thead><tr><th style="width:70px">时间</th><th>内容</th></tr></thead>
+      <tbody id="hist"></tbody>
+    </table>
   </div>
-
-  <div class="panel">
-    <div class="panel-title">追加人设</div>
-    <div class="muted" style="margin-bottom:8px">接在默认风格约束与 personality.txt 后面。写想补的性格、口癖、关系设定，例如「群里的老损友，说话带损但有关心」。</div>
-    <textarea id="pt-persona" placeholder="可留空"></textarea>
-    <div class="row" style="margin-top:12px;justify-content:flex-end">
-      <button class="btn primary" onclick="saveConfig()">保存配置</button>
-    </div>
-  </div>
-</div>
-
-<div id="toast" style="position:fixed;top:16px;left:50%;transform:translateX(-50%);background:#1e1e28;color:#f0f0f5;padding:8px 18px;border-radius:8px;font-size:13px;opacity:0;transition:opacity .2s;pointer-events:none;border:1px solid #26262f;z-index:99"></div>
 
 <script>
-(function(){
-  var PID='proactive_talk';
-  function $(id){return document.getElementById(id)}
-  function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})}
-  function toast(msg){var t=$('toast');t.textContent=msg;t.style.opacity=1;setTimeout(function(){t.style.opacity=0},1800)}
-  function log(msg){
-    var el=$('pt-log');
-    el.textContent+='\n'+new Date().toLocaleTimeString()+'  '+msg;
-    el.scrollTop=el.scrollHeight;
-  }
-  async function api(action,params){
-    try{
-      var r=await fetch('/api/plugins/action',{
-        method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({plugin_id:PID,action:action,params:params||{}})
-      });
-      return await r.json();
-    }catch(e){
-      log('[api] '+action+' '+e);
-      return {error:String(e)};
-    }
-  }
-  function fmtTs(ts){return ts?new Date(ts*1000).toLocaleString():'-'}
+const API='/api/plugins/action';
+const $=id=>document.getElementById(id);
+const msg=$('msg');
+let CFG={};
 
-  async function loadConfig(){
-    var c=await api('get_config');
-    if(c.error){log('读取配置失败: '+c.error);return}
-    $('pt-target-qq').value=c.target_qq||'';
-    $('pt-nickname').value=c.nickname||'';
-    $('pt-heartbeat').value=c.heartbeat_sec||900;
-    $('pt-min-interval').value=c.min_interval_min||180;
-    $('pt-cooldown').value=c.active_cooldown_min||30;
-    $('pt-chance').value=(c.speak_chance!=null?c.speak_chance:0.35);
-    $('pt-quiet').value=c.quiet_hours||'';
-    $('pt-bio').checked=(c.bio_rhythm!==false);
-    $('pt-max-bubbles').value=c.max_bubbles||4;
-    $('pt-persona').value=c.persona_extra||'';
-    $('pt-webui-url').value=c.webui_url||'http://127.0.0.1:8080';
-    $('pt-use-personality').checked=!!c.use_personality;
-    $('pt-use-mood').checked=!!c.use_mood;
-    $('pt-use-memory').checked=!!c.use_memory;
-    $('pt-memory-rounds').value=c.memory_rounds||3;
-    $('pt-target').textContent='目标：'+(c._resolved_target||'未配置');
-    var alive=$('pt-alive');
-    alive.textContent='心跳：'+(c._heartbeat_alive?'运行中':'未运行（需在插件页启用）');
-    alive.className='badge '+(c._heartbeat_alive?'ok':'err');
-  }
+async function call(action,params){
+  const r=await fetch(API,{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({plugin_id:'proactive_talk',action,params:params||{}})});
+  const t=await r.text(); try{return JSON.parse(t)}catch{return {raw:t}}
+}
+function setMsg(t,ok){ msg.className='pv-msg '+(ok?'ok':'err'); msg.textContent=t||''; }
+function ago(ts){
+  if(!ts) return '—';
+  const s=Math.max(0,Math.floor(Date.now()/1000-ts));
+  if(s<60) return s+' 秒前';
+  if(s<3600) return Math.floor(s/60)+' 分钟前';
+  if(s<86400) return (s/3600).toFixed(1)+' 小时前';
+  return Math.floor(s/86400)+' 天前';
+}
+function clock(ts){ return ts?new Date(ts*1000).toLocaleString():'—'; }
 
-  async function loadStatus(){
-    var s=await api('get_status');
-    if(s.error)return;
-    $('pt-last').textContent='上次主动开口：'+fmtTs(s.last_proactive_ts);
-    $('pt-topic').textContent='惦记的事：'+(s.pending_topic||'暂无');
-    var h=$('pt-history');
-    if(!s.history||!s.history.length){
-      h.innerHTML='<div class="muted">暂无主动消息记录</div>';
-      return;
-    }
-    h.innerHTML=s.history.slice().reverse().map(function(it){
-      return '<div class="hist"><span class="ts">'+esc(fmtTs(it.ts))+'</span>'+esc(it.text)+'</div>';
-    }).join('');
-  }
-
-  function loadAll(){loadConfig();loadStatus()}
-
-  async function saveConfig(){
-    var r=await api('set_config',{
-      target_qq:$('pt-target-qq').value.trim(),
-      nickname:$('pt-nickname').value.trim(),
-      heartbeat_sec:parseInt($('pt-heartbeat').value,10)||900,
-      min_interval_min:parseInt($('pt-min-interval').value,10)||180,
-      active_cooldown_min:parseInt($('pt-cooldown').value,10)||30,
-      speak_chance:parseFloat($('pt-chance').value)||0.35,
-      quiet_hours:$('pt-quiet').value.trim(),
-      bio_rhythm:$('pt-bio').checked,
-      max_bubbles:parseInt($('pt-max-bubbles').value,10)||4,
-      persona_extra:$('pt-persona').value,
-      webui_url:$('pt-webui-url').value.trim()||'http://127.0.0.1:8080',
-      use_personality:$('pt-use-personality').checked,
-      use_mood:$('pt-use-mood').checked,
-      use_memory:$('pt-use-memory').checked,
-      memory_rounds:parseInt($('pt-memory-rounds').value,10)||3
-    });
-    toast(r.ok?'配置已保存':'保存失败: '+(r.error||'未知'));
-    loadConfig();
-  }
-
-  async function sendNow(){
-    var r=await api('send_now');
-    toast(r.ok?'已触发，跳过全部闸门直接生成发送':'触发失败: '+(r.error||'未知'));
-    log(r.ok?'手动触发一次主动开口':'触发失败: '+(r.error||'未知'));
-    setTimeout(loadStatus,6000);
-  }
-
-  async function testDecision(){
-    var r=await api('test_decision');
-    if(r.error){toast('决策失败: '+r.error);return}
-    var msg=r.ok?('决策通过 → 会向 '+r.resolved_target+' 开口'):('决策拦截：'+(r.blocked_by||'未知'));
-    // 作息状态（harness.bio_rhythm）：模拟决策时一起报出来。
-    // 不报就没人知道乘子在不在生效，而它是"凌晨少说话"的唯一证据。
-    var b=r.bio||{};
-    if(b.period){
-      var bio='作息：'+b.period+'（精力 '+Number(b.energy).toFixed(2)
-        +'，主动开口乘子 '+Number(b.proactivity).toFixed(2)+'）';
-      msg+=' ｜ '+bio;
-      log(bio+' —— '+String(b.hint||''));
-    }
-    toast(msg);log(msg);
-  }
-
-  async function testLinks(){
-    var r=await api('test_links');
-    if(r.error){toast('检测失败: '+r.error);return}
-    log('人设：'+r.personality);
-    log('情绪：'+r.mood);
-    log('记忆：'+r.memory);
-    toast('联动检测完成，见日志区');
-  }
-
-  function init(){
-    loadAll();
-  }
-  if(document.readyState==='loading'){document.addEventListener('DOMContentLoaded',init)}
-  else{init()}
-})();
+function row(label, inputHtml, hint){
+  return '<tr><td class="k">'+label+'</td><td>'+inputHtml+'</td>'
+    +'<td class="pv-hint" style="margin:0">'+(hint||'')+'</td></tr>';
+}
+function drawRhythm(c){
+  const num=(k,step)=>'<input class="pv-input" data-c="'+k+'" type="number" step="'+(step||1)+'" value="'+(c[k]!=null?c[k]:'')+'">';
+  const bool=(k)=>'<label class="pv-flex" style="margin:0"><input type="checkbox" data-c="'+k+'" '
+    +(c[k]?'checked':'')+'> <span class="pv-hint" style="margin:0">启用</span></label>';
+  $('rhythm').innerHTML=[
+    row('心跳间隔(秒)', num('heartbeat_sec'), '多久评估一次要不要开口'),
+    row('最小间隔(分钟)', num('min_interval_min'), '两次主动之间的硬间隔'),
+    row('对方刚说话(分钟)', num('active_cooldown_min'), '对方刚说完不久就不打扰'),
+    row('开口概率', num('speak_chance',0.05), '每次心跳通过闸门的概率 0–1'),
+    row('静默时段', '<input class="pv-input" data-c="quiet_hours" value="'+((c.quiet_hours||'')).replace(/"/g,'&quot;')+'" placeholder="2:00-7:00">', '留空 = 不静默'),
+    row('作息乘子', bool('bio_rhythm'), '凌晨更懒、晚上更活跃（软闸）'),
+    row('单次气泡数', num('max_bubbles'), '一次最多发几条'),
+    row('记忆注入', bool('use_memory'), '带上最近几轮私聊'),
+    row('人设注入', bool('use_personality'), '与群聊里的它一致'),
+    row('情绪注入', bool('use_mood'), '按当前心情调整语气')
+  ].join('');
+}
+function drawStatus(st){
+  $('hb').textContent=st.heartbeat_alive?'心跳线程运行中':'心跳线程未运行';
+  $('s-last').textContent=ago(st.last_proactive_ts);
+  $('s-user').textContent=ago(st.last_user_ts);
+  const minInt=Number(CFG.min_interval_min||0)*60;
+  const next=st.last_proactive_ts?Math.max(0,st.last_proactive_ts+minInt-Math.floor(Date.now()/1000)):0;
+  $('s-next').textContent=next>0?(Math.ceil(next/60)+' 分钟后'):'现在可以';
+  $('s-chance').textContent=(CFG.speak_chance!=null?Number(CFG.speak_chance).toFixed(2):'—');
+  const hist=st.history||[];
+  $('hist-n').textContent=hist.length?('最近 '+hist.length+' 条'):'暂无';
+  $('hist').innerHTML=hist.slice().reverse().map(h=>{
+    const ts=h.ts||h.time||0, text=h.text||h.content||JSON.stringify(h);
+    return '<tr><td class="mono">'+(ts?new Date(ts*1000).toLocaleTimeString():'—')+'</td><td>'
+      +String(text).replace(/</g,'&lt;')+'</td></tr>';
+  }).join('')||'<tr><td colspan="2" class="pv-empty">还没有主动发过</td></tr>';
+}
+async function load(){
+  const r=await call('get_config');
+  CFG=(r&&(r.config||r))||{};
+  if(CFG.config) CFG=CFG.config;
+  $('f-target').value=CFG.target_qq||'';
+  $('f-nick').value=CFG.nickname||'';
+  $('f-persona').value=CFG.persona_extra||'';
+  drawRhythm(CFG);
+  const st=await call('get_status');
+  if(st&&st.ok) drawStatus(st);
+}
+$('refresh').onclick=load;
+$('save-basic').onclick=async()=>{
+  const r=await call('set_config',{target_qq:$('f-target').value.trim(),
+    nickname:$('f-nick').value.trim(), persona_extra:$('f-persona').value});
+  if(r&&(r.ok!==false)){ setMsg('已保存',true); await load(); } else setMsg('保存失败：'+JSON.stringify(r),false);
+};
+document.addEventListener('change',async ev=>{
+  const el=ev.target;
+  if(!el||!el.dataset||!el.dataset.c) return;
+  const k=el.dataset.c;
+  let v=el.type==='checkbox'?el.checked:el.value;
+  const r=await call('set_config',{[k]:v});
+  if(r&&(r.ok!==false)){ setMsg('已更新 '+k,true); await load(); } else setMsg('更新失败：'+JSON.stringify(r),false);
+});
+$('send-now').onclick=async()=>{
+  if(!confirm('立即主动发一条？会跳过所有闸门。')) return;
+  const r=await call('send_now');
+  setMsg((r&&r.msg)||JSON.stringify(r), !!(r&&r.ok));
+  setTimeout(load, 3000);
+};
+$('probe').onclick=async()=>{
+  const r=await call('test_decision');
+  const box=$('probe-box');
+  if(!r||r.ok===false){ box.innerHTML='<div class="pv-msg err">试跑失败：'+JSON.stringify(r)+'</div>'; return; }
+  const skip=JSON.stringify(r,null,1);
+  box.innerHTML='<pre class="mono" style="background:#211d18;border:1px solid var(--pv-line);'
+    +'border-radius:6px;padding:10px;overflow:auto;max-height:220px">'+skip.replace(/</g,'&lt;')+'</pre>';
+};
+load();
+setInterval(async()=>{ const st=await call('get_status'); if(st&&st.ok) drawStatus(st); }, 15000);
 </script>
 </body>
 </html>
