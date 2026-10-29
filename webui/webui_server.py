@@ -2399,7 +2399,7 @@ class Handler(BaseHTTPRequestHandler):
         except (ConnectionAbortedError, BrokenPipeError):
             pass
 
-    def _send_html(self, html):
+    def _send_html(self, html, no_store=False):
         try:
             data = html.encode("utf-8")
             # ★ 2026-10-25：从 no-store 改成 no-cache + ETag。
@@ -2409,6 +2409,14 @@ class Handler(BaseHTTPRequestHandler):
             #   只传几个字节。内容变了 ETag 就变，不存在看到旧页面的风险 ——
             #   这正是 ETag 存在的意义，比 no-store 既快又不牺牲正确性。
             etag = '"h%x"' % (zlib.crc32(data) & 0xFFFFFFFF)
+            if no_store:
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(data)))
+                self.send_header("Cache-Control", "no-store, must-revalidate")
+                self.end_headers()
+                self.wfile.write(data)
+                return
             # 文件时间也一并给出去：有些客户端（含 Chromium 对**顶层导航**）
             # 更愿意用 If-Modified-Since 校验，光给 ETag 它不一定来问。
             try:
@@ -2510,12 +2518,12 @@ class Handler(BaseHTTPRequestHandler):
                 if mtime != _html_mtime:
                     _load_html()
                 data = HTML
-                self._send_html(data)
+                self._send_html(data, no_store=True)
             except Exception:
                 mtime = _get_html_mtime()
                 if mtime != _html_mtime:
                     _load_html()
-                self._send_html(HTML)
+                self._send_html(HTML, no_store=True)
             return
 
         if path == "/desktop":
