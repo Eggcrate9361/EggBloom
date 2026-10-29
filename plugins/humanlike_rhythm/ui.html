@@ -325,16 +325,29 @@ button.sm{padding:5px 10px;font-size:var(--pv-fs-xs)}
     <button class="ghost" onclick="window.parent.postMessage({type:'eggbloom:navigate',page:'plugins'},'*')">返回插件列表</button>
   </div>
   <script>
-    function $(id){ return document.getElementById(id) }
-    fetch('/api/plugins').then(r=>r.json()).then(data=>{
-      const list = (data && data.plugins) || [];
-      const p = list.find(x => x.name === 'humanlike_rhythm');
-      if (!p) return;
-      if ($('cfgEnabled')) $('cfgEnabled').textContent = p.已启用 ? '启用' : '禁用';
-      if ($('cfgMin')) $('cfgMin').textContent = String(p.最小延迟 ?? '--');
-      if ($('cfgMax')) $('cfgMax').textContent = String(p.最大延迟 ?? '--');
-      if ($('cfgDelayed')) $('cfgDelayed').textContent = String(p.已延迟次数 ?? '--');
-    }).catch(()=>{});
+    // ★ 2026-10-30：原来读 /api/plugins 里本插件那一条，但插件列表里根本没有它
+    //   （plugin_manager.EGO_SUBMODULE_COPIES 把 ego 子模块的顶层副本排除在发现之外），
+    //   而且它取的还是"已启用/最小延迟"这类中文键，接口给的是英文键 ——
+    //   两条叠加，四个值恒为 --。改走通用插件动作通道，拿真配置。
+    (function(){
+      function $(id){ return document.getElementById(id) }
+      function call(action){
+        return fetch('/api/plugins/action',{method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({plugin_id:'humanlike_rhythm',action:action,params:{}})
+        }).then(function(r){ return r.json() });
+      }
+      call('get_config').then(function(cfg){
+        cfg = cfg || {};
+        if ($('cfgEnabled')) $('cfgEnabled').textContent = cfg.enabled ? '启用' : '禁用';
+        if ($('cfgMin')) $('cfgMin').textContent = (cfg.min_delay != null) ? String(cfg.min_delay) : '--';
+        if ($('cfgMax')) $('cfgMax').textContent = (cfg.max_delay != null) ? String(cfg.max_delay) : '--';
+      }).catch(function(){});
+      call('get_stats').then(function(st){
+        st = st || {};
+        if ($('cfgDelayed')) $('cfgDelayed').textContent = (st.delayed != null) ? String(st.delayed) : '--';
+      }).catch(function(){});
+    })();
   </script>
 <script>
 (function(){

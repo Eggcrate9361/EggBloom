@@ -32,6 +32,12 @@
     overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .mood-list .score{font-family:var(--pv-mono);font-size:var(--pv-fs-lg);font-weight:600;
     font-variant-numeric:tabular-nums}
+  /* ★ 2026-10-30：行内原来用写死的 #7fd7a5 / #ff9a9a，改成 token 语义类 */
+  .mood-list .score.ok{color:var(--pv-ok)}
+  .mood-list .score.err{color:var(--pv-bad)}
+  .mood-list .m-text{color:var(--pv-ink-3);font-size:var(--pv-fs-sm);
+    flex:1;text-align:right;padding-right:var(--pv-3);
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
   /* 副标题在宽屏一行读完，不被 kit 的 72ch 截断 */
   .pv-head .pv-sub{max-width:none}
@@ -365,8 +371,12 @@ async function loadMood(){
     if($('mood-decay')) $('mood-decay').value=cfg.decay_seconds!=null?cfg.decay_seconds:600;
     if($('mood-max-boost')) $('mood-max-boost').value=cfg.max_boost!=null?cfg.max_boost:8;
     var moodsRes=await action('get_moods');
-    var moods=(moodsRes&&moodsRes.moods)||(moodsRes&&moodsRes.data)||{};
-    var keys=Object.keys(moods);
+    // ★ 2026-10-30：`get_moods` 直接返回扁平字典 {群号: {text,score,valence,arousal}}，
+    //   不带 moods/data 外壳。原写法只认那两个键 → 永远拿到 {}，页面永远"暂无记录"。
+    var moods=(moodsRes&&(moodsRes.moods||moodsRes.data))||moodsRes||{};
+    var keys=Object.keys(moods).filter(function(k){
+      return moods[k]&&typeof moods[k]==='object';
+    });
     var cur=$('mood-current');
     if(keys.length){
       var first=moods[keys[0]];
@@ -383,7 +393,9 @@ async function loadMood(){
       list.innerHTML=keys.map(function(gid){
         var m=moods[gid];
         var sc=typeof m.score==='number'?m.score:0;
-        return '<div class="mood-item"><span class="gid">'+esc(gid)+'</span><span class="score" style="color:'+(sc>=0?'#7fd7a5':'#ff9a9a')+'">'+sc+'</span></div>';
+        return '<div class="mood-item"><span class="gid">'+esc(gid)+'</span>'
+          +'<span class="m-text">'+esc(m.text||m.label||'')+'</span>'
+          +'<span class="score '+(sc>=0?'ok':'err')+'">'+sc+'</span></div>';
       }).join('');
     }
   }catch(e){ toast('加载失败: '+e.message); }
