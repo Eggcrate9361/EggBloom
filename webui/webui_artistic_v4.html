@@ -3115,6 +3115,16 @@ body.mech-open .rack .lb{animation:fadeMark 260ms linear 420ms forwards}
 <!-- 导航提示条已按用户要求移除；触发 = 右上角热区（JS 注入 .nav-hot） -->
 
 <script>
+(function(){
+  var d = document.createElement('div');
+  d.id = 'uiBuildStamp';
+  d.textContent = 'UI 2026-10-29 20:47 · CARDS';
+  d.style.cssText = 'position:fixed;left:10px;bottom:8px;z-index:9999;font:9px/1.4 Consolas,monospace;'
+    + 'letter-spacing:.08em;color:rgba(232,226,214,.38);pointer-events:none;user-select:none';
+  document.addEventListener('DOMContentLoaded', function(){ document.body.appendChild(d); });
+})();
+</script>
+<script>
 /* ══════════════════════════════════════════════════════════════════
 'use strict';
 /* ═════════════ 基础设施 ═════════════ */
