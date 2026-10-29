@@ -17,7 +17,9 @@
     - **retention + spill**：工具返回超长时按预算有界保留；超预算落盘，
       卡里给绝对路径 + read 提示，模型可再读（可恢复，不是简单截断）。
     - **可中止**：每次循环检查 abort 标志（用于 UI 的 Esc 打断）。
-    - **步数与成本上限**：硬上限，绝不无限循环。
+    - **步数软上限 + 成本硬闸**：步数默认不限；真正兜底的是总工具调用
+      次数硬闸（MAX_TOOL_CALLS）与 abort 中止 —— 绝不无限循环，也不会把
+      "工具已做完、只差总结"的任务误判成失败（超限时先兜底收敛再谈失败）。
 
 事件类型（写进 session_log，kind="agent"）
     user_msg   用户/调用方输入
@@ -44,7 +46,12 @@ EV_THINKING = "thinking"
 EV_TOOL_RESULT = "tool_result"
 EV_FINAL = "final"
 
-DEFAULT_MAX_STEPS = 12
+#: 0 = **不限步数**（None 同义）。不再默认 12 ——
+#: 步数是"轮数"不是"成本"，曾把"工具已把事做完、只差模型总结"的运行
+#: 判成失败（2026-10-29 真机：说说已发布成功，页面却报
+#: 「达到步数上限 12，未收敛」，维护者："实际上发成功了，agent 不用做步数限制"）。
+#: 成本与无限循环由 MAX_TOOL_CALLS（总工具调用硬闸）+ abort 中止兜底。
+DEFAULT_MAX_STEPS = 0
 DEFAULT_MAX_TOOL_RESULT_TOKENS = _tr.DEFAULT_MAX_TOOL_RESULT_TOKENS  # 单点定义，避免两处漂移
 
 def _step_budget(messages, max_steps, step, floor=800):
@@ -52,9 +59,12 @@ def _step_budget(messages, max_steps, step, floor=800):
 
     用户要求："去掉预算定制，不是给一个死的值，是尽量降低成本" ——
     上下文越空给得越宽，越接近窗口上限收得越紧；剩下的步数越多，每步分到的越少。
+    步数不限时（max_steps<=0）分母没有"剩余步数"可用 → 用固定的适中值 4，
+    只影响每步分到的预算比例，不影响总量闸。
     """
     try:
-        return _tr.adaptive_budget(messages, steps_left=max(1, int(max_steps) - int(step)))
+        left = int(max_steps) - int(step)
+        return _tr.adaptive_budget(messages, steps_left=max(1, left if left > 0 else 4))
     except Exception:
         return floor
 #: 单步（一次模型返回）里最多执行几个工具调用
@@ -144,7 +154,9 @@ def run_agent(*, session_id, user_input, chat_fn, tool_functions,
       tool_functions       : {tool_name: callable(args_dict) -> result}
       system_prompt        : 系统提示词（调用方负责组装；本模块不碰）
       history              : 已有 messages（[{role,content}]），可为 None
-      max_steps            : 工具轮数硬上限
+      max_steps            : 工具轮数软上限；**0/None = 不限**（成本由
+                             MAX_TOOL_CALLS + abort 兜底）。到限时不再直接判失败，
+                             先做一轮"不给工具、直接给结论"的兜底收敛（见下）。
       on_event(ev_type, data) : 事件回调（流式推给前端 / 群内进度）
       should_abort() -> bool  : 中止检查
       logger(msg)          : 日志
@@ -260,8 +272,56 @@ def run_agent(*, session_id, user_input, chat_fn, tool_functions,
         total_tool_calls = 0
         # ★ 调用方没显式给预算（沿用默认常量）→ 改为每步按剩余上下文自适应
         _auto_budget = (max_tool_result_tokens == DEFAULT_MAX_TOOL_RESULT_TOKENS)
-        for step in range(max_steps + 1):
+        # 步数上限：0/None = **不限**（成本由 MAX_TOOL_CALLS + abort 兜底）
+        _step_cap = int(max_steps) if (max_steps and int(max_steps) > 0) else 0
+
+        def _converge_anyway(msgs, why):
+            """预算耗尽时的**兜底收敛轮**：不给工具，请模型直接给结论。
+
+            为什么必须先做这一轮再谈失败：多步任务里"最后一个工具已经把事做完、
+            只差模型总结"占绝大多数 —— 直接判「未收敛失败」会把成功的任务报成
+            失败（2026-10-29 真机：说说已发布成功，页面却红字失败）。
+            兜底轮仍给不出文字（模型继续空转或仍要工具）→ 再按失败语义如实报告。
+            """
+            _msgs = list(msgs) + [{
+                "role": "system",
+                "content": ("（" + why + "）不再调用任何工具。请基于以上工具结果"
+                            "直接给出最终结论：完成了什么、还差什么，简洁说。"),
+            }]
+            try:
+                try:
+                    ret = chat_fn(_msgs, [], on_reasoning=None)
+                except TypeError:
+                    ret = chat_fn(_msgs, [])
+                _c, _tc, _u, _r = _normalize_chat_return(ret)
+                _accumulate_usage(res.usage_total, _u)
+                return (str(_c or "").strip() or None) if not _tc else None
+            except Exception:
+                return None
+
+        step = 0
+        while True:
             _check_abort()
+            if _step_cap and step >= _step_cap:
+                _tail2 = _converge_anyway(messages, f"已达步数上限 {_step_cap}")
+                if _tail2:
+                    # 兜底轮给出的结论 → **成功**，不冤枉已完成的任务
+                    res.ok = True
+                    res.answer = _tail2
+                    _append_log(EV_FINAL, {"content": _tail2, "steps": step,
+                                           "reason": "steps_capped"})
+                    _emit("final", {"content": _tail2, "steps": step,
+                                    "elapsed": round(time.time() - t0, 2)})
+                else:
+                    res.ok = False
+                    res.error = f"达到步数上限 {_step_cap}，未收敛"
+                    res.answer = ""
+                    _append_log(EV_FINAL, {"content": "", "steps": res.steps,
+                                           "error": res.error})
+                    _emit("final", {"content": "", "steps": res.steps,
+                                    "error": res.error,
+                                    "elapsed": round(time.time() - t0, 2)})
+                return _finalize(res)
             step_tool_count = 0
 
             # ★ 思维链**实时流**：把 on_reasoning 交给 chat_fn（若它支持），
@@ -312,7 +372,11 @@ def run_agent(*, session_id, user_input, chat_fn, tool_functions,
             # ── 总工具预算已耗尽：不再空转，直接如实收敛 ──
             #  模型还在要工具但预算没了 → 继续循环只会浪费 token，没有产出。
             if total_tool_calls >= MAX_TOOL_CALLS:
-                _tail = str(content or "").strip()
+                # ★ 与步数上限同款兜底：模型最后一点文字都没有时，先要一次结论，
+                #   要不出来才如实判失败（工具可能已把事做完，只差总结）。
+                _tail = (str(content or "").strip()
+                         or _converge_anyway(messages, f"已达工具调用上限 {MAX_TOOL_CALLS}")
+                         or "")
                 res.ok = bool(_tail)
                 res.answer = _tail or "工具调用预算已用完，任务未完成。"
                 res.error = None if _tail else f"工具调用预算耗尽（{MAX_TOOL_CALLS} 次）"
@@ -397,14 +461,7 @@ def run_agent(*, session_id, user_input, chat_fn, tool_functions,
 
                 messages.append(_tr.make_tool_message(tc_id, r["inline"]))
 
-        # 超过步数上限仍未收敛
-        res.ok = False
-        res.error = f"达到步数上限 {max_steps}，未收敛"
-        res.answer = ""
-        _append_log(EV_FINAL, {"content": "", "steps": res.steps, "error": res.error})
-        _emit("final", {"content": "", "steps": res.steps, "error": res.error,
-                        "elapsed": round(time.time() - t0, 2)})
-        return _finalize(res)
+            step += 1   # 本轮工具执行完毕，进入下一轮（while 循环由收敛/预算/中止兜底）
 
     except AgentAborted:
         res.aborted = True

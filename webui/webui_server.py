@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python
+#!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
 EggBloom WebUI Server - Modern Management Dashboard
@@ -2459,8 +2459,9 @@ class Handler(BaseHTTPRequestHandler):
 
         # ── 只读 Agent 端点：GET 也转发（前端刷新时可直读，不必都走 POST）──
         #  /api/agent/status | sessions | tools | memory | history?
+        #  /api/persona/cards（批次 I1 人格卡：GET=列表）
         if path in ("/api/agent/status", "/api/agent/sessions", "/api/agent/tools",
-                    "/api/agent/memory"):
+                    "/api/agent/memory", "/api/persona/cards"):
             bc = fetch_from_bot_core(path)
             if bc is None:
                 # bot 没起 → 给一个"能力未知"的占位，前端能正常渲染并提示
@@ -3185,6 +3186,11 @@ class Handler(BaseHTTPRequestHandler):
         #  设计文档 §3 明确：「不新增独立进程/端口（复用 webui_server 转发）」。
         #  bot 未运行时返回一个可读的错误（前端能提示"先启动 Bot"），而不是静默失败。
         if path.startswith("/api/agent/"):
+            self._proxy_agent_post(path, data)
+            return
+
+        # ── 人格卡转发（批次 I1）：逻辑在 bot_core / harness.persona_cards ──
+        if path.startswith("/api/persona/cards"):
             self._proxy_agent_post(path, data)
             return
 

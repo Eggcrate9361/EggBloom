@@ -44,7 +44,7 @@ _CFG = {
     # 记忆开关（默认开；config 可关）
     "memory": True,
     # ── agent 页可调的运行设置（get_settings / configure）──────────────
-    "max_steps": None,       # None = 用 agent_loop 的默认步数；UI 可改
+    "max_steps": 0,          # 0 = **不限步数**（成本由 MAX_TOOL_CALLS 兜底）；UI 可改
     "thinking": True,        # 是否把模型思维链（reasoning）发给前端
 }
 
@@ -114,7 +114,9 @@ def configure(*, chat_fn=None, tool_functions=None, static_prompt_fn=None,
     if tool_picker is not None:
         _CFG["tool_picker"] = tool_picker
     if max_steps is not None:
-        _CFG["max_steps"] = int(max_steps)
+        # 0 = 不限步数（负值也归零）。必须能**写回 0**：老版本里 0 走"不改"分支，
+        # 用户在 UI 里把上限改回 0 永远不会生效 —— 曾是"改不动"的一类。
+        _CFG["max_steps"] = max(0, int(max_steps))
     if thinking is not None:
         _CFG["thinking"] = bool(thinking)
     if on_turn is not None:
@@ -256,7 +258,7 @@ def get_settings():
     return {
         "memory": bool(_CFG.get("memory", True)),
         "thinking": bool(_CFG.get("thinking", True)),
-        "max_steps": int(_CFG.get("max_steps") or 0),   # 0 = 用默认步数
+        "max_steps": int(_CFG.get("max_steps") or 0),   # 0 = 不限步数
     }
 
 
@@ -503,7 +505,8 @@ def run_chat(*, user_input, session_id=None, is_group=False, context_hint="",
     )
     if max_steps:
         kwargs["max_steps"] = int(max_steps)
-    elif _CFG.get("max_steps"):
+    elif int(_CFG.get("max_steps") or 0) > 0:
+        # 0（默认）= 不传 → agent_loop 默认不限步数；显式配置了正值才设上限
         kwargs["max_steps"] = int(_CFG["max_steps"])
 
     if publish:
@@ -785,6 +788,87 @@ def trace_of(session_id, limit=None):
     return _al.replay(session_id, limit=limit)
 
 
+# ── 会话的**归档与标题**（侧边栏用；用户的选择 ≠ 运行态）────────────────
+#  归档不是删除：归档的会话从主列表挪入"已归档"折叠区，还能恢复。
+#  标题取该会话第一句用户话，提供人话索引（老列表只显示裸 sid 前 8 位）。
+#  两者是用户的选择，**跨重启必须记住** → 落盘 data/agent_session_flags.json，
+#  结构 {sid: {"archived": bool, "title": str}}；读失败当空、写失败只记日志。
+try:
+    from data_store import get_data_dir as _get_data_dir
+    _FLAG_PATH = _get_data_dir() / "agent_session_flags.json"
+except Exception:
+    _FLAG_PATH = None
+
+_FLAGS = {}                  # sid → {"archived": bool, "title": str}
+_flags_loaded = [False]
+
+
+def _load_flags():
+    if _flags_loaded[0]:
+        return _FLAGS
+    _flags_loaded[0] = True
+    if _FLAG_PATH:
+        try:
+            raw = json.loads(_FLAG_PATH.read_text(encoding="utf-8")) or {}
+            if isinstance(raw, dict):
+                _FLAGS.update({str(k): v for k, v in raw.items() if isinstance(v, dict)})
+        except Exception:
+            pass
+    return _FLAGS
+
+
+def _save_flags():
+    if not _FLAG_PATH:
+        return
+    try:
+        tmp = str(_FLAG_PATH) + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(_FLAGS, f, ensure_ascii=False, indent=1)
+        os.replace(tmp, str(_FLAG_PATH))
+    except Exception as e:
+        _log(f"[Agent] 会话旗标落盘失败: {e}")
+
+
+def session_title(sid):
+    """该会话第一句用户话 → 侧边栏标题（压平换行、取前 24 字；算出即缓存落盘）。"""
+    sid = str(sid or "")
+    if not sid:
+        return ""
+    flags = _load_flags()
+    rec = flags.get(sid) or {}
+    if rec.get("title"):
+        return str(rec["title"])
+    t = ""
+    try:
+        for ev in _slog.events_of("agent", sid):
+            if ev.get("type") == _al.EV_USER:
+                t = str((ev.get("payload") or {}).get("content") or "").strip()
+                if t:
+                    break
+    except Exception:
+        pass
+    t = t.replace("\r", " ").replace("\n", " ").strip()[:24]
+    if t:
+        rec = dict(flags.get(sid) or {})
+        rec["title"] = t
+        flags[sid] = rec
+        _save_flags()
+    return t
+
+
+def archive_session(sid, archived=True):
+    """归档 / 恢复一个会话（写旗标并落盘）。返回 True=已记录。"""
+    sid = str(sid or "")
+    if not sid:
+        return False
+    _load_flags()
+    rec = dict(_FLAGS.get(sid) or {})
+    rec["archived"] = bool(archived)
+    _FLAGS[sid] = rec
+    _save_flags()
+    return True
+
+
 def list_sessions(kind="desk", include_disk=True, limit=None):
     """列出会话：内存热态 + 磁盘日志（**刷新页面不丢**）。
 
@@ -798,12 +882,14 @@ def list_sessions(kind="desk", include_disk=True, limit=None):
                 continue
             seen.add(sid)
             s = _SESSIONS.get(sid) or {}
+            updated = meta.get("updated") or s.get("last") or 0
             out.append({
                 "session_id": sid,
                 "is_group": bool(meta.get("is_group")),
                 "busy": bool(s.get("busy")),
                 "turns": meta.get("turns", 0),
-                "updated": meta.get("updated") or s.get("last") or 0,
+                "updated": updated,
+                "updated_at": updated,   # 与磁盘条目同名字段：前端时间列不用两套键
                 "source": "live",
             })
     if include_disk:
@@ -820,11 +906,22 @@ def list_sessions(kind="desk", include_disk=True, limit=None):
                     "busy": False,
                     "turns": None,
                     "updated": rec.get("mtime", 0),
+                    "updated_at": rec.get("mtime", 0),
                     "bytes": rec.get("bytes", 0),
                     "source": "disk",
+                    "title": "",      # 下面统一补 title，避免两处写
                 })
         except Exception:
             pass
+    # ── 归档旗标 + 标题：磁盘条目在补 title；归档状态两边都要有 ──
+    flags = _load_flags()
+    for it in out:
+        sid = it["session_id"]
+        _flag = flags.get(sid) or {}
+        it.setdefault("title", "")
+        if not it.get("title"):
+            it["title"] = session_title(sid)
+        it["archived"] = bool(_flag.get("archived"))
     out.sort(key=lambda x: x.get("updated") or 0, reverse=True)
     if limit:
         out = out[:int(limit)]
@@ -832,7 +929,7 @@ def list_sessions(kind="desk", include_disk=True, limit=None):
 
 
 def delete_session(session_id):
-    """删除一个会话（内存 + 磁盘日志）。"""
+    """删除一个会话（内存 + 磁盘日志 + 归档旗标）。"""
     sid = str(session_id or "")
     if not sid:
         return False
@@ -841,6 +938,13 @@ def delete_session(session_id):
     _SESS_META.pop(sid, None)
     with _bus_lock:
         _BUS.pop(sid, None)
+    try:
+        _load_flags()
+        if sid in _FLAGS:
+            _FLAGS.pop(sid, None)   # 旗标也清掉，不留"已删除会话"的幽灵条目
+            _save_flags()
+    except Exception:
+        pass
     try:
         return _slog.delete("agent", sid)
     except Exception:

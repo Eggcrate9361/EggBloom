@@ -89,19 +89,41 @@ try:
     check("事件含 tool_result", "tool_result" in evs)
     check("事件含 final", "final" in evs)
 
-    # ── 4. 步数上限：一直调工具不收尾 ─────────────────────────────
+    # ── 4. 步数上限到达且模型的兜底轮仍空转 → 按失败如实报告 ─────
     SID4 = "agent-test-4"
-    always = [("继续", [{"id": f"c{i}", "function": {"name": "noop", "arguments": "{}"}}], {})
-              for i in range(50)]
 
     def _endless_chat(messages, tools):
-        return ("继续", [{"id": "c", "function": {"name": "noop", "arguments": "{}"}}], {})
+        return ("", [{"id": "c", "function": {"name": "noop", "arguments": "{}"}}], {})
 
     r4 = al.run_agent(session_id=SID4, user_input="x", chat_fn=_endless_chat,
                       tool_functions={"noop": lambda a: "ok"}, max_steps=3)
     check("★步数上限未收敛 ok=False", r4.ok is False)
     check("★步数上限有错误信息", "上限" in (r4.error or ""))
     check("★步数上限不会无限循环", r4.steps <= 5)
+
+    # ── 4b. ★2026-10-29 真机 bug：工具已把事做完，只差模型总结，
+    #        以前步数到限直接判「达到步数上限 12，未收敛」→ 成功任务被报失败。
+    #        现在到限先做一轮"不给工具、直接给结论"的兜底收敛。
+    SID4B = "agent-test-4b"
+
+    def _cap_ok_chat(messages, tools):
+        if tools:      # 工具还在提供 → 干活中
+            return ("", [{"id": "c", "function": {"name": "noop", "arguments": "{}"}}], {})
+        return ("发布说说成功", None, {})  # 兜底轮（tools=[]) → 给出结论
+
+    r4b = al.run_agent(session_id=SID4B, user_input="发说说", chat_fn=_cap_ok_chat,
+                       tool_functions={"noop": lambda a: "ok"}, max_steps=2)
+    check("★到步数上限先兜底收敛（成功案例不再误报失败）", r4b.ok is True)
+    check("★兜底收敛答案是结论", "发布说说成功" in r4b.answer)
+    check("★兜底收敛后步数不超过上限", r4b.steps <= 3)
+
+    # ── 4c. ★max_steps=0（新默认）= 不限步数：稳态由工具预算兜底，
+    #        不再出现"步数上限"这种失败型报错。
+    SID4C = "agent-test-4c"
+    r4c = al.run_agent(session_id=SID4C, user_input="x", chat_fn=_cap_ok_chat,
+                       tool_functions={"noop": lambda a: "ok"}, max_steps=0)
+    check("★不限步数受工具调用预算兜底", r4c.steps <= al.MAX_TOOL_CALLS + 1)
+    check("★不限步数不报步数上限", "步数上限" not in (r4c.error or ""))
 
     # ── 5. 中止 ───────────────────────────────────────────────────
     SID5 = "agent-test-5"

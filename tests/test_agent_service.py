@@ -211,6 +211,46 @@ try:
     tr = svc.trace_of("sess-e2e")
     check("★端到端：轨迹可回放", len(tr) >= 2)
 
+    # ══ max_steps 语义（2026-10-29）：0 = 不限步数，且**必须能写回 0** ══
+    #  老实现里 0 被 `or None` 折成 None → configure 视为"不改"，UI 改回 0 永远不生效。
+    svc.configure(max_steps=5)
+    check("max_steps 正值生效", svc.get_settings()["max_steps"] == 5)
+    svc.configure(max_steps=0)
+    check("★max_steps 写回 0 = 不限", svc.get_settings()["max_steps"] == 0)
+    s0 = svc.run_chat(user_input="不限步数的一轮", session_id="sess-steps")
+    check("★max_steps=0 时 run_chat 正常收敛", s0.get("ok") is True)
+    svc.configure(max_steps=3)
+    svc.configure(max_steps=None)
+    check("max_steps=None = 不改动（保持 3）", svc.get_settings()["max_steps"] == 3)
+    svc.configure(max_steps=0)   # 还原默认，避免污染后续断言
+
+    # ══ 会话归档 / 标题 / 删除（侧边栏三件套）════════════════════
+    svc.run_chat(user_input="帮我把桌面截图发我", session_id="desk-arch-1")
+    _lst = [x for x in svc.list_sessions(kind="", limit=100)
+            if x["session_id"] == "desk-arch-1"]
+    check("列表包含新会话", len(_lst) == 1)
+    _it = _lst[0]
+    check("★新会话第一句用户话作标题", _it["title"] == "帮我把桌面截图发我")
+    check("★新会话默认未归档", _it["archived"] is False)
+    check("★新会话带 updated_at（前端时间列用）", _it.get("updated_at", 0) > 0)
+
+    # 归档 → 模拟重启（清内存再读盘）→ 状态还在（用户的落盘选择）
+    check("archive_session 生效", svc.archive_session("desk-arch-1", True) is True)
+    svc._FLAGS.clear(); svc._flags_loaded[0] = False
+    svc._load_flags()
+    _lst2 = [x for x in svc.list_sessions(kind="", limit=100)
+             if x["session_id"] == "desk-arch-1"]
+    check("★归档状态跨重启保留（落盘）", _lst2 and _lst2[0]["archived"] is True)
+    check("★归档会话标题仍在", _lst2 and _lst2[0]["title"] == "帮我把桌面截图发我")
+
+    # 恢复 → 删除（旗标一起清，不留幽灵条目）
+    svc.archive_session("desk-arch-1", False)
+    check("★删除会话", svc.delete_session("desk-arch-1") is True)
+    _lst3 = [x for x in svc.list_sessions(kind="", limit=100)
+             if x["session_id"] == "desk-arch-1"]
+    check("★删除后列表不再含", not _lst3)
+    check("★删除连归档旗标一起清", "desk-arch-1" not in svc._load_flags())
+
     # ══ is_ready ═════════════════════════════════════════════════
     check("is_ready 依赖齐备", svc.is_ready() is True)
 

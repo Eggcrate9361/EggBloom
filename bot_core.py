@@ -1339,6 +1339,11 @@ def start_event_server():
                         pass
                     return
 
+            # ── 人格卡（批次 I1）：GET/POST 共用一套路由 ────────────────
+            if self.path.startswith("/api/persona/cards"):
+                self._persona_route(self._agent_query())
+                return
+
             # ── Agent 只读端点（GET）：与 POST 共用同一套路由 ──────────
             #  webui 的 GET 读取走这里；此前只在 do_POST 里实现，
             #  导致前端 GET /api/agent/status 拿到 404 —— 状态灯永远"检测中"。
@@ -1493,7 +1498,9 @@ def start_event_server():
                         _agent.configure(
                             memory=bool(req.get("memory", True)),
                             thinking=bool(req.get("thinking", True)),
-                            max_steps=int(req.get("max_steps") or 0) or None,
+                            # ★ 0 必须原样传：它现在表示"不限步数"，
+                            #   折成 None 会让 UI 里把上限改回 0 永远改不动
+                            max_steps=max(0, int(req.get("max_steps") or 0)),
                         )
                         if _aset_path is not None:
                             try:
@@ -1501,7 +1508,7 @@ def start_event_server():
                                 with open(tmp, "w", encoding="utf-8") as f:
                                     json.dump({"memory": bool(req.get("memory", True)),
                                                "thinking": bool(req.get("thinking", True)),
-                                               "max_steps": int(req.get("max_steps") or 0)},
+                                               "max_steps": max(0, int(req.get("max_steps") or 0))},
                                               f, ensure_ascii=False, indent=1)
                                 os.replace(tmp, _aset_path)
                             except Exception as e2:
@@ -1545,6 +1552,11 @@ def start_event_server():
                     )
                 elif _p == "/api/agent/delete":
                     res = {"ok": _agent.delete_session(str(req.get("session_id") or ""))}
+                elif _p == "/api/agent/archive":
+                    # 归档/恢复会话（archived=true 入"已归档"折叠区，false 恢复）
+                    res = {"ok": _agent.archive_session(
+                        str(req.get("session_id") or ""),
+                        bool(req.get("archived", True)))}
                 elif _p == "/api/agent/status":
                     res = {"ok": True, "ready": _agent.is_ready(),
                            "memory": _agent.memory_status(),
@@ -1569,8 +1581,92 @@ def start_event_server():
             except Exception:
                 pass
 
+        def _persona_route(self, req):
+            """人格卡端点（批次 I1）：存储在 harness/persona_cards.py。
+
+            铁律：应用卡的**唯一写回口**是 EGO 的 save_personality（下面显式 import），
+            本路由不做任何直接写人格文件的事；同步 ego 的含义就在这条 import 上。
+            """
+            res = None
+            try:
+                from harness import persona_cards as _pc
+                req = req if isinstance(req, dict) else {}
+                act = str(req.get("action") or "")
+
+                def _seed_sections():
+                    from plugins.ego.personality_engine import get_personality
+                    return (get_personality() or {}).get("sections") or {}
+
+                def _raw_now():
+                    from plugins.ego.personality_engine import get_personality
+                    return str((get_personality() or {}).get("raw") or "")
+
+                if act in ("", "list"):
+                    cards_dir_existed = _pc.os.path.isdir(_pc._CARDS_DIR)
+                    born = _pc.seed_if_empty(_seed_sections)
+                    _cards = _pc.list_cards()
+                    res = {"ok": True, "cards": _cards, "seeded": born,
+                           "first_run": (not cards_dir_existed) and bool(_cards)}
+                elif act == "get":
+                    _c = _pc.get_card(str(req.get("id") or ""))
+                    res = ({"ok": True, "card": _c} if _c
+                           else {"ok": False, "error": "卡不存在"})
+                elif act == "save":
+                    _secs = req.get("sections")
+                    if not isinstance(_secs, dict) or not _secs:
+                        # 空卡拒绝：一个手滑把"空集合"存成卡，再用它应用一次，人格就清零了
+                        res = {"ok": False, "error": "sections 为空 —— 拒绝存空卡"}
+                    else:
+                        res = {"ok": True,
+                               "card": _pc.save_card(str(req.get("name") or ""),
+                                                     str(req.get("note") or ""), _secs)}
+                elif act == "delete":
+                    res = {"ok": _pc.delete_card(str(req.get("id") or ""))}
+                elif act == "apply":
+                    from plugins.ego.personality_engine import (
+                        save_personality as _ego_save,
+                        get_personality as _ego_get,
+                    )
+                    _cid = str(req.get("id") or "")
+                    _c = _pc.get_card(_cid)
+                    if not _c:
+                        res = {"ok": False, "error": "卡不存在"}
+                    else:
+                        _r = _pc.apply_card(_cid, _ego_save, _raw_now)
+                        # 同步性核查：应用后**从 EGO 读回来**比对 —— 不一致说明有
+                        # 更高优先级人格源（如「这样脆弱的东西」已发布的蒸馏卡）在校验
+                        # personality.txt，光改文件等于没改。这里必须如实告诉用户。
+                        try:
+                            _back = (_ego_get() or {}).get("sections") or {}
+                            _same = (_back == (_c.get("sections") or {}))
+                        except Exception:
+                            _back, _same = {}, None
+                        res = {"ok": _r.get("ok"), "card": _c, "result": _r.get("result"),
+                               "synced": _same, "sections_now": _back,
+                               "warning": ("" if _same else
+                                           "EGO 读回的分段与卡不一致 —— 可能另有更高优先级人格源"
+                                           "（如已发布的蒸馏卡）在校验，先处理那个源再应用")}
+                else:
+                    res = {"ok": False, "error": f"未知的 persona 动作: {act or '(空)'}"}
+            except Exception as e:
+                res = {"ok": False, "error": f"{type(e).__name__}: {e}"}
+            try:
+                body = json.dumps(res, ensure_ascii=False, default=str).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                self.wfile.write(body)
+            except Exception:
+                pass
+
         def do_POST(self):
             try:
+                # ── 人格卡（批次 I1）：薄路由，逻辑在 harness.persona_cards ──
+                if self.path.startswith("/api/persona/cards"):
+                    self._persona_route(self._agent_req())
+                    return
                 # ── Agent 薄路由（逻辑在 harness.agent_service，这里只做转接）──
                 #  这一层刻意保持"薄"：只做 JSON 解析 + 参数归一 + 错误兜底，
                 #  任何业务逻辑都在 harness 里（设计文档 §3 的折中方案）。
@@ -13625,7 +13721,8 @@ def main():
                 _agent.configure(
                     memory=bool(_sv.get("memory", True)),
                     thinking=bool(_sv.get("thinking", True)),
-                    max_steps=int(_sv.get("max_steps") or 0) or None,
+                    # 0 = 不限步数，必须原样传（与 /api/agent/settings 同语义）
+                    max_steps=max(0, int(_sv.get("max_steps") or 0)),
                 )
                 log(f"[Agent] 已应用上次保存的设置: {_sv}")
         except Exception as _ae:

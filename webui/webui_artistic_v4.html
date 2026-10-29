@@ -1688,6 +1688,20 @@ html[data-page="agent"] .deco::after{animation:decoSlideX 4.4s linear infinite}
   color:var(--ink2);transition:background 120ms linear,border-color 120ms linear}
 .ag-sess .it:hover{background:var(--c30-ink);color:var(--ink)}
 .ag-sess .it.on{border-color:var(--c10);color:var(--c10);background:transparent}
+/* 会话条目悬停操作：归档 / 删除（2026-10-29 补——以前整个列表只能点进去，
+   归档、删除都没有入口，列表只会越积越长） */
+.ag-sess .it .it-ops{display:none;gap:6px;margin-top:3px}
+.ag-sess .it:hover .it-ops{display:flex}
+.ag-sess .it .it-ops .lnk{font-size:10px;color:var(--ink4);padding:0}
+.ag-sess .it:hover .it-ops .lnk{color:var(--ink2)}
+.ag-sess .it .it-ops .lnk:hover{color:var(--c10)}
+/* 已归档折叠区：默认收起，弱化显示；恢复后回到主列表 */
+.ag-sess details.ag-arc{margin-top:var(--s3);border-top:1px solid var(--line);padding-top:var(--s3)}
+.ag-sess details.ag-arc summary{cursor:pointer;font-size:10px;color:var(--ink4);
+  margin-bottom:var(--s2);user-select:none;list-style:none}
+.ag-sess details.ag-arc summary::before{content:'▸ ';}
+.ag-sess details.ag-arc[open] summary::before{content:'▾ ';}
+.ag-sess details.ag-arc .it{opacity:.72}
 .ag-wrap textarea{width:100%;background:transparent;border:0;border-bottom:1px solid var(--line2);
   color:var(--ink);font-size:12px;padding:8px 0;outline:none;resize:vertical;line-height:1.6}
 .ag-wrap textarea:focus{border-bottom-color:var(--accent)}
@@ -3930,7 +3944,30 @@ async function pageAgent(el) {
   };
   const sidTag = () => { $('agSid').textContent = AG_S.sid ? ('SID ' + AG_S.sid.slice(0, 8)) : ''; };
 
-  /* ① 会话列表 */
+  /* ① 会话列表：主区（活跃会话）+ 底部"已归档"折叠区；每项悬停出 归档/删除。
+     两个修复（2026-10-29）：标题用后端 title（第一句用户话，以前只有裸 sid 前 8 位）；
+     时间改成 MM-DD HH:MM —— 以前 fmtRaw 打印的是 epoch 秒数字或空行，等于没有时间列。 */
+  function agFmtTs(v) {
+    const n = Number(v);
+    if (!n || !(n > 0) || !isFinite(n)) return '';
+    const d = new Date(n * 1000);
+    const p = (x) => String(x).padStart(2, '0');
+    return p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
+  }
+  function agSessRow(s, on) {
+    const id = s.session_id || s.id || '';
+    const t = String(s.title || s.last_message || '');
+    const name = t ? t.slice(0, 18) : ('会话 ' + id.slice(0, 8));
+    return '<div class="it' + (on ? ' on' : '') + '" data-sid="' + esc(id) + '" title="' + esc(t) + '">'
+      + '<div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(name) + '</div>'
+      + '<div class="dim" style="font-size:9px">' + esc(agFmtTs(s.updated_at || s.created_at)) + '</div>'
+      + '<span class="it-ops">'
+      + (s.archived
+          ? '<button class="lnk" data-unarc="' + esc(id) + '">恢复</button>'
+          : '<button class="lnk" data-arc="' + esc(id) + '">归档</button>')
+      + '<button class="lnk" data-del="' + esc(id) + '">删除</button>'
+      + '</span></div>';
+  }
   async function loadSessions() {
     try {
       const r = await API('/agent/sessions');
@@ -3938,18 +3975,46 @@ async function pageAgent(el) {
     } catch (e) { AG_S.list = []; }
     const host = $('agSess');
     if (!AG_S.list.length) { host.innerHTML = '<div class="empty">还没有历史会话</div>'; return; }
-    host.innerHTML = AG_S.list.map(s => {
-      const id = s.session_id || s.id || '';
-      const t = s.title || s.last_message || s.updated_at || id.slice(0, 8);
-      return '<div class="it' + (id === AG_S.sid ? ' on' : '') + '" data-sid="' + esc(id) + '">'
-        + '<div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(String(t).slice(0, 18)) + '</div>'
-        + '<div class="dim" style="font-size:9px">' + esc(fmtRaw(s.updated_at || s.created_at || '')) + '</div>'
-        + '</div>';
-    }).join('');
-    qsa('[data-sid]', host).forEach(it => it.onclick = () => {
+    const act = AG_S.list.filter(s => !s.archived);
+    const arc = AG_S.list.filter(s => s.archived);
+    let html = act.map(s => agSessRow(s, s.session_id === AG_S.sid)).join('');
+    if (arc.length) {
+      html += '<details class="ag-arc"' + (AG_S.arcOpen ? ' open' : '') + '>'
+        + '<summary>已归档（' + arc.length + '）</summary>'
+        + arc.map(s => agSessRow(s, s.session_id === AG_S.sid)).join('')
+        + '</details>';
+    }
+    host.innerHTML = html;
+    qsa('[data-sid]', host).forEach(it => it.onclick = (e) => {
+      if (e.target.closest('.it-ops')) return;   /* 点的是条目上的操作按钮 */
       AG_S.sid = it.dataset.sid;
       sidTag(); loadSessions(); replay();
     });
+    const actArchive = async (sid, archived) => {
+      try { await API('/agent/archive',
+        { method: 'POST', body: JSON.stringify({ session_id: sid, archived: archived }) }); }
+      catch (e) { sayHint('归档操作失败：' + e.message); return; }
+      sayHint(archived ? '已归档（可随时恢复）' : '已恢复到主列表');
+      loadSessions();
+    };
+    qsa('[data-arc]', host).forEach(b => b.onclick =
+      (e) => { e.stopPropagation(); actArchive(b.dataset.arc, true); });
+    qsa('[data-unarc]', host).forEach(b => b.onclick =
+      (e) => { e.stopPropagation(); actArchive(b.dataset.unarc, false); });
+    qsa('[data-del]', host).forEach(b => b.onclick = async (e) => {
+      e.stopPropagation();
+      const sid = b.dataset.del;
+      /* 归档可恢复、删除不可恢复 → 两道确认文案把差别讲清楚 */
+      if (!await pvConfirm('删除该会话？', '会话日志将被删除、恢复不了。想收起请用「归档」。', '删除')) return;
+      try { await API('/agent/delete',
+        { method: 'POST', body: JSON.stringify({ session_id: sid }) }); }
+      catch (e2) { sayHint('删除失败：' + e2.message); return; }
+      if (AG_S.sid === sid) { AG_S.sid = ''; AG_S.events = []; sidTag(); drawChat({ toBottom: true }); }
+      sayHint('已删除该会话');
+      loadSessions();
+    });
+    const d = host.querySelector('details.ag-arc');
+    if (d) d.addEventListener('toggle', () => { AG_S.arcOpen = d.open; });
   }
   /* ② 轨迹回放（真回放：读历史，不重新请求模型） */
   async function replay() {
@@ -4292,7 +4357,7 @@ async function pageAgent(el) {
       + swRow('显示思考过程', 'thinking', s.thinking !== false, '推理模型的思维链，逐条弱化显示')
       + '</div>'
       + '<div class="ff-card" data-fcard="max_steps"><div class="ff-main">'
-      + '<div class="ff-t">单次最大步数</div><div class="ff-d">0 = 用默认</div></div>'
+      + '<div class="ff-t">单次最大步数</div><div class="ff-d">0 = 不限步数（默认）；成本由总工具调用预算兜底，步数不再是失败判据</div></div>'
       + '<input type="number" step="1" min="0" id="agMaxSteps" value="' + (s.max_steps || 0) + '"></div>';
     qsa('.sw', agSetHost).forEach(sw => sw.onclick = () => {
       const on = sw.getAttribute('aria-checked') === 'true';
@@ -4695,6 +4760,17 @@ window.FIELD_META = {
     "custom_exit_phrases_idle": {"label": "空闲退场语", "desc": "长时间无人对话时触发", "ctl": "editable", "panel": "exit", "mount": "exitIdleList", "key": "custom_exit_phrases_idle", "default": [], "default_text": "空", "restart": true},
     "group_quote_mode": {"label": "群引用回复", "desc": "回复时是否引用它正在回的那条消息：off=不引用 / auto=对象明确时引用（被 @、被叫名字、合并了多条历史、或对方本来就发了引用）/ always=每条都引用", "ctl": "select", "panel": "group", "unit": "", "id": "sGroupQuoteMode", "options": [["auto", "自动（推荐）"], ["always", "每条都引用"], ["off", "从不引用"]], "default": "auto", "default_text": "auto"},
     "bot_nicknames": {"label": "Bot 昵称（每行一个）", "desc": "Bot 的全部称呼：群友叫其中任何一个都算在叫它。第一个当作网名用；留空则用群名片，再空才兜底 小a。大小写/全角/@ 不敏感", "ctl": "lines", "panel": "trigger", "unit": "", "id": "sBotNicknames", "default": [], "default_text": "空"},
+    "speak_gate_tier": {"label": "发言闸档位", "desc": "进模型前的纯代码闸：1 只认点名 / 2 关键词 / 3 关键词+概率（默认）/ 4 全响应。被点名一律放行，任何频控都拦不住", "ctl": "number", "panel": "trigger", "unit": "", "id": "sSpeakGateTier", "default": 3, "default_text": "3"},
+    "speak_probability": {"label": "档位概率", "desc": "档 3 下，命中关键词的消息里有多大比例真的进模型（0–1）。档位不是 3 时这一项不参与判定", "ctl": "number", "panel": "trigger", "unit": "", "id": "sSpeakProbability", "default": 0.15, "default_text": "0.15"},
+    "speak_rate_max_per_100": {"label": "发言率上限", "desc": "窗口内「回复数/消息数」超过 N/100 就静默；样本少于 20 条不判，避免刚开始聊就误拦", "ctl": "number", "panel": "trigger", "unit": "/100", "id": "sSpeakRateMax", "default": 10, "default_text": "10"},
+    "speak_rate_window_min": {"label": "发言率窗口", "desc": "统计发言率的滑动窗口长度；窗口越短越容易被拦，越长越平滑", "ctl": "number", "panel": "trigger", "unit": "分钟", "id": "sSpeakRateWindow", "default": 30, "default_text": "30"},
+    "consecutive_reply_limit": {"label": "连说上限", "desc": "连续自己说 N 条后强制静默 5 分钟（期间有人说话即清零）。被点名不受此限", "ctl": "number", "panel": "trigger", "unit": "条", "id": "sConsecutiveLimit", "default": 2, "default_text": "2"},
+    "decider_min_score": {"label": "决策器放行线", "desc": "会话决策器的置信度下限（0–1）：调低更容易接话，调高更沉默；临界区 ±0.1 交给 AI 表态", "ctl": "number", "panel": "trigger", "unit": "", "id": "sDeciderMinScore", "default": 0.5, "default_text": "0.5"},
+    "persona_sharpness": {"label": "嘴毒程度", "desc": "人格形式参数（0–1）：语气词池分档 + 句首语气词概率。只改说话形式，不改文本内容", "ctl": "number", "panel": "deai", "unit": "", "id": "sPersonaSharp", "default": 0.75, "default_text": "0.75"},
+    "persona_curiosity": {"label": "好奇程度", "desc": "人格形式参数（0–1）：对方说陈述句时追问的概率。调高更像会接话的活人，也更容易变成十万个为什么", "ctl": "number", "panel": "deai", "unit": "", "id": "sPersonaCurious", "default": 0.55, "default_text": "0.55"},
+    "persona_warmth": {"label": "亲近温度", "desc": "人格形式参数（0–1）：表情概率 + 句末句号软化成～的概率。调高更软，调低更像冷脸", "ctl": "number", "panel": "deai", "unit": "", "id": "sPersonaWarm", "default": 0.35, "default_text": "0.35"},
+    "reply_question_guard": {"label": "反问闸", "desc": "末句是问号时怎么办：off 只记口癖 / regen 重生一次 / regen_private 只在私聊与被 @ 时重生。重生会把首字从 5 秒推到 7–8 秒", "ctl": "select", "panel": "length", "unit": "", "id": "sQuestionGuard", "default": "off", "default_text": "off"},
+    "reply_long_ratio": {"label": "长句档概率", "desc": "抽到长句档（2–3 条、每条 ≤40 字）的概率（0–0.5）；只调 C 档权重，A:B 比例不变", "ctl": "number", "panel": "length", "unit": "", "id": "sReplyLongRatio", "default": 0.1, "default_text": "0.1"},
   }
 };
 /* ══ FIELD_META_END */
@@ -5196,7 +5272,7 @@ async function pageConfig(el) {
        一个都不匹配 —— 那页点保存会把整份人格写空。这里不重犯。 */
     + '<div class="hd" style="margin-top:var(--s6);cursor:pointer" id="cPersonaHd">'
     +   '<span class="lab">人格与人设</span><i class="rule"></i>'
-    +   '<span class="dim" id="cPersonaTip">写回 plugins/personality.txt · 点击展开</span>'
+    +   '<span class="dim" id="cPersonaTip">写回 plugins/personality.txt · 点击展开 · 卡</span>'
     +   '<span class="sig" style="display:inline-flex"><i></i><span id="cPersonaStat">—</span></span>'
     + '</div>'
     + '<div id="cPersonaBody" hidden><div id="cPersonaInner"><div class="empty">展开后读取</div></div></div>'
@@ -5374,6 +5450,100 @@ async function pageConfig(el) {
           if (tot) tot.textContent = '改后 ' + n + ' 字';
         });
       });
+
+      /* ── 人格卡（批次 I1）：数据口 /api/persona/cards。
+          应用卡在后端只走 EGO save_personality 一个写入口（同步 ego）；
+          应用后 loadCards()/load() 从 EGO 重新读回 —— 蒸馏卡等更高优先级源
+          存在时后端会给 warning，这里如实转述。 ── */
+      async function loadCards() {
+        const host = $('cCards');
+        if (!host) return;
+        let r = null;
+        try { r = await API('/persona/cards'); }
+        catch (e) { host.innerHTML = '<span class="dim">读取人格卡失败：' + esc(e.message) + '</span>'; return; }
+        const cards = (r && r.cards) || [];
+        if (!cards.length) {
+          host.innerHTML = '<span class="dim">还没有卡 —— 点「存为卡」把当前人格存成快照</span>';
+          return;
+        }
+        host.innerHTML = cards.map(c =>
+          '<span class="btn sm" data-card="' + esc(c.id) + '" title="' + esc(c.note || '') + '"'
+          + ' style="display:inline-flex;align-items:center;gap:6px;padding-right:6px">'
+          + esc(c.name) + '<i class="dim" style="font-style:normal;font-size:9px">' + (c.chars || 0) + '</i>'
+          + '<b data-del="' + esc(c.id) + '" style="cursor:pointer;font-weight:400;color:var(--ink4)" title="删除此卡">✕</b></span>'
+        ).join('') + (r.seeded && r.seeded.length
+          ? '<span class="dim" style="font-size:9px">首启已生成：' + esc(r.seeded.join('、')) + '</span>' : '');
+        qsa('[data-card]', host).forEach(ch => ch.onclick = async (e) => {
+          if (e.target.dataset.del) return;      /* 点的是 ✕ 删除钮 */
+          const id = ch.dataset.card;
+          const nm = (ch.childNodes[0] && ch.childNodes[0].textContent || '该卡').trim();
+          if (!await pvConfirm('应用人格卡「' + nm + '」？',
+            '用这张卡覆盖当前人格文件（personality.txt），下一条消息生效。覆盖前的原文会自动备份到卡的目录。', '应用')) return;
+          try {
+            const r2 = await API('/persona/cards', { method: 'POST',
+              body: JSON.stringify({ action: 'apply', id: id }) });
+            if (r2 && r2.ok) {
+              if (r2.warning) say('已应用，但注意：' + r2.warning, true);
+              else say('已应用「' + ((r2.card || {}).name || nm) + '」· '
+                + ((r2.card || {}).sections_count || Object.keys((r2.card || {}).sections || {}).length)
+                + ' 段，下一条消息生效');
+              await load();                      /* 应用后从 EGO 读回，编辑器跟着卡走 */
+            } else say('应用失败：' + ((r2 && r2.error) || '未知'), true);
+          } catch (e2) { say('应用失败：' + e2.message, true); }
+        });
+        qsa('[data-del]', host).forEach(x => x.onclick = async (ev) => {
+          ev.stopPropagation();
+          const id = x.dataset.del;
+          if (x.dataset.armed !== '1') {
+            x.dataset.armed = '1'; x.textContent = '确认✕';
+            setTimeout(() => { if (x.parentNode) { x.dataset.armed = ''; x.textContent = '✕'; } }, 3000);
+            return;
+          }
+          if (!await pvConfirm('删除这张人格卡？', '卡文件删除后不可恢复；personality.txt 本身不受影响。', '删除')) return;
+          try { await API('/persona/cards', { method: 'POST',
+            body: JSON.stringify({ action: 'delete', id: id }) }); } catch (e) { return; }
+          loadCards();
+        });
+      }
+      /* 存为卡：弹窗收名字/备注（Electron 不支持 window.prompt —— 用应用内对话框） */
+      function cardSaveDialog() {
+        const sections = {};
+        qsa('#cPersonaBody textarea[data-sec]').forEach(function (t) { sections[t.dataset.sec] = t.value; });
+        const total = Object.keys(sections).reduce((s, k) => s + sections[k].length, 0);
+        if (!total) { say('编辑器里没有人格内容，空的存不成卡', true); return; }
+        const ov = document.createElement('div');
+        ov.className = 'modal-ov';
+        ov.innerHTML = '<div class="modal" style="max-width:460px">'
+          + '<div class="modal-t"><h3>存为人格卡</h3></div>'
+          + '<div style="padding-bottom:var(--s3)">'
+          + '<div class="fld"><label>卡名 <span class="dim">· ' + total + ' 字，与现有同名卡会覆盖更新</span></label>'
+          + '<input id="pcNm" placeholder="小a / 大肥鱼 …"></div>'
+          + '<div class="fld" style="margin-top:var(--s2)"><label>一句话备注（可空）</label>'
+          + '<input id="pcNote"></div></div>'
+          + '<div style="display:flex;gap:var(--s2)"><button class="btn primary" id="pcOk">保存</button>'
+          + '<button class="btn" id="pcNo">取消</button></div></div>';
+        document.body.appendChild(ov);
+        const nm = $('pcNm'); if (nm) nm.focus();
+        $('pcNo').onclick = () => ov.remove();
+        ov.onclick = (e) => { if (e.target === ov) ov.remove(); };
+        const onKey = (e) => { if (e.key === 'Escape') { e.stopPropagation(); ov.remove(); } };
+        document.addEventListener('keydown', onKey, true);
+        $('pcOk').onclick = async () => {
+          const name = (nm.value || '').trim();
+          if (!name) { nm.focus(); return; }
+          const note = ($('pcNote').value || '').trim();
+          ov.remove();
+          document.removeEventListener('keydown', onKey, true);
+          try {
+            const r = await API('/persona/cards', { method: 'POST',
+              body: JSON.stringify({ action: 'save', name: name, note: note, sections: sections }) });
+            if (r && r.ok) { say('已存卡「' + name + '」· ' + total + ' 字'); await loadCards(); }
+            else say('存卡失败：' + ((r && r.error) || '未知'), true);
+          } catch (e) { say('存卡失败：' + e.message, true); }
+        };
+      }
+      const csBtn = $('cCardSave');
+      if (csBtn) csBtn.onclick = cardSaveDialog;
 
       const btn = $('cPersonaSave');
       if (btn) btn.onclick = async function () {
