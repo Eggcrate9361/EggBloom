@@ -93,6 +93,26 @@ _INJECTED = {}
 _INJECT_TTL = 180.0
 
 
+# ── 搜索统计 / 最近查询（1.5.10 精致化：插件页要真实数据）────────────
+#: 只存内存（重启清空）—— 它是观测量，不参与任何判断。
+_RECENT_SEARCH = __import__("collections").deque(maxlen=50)
+_SEARCH_STATS = {"total": 0, "model": 0, "own": 0, "fail": 0, "ms_total": 0}
+
+
+def _record_search(query: str, source: str, ms: float, chars: int = 0) -> None:
+    try:
+        _SEARCH_STATS["total"] += 1
+        if source in ("model", "own", "fail"):
+            _SEARCH_STATS[source] += 1
+        _SEARCH_STATS["ms_total"] += int(ms)
+        _RECENT_SEARCH.append({
+            "ts": time.time(), "query": str(query or "")[:80],
+            "source": source, "ms": int(ms), "chars": int(chars),
+        })
+    except Exception:
+        pass
+
+
 def _reply_key(group_id="", context=None):
     ctx = context or {}
     who = str(ctx.get("sender") or ctx.get("user_id") or ctx.get("uid") or "")
@@ -337,11 +357,14 @@ def before_reply(message: str = "", group_id: str = "", context: dict = None, **
     #   长问句会把 2024 年的盘点页当答案，模型据此回「还没官宣」。
     #   这里与 bot_core 的 search_web 共用 search_prefs，两处不会分叉。
     search_result = ""
+    _t0 = time.time()
+    _source = ""
     try:
         from search_prefs import prefer_model_search, model_search_text
         if prefer_model_search():
             search_result = model_search_text(query, log=lambda m: print(f"[web_search] {m}"))
             if search_result:
+                _source = "model"
                 print(f"[web_search] 模型搜索命中: {query}")
     except Exception as e:
         print(f"[web_search] 模型搜索不可用（回退自家搜索）: {e}")
@@ -350,10 +373,15 @@ def before_reply(message: str = "", group_id: str = "", context: dict = None, **
     if not search_result:
         try:
             search_result = search_web(query)
+            _source = "own"
             print(f"[web_search] 自家搜索: {query}")
         except Exception as e:
             print(f"[web_search] 搜索失败: {e}")
             search_result = f"搜索「{query}」失败，请稍后再试。"
+            _source = "fail"
+
+    _record_search(query, _source or ("fail" if not search_result else "own"),
+                   (time.time() - _t0) * 1000.0, len(str(search_result or "")))
 
     # 真的拿到内容才记标记（失败提示语不算"查过"，否则又会去拦截正常回复）
     try:
@@ -412,6 +440,24 @@ def after_reply(message: str = "", reply: str = "", context: dict = None, **kwar
 
 def on_load():
     print("[web_search] 联网兜底插件已启用")
+
+
+def _act_stats(_p=None):
+    s = dict(_SEARCH_STATS)
+    n = max(1, s["total"])
+    return {"ok": True, "stats": s, "avg_ms": round(s["ms_total"] / n) if s["total"] else 0}
+
+
+def _act_recent(_p=None):
+    return {"ok": True, "searches": list(reversed(list(_RECENT_SEARCH)))}
+
+
+PLUGIN_ACTIONS = {
+    "get_config": get_config,
+    "set_config": set_config,
+    "stats": _act_stats,
+    "recent": _act_recent,
+}
 
 
 def get_api_status():
