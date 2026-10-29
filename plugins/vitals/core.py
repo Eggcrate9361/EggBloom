@@ -153,20 +153,104 @@ def form_params(state: dict) -> dict:
     }
 
 
+# ── 触发表达式（病表里的 trigger 字段）──────────────────────────
+_CLAUSE_RE = re.compile(r"^\s*([a-z_]+)\s*(>=|<=|==|!=|>|<)?\s*([0-9.]+)?\s*$")
+
+
+def _eval_clause(clause: str, env: dict) -> bool:
+    m = _CLAUSE_RE.match(clause)
+    if not m:
+        return False
+    name, op, num = m.group(1), m.group(2), m.group(3)
+    if name not in env:
+        return False
+    left = env[name]
+    if not op:
+        return bool(left)
+    if num is None:
+        return False
+    right = float(num)
+    if op == ">=":
+        return left >= right
+    if op == "<=":
+        return left <= right
+    if op == ">":
+        return left > right
+    if op == "<":
+        return left < right
+    if op == "==":
+        return abs(left - right) < 1e-9
+    if op == "!=":
+        return abs(left - right) >= 1e-9
+    return False
+
+
+def trigger_env(state: dict, hour: int) -> dict:
+    env = {k: clamp((state or {}).get(k, 0.0)) for k in STATES}
+    env["hour"] = int(hour)
+    env["night"] = 1 if 0 <= hour <= 5 else 0
+    env["late_night"] = 1 if (hour >= 23 or hour <= 4) else 0
+    env["rushed"] = 0
+    env["irregular_meals"] = 0
+    env["quiet_night"] = 0
+    return env
+
+
+def eval_trigger(expr: str, state: dict, hour: int) -> bool:
+    """求值病表 trigger（只支持 && 组合的比较式；未知变量 = False，不猜）。"""
+    env = trigger_env(state, hour)
+    expr = str(expr or "").strip()
+    if not expr:
+        return False
+    return all(_eval_clause(c, env) for c in expr.split("&&"))
+
+
+def active_diseases(diseases, state: dict, hour: int) -> list:
+    out = []
+    for d in diseases or []:
+        if eval_trigger(d.get("trigger"), state, hour):
+            out.append(d)
+    return out
+
+
+def apply_event_logged(state: dict, event: str, payload: dict = None):
+    """事件 → 新状态 + 一条可读日志（插件页时间线用）。"""
+    before = normalize(state)
+    after = apply_event(before, event, payload or {})
+    deltas = {}
+    for k in STATES:
+        dv = round(after[k] - before[k], 3)
+        if abs(dv) >= 0.001:
+            deltas[k] = dv
+    note = str((payload or {}).get("text") or "")[:40]
+    entry = {"t": int(time.time()), "ev": str(event or ""), "deltas": deltas, "note": note}
+    return after, entry
+
+
+def symptom_lines(state: dict) -> list:
+    """按病给 0–2 行症状提示（无症状 = 空列表）。"""
+    s = normalize(state)
+    lines = []
+    if s["fever"] >= 0.6:
+        lines.append("【状态】发烧：打字容易出错，句子可以断，别纠正自己。")
+    elif s["cold"] >= 0.4:
+        lines.append("【状态】感冒：说话短，少用感叹号。")
+    if s["insomnia"] >= 0.6:
+        lines.append("【状态】没睡好：念头跳，别铺垫长句。")
+    if s["wounded"] >= 0.5:
+        lines.append("【状态】有点受伤：话少，不撒娇，不追问。")
+    if s["burnout"] >= 0.5:
+        lines.append("【状态】倦：能一句说完就不说两句。")
+    if s["irritability"] >= 0.7:
+        lines.append("【状态】烦：语气短而硬，但别攻击人。")
+    return lines[:2]
+
+
 def symptom_line(state: dict) -> str:
     """给 prompt 的一行状态（≤40 字）；无症状返回空串。"""
     s = normalize(state)
-    if s["fever"] >= 0.6:
-        return "【状态】发烧，打字容易出错，句子碎一点。"
-    if s["cold"] >= 0.4:
-        return "【状态】有点感冒，说话短，少用感叹号。"
-    if s["insomnia"] >= 0.6:
-        return "【状态】没睡好，脑子跳，别长篇大论。"
-    if s["wounded"] >= 0.5:
-        return "【状态】有点受伤，话少、别撒娇。"
-    if s["burnout"] >= 0.5:
-        return "【状态】倦，能少说就少说。"
-    return ""
+    lines = symptom_lines(s)
+    return lines[0] if lines else ""
 
 
 def load_diseases(path: str):

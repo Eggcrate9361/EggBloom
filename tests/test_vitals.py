@@ -118,6 +118,24 @@ finally:
     vp2._STATE = None
     shutil.rmtree(_tmp2, ignore_errors=True)
 
+
+print("\n[9] 触发表达式与事件日志（1.5.10 强化）")
+st = {"cold": 0.5, "irritability": 0.7, "wounded": 0.2, "fever": 0, "insomnia": 0,
+      "loneliness": 0, "guard": 0, "burnout": 0}
+check("cold >= 0.3", core.eval_trigger("cold >= 0.3", st, 14) is True)
+check("&& 组合 + late_night 命中(23点)", core.eval_trigger("irritability >= 0.6 && late_night", st, 23) is True)
+check("&& 组合 + late_night 不命中(14点)", core.eval_trigger("irritability >= 0.6 && late_night", st, 14) is False)
+check("未知变量 = False（不猜）", core.eval_trigger("night_chill", st, 14) is False)
+d = [{"id": "x", "name": "感冒", "kind": "physical", "trigger": "cold >= 0.3",
+      "effects": [], "decay": {}, "recover": []},
+     {"id": "y", "name": "易怒", "kind": "mental", "trigger": "irritability >= 0.9",
+      "effects": [], "decay": {}, "recover": []}]
+check("active_diseases 只回命中项", [x["name"] for x in core.active_diseases(d, st, 14)] == ["感冒"])
+_ns, _ev = core.apply_event_logged(core.default_state(), "message.in", {"text": "闭嘴", "hour": 14})
+check("事件带 deltas", _ev.get("deltas", {}).get("wounded", 0) >= 0.19, _ev)
+check("事件带原文", _ev.get("note") == "闭嘴", _ev)
+check("症状可多行", len(core.symptom_lines({"cold": .5, "irritability": .8})) >= 2)
+
 print("\n" + "=" * 56)
 print(f"通过 {len(PASS)} / 失败 {len(FAIL)}")
 if FAIL:

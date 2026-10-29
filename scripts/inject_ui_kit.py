@@ -21,8 +21,15 @@ for base, dirs, files in os.walk(os.path.join(ROOT, "plugins")):
             continue
         p = os.path.join(base, f)
         t = io.open(p, encoding="utf-8").read()
+        # 已有 kit 块 → 用最新 kit.css 整体替换（保证样式升级能推送到所有页面）
         if MARK in t:
-            skipped.append(p)
+            import re as _re
+            t2 = _re.sub(r'<style id="pv-kit">.*?</style>', BLOCK, t, count=1, flags=_re.S)
+            if t2 != t:
+                io.open(p, "w", encoding="utf-8").write(t2)
+                changed.append(p)
+            else:
+                skipped.append(p)
             continue
         if "<!--PV-KIT-->" in t:
             t = t.replace("<!--PV-KIT-->", BLOCK, 1)

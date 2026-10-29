@@ -79,6 +79,35 @@ _HISTORY_MAX = 120
 _HISTORY_MIN_GAP = 600
 
 
+def _load_events() -> list:
+    try:
+        raw = json.load(open(_STATE_PATH, encoding="utf-8"))
+        ev = raw.get("events")
+        return [x for x in (ev or []) if isinstance(x, dict)][-60:]
+    except Exception:
+        return []
+
+
+def _append_event(entry: dict) -> None:
+    try:
+        events = _load_events()
+        events.append(entry)
+        events = events[-60:]
+        # 只重写 events 字段，避免动到刚保存的状态
+        raw = {}
+        try:
+            raw = json.load(open(_STATE_PATH, encoding="utf-8"))
+        except Exception:
+            raw = dict(_STATE or core.default_state())
+        raw["events"] = events
+        tmp = _STATE_PATH + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(raw, f, ensure_ascii=False, indent=1)
+        os.replace(tmp, _STATE_PATH)
+    except Exception as e:
+        print(f"[vitals] 事件日志失败: {e}")
+
+
 def _load_history() -> list:
     try:
         raw = json.load(open(_STATE_PATH, encoding="utf-8"))
@@ -154,15 +183,19 @@ def _on_event(ctx, event_name: str = "", payload: dict = None, **kwargs):
             _cancel_timer(gid)          # 有人说话 = 不是"无人回应"
         text = str(p.get("text") or "")
         hour = time.localtime(float(p.get("ts") or time.time())).tm_hour
-        st = core.apply_event(st, "message.in",
-                              {"text": text, "at_bot": bool(p.get("at_bot")), "hour": hour})
+        st, _ev = core.apply_event_logged(st, "message.in",
+                                          {"text": text, "at_bot": bool(p.get("at_bot")), "hour": hour})
+        if _ev.get("deltas"):
+            _append_event(_ev)
     elif event_name == "bot.replied":
         if gid:
             _LAST_REPLY_AT[gid] = time.time()
             _schedule_timer(gid)
         st = load_state()
     elif event_name == "vitals.poke":
-        st = core.apply_event(st, "poke", {})
+        st, _ev = core.apply_event_logged(st, "poke", {})
+        if _ev.get("deltas"):
+            _append_event(_ev)
     else:
         return None
 
@@ -179,7 +212,8 @@ def _schedule_timer(gid: str) -> None:
             if _LAST_MSG_AT.get(g, 0) > _LAST_REPLY_AT.get(g, 0):
                 return              # 期间有人说话，不算冷落
             st = load_state()
-            st = core.apply_event(st, "no_reply_10min", {})
+            st, _ev = core.apply_event_logged(st, "no_reply_10min", {})
+            _append_event(_ev)
             save_state(st)
             print(f"[vitals] 群[{g}] 发言后 10 分钟无人回应 → loneliness 上升")
         except Exception as e:
@@ -209,6 +243,8 @@ def _before_reply(ctx, message: str = "", group_id: str = "", context: dict = No
     # ① 可重置：真实求助信号 → 全部清零，不玩梗、不延展（§16.6）
     if bool(_cfg("vitals_reset_on_help", True)) and core.HELP_RE.search(text):
         save_state(core.reset_all(load_state()))
+        _append_event({"t": int(time.time()), "ev": "help_reset", "deltas": {},
+                       "note": "命中求助信号，全部清零"})
         print("[vitals] 命中求助信号 → 状态清零")
         return None
     # ② 不攻击：辱骂/自伤威胁 → 短路成"不回"（代码边界，不靠 prompt）
@@ -318,8 +354,13 @@ def reset_vitals(_params=None) -> dict:
 def _act_get_vitals(_params=None) -> dict:
     if not _DISEASES:
         load_diseases()
-    return {"vitals": get_vitals(), "form": get_form_params(),
-            "diseases": len(_DISEASES), "history": _load_history()}
+    vit = get_vitals()
+    hour = time.localtime().tm_hour
+    active = core.active_diseases(_DISEASES, vit, hour)
+    return {"vitals": vit, "form": get_form_params(),
+            "diseases": len(_DISEASES), "history": _load_history(),
+            "events": _load_events(), "active": active,
+            "symptoms": core.symptom_lines(vit)}
 
 
 def nudge_vitals(params=None) -> dict:
