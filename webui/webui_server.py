@@ -2482,8 +2482,13 @@ class Handler(BaseHTTPRequestHandler):
         # ── 只读 Agent 端点：GET 也转发（前端刷新时可直读，不必都走 POST）──
         #  /api/agent/status | sessions | tools | memory | history?
         #  /api/persona/cards（批次 I1 人格卡：GET=列表）
+        # 人格卡：单独一条，用业务超时转发（0.5s 是存活探测用的，读卡会超时）
+        if path == "/api/persona/cards":
+            self._proxy_bot_core(self.path, timeout=10)
+            return
+
         if path in ("/api/agent/status", "/api/agent/sessions", "/api/agent/tools",
-                    "/api/agent/memory", "/api/persona/cards"):
+                    "/api/agent/memory"):
             bc = fetch_from_bot_core(path)
             if bc is None:
                 # bot 没起 → 给一个"能力未知"的占位，前端能正常渲染并提示

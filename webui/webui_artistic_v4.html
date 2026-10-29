@@ -16,6 +16,39 @@
     font-display:swap;src:url('fonts/fusion-pixel-12px-sc.woff2') format('woff2')}
 /* 后端注入的右下角「切换到旧版」浮钮：配置中心已有界面切换，隐藏 */
 #__uiSwitch,#__uiSwitchBtn{display:none !important}
+
+/* ═══ 人格人物卡（2026-10-29 第二轮）：卡=一个人物，卡内是全部人格段 ═══ */
+.pc-cards{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:var(--s4)}
+@media (max-width:1000px){.pc-cards{grid-template-columns:1fr}}
+.pc-persona{background:var(--panel);border:1px solid var(--line2);border-radius:3px;
+  display:flex;flex-direction:column;min-width:0}
+.pc-persona.active{box-shadow:0 0 0 1px var(--accent) inset}
+.pc-persona-hd{display:flex;align-items:baseline;gap:var(--s2);padding:var(--s3) var(--s4);
+  border-bottom:1px solid var(--line);flex-wrap:wrap}
+.pc-persona-nm{font-size:var(--z5);color:var(--ink)}
+.pc-badge{font-size:9px;letter-spacing:.1em;padding:2px 6px;border:1px solid var(--accent);
+  color:var(--accent);border-radius:2px}
+.pc-persona-meta{margin-left:auto;font-size:var(--z1);color:var(--ink3)}
+.pc-persona-note{padding:var(--s2) var(--s4) 0;color:var(--ink3);font-size:var(--z1)}
+.pc-items{padding:var(--s2) var(--s3) var(--s3);max-height:560px;overflow:auto}
+.pc-item{border-bottom:1px solid var(--line)}
+.pc-item:last-child{border-bottom:0}
+.pc-item>summary{display:flex;align-items:center;gap:var(--s2);cursor:pointer;
+  padding:var(--s2) var(--s1);list-style:none;color:var(--ink2);font-size:var(--z2)}
+.pc-item>summary::-webkit-details-marker{display:none}
+.pc-item>summary::before{content:"+";color:var(--ink4);font-size:12px;width:10px}
+.pc-item[open]>summary::before{content:"-"}
+.pc-item>summary em{margin-left:auto;font-style:normal;color:var(--ink4);font-size:var(--z1)}
+.pc-item>summary:hover{color:var(--ink)}
+.pc-item textarea{width:100%;min-height:110px;margin:0 0 var(--s3);padding:var(--s2);
+  background:var(--bg);color:var(--ink);border:1px solid var(--line2);border-radius:2px;
+  font-family:var(--f-px0);font-size:var(--z1);line-height:1.9;resize:vertical;outline:none}
+.pc-item textarea:focus{border-color:var(--accent)}
+.pc-read{white-space:pre-wrap;color:var(--ink2);font-size:var(--z1);line-height:1.9;
+  padding:0 var(--s1) var(--s3)}
+.pc-persona-ft{display:flex;gap:var(--s2);padding:var(--s3) var(--s4);
+  border-top:1px solid var(--line);margin-top:auto}
+.pc-empty2{padding:var(--s5);text-align:center;color:var(--ink3);font-size:var(--z1)}
 </style>
 <style>
 /* ═══════════════════════════════════════════════════════════════════
@@ -5422,271 +5455,212 @@ async function pageConfig(el) {
   (function mountPersona() {
     const hd = $('cPersonaHd'), body = $('cPersonaBody'), inner = $('cPersonaInner');
     if (!hd || !body || !inner) return;
-    let loaded = false, lastTotal = 0;
+    let loaded = false;
+    let SECTIONS = {}, CONF = {}, CARDS = [], ACTIVE_ID = '';
 
-    const say = (t, bad) => {
+    const say = (msg, bad) => {
       const m = $('cPersonaMsg');
       if (!m) return;
       m.className = bad ? 'errbox' : 'dim';
-      m.textContent = t || '';
+      m.textContent = msg || '';
     };
+    const fmtTime = v => {
+      const n = Number(v);
+      if (!n || !isFinite(n)) return '—';
+      const d = new Date(n * 1000), p = x => String(x).padStart(2, '0');
+      return (d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
+    };
+    const splitSec = k => {
+      const s = String(k || '');
+      const m = s.match(/^【[^】]{1,14}】/);
+      if (m) return { name: m[0], body: s.slice(m[0].length) };
+      return { name: s.length > 18 ? s.slice(0, 18) + '…' : s, body: s.length > 18 ? s.slice(18) : '' };
+    };
+    const secHtml = (k, v, editable) => {
+      const parts = splitSec(k);
+      const inline = parts.body.trim().length > 0;   // 标题与正文挤在一行的老段
+      const chars = String(v || '').length + parts.body.length;
+      const full = (parts.body + (v ? '\n' + v : '')).trim();
+      const bodyHtml = inline
+        ? '<div class="pc-read">' + esc(full) + '</div>'
+        : (editable
+            ? '<textarea data-sec="' + esc(k) + '"></textarea>'
+            : '<div class="pc-read">' + esc(v) + '</div>');
+      return '<details class="pc-item">'
+        + '<summary title="' + esc(k) + '"><span>' + esc(parts.name) + '</span>'
+        + '<em>' + chars + ' 字</em></summary>'
+        + bodyHtml + '</details>';
+    };
+    function cardHtml(card) {
+      const active = card.id === ACTIVE_ID;
+      const secs = active ? SECTIONS : (card._sections || {});
+      const names = Object.keys(secs);
+      const count = names.length;
+      const chars = names.reduce((n, k) => n + String(secs[k] || '').length, 0);
+      let ft;
+      if (active) {
+        ft = '<button class="btn primary" data-pc-save="1">保存到人格</button>'
+           + '<button class="btn" data-pc-export="1">存为卡</button>';
+      } else {
+        ft = '<button class="btn primary" data-pc-apply="' + esc(card.id) + '">应用这张卡</button>'
+           + '<button class="btn" data-pc-del="' + esc(card.id) + '">删除</button>';
+      }
+      const curN = Object.keys(SECTIONS).length;
+      const fewer = (!active && count < curN)
+        ? '<div class="pc-persona-note" style="color:var(--err)">仅 ' + count
+          + ' 段，当前 ' + curN + ' 段 —— 应用会丢段</div>' : '';
+      return '<article class="pc-persona' + (active ? ' active' : '') + '">'
+        + '<div class="pc-persona-hd"><span class="pc-persona-nm">' + esc(card.name) + '</span>'
+        +   (active ? '<span class="pc-badge">当前生效</span>' : '')
+        +   '<span class="pc-persona-meta">' + count + ' 段 · ' + chars + ' 字 · '
+        +   fmtTime(card.updated) + '</span></div>'
+        + (card.note ? '<div class="pc-persona-note">' + esc(card.note) + '</div>' : '')
+        + fewer
+        + '<div class="pc-items">' + (names.length
+            ? names.map(k => secHtml(k, secs[k], active)).join('')
+            : '<div class="pc-empty2">这张卡没有内容</div>')
+        + '</div>'
+        + '<div class="pc-persona-ft">' + ft + '</div></article>';
+    }
+
+    function bindCards() {
+      const box = $('cCards');
+      if (!box) return;
+      qsa('#cCards .pc-persona.active textarea[data-sec]').forEach(t => {
+        t.value = SECTIONS[t.dataset.sec] || '';
+      });
+      qsa('[data-pc-save]', box).forEach(b => b.onclick = saveActive);
+      qsa('[data-pc-export]', box).forEach(b => b.onclick = saveAsCard);
+      qsa('[data-pc-apply]', box).forEach(b => b.onclick = async () => {
+        const id = b.dataset.pcApply;
+        const c = CARDS.find(x => x.id === id) || {};
+        const n = (c._sections && Object.keys(c._sections).length) || 0;
+        const curN = Object.keys(SECTIONS).length;
+        if (!await pvConfirm('应用「' + (c.name || '这张卡') + '」？',
+          '会用这张卡的全部内容覆盖当前人格（personality.txt），下一条消息生效。'
+          + (n < curN ? '\n\n注意：这张卡只有 ' + n + ' 段，当前有 ' + curN + ' 段，应用后会少掉一些段落。' : ''),
+          '应用')) return;
+        try {
+          const r = await API('/persona/cards', { method: 'POST', body: JSON.stringify({ action: 'apply', id }) });
+          if (r && r.ok) { say('已应用「' + (c.name || '') + '」，下一条消息生效'); await load(); }
+          else say('应用失败：' + ((r && r.error) || '未知'), true);
+        } catch (e) { say('应用失败：' + e.message, true); }
+      });
+      qsa('[data-pc-del]', box).forEach(b => b.onclick = async () => {
+        if (!await pvConfirm('删除这张人格卡？', '卡文件删除后不可恢复；personality.txt 不受影响。', '删除')) return;
+        await API('/persona/cards', { method: 'POST', body: JSON.stringify({ action: 'delete', id: b.dataset.pcDel }) });
+        await loadCards();
+      });
+    }
+
+    async function saveActive() {
+      const secs = Object.assign({}, SECTIONS);   // 先全量保留，再覆盖编辑过的
+      qsa('#cCards .pc-persona.active textarea[data-sec]').forEach(t => { secs[t.dataset.sec] = t.value; });
+      if (!Object.keys(secs).length) { say('没有可保存的段落', true); return; }
+      const total = Object.values(secs).reduce((n, v) => n + v.length, 0);
+      const near = Object.values(SECTIONS).reduce((n, v) => n + String(v).length, 0);
+      if (near > 0 && total < near * 0.5
+          && !await pvConfirm('总字数骤降', '从 ' + near + ' 字降到 ' + total + ' 字，确定保存？', '保存')) return;
+      const ex = $('cPersonaEx');
+      const r = await API('/plugins/action', { method: 'POST', body: JSON.stringify({
+        plugin_id: 'personality_engine', action: 'save_personality',
+        params: { sections: secs, config: { example_enabled: ex ? ex.value === '1' : true } },
+      }) });
+      if (r && r.success !== false) { say('已保存（' + Object.keys(secs).length + ' 段 / ' + total + ' 字）'); await load(); }
+      else say('保存失败：' + ((r && r.error) || '未知'), true);
+    }
+
+    async function saveAsCard() {
+      let name = null;
+      try { name = await pvPrompt('存为卡', '小a-原版'); } catch (e) { name = null; }
+      if (!name) return;
+      const r = await API('/persona/cards', { method: 'POST', body: JSON.stringify({ action: 'save', name, sections: SECTIONS }) });
+      if (r && r.ok) { say('已存为卡「' + name + '」'); await loadCards(); }
+      else say('存卡失败：' + ((r && r.error) || '未知'), true);
+    }
+
+    async function loadCards() {
+      let r = null;
+      try { r = await API('/persona/cards'); } catch (e) { return; }
+      CARDS = (r && r.cards) || [];
+      for (const c of CARDS) {
+        try {
+          const d = await API('/persona/cards', { method: 'POST', body: JSON.stringify({ action: 'get', id: c.id }) });
+          c._sections = (d && d.card && d.card.sections) || {};
+        } catch (e) { c._sections = {}; }
+      }
+      const active = CARDS.find(c => /小\s*a/i.test(c.name)) || CARDS[0];
+      ACTIVE_ID = active ? active.id : '';
+      if (active) active._sections = SECTIONS;
+      const host = $('cCards');
+      if (!host) return;
+      host.innerHTML = CARDS.length
+        ? '<div class="pc-cards">' + CARDS.map(cardHtml).join('') + '</div>'
+        : '<div class="pc-empty2">还没有人物卡 —— 点「存为卡」把当前人格存成一张</div>';
+      bindCards();
+    }
 
     async function load() {
       inner.innerHTML = '<div class="empty">读取中…</div>';
       let r;
       try {
-        r = await API('/plugins/action', {
-          method: 'POST',
-          body: JSON.stringify({ plugin_id: 'personality_engine', action: 'get_personality' }),
-        }, 30000);
-      } catch (e) {
-        inner.innerHTML = '<div class="errbox">读取人格失败：' + esc(e.message) + '</div>';
-        return;
-      }
-      if (r && r.error) {
-        inner.innerHTML = '<div class="errbox">读取人格失败：' + esc(r.error) + '</div>';
-        return;
-      }
-      const secs = (r && r.sections) || {};
-      const conf = (r && r.config) || {};
-      const names = Object.keys(secs);
-      lastTotal = names.reduce((n, k) => n + String(secs[k] || '').length, 0);
+        r = await API('/plugins/action', { method: 'POST', body: JSON.stringify({
+          plugin_id: 'personality_engine', action: 'get_personality',
+        }) });
+      } catch (e) { inner.innerHTML = '<div class="errbox">读取人格失败：' + esc(e.message) + '</div>'; return; }
+      if (!r || r.error) { inner.innerHTML = '<div class="errbox">读取人格失败：' + esc((r && r.error) || '未知') + '</div>'; return; }
+      SECTIONS = Object.assign({}, r.sections || {});
+      CONF = r.config || {};
+      const names = Object.keys(SECTIONS);
+      const total = names.reduce((n, k) => n + String(SECTIONS[k] || '').length, 0);
       const st = $('cPersonaStat');
-      if (st) st.textContent = names.length + ' 段 / ' + lastTotal + ' 字';
+      if (st) st.textContent = names.length + ' 段 / ' + total + ' 字';
       const tip = $('cPersonaTip');
       if (tip) tip.textContent = '写回 plugins/personality.txt · 保存后下一条消息即生效';
 
-      let html = ''
+      inner.innerHTML = ''
         + '<div class="stats" style="margin-bottom:var(--s4)">'
-        +   '<div class="st"><div class="lab">段落</div><div class="v">' + names.length
-        +     '</div><div class="c">按【】切分</div></div>'
-        +   '<div class="st"><div class="lab">总字数</div><div class="v">' + lastTotal
-        +     '</div><div class="c" id="cPersonaTotal">当前生效内容</div></div>'
-        +   '<div class="st"><div class="lab">示例注入</div><div class="v">'
-        +     (conf.example_enabled === false ? '关' : '开') + '</div><div class="c">few-shot</div></div>'
+        +   '<div class="st"><div class="lab">段落</div><div class="v">' + names.length + '</div><div class="c">按【】切分</div></div>'
+        +   '<div class="st"><div class="lab">总字数</div><div class="v">' + total + '</div><div class="c">当前生效内容</div></div>'
+        +   '<div class="st"><div class="lab">示例注入</div><div class="v">' + (CONF.example_enabled === false ? '关' : '开') + '</div><div class="c">few-shot</div></div>'
         + '</div>'
-        /* 人格卡：真卡片（应用/删除），不再是"一排按钮" */
-        + '<div class="fld" style="margin-bottom:var(--s4)">'
-        +   '<label>人格卡 <span class="dim">· 点「应用」覆盖当前人格（先自动备份）；「存为卡」= 把当前编辑内容存成快照</span>'
-        +     '<button class="btn sm" id="cCardSave" style="float:right">存为卡</button></label>'
-        +   '<div id="cCards"><span class="dim">读取中…</span></div></div>'
-        /* 人格段：2 列卡片 */
-        + '<div class="pc-grid" id="pcGrid">';
-
-      names.forEach(function (k) {
-        const v = String(secs[k] || '');
-        const prev = v.replace(/\s+/g, ' ').slice(0, 120);
-        const rows = Math.min(16, Math.max(4, Math.ceil(v.length / 42)));
-        html += '<div class="pc-card" data-pc="' + esc(k) + '">'
-          +   '<div class="pc-hd"><span class="pc-name">' + esc(k) + '</span>'
-          +     '<span class="pc-meta">' + v.length + ' 字</span></div>'
-          +   '<div class="pc-prev" data-prev="' + esc(k) + '">' + esc(prev || '（空段）') + '</div>'
-          +   '<textarea class="pc-edit" data-sec="' + esc(k) + '" rows="' + rows + '" spellcheck="false" hidden></textarea>'
-          +   '<div style="display:flex;gap:8px;margin-top:10px">'
-          +     '<button class="btn sm" data-pc-edit="' + esc(k) + '">编辑</button></div>'
-          + '</div>';
-      });
-      html += '</div>';
-      if (!names.length) {
-        html += '<div class="errbox">没读到任何段落。人格文件可能是空的 —— '
-          + '先别保存，去 plugins/personality.txt 确认内容。</div>';
-      }
-
-      html += '<div style="display:flex;gap:var(--s3);flex-wrap:wrap;align-items:flex-end;margin-top:var(--s4)">'
-        +   '<button class="btn primary" id="cPersonaSave">保存人格</button>'
+        + '<div class="fld" style="margin-bottom:var(--s3)">'
+        +   '<label>人物卡 <span class="dim">· 每张卡 = 一个人物；点开段落可直接编辑当前人格，另一张卡用「应用」切换</span></label>'
+        + '</div>'
+        + '<div id="cCards"></div>'
+        + '<div style="display:flex;gap:var(--s3);flex-wrap:wrap;align-items:flex-end;margin-top:var(--s4)">'
         +   '<button class="btn" id="cPersonaReload">重新读取</button>'
-        +   '<div class="fld" style="max-width:200px">'
+        +   '<div class="fld" style="max-width:220px">'
         +     '<label>few-shot 示例注入</label>'
         +     '<select id="cPersonaEx">'
-        +       '<option value="1"' + (conf.example_enabled === false ? '' : ' selected') + '>开启</option>'
-        +       '<option value="0"' + (conf.example_enabled === false ? ' selected' : '') + '>关闭</option>'
+        +       '<option value="1"' + (CONF.example_enabled === false ? '' : ' selected') + '>开启</option>'
+        +       '<option value="0"' + (CONF.example_enabled === false ? ' selected' : '') + '>关闭</option>'
         +     '</select></div>'
         + '</div>'
         + '<div id="cPersonaMsg" class="dim" style="margin-top:var(--s3)"></div>'
         + '<div class="dim" style="margin-top:var(--s2);font-size:var(--z1)">'
-        +   '保存会自动备份（auto_backup 保留 5 份）。段标题【】不要改 —— '
-        +   '下游按段名取值，改名等于删段。示例开关与人格一起保存。</div>';
+        +   '保存会自动备份。段标题【】不要改 —— 下游按段名取值，改名等于删段。</div>';
 
-      inner.innerHTML = html;
-      // 值用 property 写入，避免把人格正文塞进 HTML 属性里被转义破坏
-      qsa('[data-pc-edit]').forEach(function (b) {
-        b.onclick = function () {
-          const card = b.closest('.pc-card');
-          const ta = card.querySelector('textarea[data-sec]');
-          const open = card.classList.toggle('open');
-          ta.hidden = !open;
-          b.textContent = open ? '收起' : '编辑';
-          if (open) { ta.focus(); ta.selectionStart = ta.selectionEnd = 0; }
-        };
-      });
-      qsa('#cPersonaBody textarea[data-sec]').forEach(function (t) {
-        t.value = String(secs[t.dataset.sec] || '');
-        t.addEventListener('input', function () {
-          const n = qsa('#cPersonaBody textarea[data-sec]')
-            .reduce((s, x) => s + x.value.length, 0);
-          const tot = $('cPersonaTotal');
-          if (tot) tot.textContent = '改后 ' + n + ' 字';
-          const prev = document.querySelector('[data-prev="' + t.dataset.sec + '"]');
-          if (prev) prev.textContent = t.value.replace(/\s+/g, ' ').slice(0, 120) || '（空段）';
-        });
-      });
+      await loadCards();
 
-      /* ── 人格卡（批次 I1）：数据口 /api/persona/cards。
-          应用卡在后端只走 EGO save_personality 一个写入口（同步 ego）；
-          应用后 loadCards()/load() 从 EGO 重新读回 —— 蒸馏卡等更高优先级源
-          存在时后端会给 warning，这里如实转述。 ── */
-      function fmtCardTime(v) {
-        const t = Number(v);
-        if (!t || !isFinite(t)) return '—';
-        const d = new Date(t * 1000);
-        const p = n => String(n).padStart(2, '0');
-        return (d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
-      }
-      async function loadCards() {
-        const host = $('cCards');
-        if (!host) return;
-        let r = null;
-        try { r = await API('/persona/cards'); }
-        catch (e) { host.innerHTML = '<span class="dim">读取人格卡失败：' + esc(e.message) + '</span>'; return; }
-        const cards = (r && r.cards) || [];
-        if (!cards.length) {
-          host.innerHTML = '<span class="dim">还没有卡 —— 点「存为卡」把当前人格存成快照</span>';
-          return;
-        }
-        host.innerHTML = '<div class="pc-chips">' + cards.map(c =>
-          '<div class="pc-chip" data-card="' + esc(c.id) + '">'
-          + '<div class="n" title="' + esc(c.name) + '">' + esc(c.name) + '</div>'
-          +   (c.note ? '<div class="note" title="' + esc(c.note) + '">' + esc(c.note) + '</div>' : '')
-          + '<div class="m">' + (c.sections_count || 0) + ' 段 · ' + (c.chars || 0) + ' 字 · '
-          +   esc(fmtCardTime(c.updated)) + '</div>'
-          + ((c.sections_count || 0) < names.length
-              ? '<div class="m" style="color:#d97b6c">仅 ' + (c.sections_count || 0)
-                + ' 段，当前 ' + names.length + ' 段 —— 应用会丢段</div>' : '')
-          + '<div class="row"><button class="btn sm primary" data-apply="' + esc(c.id) + '">应用</button>'
-          +   '<span class="x" data-del="' + esc(c.id) + '" title="删除此卡">删除</span></div>'
-          + '</div>'
-        ).join('') + '</div>' + (r.seeded && r.seeded.length
-          ? '<div class="dim" style="font-size:9px;margin-top:6px">首启已生成：' + esc(r.seeded.join('、')) + '</div>' : '');
-        qsa('[data-card]', host).forEach(ch => ch.onclick = async (e) => {
-          if (e.target.dataset.del) return;      /* 点的是 ✕ 删除钮 */
-          const id = ch.dataset.card;
-          const nm = (ch.childNodes[0] && ch.childNodes[0].textContent || '该卡').trim();
-          if (!await pvConfirm('应用人格卡「' + nm + '」？',
-            '用这张卡覆盖当前人格文件（personality.txt），下一条消息生效。覆盖前的原文会自动备份到卡的目录。', '应用')) return;
-          try {
-            const r2 = await API('/persona/cards', { method: 'POST',
-              body: JSON.stringify({ action: 'apply', id: id }) });
-            if (r2 && r2.ok) {
-              if (r2.warning) say('已应用，但注意：' + r2.warning, true);
-              else say('已应用「' + ((r2.card || {}).name || nm) + '」· '
-                + ((r2.card || {}).sections_count || Object.keys((r2.card || {}).sections || {}).length)
-                + ' 段，下一条消息生效');
-              await load();                      /* 应用后从 EGO 读回，编辑器跟着卡走 */
-            } else say('应用失败：' + ((r2 && r2.error) || '未知'), true);
-          } catch (e2) { say('应用失败：' + e2.message, true); }
-        });
-        qsa('[data-del]', host).forEach(x => x.onclick = async (ev) => {
-          ev.stopPropagation();
-          const id = x.dataset.del;
-          if (x.dataset.armed !== '1') {
-            x.dataset.armed = '1'; x.textContent = '确认✕';
-            setTimeout(() => { if (x.parentNode) { x.dataset.armed = ''; x.textContent = '✕'; } }, 3000);
-            return;
-          }
-          if (!await pvConfirm('删除这张人格卡？', '卡文件删除后不可恢复；personality.txt 本身不受影响。', '删除')) return;
-          try { await API('/persona/cards', { method: 'POST',
-            body: JSON.stringify({ action: 'delete', id: id }) }); } catch (e) { return; }
-          loadCards();
-        });
-      }
-      /* 存为卡：弹窗收名字/备注（Electron 不支持 window.prompt —— 用应用内对话框） */
-      function cardSaveDialog() {
-        const sections = {};
-        qsa('#cPersonaBody textarea[data-sec]').forEach(function (t) { sections[t.dataset.sec] = t.value; });
-        const total = Object.keys(sections).reduce((s, k) => s + sections[k].length, 0);
-        if (!total) { say('编辑器里没有人格内容，空的存不成卡', true); return; }
-        const ov = document.createElement('div');
-        ov.className = 'modal-ov';
-        ov.innerHTML = '<div class="modal" style="max-width:460px">'
-          + '<div class="modal-t"><h3>存为人格卡</h3></div>'
-          + '<div style="padding-bottom:var(--s3)">'
-          + '<div class="fld"><label>卡名 <span class="dim">· ' + total + ' 字，与现有同名卡会覆盖更新</span></label>'
-          + '<input id="pcNm" placeholder="小a / 大肥鱼 …"></div>'
-          + '<div class="fld" style="margin-top:var(--s2)"><label>一句话备注（可空）</label>'
-          + '<input id="pcNote"></div></div>'
-          + '<div style="display:flex;gap:var(--s2)"><button class="btn primary" id="pcOk">保存</button>'
-          + '<button class="btn" id="pcNo">取消</button></div></div>';
-        document.body.appendChild(ov);
-        const nm = $('pcNm'); if (nm) nm.focus();
-        $('pcNo').onclick = () => ov.remove();
-        ov.onclick = (e) => { if (e.target === ov) ov.remove(); };
-        const onKey = (e) => { if (e.key === 'Escape') { e.stopPropagation(); ov.remove(); } };
-        document.addEventListener('keydown', onKey, true);
-        $('pcOk').onclick = async () => {
-          const name = (nm.value || '').trim();
-          if (!name) { nm.focus(); return; }
-          const note = ($('pcNote').value || '').trim();
-          ov.remove();
-          document.removeEventListener('keydown', onKey, true);
-          try {
-            const r = await API('/persona/cards', { method: 'POST',
-              body: JSON.stringify({ action: 'save', name: name, note: note, sections: sections }) });
-            if (r && r.ok) { say('已存卡「' + name + '」· ' + total + ' 字'); await loadCards(); }
-            else say('存卡失败：' + ((r && r.error) || '未知'), true);
-          } catch (e) { say('存卡失败：' + e.message, true); }
-        };
-      }
-      const csBtn = $('cCardSave');
-      if (csBtn) csBtn.onclick = cardSaveDialog;
-
-      const btn = $('cPersonaSave');
-      if (btn) btn.onclick = async function () {
-        const sections = {};
-        qsa('#cPersonaBody textarea[data-sec]').forEach(function (t) {
-          sections[t.dataset.sec] = t.value;          // ★ 所有段都回传，漏一段=删一段
-        });
-        const total = Object.keys(sections).reduce((s, k) => s + sections[k].length, 0);
-        if (lastTotal > 0 && total < lastTotal * 0.3) {
-          if (!confirm('改动后只剩 ' + total + ' 字（原来 ' + lastTotal + ' 字）。'
-            + '确定要保存吗？')) return;
-        }
-        btn.disabled = true;
-        say('保存中…');
-        try {
-          const r1 = await API('/plugins/action', {
-            method: 'POST',
-            body: JSON.stringify({ plugin_id: 'personality_engine', action: 'save_personality',
-                                   params: { sections: sections } }),
-          }, 30000);
-          if (r1 && r1.success === false) throw new Error(r1.error || '保存失败');
-          const ex = $('cPersonaEx');
-          if (ex) {
-            await API('/plugins/action', {
-              method: 'POST',
-              body: JSON.stringify({ plugin_id: 'personality_engine', action: 'set_config',
-                                     params: { example_enabled: ex.value === '1' } }),
-            }, 30000);
-          }
-          say('已保存 · ' + total + ' 字，下一条消息生效');
-          lastTotal = total;
-        } catch (e) {
-          say('保存失败：' + e.message, true);
-        } finally {
-          btn.disabled = false;
-        }
-      };
       const re = $('cPersonaReload');
-      if (re) re.onclick = function () { load(); };
-      await loadCards();               /* 人格卡条（I1）：随人格一起刷新 */
+      if (re) re.onclick = load;
+      const ex = $('cPersonaEx');
+      if (ex) ex.onchange = async () => {
+        await API('/plugins/action', { method: 'POST', body: JSON.stringify({
+          plugin_id: 'personality_engine', action: 'save_personality',
+          params: { sections: SECTIONS, config: { example_enabled: ex.value === '1' } },
+        }) });
+        say('few-shot 注入已' + (ex.value === '1' ? '开启' : '关闭'));
+      };
     }
 
-    hd.onclick = function () {
-      const show = body.hidden;
-      body.hidden = !show;
-      if (show && !loaded) { loaded = true; load(); }
-    };
+    body.hidden = true;
+    hd.addEventListener('click', () => {
+      body.hidden = !body.hidden;
+      if (!body.hidden && !loaded) { loaded = true; load(); }
+    });
   })();
-
   const dirty = {};
   /* 元数据区上下文：与"其他配置项"共用 dirty/mark，保存时一起提交 */
   const cfCtx = {
