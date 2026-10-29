@@ -759,5 +759,26 @@ class TestRecallEvent(_EventHandlersBase):
         self.send_message.assert_not_called()
 
 
-if __name__ == "__main__":
+
+class TestDeciderRecent(unittest.TestCase):
+    """1.5.10：最近决策环形缓冲（插件页展示"为什么回/没回"）。"""
+
+    def test_record_and_action(self):
+        import plugins.group_chat_decider as d
+        before = len(d._RECENT_DECISIONS)
+        class _D:
+            reason = "测试原因"
+            atmosphere = "neutral"
+            confidence = 0.42
+        d._record_decision("123", "在吗", _D(), {"action": "skip"})
+        self.assertEqual(len(d._RECENT_DECISIONS), before + 1)
+        r = d.PLUGIN_ACTIONS["recent"]({})
+        self.assertTrue(r["ok"])
+        latest = r["decisions"][0]
+        self.assertEqual(latest["act"], "skip")
+        self.assertEqual(latest["reason"], "测试原因")
+        self.assertAlmostEqual(latest["confidence"], 0.42, places=2)
+
+
+if __name__ == '__main__':
     unittest.main(verbosity=2)

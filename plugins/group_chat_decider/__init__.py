@@ -660,6 +660,27 @@ _last_reply_target = {}   # {group_id: (被回复者QQ, 时间)} —— 接话�
 _bot_spoke_times = {}     # {group_id: [真实发出时刻…]} —— 防刷屏闸用
 _pending_reply = {}       # {group_id: 决策放行时刻} —— 回复生成期间的预占冷却
 _followup_until = {}      # {group_id: 接话窗口截止} —— 回完等追问（学 qq-bridge 的 purpose=reply/messages）
+#: 最近决策（1.5.10 精致化）：插件页展示"为什么回 / 为什么没回"。
+#: 只存内存、最多 60 条；重启即清空 —— 它是观测数据，不参与任何判断。
+_RECENT_DECISIONS = __import__("collections").deque(maxlen=60)
+
+
+def _record_decision(group_id: str, message: str, decision, result) -> None:
+    try:
+        _RECENT_DECISIONS.append({
+            "ts": time.time(),
+            "group": str(group_id or ""),
+            "act": str((result or {}).get("action") or "none"),
+            "text": str(message or "")[:60],
+            "reason": str(getattr(decision, "reason", "") or
+                          (result or {}).get("reason", "") or "")[:120],
+            "atmosphere": str(getattr(decision, "atmosphere", "") or ""),
+            "confidence": float(getattr(decision, "confidence", 0) or 0),
+        })
+    except Exception:
+        pass
+
+
 _decision_cache = {}      # {(group, text, tail_ts): (ts, result)} 同消息二次派发复用
 
 
@@ -1892,6 +1913,7 @@ def before_reply(message: str = "", group_id: str = "", context: dict = None, **
         _cut = time.time() - 30
         for _k in [k for k, (ts, _) in _decision_cache.items() if ts < _cut]:
             _decision_cache.pop(_k, None)
+    _record_decision(group_id, message, decision, _result)
     _decision_cache[_ck] = (time.time(), _result)
     return _result
 
@@ -2106,8 +2128,14 @@ def _stats(params: dict = None) -> dict:
         return {"ok": False, "error": str(e), "stats": {}}
 
 
+def _recent(params: dict = None) -> dict:
+    """最近决策（插件页用）：倒序返回，带 act/原因/置信度。"""
+    return {"ok": True, "decisions": list(reversed(list(_RECENT_DECISIONS)))}
+
+
 PLUGIN_ACTIONS = {
     "get_config": _get_config,
+    "recent": _recent,
     "set_config": _set_config,
     "set_ai_config": _set_ai_config,
     "set_provider_key": _set_provider_key,

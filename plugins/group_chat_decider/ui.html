@@ -1,71 +1,9 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>群聊决策</title>
-  <style>
-    :root{
-      --bg:#0a0a0f;--surface:#111118;--paper:#16161f;--elevated:#1e1e28;--input:#14141b;
-      --ink:#f0f0f5;--ink2:#b8b8c8;--ink3:#8a8f9a;--ink4:#3a3f48;--ink5:#26262f;
-      --gold:#c9a96e;--gold-dim:#8a7350;--red:#b54a4a;--green:#4a9b6a;
-      --font-d:'Outfit','Noto Sans SC','PingFang SC',system-ui,sans-serif;
-      --font-m:'JetBrains Mono','Consolas',monospace;--radius:12px;
-      --shadow-sm:0 1px 2px rgba(0,0,0,0.35);--shadow-md:0 4px 14px rgba(0,0,0,0.45);
-      --shadow-gold:0 0 22px rgba(201,169,110,0.22);
-      --ease:180ms cubic-bezier(0.4,0,0.2,1);--ease-spring:280ms cubic-bezier(0.34,1.56,0.64,1);
-    }
-    *{box-sizing:border-box}
-    html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);font-family:var(--font-d);-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;text-rendering:optimizeLegibility}
-    body{background-image:radial-gradient(ellipse at 10% 0%, rgba(201,169,110,0.06), transparent 45%),radial-gradient(ellipse at 90% 100%, rgba(90,122,138,0.05), transparent 45%)}
-    ::selection{background:rgba(201,169,110,0.25);color:var(--ink)}
-    ::-webkit-scrollbar{width:7px;height:7px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:var(--ink5);border-radius:3px}::-webkit-scrollbar-thumb:hover{background:var(--ink3)}
-    .wrap{max-width:900px;margin:0 auto;padding:22px}
-    .panel{background:linear-gradient(180deg,var(--surface),var(--paper));border:1px solid var(--ink4);border-radius:var(--radius);padding:18px;margin-bottom:14px;position:relative;transition:border-color 200ms ease,box-shadow 200ms ease,transform 200ms ease;animation:fadeIn 0.3s cubic-bezier(0.22,1,0.36,1)}
-    .panel:hover{border-color:rgba(201,169,110,0.25);box-shadow:var(--shadow-md);transform:translateY(-1px)}
-    .panel-title{font-size:17px;font-weight:700;margin-bottom:12px}
-    .meta{font-size:12px;color:var(--ink3);margin-left:8px;font-weight:400}
-    .desc{color:var(--ink2);font-size:14px;line-height:1.7;margin-top:10px}
-    .row{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:14px;padding:12px;background:var(--elevated);border:1px solid var(--ink4);border-radius:10px;transition:border-color 200ms ease}
-    .row:hover{border-color:rgba(201,169,110,0.25)}
-    .label{font-size:14px;color:var(--ink2);font-weight:500}
-    .value{font-size:13px;color:var(--ink3);font-family:var(--font-m)}
-    .switch{position:relative;width:44px;height:24px;background:#2a2a35;border-radius:999px;cursor:pointer;border:1px solid var(--ink4);transition:background .2s,box-shadow .2s}
-    .switch:hover{border-color:rgba(201,169,110,0.4)}
-    .switch.on{background:var(--gold);box-shadow:var(--shadow-gold)}
-    .switch::after{content:'';position:absolute;left:2px;top:2px;width:18px;height:18px;background:#fff;border-radius:50%;transition:transform .2s;box-shadow:0 1px 3px rgba(0,0,0,0.3)}
-    .switch.on::after{transform:translateX(20px)}
-    .input,.select{width:100%;background:var(--input);color:var(--ink);border:1px solid var(--ink4);border-radius:8px;padding:8px 10px;font-size:13px;outline:none;transition:all 200ms cubic-bezier(0.4,0,0.2,1);font-family:var(--font-d)}
-    .input:focus,.select:focus{border-color:var(--gold);box-shadow:0 0 0 3px rgba(201,169,110,0.12)}
-    .select{appearance:none;cursor:pointer}
-    .field{display:flex;flex-direction:column;gap:6px;margin-top:14px}
-    .field-title{font-size:13px;color:var(--ink2);font-weight:500}
-    .hint{font-size:12px;color:var(--ink3)}
-    .grid{display:grid;gap:12px;margin-top:14px}
-    .grid-2{grid-template-columns:repeat(2,1fr)}
-    @media (max-width:860px){ .grid-2{grid-template-columns:1fr} }
-    .card{background:var(--elevated);border:1px solid var(--ink4);border-radius:var(--radius);padding:12px;transition:border-color 150ms ease,box-shadow 150ms ease}
-    .card:hover{border-color:rgba(201,169,110,0.25);box-shadow:var(--shadow-sm)}
-    .card-label{font-size:12px;color:var(--ink3);margin-bottom:4px;font-weight:500}
-    .card-value{font-family:var(--font-m);font-size:14px;color:var(--ink)}
-    .actions{display:flex;gap:10px;margin-top:14px;flex-wrap:wrap}
-    .btn{background:var(--elevated);color:var(--ink);border:1px solid var(--ink4);padding:8px 12px;border-radius:8px;cursor:pointer;font-size:13px;transition:all 150ms cubic-bezier(0.4,0,0.2,1);font-family:var(--font-d);font-weight:500}
-    .btn:hover:not(:disabled){background:var(--paper);border-color:var(--gold);transform:translateY(-1px);box-shadow:var(--shadow-sm)}
-    .btn:active:not(:disabled){transform:scale(0.97)}
-    .btn.primary{background:linear-gradient(135deg, rgba(201,169,110,0.18), rgba(201,169,110,0.08));color:var(--gold);border-color:rgba(201,169,110,0.35);font-weight:600}
-    .btn.primary:hover{background:linear-gradient(135deg, rgba(201,169,110,0.28), rgba(201,169,110,0.14));border-color:rgba(201,169,110,0.5);box-shadow:var(--shadow-gold)}
-    .status{font-size:12px;color:var(--ink3);margin-top:8px;min-height:16px}
-    .status.error{color:#ff8a8a}
-    .status.ok{color:#8aff9a}
-    .badge{display:inline-flex;align-items:center;padding:3px 10px;border-radius:999px;background:var(--ink4);color:var(--ink2);font-size:11px;margin-left:8px;font-weight:600;transition:all 150ms ease}
-    .badge.ok{background:rgba(74,155,106,0.2);color:var(--green)}
-    .badge.err{background:rgba(181,74,74,0.2);color:var(--red)}
-    .badge.active{background:rgba(201,169,110,0.2);color:var(--gold);border:1px solid rgba(201,169,110,0.35)}
-    .back{display:inline-block;margin-top:14px;color:var(--gold);cursor:pointer;font-size:14px;transition:opacity 150ms ease}
-    .back:hover{opacity:0.85}
-    button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-visible{outline:2px solid var(--gold);outline-offset:2px}
-    @keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
-  </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>群聊决策器</title>
 <style id="pv-kit">/*PV-KIT*/
 /* ═══════════════════════════════════════════════════════════════
    EggBloom 插件 UI 套件（1.5.10）
@@ -175,331 +113,167 @@ button.danger:hover{border-color:var(--pv-bad);color:var(--pv-bad)}
 </style>
 </head>
 <body>
-  <div class="wrap">
-    <div class="panel">
-      <div class="panel-title">群聊决策<span class="meta">group_chat_decider v3.0.0</span></div>
-      <div class="desc">两层过滤：概率门零成本拦截 + 轻量AI读空气；含注意力机制避免连续回复。AI 决策默认使用免费模型预设（可在此配置）。</div>
-
-      <div class="row">
-        <div>
-          <div class="label">启用</div>
-          <div class="value" id="enabledValue">加载中...</div>
-        </div>
-        <div class="switch" id="enableSwitch" role="switch" aria-checked="false" tabindex="0"></div>
-      </div>
-    </div>
-
-    <div class="panel">
-      <div class="panel-title">AI 免费模型配置<span class="meta">api config</span></div>
-      <div class="desc">选择决策使用的免费模型预设。密钥仅存于插件本地 <span class="value">data/secret.json</span>（已 gitignore，不会入库）。未配置密钥的预设会自动跳过、降级到下一个可用的。</div>
-
-      <div class="field">
-        <div class="field-title">当前激活预设</div>
-        <select class="select" id="modelSelect">
-          <option value="">加载中...</option>
-        </select>
-        <div class="hint" id="modelHint"></div>
-      </div>
-
-      <div class="field">
-        <div class="field-title">AI 主动参与度</div>
-        <select class="select" id="participationSelect">
-          <option value="">加载中...</option>
-        </select>
-        <div class="hint" id="participationHint"></div>
-      </div>
-
-      <div class="field">
-        <div class="field-title">决策参数</div>
-        <div class="grid grid-2" id="paramGrid" style="margin-top:8px"></div>
-        <div class="hint" style="margin-top:8px">冷却与连续回复上限均豁免被 @ 的情况；置信度阈值是 AI 读空气"不确定就放行"的临界值（越低越保守）。</div>
-      </div>
-
-      <div id="providerList" style="margin-top:14px">
-        <div class="empty" style="color:var(--ink3);font-size:13px;padding:8px 0">加载中...</div>
-      </div>
-
-      <div class="grid grid-2">
-        <div class="card">
-          <div class="card-label">图片理解（视觉）</div>
-          <div class="card-value" style="font-family:var(--font-d);font-size:13px;color:var(--ink2)">收到 [图片] 时用视觉模型描述内容</div>
-          <div class="switch" id="visionSwitch" role="switch" aria-checked="false" tabindex="0" style="margin-top:10px"></div>
-        </div>
-        <div class="card">
-          <div class="card-label">转发记录分析</div>
-          <div class="card-value" style="font-family:var(--font-d);font-size:13px;color:var(--ink2)">转发聊天记录时提炼要点辅助决策</div>
-          <div class="switch" id="forwardSwitch" role="switch" aria-checked="false" tabindex="0" style="margin-top:10px"></div>
-        </div>
-      </div>
-
-      <div class="actions">
-        <button class="btn primary" id="saveAiBtn">保存配置</button>
-        <button class="btn" id="refreshAiBtn">刷新</button>
-      </div>
-      <div class="status" id="aiStatus"></div>
-    </div>
-
-    <div class="panel">
-      <div class="panel-title">运行统计</div>
-      <div class="actions">
-        <button class="btn" id="statsBtn">刷新统计</button>
-      </div>
-      <div class="status" id="statsStatus"></div>
-      <div class="grid grid-2" id="statsGrid" style="margin-top:10px"></div>
-    </div>
-
-    <div class="back" onclick="window.parent.postMessage({type:'eggbloom:navigate',page:'plugins'},'*')">返回插件列表</div>
+  <div class="pv-head">
+    <h1>群聊决策器</h1>
+    <div class="pv-sub">v3 · AI 读空气：先在零成本前置门上过滤，再让轻量模型判断「这条值不值得接」</div>
   </div>
 
-  <script>
-    const API = '/api/plugins/action';
-    const statusEl = document.getElementById('enabledValue');
-    const enableSwitch = document.getElementById('enableSwitch');
-    const modelSelect = document.getElementById('modelSelect');
-    const modelHint = document.getElementById('modelHint');
-    const participationSelect = document.getElementById('participationSelect');
-    const participationHint = document.getElementById('participationHint');
-    const paramGrid = document.getElementById('paramGrid');
-    const providerList = document.getElementById('providerList');
-    const visionSwitch = document.getElementById('visionSwitch');
-    const forwardSwitch = document.getElementById('forwardSwitch');
-    const saveAiBtn = document.getElementById('saveAiBtn');
-    const refreshAiBtn = document.getElementById('refreshAiBtn');
-    const aiStatusEl = document.getElementById('aiStatus');
-    let state = { models: [], active_model: '', vision_enabled: true, forward_analysis: true, participation: 'normal', participation_levels: {}, decision_params: {}, decision_param_defaults: {} };
+  <div class="pv-panel">
+    <div class="pv-panel-h"><h2>状态</h2><i class="pv-rule"></i>
+      <span class="pv-count" id="ver">—</span></div>
+    <div class="pv-flex">
+      <span class="pv-tag" id="en-tag">读取中</span>
+      <button id="toggle" class="primary">切换启用</button>
+      <span class="pv-hint" style="margin:0">关掉 = 决策器不参与任何消息（发言闸与生成链不受影响）</span>
+    </div>
+    <div class="pv-stats" style="margin-top:14px">
+      <div class="pv-stat"><b id="s-profile">0</b><span>群画像</span></div>
+      <div class="pv-stat"><b id="s-topic">0</b><span>话题流</span></div>
+      <div class="pv-stat"><b id="s-emo">0</b><span>情绪记录</span></div>
+      <div class="pv-stat"><b id="s-chain">0</b><span>对话链</span></div>
+    </div>
+  </div>
 
-    function setStatus(text, kind){
-      statusEl.textContent = text;
-    }
-    function setAiStatus(text, kind){
-      aiStatusEl.textContent = text;
-      aiStatusEl.className = 'status ' + (kind || '');
-    }
-    function setToggleUI(el, on){
-      el.classList.toggle('on', on);
-      el.setAttribute('aria-checked', String(on));
-    }
-    async function call(action, params){
-      const body = {plugin_id:'group_chat_decider', action, ...(params ? {params} : {})};
-      const res = await fetch(API, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
-      const text = await res.text();
-      let data;
-      try { data = JSON.parse(text); } catch { data = {raw:text}; }
-      if(!res.ok) throw new Error(data.error || text || ('HTTP ' + res.status));
-      return data;
-    }
+  <div class="pv-panel">
+    <div class="pv-panel-h"><h2>参与度</h2><i class="pv-rule"></i>
+      <span class="pv-count">决定它多主动找接梗点</span></div>
+    <div class="pv-flex" id="parts"></div>
+    <div class="pv-hint" id="part-hint">—</div>
+  </div>
 
-    function renderProviders(){
-      const models = state.models || [];
-      const levels = state.participation_levels || {};
-      const hints = {conservative:'保守：只回应明确信号（@、问句、强兴趣），少刷存在感', normal:'正常：按话题相关性自然参与', active:'活跃：主动找接梗点，允许适度插话'};
-      participationSelect.innerHTML = '';
-      Object.keys(levels).forEach(k => {
-        const opt = document.createElement('option');
-        opt.value = k;
-        opt.textContent = levels[k] + '（' + k + '）';
-        opt.selected = (k === state.participation);
-        participationSelect.appendChild(opt);
-      });
-      participationHint.textContent = hints[state.participation] || '';
+  <div class="pv-panel">
+    <div class="pv-panel-h"><h2>决策参数</h2><i class="pv-rule"></i>
+      <span class="pv-count">v3 真正消费的值 · 保存后立刻生效</span></div>
+    <table class="pv-table">
+      <thead><tr><th>参数</th><th style="width:150px">值</th><th>说明</th></tr></thead>
+      <tbody id="params"></tbody>
+    </table>
+    <div class="pv-flex" style="margin-top:12px">
+      <button class="primary" id="save-params">保存参数</button>
+      <span class="pv-hint" style="margin:0">置信度阈值：越低越保守（看不懂氛围时默认跳过）</span>
+    </div>
+    <div class="pv-msg" id="msg"></div>
+  </div>
 
-      const paramLabels = {
-        confidence_threshold: '置信度阈值',
-        max_context_messages: '上下文消息条数',
-        max_bot_replies: '连续回复上限',
-        cooldown_seconds: '冷却时长（秒）',
-        max_tracked_users: '追踪用户上限',
-      };
-      paramGrid.innerHTML = '';
-      Object.keys(paramLabels).forEach(k => {
-        const wrap = document.createElement('div');
-        wrap.style.cssText = 'display:flex;flex-direction:column;gap:4px';
-        const lbl = document.createElement('div');
-        lbl.style.cssText = 'font-size:12px;color:var(--ink2)';
-        lbl.textContent = paramLabels[k];
-        const inp = document.createElement('input');
-        inp.type = 'number';
-        inp.className = 'input';
-        inp.dataset.param = k;
-        inp.value = state.decision_params[k] !== undefined ? state.decision_params[k] : (state.decision_param_defaults[k] || '');
-        inp.step = k === 'confidence_threshold' ? '0.05' : '1';
-        wrap.appendChild(lbl);
-        wrap.appendChild(inp);
-        paramGrid.appendChild(wrap);
-      });
-      modelSelect.innerHTML = '';
-      models.forEach(m => {
-        const opt = document.createElement('option');
-        opt.value = m.id;
-        opt.textContent = m.name + (m.configured ? '（已配置）' : '（未配置）') + (m.active ? ' ✓' : '');
-        opt.selected = !!m.active;
-        modelSelect.appendChild(opt);
-      });
-      const active = models.find(m => m.active) || models.find(m => m.id === state.active_model);
-      modelHint.textContent = active ? active.text_model + ' / ' + active.vision_model + ' · ' + active.note : '';
+  <div class="pv-panel">
+    <div class="pv-panel-h"><h2>决策模型</h2><i class="pv-rule"></i>
+      <span class="pv-count">免密车道，不需要 Key</span></div>
+    <div class="pv-flex">
+      <select class="pv-select" id="model" style="max-width:300px"></select>
+      <button id="save-model">保存模型</button>
+    </div>
+  </div>
 
-      providerList.innerHTML = '';
-      models.forEach(m => {
-        const row = document.createElement('div');
-        row.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 12px;margin-top:8px;background:var(--elevated);border:1px solid var(--ink4);border-radius:10px';
-        const left = document.createElement('div');
-        left.style.cssText = 'flex:1;min-width:0';
-        const name = document.createElement('div');
-        name.style.cssText = 'font-size:13px;color:var(--ink);font-weight:600';
-        name.textContent = m.name;
-        const badges = document.createElement('div');
-        badges.style.cssText = 'margin-top:4px';
-        const b1 = document.createElement('span');
-        b1.className = 'badge ' + (m.configured ? 'ok' : 'err');
-        b1.textContent = m.configured ? '已配置' : '未配置';
-        badges.appendChild(b1);
-        if (m.active){
-          const b2 = document.createElement('span');
-          b2.className = 'badge active';
-          b2.textContent = '当前';
-          badges.appendChild(b2);
-        }
-        left.appendChild(name);
-        left.appendChild(badges);
-        const keyWrap = document.createElement('div');
-        keyWrap.style.cssText = 'display:flex;gap:6px;align-items:center';
-        const keyInput = document.createElement('input');
-        keyInput.type = 'password';
-        keyInput.className = 'input';
-        keyInput.style.cssText = 'width:220px';
-        keyInput.placeholder = m.id === 'ollama' ? '本地模型无需 key' : (m.configured ? '已保存，输入可覆盖' : '粘贴 API Key');
-        keyInput.dataset.provider = m.id;
-        if (m.id === 'ollama') keyInput.disabled = true;
-        const saveBtn = document.createElement('button');
-        saveBtn.className = 'btn';
-        saveBtn.textContent = '保存';
-        saveBtn.dataset.provider = m.id;
-        saveBtn.addEventListener('click', async () => {
-          setAiStatus('保存 ' + m.name + ' 密钥...');
-          try {
-            const res = await call('set_provider_key', {provider: m.id, api_key: keyInput.value});
-            if (res && res.ok){
-              setAiStatus(m.name + ' 密钥已保存', 'ok');
-              await loadConfig(true);
-            } else {
-              setAiStatus('保存失败：' + ((res && res.error) || '未知错误'), 'error');
-            }
-          } catch (e){
-            setAiStatus('保存失败：' + e.message, 'error');
-          }
-        });
-        keyWrap.appendChild(keyInput);
-        keyWrap.appendChild(saveBtn);
-        row.appendChild(left);
-        row.appendChild(keyWrap);
-        providerList.appendChild(row);
-      });
-    }
+  <div class="pv-panel">
+    <div class="pv-panel-h"><h2>最近决策</h2><i class="pv-rule"></i>
+      <span class="pv-count" id="recent-n">每 5 秒刷新</span></div>
+    <table class="pv-table">
+      <thead><tr><th style="width:64px">时间</th><th style="width:58px">动作</th><th style="width:64px">置信度</th>
+        <th>原因</th><th>触发消息</th></tr></thead>
+      <tbody id="recent"></tbody>
+    </table>
+  </div>
 
-    async function loadConfig(quiet){
-      if (!quiet) setAiStatus('加载中...');
-      try {
-        const data = await call('get_config');
-        const cfg = (data && data.config) || {};
-        state = Object.assign(state, cfg);
-        const enabled = Boolean(data && data.enabled);
-        setStatus(enabled ? '已启用' : '未启用');
-        setToggleUI(enableSwitch, enabled);
-        setToggleUI(visionSwitch, state.vision_enabled);
-        setToggleUI(forwardSwitch, state.forward_analysis);
-        renderProviders();
-        if (!quiet) setAiStatus('已加载', 'ok');
-      } catch (e){
-        if (!quiet) setAiStatus('加载失败：' + e.message, 'error');
-      }
-    }
-
-    async function saveAi(){
-      setAiStatus('保存中...');
-      try {
-        const dparams = {};
-        paramGrid.querySelectorAll('input[data-param]').forEach(inp => {
-          dparams[inp.dataset.param] = parseFloat(inp.value);
-        });
-        const params = {
-          active_model: modelSelect.value,
-          vision_enabled: visionSwitch.classList.contains('on'),
-          forward_analysis: forwardSwitch.classList.contains('on'),
-          participation: participationSelect.value,
-          ...dparams,
-        };
-        const res = await call('set_ai_config', params);
-        state = Object.assign(state, (res && res.config) || {});
-        renderProviders();
-        setAiStatus('已保存', 'ok');
-      } catch (e){
-        setAiStatus('保存失败：' + e.message, 'error');
-      }
-    }
-
-    async function loadStats(){
-      try {
-        const data = await call('stats');
-        const stats = (data && data.stats) || {};
-        const grid = document.getElementById('statsGrid');
-        const labels = {group_profiles:'群画像', topic_flows:'话题流', emotion_logs:'情绪记录', conversation_chains:'对话链'};
-        grid.innerHTML = '';
-        Object.keys(labels).forEach(k => {
-          const card = document.createElement('div');
-          card.className = 'card';
-          card.style.cssText = 'text-align:center';
-          const val = document.createElement('div');
-          val.style.cssText = 'font-family:var(--font-m);font-size:22px;font-weight:600';
-          val.textContent = stats[k] !== undefined ? stats[k] : '-';
-          const lbl = document.createElement('div');
-          lbl.style.cssText = 'font-size:12px;color:var(--ink3);margin-top:6px';
-          lbl.textContent = labels[k];
-          card.appendChild(val);
-          card.appendChild(lbl);
-          grid.appendChild(card);
-        });
-        document.getElementById('statsStatus').textContent = '';
-      } catch (e){
-        document.getElementById('statsStatus').textContent = '统计失败：' + e.message;
-      }
-    }
-
-    enableSwitch.addEventListener('click', async ()=>{
-      setStatus('切换中...');
-      try {
-        const res = await call('toggle');
-        const enabled = Boolean(res.enabled);
-        setToggleUI(enableSwitch, enabled);
-        setStatus(enabled ? '已启用' : '未启用');
-      } catch (e){
-        setStatus('切换失败：' + e.message);
-      }
-    });
-    visionSwitch.addEventListener('click', ()=> setToggleUI(visionSwitch, !visionSwitch.classList.contains('on')));
-    forwardSwitch.addEventListener('click', ()=> setToggleUI(forwardSwitch, !forwardSwitch.classList.contains('on')));
-    saveAiBtn.addEventListener('click', saveAi);
-    refreshAiBtn.addEventListener('click', ()=> loadConfig(false));
-    statsBtn.addEventListener('click', loadStats);
-    loadConfig(false);
-    loadStats();
-  </script>
 <script>
-(function(){
-  if (window.__eggbMotion) return; window.__eggbMotion = true;
-  document.addEventListener('click', function(e){
-    var btn = e.target && e.target.closest ? e.target.closest('button, .btn, .tool-item') : null;
-    if(!btn || btn.disabled) return;
-    var rect = btn.getBoundingClientRect();
-    var size = Math.max(rect.width, rect.height) * 1.2;
-    var r = document.createElement('span');
-    r.className = 'btn-ripple';
-    r.style.width = r.style.height = size + 'px';
-    r.style.left = (e.clientX - rect.left - size/2) + 'px';
-    r.style.top = (e.clientY - rect.top - size/2) + 'px';
-    btn.appendChild(r);
-    setTimeout(function(){ r.remove(); }, 600);
+const API='/api/plugins/action';
+const $=id=>document.getElementById(id);
+const msg=$('msg');
+
+async function call(action,params){
+  const r=await fetch(API,{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({plugin_id:'group_chat_decider',action,params:params||{}})});
+  const t=await r.text(); try{return JSON.parse(t)}catch{return {raw:t}}
+}
+function setMsg(t,ok){ msg.className='pv-msg '+(ok?'ok':'err'); msg.textContent=t||''; }
+function fmtTime(ts){ const d=new Date(ts*1000); return d.toTimeString().slice(0,8); }
+const ACT_LABEL={inject:'放行',skip:'跳过',observe:'观察',none:'—'};
+const ACT_CLASS={inject:'ok',skip:'',observe:'bad'};
+
+function drawParts(cfg){
+  const lv=cfg.participation_levels||{};
+  const cur=cfg.participation||'normal';
+  $('parts').innerHTML=Object.keys(lv).map(k=>
+    '<button class="'+(k===cur?'primary':'')+'" data-part="'+k+'">'+lv[k]+'</button>').join('');
+  document.querySelectorAll('[data-part]').forEach(b=>b.onclick=async()=>{
+    const r=await call('set_config',{participation:b.dataset.part});
+    if(r&&r.ok){ setMsg('参与度已改为「'+lv[b.dataset.part]+'」',true); await load(); }
+    else setMsg('保存失败：'+JSON.stringify(r),false);
   });
-})();
+}
+function drawParams(cfg){
+  const p=cfg.decision_params||{}, d=cfg.decision_param_defaults||{};
+  const labels={
+    confidence_threshold:'置信度阈值（越低越保守）',
+    max_context_messages:'送入 AI 的最近消息条数',
+    max_bot_replies:'窗口内最多发言次数（防刷屏）',
+    cooldown_seconds:'冷却秒数（0 = 不冷却）',
+    followup_wait_seconds:'接话窗口（追问还能再答）',
+    followup_max_chars:'追问的短消息阈值',
+    observe_before_silence_seconds:'沉默前观察秒数'
+  };
+  $('params').innerHTML=Object.keys(d).map(k=>{
+    const isFloat=typeof d[k]==='number'&&!Number.isInteger(d[k]);
+    return '<tr><td><code>'+k+'</code></td>'
+      +'<td><input class="pv-input" data-p="'+k+'" type="number" step="'+(isFloat?0.05:1)+'" value="'
+      +(p[k]!=null?p[k]:d[k])+'"></td>'
+      +'<td class="pv-hint" style="margin:0">'+(labels[k]||('默认 '+d[k]))+'</td></tr>';
+  }).join('');
+}
+async function load(){
+  const r=await call('get_config');
+  if(!r||!r.config){ $('ver').textContent='读取失败'; return; }
+  const c=r.config;
+  $('ver').textContent='group_chat_decider v3';
+  $('en-tag').textContent=r.enabled?'已启用':'已停用';
+  $('en-tag').className='pv-tag '+(r.enabled?'ok':'bad');
+  drawParts(c);
+  drawParams(c);
+  const models=c.models||[];
+  $('model').innerHTML=models.map(m=>{
+    const id=typeof m==='string'?m:(m.id||m.name);
+    const label=typeof m==='string'?m:(m.label||m.name||id);
+    return '<option value="'+id+'"'+(id===c.active_model?' selected':'')+'>'+label+'</option>';
+  }).join('')||'<option value="">（无可用模型）</option>';
+  const st=await call('stats');
+  const s=(st&&st.stats)||{};
+  $('s-profile').textContent=s.group_profiles||0;
+  $('s-topic').textContent=s.topic_flows||0;
+  $('s-emo').textContent=s.emotion_logs||0;
+  $('s-chain').textContent=s.conversation_chains||0;
+  await loadRecent();
+}
+async function loadRecent(){
+  const r=await call('recent');
+  const list=(r&&r.decisions)||[];
+  $('recent-n').textContent=list.length?('最近 '+list.length+' 条 · 每 5 秒刷新'):'暂无记录（有消息进来后出现）';
+  $('recent').innerHTML=list.map(d=>{
+    const act=ACT_LABEL[d.act]||d.act;
+    return '<tr><td class="mono">'+fmtTime(d.ts)+'</td>'
+      +'<td><span class="pv-tag '+(ACT_CLASS[d.act]||'')+'">'+act+'</span></td>'
+      +'<td class="mono">'+(d.confidence!=null?Number(d.confidence).toFixed(2):'—')+'</td>'
+      +'<td>'+((d.reason||'').replace(/</g,'&lt;'))+'</td>'
+      +'<td class="pv-hint" style="margin:0">'+((d.text||'').replace(/</g,'&lt;'))+'</td></tr>';
+  }).join('')||'<tr><td colspan="5" class="pv-empty">还没有决策记录</td></tr>';
+}
+$('toggle').onclick=async()=>{
+  const r=await call('toggle');
+  if(r&&('enabled' in r)){ setMsg(r.enabled?'已启用':'已停用',true); await load(); }
+  else setMsg('切换失败：'+JSON.stringify(r),false);
+};
+$('save-params').onclick=async()=>{
+  const payload={};
+  document.querySelectorAll('[data-p]').forEach(i=>{ payload[i.dataset.p]=i.value; });
+  const r=await call('set_config',payload);
+  if(r&&r.ok){ setMsg('参数已保存',true); await load(); }
+  else setMsg('保存失败：'+JSON.stringify(r),false);
+};
+$('save-model').onclick=async()=>{
+  const r=await call('set_ai_config',{active_model:$('model').value});
+  if(r&&r.ok){ setMsg('模型已切换',true); await load(); }
+  else setMsg('切换失败：'+JSON.stringify(r),false);
+};
+load();
+setInterval(loadRecent, 5000);
 </script>
 </body>
 </html>
