@@ -2,66 +2,9 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>personality_engine 插件</title>
-<style>
-  :root{
-    --bg:#0a0a0f;--surface:#111118;--paper:#16161f;--elevated:#1e1e28;--input:#14141b;
-    --ink:#f0f0f5;--ink2:#b8b8c8;--ink3:#8a8f9a;--ink4:#3a3f48;--gold:#c9a96e;
-    --font-d:'Outfit','Noto Sans SC','PingFang SC',system-ui,sans-serif;
-    --font-m:'JetBrains Mono','Consolas',monospace;--radius:12px;
-  }
-  *{box-sizing:border-box}
-  html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);font-family:var(--font-d)}
-  .wrap{max-width:900px;margin:0 auto;padding:22px}
-  .panel{background:linear-gradient(180deg,var(--surface),var(--paper));border:1px solid var(--ink4);border-radius:var(--radius);padding:18px}
-  .panel-title{font-size:17px;font-weight:700;margin-bottom:12px}
-  .meta{font-size:12px;color:var(--ink3);margin-left:8px;font-weight:400}
-  .desc{color:var(--ink2);font-size:14px;line-height:1.7;margin-top:10px}
-  .grid{display:grid;gap:12px;margin-top:14px}
-  .grid-2{grid-template-columns:repeat(2,1fr)}
-  @media (max-width:860px){ .grid-2{grid-template-columns:1fr} }
-  .card{background:var(--elevated);border:1px solid var(--ink4);border-radius:var(--radius);padding:12px}
-  .card-label{font-size:12px;color:var(--ink3);margin-bottom:4px}
-  .card-value{font-family:var(--font-m);font-size:14px;color:var(--ink)}
-  .back{display:inline-block;margin-top:14px;color:var(--gold);cursor:pointer;font-size:14px}
-  button{padding:6px 12px;border:1px solid var(--ink4);background:var(--elevated);color:var(--ink);border-radius:6px;cursor:pointer;font-size:13px}
-  button:hover{background:var(--paper);border-color:var(--gold)}
-  button.primary{background:var(--gold);color:#0a0a0f;border-color:var(--gold);font-weight:600}
-  input[type="text"],textarea,select{padding:8px 10px;background:var(--input);color:var(--ink);border:1px solid var(--ink4);border-radius:6px;font-family:inherit;font-size:13px;width:100%}
-  textarea{min-height:80px;resize:vertical}
-  .muted{color:var(--ink3);font-size:12px;margin-top:4px}
-  .row{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
-  .tag{display:inline-block;background:var(--elevated);color:var(--gold);padding:2px 8px;border-radius:4px;margin:2px;font-size:12px;border:1px solid var(--ink4)}
-  .section-title{font-size:14px;font-weight:700;margin:14px 0 6px;color:var(--ink)}
-  .empty{color:var(--ink3);font-size:13px;padding:8px 0}
-
-  /* eggb-motion */
-  @media (prefers-reduced-motion: reduce){*,*::before,*::after{animation-duration:0.01ms !important;animation-iteration-count:1 !important;transition-duration:0.01ms !important;scroll-behavior:auto !important}}
-  .btn-ripple{position:absolute;border-radius:50%;background:rgba(201,169,110,0.3);transform:scale(0);pointer-events:none;animation:rippleAnim 550ms ease-out forwards}
-  @keyframes rippleAnim{to{transform:scale(3);opacity:0}}
-  .card,.panel,.stat-card,.tool-item,.list-item{transition:transform 160ms cubic-bezier(0.22,1,0.36,1),box-shadow 200ms ease,border-color 200ms ease}
-  .card:hover,.panel:hover,.stat-card:hover{transform:translateY(-2px);box-shadow:0 4px 14px rgba(0,0,0,0.45)}
-  .tool-item:hover,.list-item:hover{transform:translateX(2px)}
-  button{transition:all 160ms cubic-bezier(0.4,0,0.2,1)}
-  button:active:not(:disabled){transform:scale(0.96)}
-  .tab{transition:transform 160ms ease,background 160ms ease,color 160ms ease,border-color 160ms ease}
-  .tab:hover{transform:translateY(-1px)}
-  .tab.active{transform:scale(1.05)}
-  .toast{display:flex;align-items:center;gap:8px;overflow:hidden;position:relative}
-  .toast::before{content:attr(data-icon);width:18px;text-align:center;font-size:13px;line-height:1;flex-shrink:0}
-  .toast::after{content:'';position:absolute;left:0;bottom:0;height:2px;width:100%;transform:scaleX(0);transform-origin:left;animation:toastProgress 2s linear forwards}
-  .toast.success::after{background:#6ecf8e}
-  .toast.error::after{background:#ff8a80}
-  .toast.info::after{background:#c9a96e}
-  @keyframes toastProgress{to{transform:scaleX(1)}}
-  .toast.show{animation:toastIn 260ms cubic-bezier(0.34,1.56,0.64,1)}
-  @keyframes toastIn{from{opacity:0;transform:translateY(-14px) scale(0.92)}to{opacity:1;transform:translateY(0) scale(1)}}
-  .panel-title{position:relative}
-  .panel-title::after{content:'';position:absolute;bottom:-2px;left:0;width:34px;height:2px;background:linear-gradient(90deg,#c9a96e,transparent);border-radius:2px;transition:width 300ms cubic-bezier(0.22,1,0.36,1)}
-  .panel:hover .panel-title::after{width:60px}
-  
-  </style>
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>人格引擎</title>
+<!-- 本页与 plugins/ego/personality_engine/ui.html 同一份；EGO 的链接走这里 -->
 <style id="pv-kit">/*PV-KIT*/
 /* ═══════════════════════════════════════════════════════════════════════
    EggBloom 插件 UI 套件 v2（2026-10-29）
@@ -318,186 +261,197 @@ button.sm{padding:5px 10px;font-size:var(--pv-fs-xs)}
 </style>
 </head>
 <body>
-  <div class="wrap">
-    <div class="panel">
-      <div class="panel-title">人格引擎<span class="meta">personality_engine v0.2.0</span></div>
-      <div class="desc">编辑小a的人格、说话方式、行为规则。保存后即时生效。</div>
-      <div class="row" style="margin-top:12px">
-        <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--ink2)">
-          <input type="checkbox" id="example-enabled" checked>
-          <span>启用示例库</span>
-        </label>
-        <button class="primary" id="pSaveAll" onclick="saveAll()">保存人格</button>
-      </div>
-      <!-- ★ 2026-10-27 防误删：本页的段名是写死的 8 个（【你是谁】【日常】…），
-           而人格文件实际的段名是【我是谁】【怎么说话】【荤的】【网络用语】
-           【什么不干】【干活的时候】——一个都不匹配。于是 loadPersonality()
-           取不到值、saveAll() 又只提交"非空"的框，提交的是空集合，
-           save_personality({}) 会把整份人格写成空文件。
-           这里加一道闸：一个段都没匹配上就禁用保存，把人指到配置中心那份
-           （按真实段名动态渲染的那页）。 -->
-      <div id="pMismatch" class="desc" hidden
-           style="margin-top:10px;color:var(--warn,#ff9f0a);line-height:1.7">
-        本页的段名与当前人格文件对不上，**已禁用保存**（点了会把人格写空）。<br>
-        请到「配置中心 → 人格与人设」修改 —— 那一页按真实段名渲染。
-      </div>
+  <div class="pv-head">
+    <div class="pv-hero-icon">✎</div>
+    <div class="pv-head-body">
+      <div class="pv-eyebrow">EGO · PERSONALITY</div>
+      <h1>人格引擎</h1>
+      <div class="pv-sub">唯一写入口是 plugins/personality.txt。段名从后端读、不写死；保存时全量回传，漏一段等于删一段。</div>
     </div>
-    <div class="panel">
-      <div class="section-title">基础信息</div>
-      <div class="grid grid-2">
-        <div><div class="muted">【你是谁】</div><textarea id="sec-你是谁" placeholder="18岁男生，喜欢计算机..."></textarea></div>
-        <div><div class="muted">【日常】</div><textarea id="sec-日常" placeholder="阴间作息，晚上精神..."></textarea></div>
-      </div>
+  </div>
+
+  <div class="pv-kpis" style="margin-bottom:16px">
+    <div class="pv-kpi"><span class="k">段落</span><b id="k-secs">—</b><div class="d">按【】切分</div></div>
+    <div class="pv-kpi hero"><span class="k">总字数</span><b id="k-chars">—</b><div class="d">当前生效</div></div>
+    <div class="pv-kpi"><span class="k">人格卡</span><b id="k-cards">—</b><div class="d">可应用 / 快照</div></div>
+    <div class="pv-kpi"><span class="k">示例注入</span><b id="k-ex">—</b><div class="d">few-shot</div></div>
+  </div>
+
+  <div class="pv-panel">
+    <div class="pv-panel-h"><h2>人格卡</h2><i class="pv-rule"></i>
+      <span class="pv-count">应用 = 覆盖人格（先自动备份）</span>
+      <button class="sm" id="save-card">存为卡</button></div>
+    <div id="cards"><div class="pv-empty">读取中…</div></div>
+  </div>
+
+  <div class="pv-panel">
+    <div class="pv-panel-h"><h2>人格段落</h2><i class="pv-rule"></i>
+      <span class="pv-count" id="secs-n">—</span></div>
+    <div class="pv-grid cols-2" id="grid"></div>
+    <div id="empty-tip"></div>
+  </div>
+
+  <div class="pv-panel">
+    <div class="pv-panel-h"><h2>保存</h2><i class="pv-rule"></i></div>
+    <div class="pv-flex">
+      <button class="primary" id="save">保存人格</button>
+      <button id="reload">重新读取</button>
+      <label class="pv-switch" style="margin-left:8px">
+        <input type="checkbox" id="ex">
+        <span class="pv-track"></span>
+        <span class="pv-switch-label">few-shot 示例注入</span>
+      </label>
     </div>
-    <div class="panel">
-      <div class="section-title">性格与表达</div>
-      <div class="grid grid-2">
-        <div><div class="muted">【性格】</div><textarea id="sec-性格" placeholder="懒散但对感兴趣的事认真..."></textarea></div>
-        <div><div class="muted">【说话方式】</div><textarea id="sec-说话方式" placeholder="短句为主，口语化..."></textarea></div>
-      </div>
+    <div class="pv-hint">保存全量回传所有段落；总字数暴跌会二次确认。段标题【】别改，下游按段名取值。</div>
+    <div class="pv-msg" id="msg"></div>
+  </div>
+
+  <div class="pv-panel">
+    <div class="pv-panel-h"><h2>示例库</h2><i class="pv-rule"></i>
+      <span class="pv-count">few-shot，保存后下一轮生效</span></div>
+    <textarea class="pv-textarea" id="examples" style="min-height:160px"></textarea>
+    <div class="pv-flex" style="margin-top:10px">
+      <button class="primary" id="save-ex">保存示例</button>
+      <button id="reload-ex">重新读取</button>
     </div>
-    <div class="panel">
-      <div class="section-title">行为规则</div>
-      <div class="grid grid-2">
-        <div><div class="muted">【群聊行为】</div><textarea id="sec-群聊行为" placeholder="只在被@或叫小a时回复..."></textarea></div>
-        <div><div class="muted">【遇到各种事】</div><textarea id="sec-遇到各种事" placeholder="- 被问身份/年龄/在哪 → ..."></textarea></div>
-      </div>
-    </div>
-    <div class="panel">
-      <div class="section-title">其他</div>
-      <div class="grid grid-2">
-        <div><div class="muted">【口头禅】</div><textarea id="sec-口头禅" placeholder="…… 无语 | 行吧 勉强接受 | ..."></textarea></div>
-        <div><div class="muted">【绝对不能说的话】</div><textarea id="sec-绝对不能说的话" placeholder="作为AI / 根据算法 / ..."></textarea></div>
-      </div>
-    </div>
-    <div class="panel">
-      <div class="row">
-        <div>
-          <div class="section-title" style="margin:0">示例库</div>
-          <div class="muted">few-shot 示例，会注入 prompt。可直接修改 JSON，保存后即时生效。</div>
-        </div>
-        <button class="primary" onclick="saveExamples()">保存示例</button>
-      </div>
-      <textarea id="example-editor" style="min-height:180px;font-family:var(--font-m);margin-top:10px"></textarea>
-    </div>
-    <div class="panel">
-      <div class="section-title">实时预览</div>
-      <div id="preview" style="white-space:pre-wrap;font-family:var(--font-m);font-size:13px;color:var(--ink2);line-height:1.7;background:var(--input);padding:12px;border-radius:8px;border:1px solid var(--ink4)">加载中...</div>
-    </div>
-    {BACK_BTN}
-  <script>
-  async function api(path, opts={}) {
-    const res = await fetch(path, Object.assign({headers: {'Content-Type':'application/json'}}, opts));
-    return res.json();
-  }
-  async function loadPersonality() {
-    const data = await api('/api/plugins/action', {
-      method: 'POST',
-      body: JSON.stringify({plugin_id:'personality_engine', action:'get_personality'})
-    });
-    const sections = (data && data.sections) || {};
-    const fields = ['你是谁','日常','性格','说话方式','群聊行为','遇到各种事','口头禅','绝对不能说的话'];
-    for (const key of fields) {
-      const el = document.getElementById('sec-' + key);
-      if (el) el.value = sections['【' + key + '】'] || '';
-    }
-    /* ★ 段名闸门（2026-10-27）：一个都没匹配上 → 禁用保存，否则一按就把人格写空。
-       判据用"后端返回的真实段名"和"本页写死的段名"做交集，不猜。 */
-    try {
-      const hit = fields.filter(function (k) { return sections['【' + k + '】'] !== undefined; }).length;
-      const btn = document.getElementById('pSaveAll');
-      const warn = document.getElementById('pMismatch');
-      if (hit === 0 && Object.keys(sections).length > 0) {
-        if (btn) { btn.disabled = true; btn.title = '段名与当前人格文件不匹配，已禁用'; btn.style.opacity = 0.45; }
-        if (warn) warn.hidden = false;
-      }
-    } catch (e) {}
-    const cfg = (data && data.config) || {};
-    const exEl = document.getElementById('example-enabled');
-    if (exEl) exEl.checked = !(cfg.example_enabled === false);
-    updatePreview();
-  }
-  async function saveAll() {
-    const sections = {};
-    const fields = ['你是谁','日常','性格','说话方式','群聊行为','遇到各种事','口头禅','绝对不能说的话'];
-    for (const key of fields) {
-      const el = document.getElementById('sec-' + key);
-      if (el && el.value.trim()) {
-        sections['【' + key + '】'] = el.value.trim();
-      }
-    }
-    const exEl = document.getElementById('example-enabled');
-    const payload = {
-      plugin_id:'personality_engine',
-      action:'save_personality',
-      params:{
-        sections,
-        config: {
-          example_enabled: exEl ? exEl.checked : true,
-        }
-      }
-    };
-    const data = await api('/api/plugins/action', {
-      method: 'POST',
-      body: JSON.stringify(payload)
-    });
-    alert(data.success !== false ? '已保存' : '保存失败：' + (data.error || '未知错误'));
-    updatePreview();
-  }
-  function updatePreview() {
-    const fields = ['你是谁','日常','性格','说话方式','群聊行为','遇到各种事','口头禅','绝对不能说的话'];
-    const parts = [];
-    for (const key of fields) {
-      const el = document.getElementById('sec-' + key);
-      if (el && el.value.trim()) {
-        parts.push('【' + key + '】\n' + el.value.trim());
-      }
-    }
-    document.getElementById('preview').textContent = parts.join('\n\n') || '暂无内容';
-  }
-  document.querySelectorAll('textarea').forEach(el => {
-    el.addEventListener('input', updatePreview);
-  });
-  async function loadExamples() {
-    const data = await api('/api/plugins/action', {
-      method: 'POST',
-      body: JSON.stringify({plugin_id:'personality_engine', action:'get_examples', params:{scene:''}})
-    });
-    const list = Array.isArray(data && data.examples) ? data.examples : [];
-    document.getElementById('example-editor').value = JSON.stringify(list, null, 2);
-  }
-  async function saveExamples() {
-    const raw = document.getElementById('example-editor').value || '[]';
-    let parsed;
-    try { parsed = JSON.parse(raw); } catch (e) { alert('示例库 JSON 格式错误'); return; }
-    const data = await api('/api/plugins/action', {
-      method: 'POST',
-      body: JSON.stringify({plugin_id:'personality_engine', action:'save_examples', params:{examples: parsed}})
-    });
-    alert(data.success !== false ? '示例已保存' : '保存失败：' + (data.error || '未知错误'));
-  }
-  (async function init(){
-    await loadPersonality();
-    await loadExamples();
-  })();
-  </script>
+    <div class="pv-msg" id="msg-ex"></div>
+  </div>
+
 <script>
-(function(){
-  if (window.__eggbMotion) return; window.__eggbMotion = true;
-  document.addEventListener('click', function(e){
-    var btn = e.target && e.target.closest ? e.target.closest('button, .btn, .tool-item') : null;
-    if(!btn || btn.disabled) return;
-    var rect = btn.getBoundingClientRect();
-    var size = Math.max(rect.width, rect.height) * 1.2;
-    var r = document.createElement('span');
-    r.className = 'btn-ripple';
-    r.style.width = r.style.height = size + 'px';
-    r.style.left = (e.clientX - rect.left - size/2) + 'px';
-    r.style.top = (e.clientY - rect.top - size/2) + 'px';
-    btn.appendChild(r);
-    setTimeout(function(){ r.remove(); }, 600);
+const ACT='/api/plugins/action';
+const CARDS='/api/persona/cards';
+const $=id=>document.getElementById(id);
+const msg=$('msg'), msgEx=$('msg-ex');
+let SECTIONS={}, TOTAL=0;
+
+async function post(url, body){
+  const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify(body)});
+  const t=await r.text(); try{return JSON.parse(t)}catch{return {raw:t}}
+}
+async function get(url){
+  const r=await fetch(url,{headers:{'Accept':'application/json'}});
+  const t=await r.text(); try{return JSON.parse(t)}catch{return {raw:t}}
+}
+function setMsg(el,t,ok){ el.className='pv-msg '+(ok?'ok':'err'); el.textContent=t||''; }
+function call(action,params){ return post(ACT,{plugin_id:'ego.personality_engine',action,params:params||{}}); }
+function esc(s){ return String(s==null?'':s).replace(/</g,'&lt;').replace(/"/g,'&quot;'); }
+
+function drawSections(){
+  const keys=Object.keys(SECTIONS);
+  $('secs-n').textContent=keys.length+' 段';
+  $('grid').innerHTML=keys.map(k=>{
+    const v=String(SECTIONS[k]||'');
+    const prev=v.replace(/\s+/g,' ').slice(0,140);
+    return '<div class="pv-card pc-card" data-k="'+encodeURIComponent(k)+'">'
+      +'<div class="pv-flex" style="justify-content:space-between">'
+      +  '<span class="pc-name">'+esc(k)+'</span>'
+      +  '<span class="pv-count pc-n">'+v.length+' 字</span></div>'
+      +'<div class="pc-prev">'+esc(prev||'（空段）')+'</div>'
+      +'<textarea class="pv-textarea" data-sec="'+esc(k)+'" hidden></textarea>'
+      +'<div class="pv-flex" style="margin-top:10px"><button class="sm" data-edit="1">编辑</button></div>'
+      +'</div>';
+  }).join('')||'<div class="pv-empty">没读到任何段落</div>';
+  document.querySelectorAll('textarea[data-sec]').forEach(ta=>{
+    ta.value=SECTIONS[ta.dataset.sec]||'';
+    ta.addEventListener('input',()=>{
+      SECTIONS[ta.dataset.sec]=ta.value;
+      const card=ta.closest('.pc-card');
+      card.querySelector('.pc-n').textContent=ta.value.length+' 字';
+      card.querySelector('.pc-prev').textContent=ta.value.replace(/\s+/g,' ').slice(0,140)||'（空段）';
+      refreshTotal();
+    });
   });
-})();
+  document.querySelectorAll('[data-edit]').forEach(b=>b.onclick=()=>{
+    const card=b.closest('.pc-card');
+    const ta=card.querySelector('textarea');
+    const open=card.classList.toggle('open');
+    ta.hidden=!open; b.textContent=open?'收起':'编辑';
+    if(open){ ta.focus(); ta.selectionStart=ta.selectionEnd=0; }
+  });
+}
+function refreshTotal(){
+  TOTAL=Object.keys(SECTIONS).reduce((n,k)=>n+String(SECTIONS[k]||'').length,0);
+  $('k-chars').textContent=TOTAL;
+  $('k-secs').textContent=Object.keys(SECTIONS).length;
+}
+
+async function load(){
+  const r=await call('get_personality');
+  if(!r||r.error){ $('msg').className='pv-msg err'; $('msg').textContent='读取失败：'+((r&&r.error)||'未知'); return; }
+  SECTIONS=Object.assign({},r.sections||{});
+  $('k-ex').textContent=((r.config||{}).example_enabled===false)?'关':'开';
+  $('ex').checked=((r.config||{}).example_enabled!==false);
+  drawSections(); refreshTotal();
+  $('empty-tip').innerHTML=Object.keys(SECTIONS).length?''
+    :'<div class="pv-msg err">没读到段落，先别保存 —— 去 plugins/personality.txt 确认内容。</div>';
+  await loadCards();
+}
+async function loadCards(){
+  let r=null; try{ r=await get(CARDS); }catch(e){ return; }
+  const cards=(r&&r.cards)||[];
+  $('k-cards').textContent=cards.length;
+  const host=$('cards');
+  if(!cards.length){ host.innerHTML='<div class="pv-empty">还没有卡 —— 点右上「存为卡」把当前人格存成快照</div>'; return; }
+  host.innerHTML='<div class="pv-grid cols-3">'+cards.map(c=>
+    '<div class="pv-card">'
+    +'<div class="pv-flex" style="justify-content:space-between">'
+    +  '<b style="font-size:13px">'+esc(c.name)+'</b>'
+    +  '<span class="pv-count">'+(c.chars||0)+' 字</span></div>'
+    +(c.note?'<div class="pv-hint" style="margin-top:4px">'+esc(c.note)+'</div>':'')
+    +'<div class="pv-count" style="margin-top:6px">'+(c.sections_count||0)+' 段 · '
+    +  esc(String(c.updated||'').slice(5,16)||'—')+'</div>'
+    +'<div class="pv-flex" style="margin-top:10px">'
+    +  '<button class="primary sm" data-apply="'+esc(c.id)+'">应用</button>'
+    +  '<button class="danger sm" data-del="'+esc(c.id)+'">删除</button></div>'
+    +'</div>').join('')+'</div>';
+  document.querySelectorAll('[data-apply]').forEach(b=>b.onclick=async()=>{
+    if(b.dataset.armed!=='1'){ b.dataset.armed='1'; b.textContent='确认应用？';
+      setTimeout(()=>{ b.textContent='应用'; },3000); return; }
+    const r2=await post(CARDS,{action:'apply',id:b.dataset.apply});
+    if(r2&&r2.ok){ setMsg(msg,'已应用'+(r2.warning?('（注意：'+r2.warning+'）'):'')+'，下一轮生效',true); await load(); }
+    else setMsg(msg,'应用失败：'+((r2&&r2.error)||'未知'),false);
+  });
+  document.querySelectorAll('[data-del]').forEach(b=>b.onclick=async()=>{
+    if(b.dataset.armed!=='1'){ b.dataset.armed='1'; b.textContent='确认删除';
+      setTimeout(()=>{ b.textContent='删除'; },3000); return; }
+    await post(CARDS,{action:'delete',id:b.dataset.del});
+    await loadCards();
+  });
+}
+$('save').onclick=async()=>{
+  const keys=Object.keys(SECTIONS);
+  if(!keys.length){ setMsg(msg,'没有段落，拒绝保存',false); return; }
+  const total=keys.reduce((n,k)=>n+String(SECTIONS[k]||'').length,0);
+  if(TOTAL>0 && total<TOTAL*0.5 && !confirm('总字数从 '+TOTAL+' 降到 '+total+'，确定保存？')) return;
+  const r=await post(ACT,{plugin_id:'ego.personality_engine',action:'save_personality',
+    params:{sections:SECTIONS,config:{example_enabled:$('ex').checked}}});
+  if(r&&r.success!==false){ setMsg(msg,'已保存（'+keys.length+' 段 / '+total+' 字）',true); refreshTotal(); }
+  else setMsg(msg,'保存失败：'+((r&&r.error)||'未知'),false);
+};
+$('save-card').onclick=async()=>{
+  const name=(prompt('卡名（如：小a-原版）')||'').trim();
+  if(!name) return;
+  const r=await post(CARDS,{action:'save',name,sections:SECTIONS});
+  if(r&&r.ok){ setMsg(msg,'已存为卡「'+name+'」',true); await loadCards(); }
+  else setMsg(msg,'存卡失败：'+((r&&r.error)||'未知'),false);
+};
+$('reload').onclick=load;
+$('ex').onchange=()=>{ $('k-ex').textContent=$('ex').checked?'开':'关'; };
+
+async function loadExamples(){
+  const r=await call('get_examples',{scene:''});
+  $('examples').value=JSON.stringify((r&&r.examples)||[],null,2);
+}
+$('reload-ex').onclick=loadExamples;
+$('save-ex').onclick=async()=>{
+  let arr; try{ arr=JSON.parse($('examples').value||'[]'); }
+  catch(e){ setMsg(msgEx,'JSON 不合法：'+e.message,false); return; }
+  const r=await call('save_examples',{examples:arr,scene:''});
+  setMsg(msgEx,r&&r.success!==false?'示例已保存':'保存失败：'+JSON.stringify(r), !!(r&&r.success!==false));
+};
+load();
+loadExamples();
 </script>
 </body>
 </html>
