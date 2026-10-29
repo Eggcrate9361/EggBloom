@@ -2,53 +2,8 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<title>QQ 空间 · EggBloom</title>
-<style>
-:root{--bg:#0a0a0f;--paper:#16161f;--line:#26262f;--ink:#f0f0f5;--ink2:#b8b8c8;--ink3:#8a8f9a;
-  --gold:#c9a96e;--ok:#6f9e78;--err:#b05a52;--warn:#c9a35e;
-  --f:'Outfit','Noto Sans SC',system-ui,sans-serif;--m:'JetBrains Mono',Consolas,monospace}
-*{margin:0;padding:0;box-sizing:border-box}
-body{background:var(--bg);color:var(--ink);font-family:var(--f);font-size:13.5px;padding:18px 20px 40px}
-h2{font-size:16px;font-weight:600;margin-bottom:4px}
-.sub{color:var(--ink3);font-size:12px;margin-bottom:16px}
-button{font-family:var(--m);font-size:11px;letter-spacing:.06em;padding:6px 12px;cursor:pointer;
-  background:transparent;color:var(--ink2);border:1px solid var(--line);border-radius:4px}
-button:hover{border-color:var(--gold);color:var(--gold)}
-button:disabled{opacity:.35;cursor:not-allowed}
-button.primary{color:var(--gold);border-color:#5a4a33}
-button.danger{color:var(--err);border-color:#3a2523}
-.card{border:1px solid var(--line);border-radius:6px;padding:14px;background:var(--paper);margin-bottom:14px}
-.card h3{font-size:13px;font-weight:600;margin-bottom:10px;display:flex;align-items:center;gap:8px}
-.bar{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
-.stat{font-family:var(--m);font-size:11px;color:var(--ink3)}
-.stat b{color:var(--ink2);font-weight:500}
-.sw{display:inline-flex;align-items:center;gap:8px;font-family:var(--m);font-size:11.5px;
-  border:1px solid var(--line);border-radius:4px;padding:6px 10px;cursor:pointer;user-select:none}
-.sw.on{border-color:#5a4a33;color:var(--gold)}
-.sw .dot{width:7px;height:7px;border-radius:50%;background:var(--line)}
-.sw.on .dot{background:var(--ok)}
-.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px}
-.act{border:1px solid var(--line);border-radius:5px;padding:10px}
-.act .nm{font-family:var(--m);font-size:11.5px;color:var(--ink2);margin-bottom:2px}
-.act .lz{font-size:10.5px;color:var(--ink3);margin-bottom:8px}
-.f{display:flex;flex-direction:column;gap:3px;margin-bottom:6px}
-.f label{font-family:var(--m);font-size:10px;color:var(--ink3);letter-spacing:.08em}
-input,select,textarea{background:#14141b;border:1px solid var(--line);border-radius:4px;color:var(--ink);
-  font-family:var(--m);font-size:12px;padding:6px 8px;outline:none;width:100%}
-input:focus,select:focus,textarea:focus{border-color:var(--gold)}
-textarea{resize:vertical;min-height:52px;line-height:1.5}
-pre{font-family:var(--m);font-size:11px;background:#0e0e14;border:1px solid var(--line);border-radius:5px;
-  padding:10px;overflow:auto;max-height:340px;white-space:pre-wrap;word-break:break-all;color:var(--ink2)}
-.warnbox{border:1px solid #4a3d24;background:#1a160f;border-radius:5px;padding:9px 11px;
-  font-size:12px;color:var(--warn);margin-bottom:12px}
-.ok{color:var(--ok)}.err{color:var(--err)}
-.row{display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap}
-.hint{color:var(--ink3);font-size:11px;margin-top:6px}
-table{width:100%;border-collapse:collapse;margin-top:6px}
-th{font-family:var(--m);font-size:10px;letter-spacing:.1em;color:var(--ink3);text-align:left;
-  padding:6px 8px;border-bottom:1px solid var(--line);font-weight:400}
-td{padding:6px 8px;border-bottom:1px solid #1c1c22;font-size:11.5px;color:var(--ink2)}
-</style>
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>QQ空间</title>
 <style id="pv-kit">/*PV-KIT*/
 /* ═══════════════════════════════════════════════════════════════
    EggBloom 插件 UI 套件（1.5.10）
@@ -158,175 +113,160 @@ button.danger:hover{border-color:var(--pv-bad);color:var(--pv-bad)}
 </style>
 </head>
 <body>
-<h2>QQ 空间</h2>
-<div class="sub">9 个动作分四层。默认全关 —— 要用哪层显式打开。发说说有频率硬上限（每天 ≤2 条，间隔 ≥4 小时）。</div>
-
-<div id="warn"></div>
-
-<div class="card">
-  <h3>总开关与能力层</h3>
-  <div class="bar" style="margin-bottom:10px">
-    <span class="sw" id="sw_enabled" onclick="toggleEnabled()"><span class="dot"></span>插件启用</span>
-    <span class="stat" id="stat">加载中…</span>
+  <div class="pv-head">
+    <h1>QQ 空间</h1>
+    <div class="pv-sub">九件事分四层：读、互动、写、管；默认全关，发说说有每日上限与最小间隔两道硬闸</div>
   </div>
-  <div class="bar" id="layers"></div>
-  <div class="hint">read=读（无风险）· interact=互动（低）· write=发说说（中，人人可见）· manage=删/改权限/拉黑（中，不可逆或影响他人）</div>
-</div>
 
-<div class="card">
-  <h3>发布额度</h3>
-  <div class="bar">
-    <span class="stat" id="limit"></span>
-    <button class="danger" style="margin-left:auto" onclick="if(confirm('清空今日发布记录？仅用于调试/误操作恢复。'))call('reset_limit',{confirm:true}).then(load)">清空记录</button>
+  <div class="pv-panel">
+    <div class="pv-panel-h"><h2>状态</h2><i class="pv-rule"></i><span class="pv-count" id="en">—</span></div>
+    <div class="pv-stats">
+      <div class="pv-stat"><b id="s-used">0</b><span>今日已发 / 上限</span></div>
+      <div class="pv-stat"><b id="s-gap">—</b><span>最小间隔</span></div>
+      <div class="pv-stat"><b id="s-can">—</b><span>现在能发吗</span></div>
+      <div class="pv-stat"><b id="s-last">—</b><span>最近一次</span></div>
+    </div>
+    <div class="pv-flex" style="margin-top:14px">
+      <button class="primary" id="toggle">切换启用</button>
+      <button id="reset-limit" class="danger">重置今日限额</button>
+      <button id="refresh">刷新</button>
+    </div>
+    <div class="pv-msg" id="msg"></div>
   </div>
-  <div id="loglist"></div>
-</div>
 
-<div class="card">
-  <h3>人设（AI 生成内容用）</h3>
-  <div class="f"><textarea id="persona" placeholder="留空则用内置默认人设"></textarea></div>
-  <div class="bar">
-    <button class="primary" onclick="savePersona()">保存人设</button>
-    <button onclick="genPreview()">试生成一条（不发布）</button>
+  <div class="pv-panel">
+    <div class="pv-panel-h"><h2>能力分层</h2><i class="pv-rule"></i>
+      <span class="pv-count">勾选 = 允许；写/管建议保持关闭</span></div>
+    <table class="pv-table">
+      <thead><tr><th style="width:90px">层</th><th style="width:80px">允许</th><th>包含动作</th></tr></thead>
+      <tbody id="layers"></tbody>
+    </table>
   </div>
-  <div id="genbox" style="margin-top:10px;display:none"><pre id="genout"></pre></div>
-</div>
 
-<div class="card">
-  <h3>试运行（直接执行，返回原始 JSON）</h3>
-  <div class="hint" style="margin-bottom:10px">每个动作都可手动触发。返回的是驱动给的**原始 JSON**，不是"成功"两个字。试运行同样受能力层门禁约束。</div>
-  <div class="grid" id="acts"></div>
-</div>
+  <div class="pv-panel">
+    <div class="pv-panel-h"><h2>发一条说说</h2><i class="pv-rule"></i>
+      <span class="pv-count">预览 → 确认发布，两步</span></div>
+    <div class="pv-flex" style="align-items:flex-start">
+      <div class="pv-field" style="flex:1;min-width:200px;margin:0">
+        <label class="pv-label">主题提示（可空 = 按人设自由写）</label>
+        <input class="pv-input" id="f-hint" placeholder="比如：今天下雨">
+      </div>
+      <div class="pv-field" style="width:190px;margin:0">
+        <label class="pv-label">可见范围</label>
+        <select class="pv-select" id="f-ugc"></select>
+      </div>
+      <div style="display:flex;align-items:flex-end;padding-bottom:2px">
+        <button id="gen">生成预览</button>
+      </div>
+    </div>
+    <div id="preview" style="margin-top:12px"></div>
+  </div>
 
-<div class="card">
-  <h3>返回结果</h3>
-  <pre id="out">（尚未执行任何动作）</pre>
-</div>
+  <div class="pv-panel">
+    <div class="pv-panel-h"><h2>人设</h2><i class="pv-rule"></i>
+      <span class="pv-count">写说说时的口吻依据</span></div>
+    <textarea class="pv-textarea" id="f-persona" style="min-height:90px"></textarea>
+    <div class="pv-flex" style="margin-top:10px"><button class="primary" id="save-persona">保存人设</button></div>
+  </div>
+
+  <div class="pv-panel">
+    <div class="pv-panel-h"><h2>最近发布</h2><i class="pv-rule"></i>
+      <span class="pv-count" id="log-n">—</span></div>
+    <table class="pv-table">
+      <thead><tr><th style="width:70px">时间</th><th>内容</th></tr></thead>
+      <tbody id="log"></tbody>
+    </table>
+    <div class="pv-hint" id="last-error" style="display:none"></div>
+  </div>
 
 <script>
 const API='/api/plugins/action';
-let S=null;
+const $=id=>document.getElementById(id);
+const msg=$('msg');
+let ST={};
+
 async function call(action,params){
   const r=await fetch(API,{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify({plugin_id:'qzone',action,params:params||{}})});
-  return r.json();
+  const t=await r.text(); try{return JSON.parse(t)}catch{return {raw:t}}
 }
-function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
-function show(obj){
-  document.getElementById('out').textContent=JSON.stringify(obj,null,2);
-}
-function showErr(m){document.getElementById('warn').innerHTML=`<div class="warnbox">${esc(m)}</div>`;}
-function clearErr(){document.getElementById('warn').innerHTML='';}
+function setMsg(t,ok){ msg.className='pv-msg '+(ok?'ok':'err'); msg.textContent=t||''; }
+const LAYER_NAMES={read:'读',interact:'互动',write:'写',manage:'管'};
 
-const ACT_DEF=[
-  {a:'get_qzone_msg_list',layer:'read',f:'说说列表',fields:[
-    {k:'target_uin',l:'目标QQ(空=自己)',t:'text',ph:'留空'},{k:'pos',l:'起始偏移',t:'number',v:0},{k:'num',l:'数量',t:'number',v:20}]},
-  {a:'get_qzone_feeds',layer:'read',f:'好友动态',fields:[
-    {k:'page_num',l:'页码',t:'number',v:1},{k:'count',l:'本页数量',t:'number',v:10}]},
-  {a:'like_qzone',layer:'interact',f:'点赞',fields:[
-    {k:'tid',l:'tid(必填)',t:'text'},{k:'target_uin',l:'所属QQ',t:'text',ph:'留空'},{k:'abstime',l:'发表时间(unix秒)',t:'number',v:0}]},
-  {a:'unlike_qzone',layer:'interact',f:'取消赞',fields:[
-    {k:'tid',l:'tid(必填)',t:'text'},{k:'target_uin',l:'所属QQ',t:'text',ph:'留空'},{k:'abstime',l:'发表时间',t:'number',v:0}]},
-  {a:'comment_qzone',layer:'interact',f:'评论',fields:[
-    {k:'tid',l:'tid(必填)',t:'text'},{k:'content',l:'评论内容(必填)',t:'text'},{k:'target_uin',l:'所属QQ',t:'text',ph:'留空'}]},
-  {a:'send_qzone_msg',layer:'write',f:'发说说',fields:[
-    {k:'content',l:'正文(必填)',t:'textarea'},{k:'ugc_right',l:'权限',t:'select',opts:'ugc'},
-    {k:'target_uins',l:'权限名单QQ(逗号分隔)',t:'text',ph:'仅16/128需要'},{k:'images',l:'图片(逗号分隔URL)',t:'text',ph:'可空'}]},
-  {a:'delete_qzone_msg',layer:'manage',f:'删除说说',fields:[
-    {k:'tid',l:'tid(必填)',t:'text'},{k:'confirm',l:'确认删除',t:'check'}]},
-  {a:'set_qzone_msg_right',layer:'manage',f:'改权限',fields:[
-    {k:'tid',l:'tid(必填)',t:'text'},{k:'ugc_right',l:'权限(必填)',t:'select',opts:'ugc'},
-    {k:'target_uins',l:'权限名单QQ(逗号分隔)',t:'text',ph:'仅16/128需要'}]},
-  {a:'set_qzone_ban',layer:'manage',f:'拉黑/解黑',fields:[
-    {k:'user_id',l:'目标QQ(必填)',t:'text'},{k:'enable',l:'拉黑',t:'check',v:true}]},
-];
-const LAYER_ZH={read:'读',interact:'互动',write:'写',manage:'管'};
-
-function ugcOpts(sel){
-  if(!S) return '';
-  return S.ugc_options.map(o=>`<option value="${o.value}" ${String(o.value)===String(sel)?'selected':''}>${o.value} · ${esc(o.label)}</option>`).join('');
-}
-function buildActs(){
-  let h='';
-  for(const d of ACT_DEF){
-    h+=`<div class="act"><div class="nm">${d.a}</div><div class="lz">${d.f} · ${LAYER_ZH[d.layer]}层</div>`;
-    for(const f of d.fields){
-      if(f.t==='select') h+=`<div class="f"><label>${esc(f.l)}</label><select id="p_${d.a}_${f.k}">${ugcOpts(1)}</select></div>`;
-      else if(f.t==='check') h+=`<div class="f"><label><input type="checkbox" id="p_${d.a}_${f.k}" ${f.v?'checked':''} style="width:auto"> ${esc(f.l)}</label></div>`;
-      else if(f.t==='textarea') h+=`<div class="f"><label>${esc(f.l)}</label><textarea id="p_${d.a}_${f.k}" placeholder="${esc(f.ph||'')}"></textarea></div>`;
-      else h+=`<div class="f"><label>${esc(f.l)}</label><input type="${f.t}" id="p_${d.a}_${f.k}" value="${f.v!=null?f.v:''}" placeholder="${esc(f.ph||'')}"></div>`;
-    }
-    h+=`<button class="primary" onclick="run('${d.a}')">执行</button></div>`;
+function draw(status){
+  ST=status||{};
+  const lim=ST.limit||{};
+  $('en').textContent=ST.enabled?'插件已启用':'插件已停用';
+  $('s-used').textContent=(lim.used_today||0)+' / '+(lim.max_per_day||0);
+  $('s-gap').textContent=(lim.min_interval_hours||0)+' 小时';
+  $('s-can').textContent=lim.can_publish_now?'可以':'不行';
+  $('s-can').style.color=lim.can_publish_now?'var(--pv-ok)':'var(--pv-bad)';
+  $('s-last').textContent=(ST.publish_log&&ST.publish_log.length)?'有记录':'还没有';
+  // 分层
+  const layers=ST.layers||{}, meta=ST.layers_meta||{};
+  $('layers').innerHTML=Object.keys(meta).map(k=>
+    '<tr><td class="k">'+LAYER_NAMES[k]+'</td>'
+    +'<td><label class="pv-flex" style="margin:0"><input type="checkbox" data-layer="'+k+'" '
+    +(layers[k]?'checked':'')+'> <span class="pv-hint" style="margin:0">'+(layers[k]?'允许':'禁止')+'</span></label></td>'
+    +'<td class="mono">'+meta[k].join(' · ')+'</td></tr>').join('');
+  document.querySelectorAll('[data-layer]').forEach(cb=>cb.onchange=async()=>{
+    const r=await call('set_config',{layers:{[cb.dataset.layer]:cb.checked}});
+    if(r&&r.ok!==false){ setMsg('已更新分层',true); await load(); } else setMsg('保存失败：'+JSON.stringify(r),false);
+  });
+  // 可见范围
+  const opts=ST.ugc_options||[];
+  if($('f-ugc').options.length===0){
+    $('f-ugc').innerHTML=opts.map(o=>'<option value="'+o.value+'">'+o.label+'</option>').join('');
   }
-  document.getElementById('acts').innerHTML=h;
-}
-function collect(d){
-  const p={};
-  for(const f of d.fields){
-    const el=document.getElementById(`p_${d.a}_${f.k}`); if(!el) continue;
-    let v;
-    if(f.t==='check') v=el.checked;
-    else v=el.value;
-    if(v===''&&f.t!=='textarea'&&f.t!=='check') continue;
-    if(v===''&&f.t==='textarea') continue;
-    if(f.k==='target_uins'&&v){ p[f.k]=v.split(',').map(x=>x.trim()).filter(Boolean); continue; }
-    if(f.k==='images'&&v){ p[f.k]=v.split(',').map(x=>x.trim()).filter(Boolean); continue; }
-    if(f.k==='user_id'&&v){ p[f.k]=parseInt(v,10); continue; }
-    if(f.k==='target_uin'&&v){ p[f.k]=parseInt(v,10); continue; }
-    if((f.t==='number')&&v!==''){ p[f.k]=parseInt(v,10); continue; }
-    p[f.k]=v;
-  }
-  return p;
-}
-async function run(a){
-  const d=ACT_DEF.find(x=>x.a===a); clearErr();
-  const r=await call('run',{action:a,params:collect(d)});
-  show(r); load();
-}
-function toggleEnabled(){
-  call('set_config',{enabled:!S.enabled}).then(()=>load());
-}
-function toggleLayer(k){
-  const layers=Object.assign({},S.layers); layers[k]=!layers[k];
-  call('set_config',{layers}).then(()=>load());
-}
-function savePersona(){
-  call('set_config',{persona:document.getElementById('persona').value}).then(r=>{show(r);load();});
-}
-async function genPreview(){
-  const r=await call('generate',{hint:''});
-  document.getElementById('genbox').style.display='block';
-  document.getElementById('genout').textContent=r.ok?r.content:JSON.stringify(r,null,2);
+  $('f-persona').value=ST.persona||'';
+  // 发布记录
+  const log=(ST.publish_log||[]).slice().reverse();
+  $('log-n').textContent=log.length?('最近 '+log.length+' 条'):'暂无';
+  $('log').innerHTML=log.map(x=>{
+    const ts=x.ts||x.time||0;
+    const text=x.content||x.text||x.hint||JSON.stringify(x);
+    return '<tr><td class="mono">'+(ts?new Date(ts*1000).toLocaleTimeString():'—')+'</td>'
+      +'<td>'+String(text).replace(/</g,'&lt;')+'</td></tr>';
+  }).join('')||'<tr><td colspan="2" class="pv-empty">还没发过</td></tr>';
+  if(ST.last_error){ $('last-error').style.display='block'; $('last-error').textContent='最近错误：'+ST.last_error; }
 }
 async function load(){
-  const d=await call('status');
-  if(d.error){ showErr(d.error); return; }
-  S=d;
-  document.getElementById('sw_enabled').className='sw'+(d.enabled?' on':'');
-  const on=Object.entries(d.layers).filter(([,v])=>v).map(([k])=>LAYER_ZH[k]);
-  document.getElementById('stat').innerHTML=
-    `总开关 <b>${d.enabled?'开':'关'}</b> · 能力层 <b>${on.length?on.join('/'):'全关'}</b>`;
-  document.getElementById('layers').innerHTML=Object.keys(d.layers).map(k=>
-    `<span class="sw ${d.layers[k]?'on':''}" onclick="toggleLayer('${k}')"><span class="dot"></span>${LAYER_ZH[k]}</span>`).join('');
-  const L=d.limit;
-  document.getElementById('limit').innerHTML=
-    `今日已发 <b>${L.used_today}/${L.max_per_day}</b> · 间隔 ≥ <b>${L.min_interval_hours}h</b> · 现在可发 <b class="${L.can_publish_now?'ok':'err'}">${L.can_publish_now?'是':'否'}</b>`+
-    (L.block_reason?` <span class="err">（${esc(L.block_reason)}）</span>`:'');
-  const logs=(d.publish_log||[]).reverse();
-  document.getElementById('loglist').innerHTML= logs.length?
-    '<table><thead><tr><th>时间</th><th>tid</th><th>内容</th></tr></thead><tbody>'+
-    logs.map(x=>`<tr><td>${new Date(x.ts*1000).toLocaleString()}</td><td>${esc(x.tid||'—')}</td><td>${esc(x.content)}</td></tr>`).join('')+
-    '</tbody></table>':'<div class="hint">今天还没有发布记录</div>';
-  document.getElementById('persona').value=d.persona||'';
-  buildActs();
+  const r=await call('status');
+  if(!r||r.error){ setMsg('读取失败：'+JSON.stringify(r),false); return; }
+  draw(r);
 }
-async function init(){
-  // 先请求一次 ugc 选项，再建动作卡
-  const d=await call('status');
-  if(!d.error){ S=d; }
-  await load();
-}
-init();
+$('refresh').onclick=load;
+$('toggle').onclick=async()=>{
+  const r=await call('set_config',{enabled:!(ST.enabled)});
+  if(r&&r.ok!==false){ setMsg('已切换',true); await load(); } else setMsg('失败：'+JSON.stringify(r),false);
+};
+$('save-persona').onclick=async()=>{
+  const r=await call('set_config',{persona:$('f-persona').value});
+  if(r&&r.ok!==false){ setMsg('人设已保存',true); } else setMsg('保存失败：'+JSON.stringify(r),false);
+};
+$('gen').onclick=async()=>{
+  $('preview').innerHTML='<span class="pv-hint">生成中…</span>';
+  const r=await call('generate',{hint:$('f-hint').value.trim()});
+  if(!r||!r.ok){ $('preview').innerHTML='<div class="pv-msg err">生成失败：'+JSON.stringify(r&&(r.error||r))+'</div>'; return; }
+  $('preview').innerHTML='<div class="pv-panel" style="margin:0;background:#211d18">'
+    +'<div class="pv-panel-h"><h2>预览</h2><i class="pv-rule"></i></div>'
+    +'<div style="white-space:pre-wrap;line-height:1.8">'+String(r.content||'').replace(/</g,'&lt;')+'</div>'
+    +'<div class="pv-flex" style="margin-top:12px"><button class="primary" id="publish">确认发布</button></div></div>';
+  $('publish').onclick=async()=>{
+    if(!confirm('确定发布这条说说？')) return;
+    const rr=await call('run',{action:'send_qzone_msg',params:{
+      content:r.content, ugc_right:Number($('f-ugc').value)}});
+    setMsg(rr&&rr.ok?('已发布：'+(rr.tid||rr.fid||'成功')):null, !!(rr&&rr.ok));
+    if(!rr||!rr.ok) setMsg('发布失败：'+JSON.stringify(rr),false);
+    $('preview').innerHTML=''; await load();
+  };
+};
+$('reset-limit').onclick=async()=>{
+  if(!confirm('清空今日发布记录？（仅用于误操作恢复）')) return;
+  const r=await call('reset_limit',{confirm:true});
+  if(r&&r.ok){ setMsg('已清空今日记录',true); await load(); } else setMsg('失败：'+JSON.stringify(r),false);
+};
+load();
 </script>
 </body>
 </html>
