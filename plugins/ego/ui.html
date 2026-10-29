@@ -4,218 +4,6 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>EGO 插件</title>
-<style>
-  :root{
-      --bg:#0a0a0f;--surface:#111118;--paper:#16161f;--elevated:#1e1e28;--input:#14141b;
-      --ink:#f0f0f5;--ink2:#b8b8c8;--ink3:#8a8f9a;--ink4:#3a3f48;--ink5:#26262f;
-      --gold:#c9a96e;--gold-dim:#8a7350;--red:#b54a4a;--green:#4a9b6a;
-      --font-d:'Outfit','Noto Sans SC','PingFang SC',system-ui,sans-serif;
-      --font-m:'JetBrains Mono','Consolas',monospace;--radius:12px;
-      --shadow-sm:0 1px 2px rgba(0,0,0,0.35);--shadow-md:0 4px 14px rgba(0,0,0,0.45);
-      --shadow-lg:0 10px 34px rgba(0,0,0,0.55);--shadow-gold:0 0 22px rgba(201,169,110,0.22);
-      --ease:180ms cubic-bezier(0.4, 0, 0.2, 1);--ease-spring:280ms cubic-bezier(0.34, 1.56, 0.64, 1);
-    }
-    *{box-sizing:border-box}
-    html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);font-family:var(--font-d);-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;text-rendering:optimizeLegibility}
-    body{background-image:radial-gradient(ellipse at 10% 0%, rgba(201,169,110,0.06), transparent 45%),radial-gradient(ellipse at 90% 100%, rgba(90,122,138,0.05), transparent 45%)}
-    ::selection{background:rgba(201,169,110,0.25);color:var(--ink)}
-    .wrap{max-width:1060px;margin:0 auto;padding:24px}
-    .panel{background:linear-gradient(180deg,var(--surface),var(--paper));border:1px solid var(--ink4);border-radius:var(--radius);padding:18px;margin-bottom:14px;position:relative;transition:border-color 200ms ease}
-    .panel:hover{border-color:rgba(201,169,110,0.25)}
-    .panel::before{content:'';position:absolute;top:-1px;left:-1px;right:-1px;bottom:-1px;border-radius:13px;background:linear-gradient(135deg,rgba(201,169,110,0.1),transparent);opacity:0;transition:opacity 200ms ease;pointer-events:none;z-index:-1}
-    .panel:hover::before{opacity:1}
-    .panel-title{font-size:17px;font-weight:700;margin-bottom:12px;display:flex;justify-content:space-between;align-items:center;user-select:none}
-    .meta{font-size:12px;color:var(--ink3);margin-left:8px;font-weight:400}
-    .desc{color:var(--ink2);font-size:14px;line-height:1.7;margin-top:10px}
-    .grid{display:grid;gap:12px;margin-top:14px}
-    .grid-2{grid-template-columns:repeat(2,1fr)}
-    .grid-3{grid-template-columns:repeat(3,1fr)}
-    @media (max-width:860px){ .grid-2,.grid-3{grid-template-columns:1fr} }
-    .card{background:var(--elevated);border:1px solid var(--ink4);border-radius:var(--radius);padding:12px;transition:transform 120ms ease,box-shadow 120ms ease,border-color 120ms ease}
-    .card:hover{transform:translateY(-1px);box-shadow:var(--shadow-md);border-color:rgba(201,169,110,0.25)}
-    .card-label{font-size:12px;color:var(--ink3);margin-bottom:4px;font-weight:500}
-    .card-value{font-family:var(--font-m);font-size:14px;color:var(--ink)}
-    .back{display:inline-block;margin-top:14px;color:var(--gold);cursor:pointer;font-size:14px;transition:opacity 150ms ease}
-    .back:hover{opacity:0.85}
-    button{padding:8px 14px;border:1px solid var(--ink4);background:var(--elevated);color:var(--ink);border-radius:8px;cursor:pointer;font-size:13px;transition:all 150ms cubic-bezier(0.4,0,0.2,1);position:relative;overflow:hidden;font-family:var(--font-ui, var(--font-d));font-weight:500;letter-spacing:0.02em;line-height:1.2}
-    button:hover:not(:disabled){background:var(--paper);border-color:var(--gold);transform:translateY(-1px);box-shadow:var(--shadow-sm)}
-    button:active:not(:disabled){transform:scale(0.97) translateY(0)}
-    button:disabled{opacity:0.5;cursor:not-allowed}
-    button.primary{background:linear-gradient(135deg, rgba(201,169,110,0.18), rgba(201,169,110,0.08));color:var(--gold);border-color:rgba(201,169,110,0.35);font-weight:600}
-    button.primary:hover{background:linear-gradient(135deg, rgba(201,169,110,0.28), rgba(201,169,110,0.14));border-color:rgba(201,169,110,0.5);box-shadow:var(--shadow-gold)}
-    button.danger{color:#ff8a80;border-color:rgba(255,80,80,0.25);background:rgba(255,80,80,0.08)}
-    button.danger:hover{background:rgba(255,80,80,0.16);border-color:rgba(255,80,80,0.4)}
-    button.ghost{background:transparent;color:var(--ink2);border-color:var(--ink4)}
-    button.ghost:hover{color:var(--ink);border-color:var(--ink4);background:rgba(255,255,255,0.03)}
-    input[type="text"],textarea,select{padding:8px 10px;background:var(--input);color:var(--ink);border:1px solid var(--ink4);border-radius:8px;font-family:inherit;font-size:13px;width:100%;transition:all 200ms cubic-bezier(0.4,0,0.2,1)}
-    textarea{min-height:80px;resize:vertical}
-    input[type="text"]:focus,textarea:focus,select:focus{border-color:var(--gold);outline:none;box-shadow:0 0 0 3px rgba(201,169,110,0.12);transform:translateY(-1px)}
-    .muted{color:var(--ink3);font-size:12px;margin-top:4px}
-    .row{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
-    .section-title{font-size:14px;font-weight:700;margin:14px 0 6px;color:var(--ink)}
-    .empty{color:var(--ink3);font-size:13px;padding:8px 0}
-    .tabs{display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap}
-    .tab{border-radius:999px;border:1px solid var(--ink4);background:transparent;color:var(--ink2);padding:6px 12px;font-size:12px;cursor:pointer;transition:all 150ms ease;font-weight:500}
-    .tab:hover{border-color:var(--gold);color:var(--ink);background:rgba(255,255,255,0.02)}
-    .tab.active{background:var(--gold);color:#0a0a0f;border-color:var(--gold);font-weight:600;box-shadow:var(--shadow-gold)}
-    .stat-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
-    .stat-card{background:var(--elevated);border:1px solid var(--ink4);border-radius:var(--radius);padding:12px;text-align:center;transition:border-color 200ms ease,box-shadow 200ms ease}
-    .stat-card:hover{border-color:rgba(201,169,110,0.3);box-shadow:var(--shadow-md)}
-    .stat-value{font-family:var(--font-m);font-size:20px;color:var(--ink);font-weight:600}
-    .stat-label{font-size:12px;color:var(--ink3);margin-top:6px}
-    .toggle{position:relative;display:inline-block;width:44px;height:24px;flex-shrink:0;transition:transform 200ms ease}
-    .toggle:active{transform:scale(0.9)}
-    .toggle input{opacity:0;width:0;height:0;position:absolute}
-    .slider{position:absolute;cursor:pointer;top:0;left:0;right:0;bottom:0;background-color:var(--ink4);transition:all 200ms ease;border-radius:999px;border:1px solid var(--ink4)}
-    .slider:before{position:absolute;content:"";height:18px;width:18px;left:3px;bottom:3px;background-color:#fff;transition:all 200ms ease;border-radius:50%;box-shadow:0 1px 3px rgba(0,0,0,0.3)}
-    input:checked + .slider{background-color:var(--gold);border-color:rgba(201,169,110,0.4)}
-    input:checked + .slider:before{transform:translateX(20px)}
-    .switch-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 0;border-bottom:1px solid var(--ink4);transition:background 150ms ease}
-    .switch-row:hover{background:rgba(255,255,255,0.02);margin:0 -12px;padding-left:12px;padding-right:12px;border-radius:8px}
-    .switch-row:last-child{border-bottom:none}
-    .badge{display:inline-flex;align-items:center;padding:3px 10px;border-radius:999px;background:var(--ink4);color:var(--ink2);font-size:11px;margin-left:8px;font-weight:600;transition:all 150ms ease}
-    .badge.ok{background:rgba(74,155,106,0.2);color:var(--green)}
-    .badge.err{background:rgba(181,74,74,0.2);color:var(--red)}
-    .list-item{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:10px;border-bottom:1px solid var(--ink4);transition:background 150ms ease;border-radius:8px}
-    .list-item:hover{background:rgba(255,255,255,0.02)}
-    .list-item:last-child{border-bottom:none}
-    .tag{display:inline-block;padding:3px 8px;border-radius:6px;background:var(--ink4);color:var(--ink2);font-size:11px;margin-right:6px;border:1px solid transparent;transition:all 150ms ease}
-    .tag:hover{border-color:var(--gold);color:var(--ink)}
-    .quality{font-family:var(--font-m);font-size:12px;color:var(--gold);font-weight:600}
-    .log{background:var(--input);border:1px solid var(--ink4);border-radius:10px;padding:12px;font-family:var(--font-m);font-size:12px;color:var(--ink2);max-height:220px;overflow:auto;white-space:pre-wrap;line-height:1.7;transition:border-color 200ms ease}
-    .log:hover{border-color:rgba(201,169,110,0.25)}
-    .toast{position:fixed;top:16px;right:16px;background:var(--elevated);border:1px solid var(--ink4);color:var(--ink);padding:10px 14px;border-radius:10px;font-size:13px;z-index:999;opacity:0;transform:translateY(-8px);transition:opacity 200ms ease,transform 200ms ease;pointer-events:none;box-shadow:var(--shadow-md)}
-    .toast.show{opacity:1;transform:translateY(0)}
-    .toast.success{border-left:3px solid #6ecf8e}
-    .toast.error{border-left:3px solid #ff8a80}
-    .toast.info{border-left:3px solid var(--gold)}
-    .inline{display:inline-flex;align-items:center;gap:8px}
-    .grow{flex:1}
-    .empty-state{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:36px 16px;color:var(--ink3);text-align:center}
-    .empty-state-icon{font-size:28px;margin-bottom:10px;opacity:0.6}
-    .empty-state-title{font-size:14px;font-weight:600;color:var(--ink2);margin-bottom:4px}
-    .empty-state-desc{font-size:12px;color:var(--ink3)}
-    .panel-divider{height:1px;background:var(--ink5);margin:16px 0;border:none}
-    .section-label{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:var(--gold);margin:16px 0 8px 4px}
-    .section-label:first-child{margin-top:0}
-    input[type="number"]{-moz-appearance:textfield}
-    input[type="number"]::-webkit-outer-spin-button,input[type="number"]::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
-    button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-visible{outline:2px solid var(--gold);outline-offset:2px}
-    @keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
-    @keyframes slideUp{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
-    .panel{animation:slideUp 0.4s cubic-bezier(0.22, 1, 0.36, 1)}
-    .list-item{animation:fadeIn 0.25s ease-out}
-    .settings-panels::-webkit-scrollbar{width:6px}
-    .settings-panels::-webkit-scrollbar-track{background:transparent}
-    .settings-panels::-webkit-scrollbar-thumb{background:var(--ink5);border-radius:3px}
-    .settings-panels::-webkit-scrollbar-thumb:hover{background:var(--ink3)}
-    /* ── EGO 引导 & 健康状态 ── */
-    .health-banner{display:flex;align-items:center;gap:12px;padding:10px 14px;border-radius:10px;margin-bottom:14px;font-size:13px;border:1px solid var(--ink4);cursor:pointer;transition:all 150ms ease;background:var(--elevated)}
-    .health-banner:hover{border-color:rgba(201,169,110,0.3);transform:translateY(-1px)}
-    .health-banner.ok{border-left:3px solid var(--green)}
-    .health-banner.warn{border-left:3px solid var(--gold)}
-    .health-banner.err{border-left:3px solid var(--red)}
-    .health-banner .hb-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
-    .health-banner.ok .hb-dot{background:var(--green);box-shadow:0 0 8px rgba(74,155,106,0.5)}
-    .health-banner.warn .hb-dot{background:var(--gold);box-shadow:0 0 8px rgba(201,169,110,0.5)}
-    .health-banner.err .hb-dot{background:var(--red);box-shadow:0 0 8px rgba(181,74,74,0.5)}
-    .health-banner .hb-title{font-weight:600}
-    .health-banner .hb-desc{color:var(--ink3);font-size:12px}
-    .hb-modules{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
-    .hb-mod{display:inline-flex;align-items:center;gap:5px;padding:2px 9px;border-radius:999px;background:var(--input);border:1px solid var(--ink4);font-size:11px;color:var(--ink2)}
-    .hb-mod .m-dot{width:6px;height:6px;border-radius:50%}
-    .hb-mod.m-ok .m-dot{background:var(--green)}
-    .hb-mod.m-fail .m-dot{background:var(--red)}
-    .hb-mod.m-warn .m-dot{background:var(--gold)}
-    .wizard-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.75);display:none;align-items:center;justify-content:center;z-index:10000;backdrop-filter:blur(4px)}
-    .wizard-overlay.show{display:flex}
-    .wizard-modal{background:linear-gradient(180deg,var(--surface),var(--paper));border:1px solid var(--ink4);border-radius:var(--radius);padding:26px;width:92%;max-width:760px;max-height:90vh;overflow:auto;box-shadow:var(--shadow-lg)}
-    .wizard-modal .wm-title{font-size:20px;font-weight:700;margin-bottom:6px}
-    .wizard-modal .wm-desc{color:var(--ink2);font-size:13px;line-height:1.6;margin-bottom:16px}
-    .w-step{display:none;animation:fadeIn 0.25s ease}
-    .w-step.active{display:block}
-    .w-progress{display:flex;gap:8px;margin-bottom:16px}
-    .w-progress .dot{width:26px;height:4px;border-radius:2px;background:var(--ink4);transition:background 200ms ease}
-    .w-progress .dot.done{background:var(--gold)}
-    .w-progress .dot.current{background:linear-gradient(90deg,var(--gold),var(--ink3))}
-    .w-actions{display:flex;justify-content:space-between;gap:12px;margin-top:18px}
-    .w-check{display:flex;align-items:center;gap:8px;padding:8px;border:1px solid var(--ink4);border-radius:8px;margin-bottom:8px;cursor:pointer;transition:border-color 150ms ease}
-    .w-check:hover{border-color:rgba(201,169,110,0.3)}
-    .issue-card{display:flex;flex-direction:column;gap:8px;padding:12px 14px;border-radius:10px;margin-bottom:10px;border:1px solid var(--ink4);background:var(--elevated)}
-    .issue-card.err{border-left:3px solid var(--red)}
-    .issue-card.warn{border-left:3px solid var(--gold)}
-    .issue-card .ic-head{display:flex;align-items:center;gap:8px;font-weight:600;font-size:13px}
-    .issue-card .ic-desc{color:var(--ink2);font-size:12px;line-height:1.6}
-    .issue-card .ic-fix{color:var(--ink3);font-size:12px;line-height:1.6;background:var(--input);padding:8px 10px;border-radius:8px;border:1px solid var(--ink4)}
-    .issue-card .ic-goto{display:inline-flex;align-items:center;gap:6px;padding:7px 12px;border-radius:8px;background:linear-gradient(135deg,rgba(201,169,110,0.18),rgba(201,169,110,0.08));color:var(--gold);border:1px solid rgba(201,169,110,0.35);font-size:12px;font-weight:600;cursor:pointer;transition:all 150ms ease;text-decoration:none;align-self:flex-start}
-    .issue-card .ic-goto:hover{background:linear-gradient(135deg,rgba(201,169,110,0.28),rgba(201,169,110,0.14));border-color:rgba(201,169,110,0.5);box-shadow:var(--shadow-gold)}
-    .wizard-btn{margin-top:12px;display:inline-flex;align-items:center;gap:6px;padding:8px 14px;border-radius:8px;background:linear-gradient(135deg,rgba(201,169,110,0.18),rgba(201,169,110,0.08));color:var(--gold);border:1px solid rgba(201,169,110,0.35);font-size:13px;font-weight:600;cursor:pointer;transition:all 150ms ease}
-    .wizard-btn:hover{background:linear-gradient(135deg,rgba(201,169,110,0.28),rgba(201,169,110,0.14));box-shadow:var(--shadow-gold)}
-    /* ══ 动效增强（0.6.2+）══ */
-    /* eggb-motion */
-    @media (prefers-reduced-motion: reduce){
-      *,*::before,*::after{animation-duration:0.01ms !important;animation-iteration-count:1 !important;transition-duration:0.01ms !important;scroll-behavior:auto !important}
-    }
-    /* 按钮点击涟漪 */
-    .btn-ripple{position:absolute;border-radius:50%;background:rgba(201,169,110,0.35);transform:scale(0);pointer-events:none;animation:rippleAnim 550ms ease-out forwards}
-    @keyframes rippleAnim{to{transform:scale(3);opacity:0}}
-    /* toast 图标 + 进度条 */
-    .toast{display:flex;align-items:center;gap:8px;overflow:hidden}
-    .toast::before{content:attr(data-icon);width:18px;text-align:center;font-size:13px;line-height:1}
-    .toast::after{content:'';position:absolute;left:0;bottom:0;height:2px;width:100%;transform:scaleX(0);transform-origin:left;animation:toastProgress 2s linear forwards;background:var(--gold)}
-    .toast.success::after{background:#6ecf8e}
-    .toast.error::after{background:#ff8a80}
-    @keyframes toastProgress{to{transform:scaleX(1)}}
-    .toast.show{animation:toastIn 260ms cubic-bezier(0.34,1.56,0.64,1)}
-    @keyframes toastIn{from{opacity:0;transform:translateY(-14px) scale(0.92)}to{opacity:1;transform:translateY(0) scale(1)}}
-    /* 引导模态弹入 */
-    .wizard-overlay{transition:opacity 220ms ease}
-    .wizard-overlay.show{animation:overlayIn 220ms ease}
-    @keyframes overlayIn{from{opacity:0}to{opacity:1}}
-    .wizard-modal{transform:scale(0.92);opacity:0;transition:transform 260ms cubic-bezier(0.34,1.56,0.64,1),opacity 220ms ease}
-    .wizard-overlay.show .wizard-modal{transform:scale(1);opacity:1}
-    .w-progress .dot{overflow:hidden;position:relative}
-    .w-progress .dot::after{content:'';position:absolute;inset:0;background:linear-gradient(90deg,transparent,rgba(255,255,255,0.5),transparent);transform:translateX(-100%);animation:shimmer 1.6s infinite}
-    .w-progress .dot.current::after{transform:translateX(100%);animation-duration:0.9s}
-    @keyframes shimmer{to{transform:translateX(100%)}}
-    /* 健康模块胶囊 */
-    .hb-mod{transition:transform 150ms ease,border-color 150ms ease,background 150ms ease}
-    .hb-mod:hover{transform:translateY(-1px);border-color:var(--gold)}
-    .hb-mod .m-dot{transition:transform 200ms ease}
-    .hb-mod:hover .m-dot{transform:scale(1.4)}
-    .health-banner{border-radius:12px}
-    .health-banner.ok .hb-dot{animation:dotPulse 2.4s ease-in-out infinite}
-    @keyframes dotPulse{0%,100%{box-shadow:0 0 0 0 rgba(74,155,106,0.45)}50%{box-shadow:0 0 0 5px rgba(74,155,106,0)}}
-    /* 问题卡片入场 */
-    .issue-card{animation:issueIn 320ms cubic-bezier(0.22,1,0.36,1) both}
-    @keyframes issueIn{from{opacity:0;transform:translateX(-10px)}to{opacity:1;transform:translateX(0)}}
-    .issue-card:nth-child(2){animation-delay:50ms}
-    .issue-card:nth-child(3){animation-delay:100ms}
-    .issue-card:hover{transform:translateY(-1px);box-shadow:var(--shadow-md)}
-    .issue-card .ic-goto:active{transform:scale(0.96)}
-    /* 数字统计滚动 */
-    .stat-value{font-variant-numeric:tabular-nums}
-    .stat-card{transition:transform 160ms ease,box-shadow 160ms ease,border-color 160ms ease}
-    .stat-card:hover{transform:translateY(-2px)}
-    /* 列表项悬停滑入 */
-    .list-item,.switch-row{transition:background 150ms ease,transform 150ms ease,padding-left 150ms ease}
-    .list-item:hover{transform:translateX(2px)}
-    /* 面板标题装饰线 */
-    .panel-title::after{content:'';position:absolute;bottom:-2px;left:0;width:34px;height:2px;background:linear-gradient(90deg,var(--gold),transparent);border-radius:2px;transition:width 300ms cubic-bezier(0.22,1,0.36,1)}
-    .panel-title{position:relative}
-    .panel:hover .panel-title::after{width:60px}
-  
-  .ego-nav{position:sticky;top:0;z-index:50;display:flex;flex-wrap:wrap;gap:6px;
-    padding:8px 10px;margin-bottom:14px;background:var(--paper);border:1px solid var(--ink5);
-    border-radius:10px;box-shadow:var(--shadow-sm);backdrop-filter:blur(6px)}
-  .ego-nav-item{font-size:12.5px;font-weight:600;color:var(--ink2);text-decoration:none;
-    padding:5px 12px;border-radius:7px;border:1px solid transparent;transition:all .15s ease;white-space:nowrap}
-  .ego-nav-item:hover{color:var(--gold);border-color:var(--gold);background:rgba(201,169,110,0.08)}
-  .panel{scroll-margin-top:64px}
-  html{scroll-behavior:smooth}
-
-  
-</style>
 <style id="pv-kit">/*PV-KIT*/
 /* ═══════════════════════════════════════════════════════════════════════
    EggBloom 插件 UI 套件 v2（2026-10-29）
@@ -470,113 +258,316 @@ button.sm{padding:5px 10px;font-size:var(--pv-fs-xs)}
   padding:1px 5px;font-family:var(--pv-mono);font-size:var(--pv-fs-xs)}
 .pv-truncate{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 </style>
+<style>
+/* ── EGO 页面自有组件（设计 token / 基础组件全部来自 kit） ───────────── */
+html{scroll-behavior:smooth}
+[id]{scroll-margin-top:88px}
+#ego-log{scroll-margin-top:136px}
+
+/* 顶部导航：kit 小按钮做胶囊，锚点跳转 */
+.ego-nav{position:sticky;top:var(--pv-2);z-index:20;width:max-content;max-width:100%;
+  padding:var(--pv-2);margin:0 0 var(--pv-4);
+  background:rgba(24,21,18,.92);border:1px solid var(--pv-line);
+  border-radius:var(--pv-r-full);box-shadow:var(--pv-shadow);backdrop-filter:blur(10px)}
+.ego-nav .pv-btn{border-radius:var(--pv-r-full);color:var(--pv-ink-2)}
+.ego-nav .pv-btn:hover{color:var(--pv-gold)}
+/* kit 只给 <button> 定义了 .sm，这里补上 <a class="pv-btn sm"> */
+.pv-btn.sm{padding:5px 10px;font-size:var(--pv-fs-xs)}
+
+/* 面板导语 */
+.ego-lead{color:var(--pv-ink-2);font-size:var(--pv-fs);line-height:1.7;margin:0 0 var(--pv-4);max-width:78ch}
+
+/* 子模块开关：整行可点，文字在左、kit 开关在右 */
+.pv-switch.ego-switch{display:flex;flex-direction:row-reverse;justify-content:space-between;
+  width:100%;gap:var(--pv-3);padding:var(--pv-3) var(--pv-4);
+  background:var(--pv-surface-2);border:1px solid var(--pv-line);border-radius:var(--pv-r);
+  transition:border-color .18s var(--pv-ease),background .18s var(--pv-ease)}
+.pv-switch.ego-switch:hover{border-color:var(--pv-line-2);background:var(--pv-surface-3)}
+.pv-switch.ego-switch .pv-track{flex:none}
+.pv-switch.ego-switch .pv-switch-label{display:flex;flex-direction:column;gap:2px;min-width:0}
+.pv-switch.ego-switch .pv-switch-label b{color:var(--pv-ink);font-size:var(--pv-fs);font-weight:600}
+.pv-switch.ego-switch .pv-hint{margin:0}
+
+/* 模块详情卡：标题 / 说明 / 底部整宽链接 */
+.ego-mod{display:flex;flex-direction:column;gap:var(--pv-2)}
+.ego-mod b{font-size:var(--pv-fs);color:var(--pv-ink)}
+.ego-mod .pv-hint{margin:0}
+.ego-mod .pv-btn{width:100%;margin-top:auto;justify-content:center;
+  background:transparent;border-color:var(--pv-line);color:var(--pv-gold)}
+.ego-mod .pv-btn:hover{background:var(--pv-gold-soft);border-color:var(--pv-gold-2);color:var(--pv-gold)}
+
+/* 运行日志 */
+.log{background:var(--pv-surface-2);border:1px solid var(--pv-line);border-radius:var(--pv-r);
+  padding:var(--pv-3) var(--pv-4);font-family:var(--pv-mono);font-size:var(--pv-fs-sm);
+  color:var(--pv-ink-2);white-space:pre-wrap;word-break:break-word;line-height:1.75}
+.log.pv-scroll{max-height:200px}
+.log::-webkit-scrollbar{width:8px;height:8px}
+.log::-webkit-scrollbar-track{background:transparent}
+.log::-webkit-scrollbar-thumb{background:var(--pv-surface-3);border-radius:var(--pv-r-full)}
+.log::-webkit-scrollbar-thumb:hover{background:var(--pv-ink-3)}
+
+/* 返回插件列表 */
+.ego-back{display:inline-flex;align-items:center;gap:6px;margin-top:var(--pv-1);
+  color:var(--pv-gold);font-size:var(--pv-fs);cursor:pointer;user-select:none;
+  transition:opacity .15s var(--pv-ease)}
+.ego-back:hover{opacity:.8}
+
+/* ── 健康提示条（JS 会重写 className，只能挂 .health-banner + 状态类） ── */
+.health-banner{display:flex;align-items:center;gap:var(--pv-3);padding:var(--pv-3) var(--pv-4);
+  margin:0 0 var(--pv-4);font-size:var(--pv-fs);border:1px solid var(--pv-line);
+  border-left:3px solid var(--pv-line-2);border-radius:var(--pv-r);
+  background:var(--pv-surface);cursor:pointer;
+  transition:border-color .18s var(--pv-ease),transform .18s var(--pv-ease),box-shadow .18s var(--pv-ease)}
+.health-banner:hover{transform:translateY(-1px);box-shadow:var(--pv-shadow)}
+.health-banner.ok{border-left-color:var(--pv-ok);background:linear-gradient(90deg,var(--pv-ok-soft),var(--pv-surface) 45%)}
+.health-banner.warn{border-left-color:var(--pv-warn);background:linear-gradient(90deg,var(--pv-warn-soft),var(--pv-surface) 45%)}
+.health-banner.err{border-left-color:var(--pv-bad);background:linear-gradient(90deg,var(--pv-bad-soft),var(--pv-surface) 45%)}
+.health-banner .hb-dot{width:8px;height:8px;border-radius:50%;flex:none;background:var(--pv-ink-3)}
+.health-banner.ok .hb-dot{background:var(--pv-ok);box-shadow:0 0 8px rgba(143,196,160,.5)}
+.health-banner.warn .hb-dot{background:var(--pv-warn);box-shadow:0 0 8px rgba(217,161,95,.5)}
+.health-banner.err .hb-dot{background:var(--pv-bad);box-shadow:0 0 8px rgba(217,123,108,.5)}
+.hb-body{flex:1;min-width:0}
+.health-banner .hb-title{font-weight:600;color:var(--pv-ink)}
+.health-banner .hb-desc{color:var(--pv-ink-3);font-size:var(--pv-fs-sm);margin-top:2px}
+.hb-modules{display:flex;gap:var(--pv-2);flex-wrap:wrap;margin-top:var(--pv-2)}
+.hb-mod{display:inline-flex;align-items:center;gap:5px;padding:2px 9px;border-radius:var(--pv-r-full);
+  border:1px solid var(--pv-line);background:var(--pv-surface-2);
+  font-size:var(--pv-fs-xs);color:var(--pv-ink-3)}
+.hb-mod .m-dot{width:6px;height:6px;border-radius:50%;background:currentColor}
+.hb-mod.m-ok{color:var(--pv-ok);border-color:rgba(143,196,160,.35);background:var(--pv-ok-soft)}
+.hb-mod.m-fail{color:var(--pv-bad);border-color:rgba(217,123,108,.35);background:var(--pv-bad-soft)}
+.hb-mod.m-warn{color:var(--pv-warn);border-color:rgba(217,161,95,.35);background:var(--pv-warn-soft)}
+
+/* 问题卡（renderHealth 注入的静态类名，只能用 kit token 重绘） */
+#issue-list{--gold:var(--pv-gold);--red:var(--pv-bad)} /* JS 内联色仍写旧变量名，这里局部映射 */
+#issue-list .issue-card{display:flex;flex-direction:column;gap:var(--pv-2);
+  padding:var(--pv-3) var(--pv-4);border:1px solid var(--pv-line);border-left:3px solid var(--pv-warn);
+  border-radius:var(--pv-r);background:var(--pv-surface-2);margin:0 0 var(--pv-2)}
+#issue-list .issue-card.err{border-left-color:var(--pv-bad)}
+#issue-list .issue-card .ic-head{display:flex;align-items:center;gap:var(--pv-2);font-weight:600;font-size:var(--pv-fs)}
+#issue-list .issue-card .ic-desc{color:var(--pv-ink-2);font-size:var(--pv-fs-sm);line-height:1.65}
+#issue-list .issue-card .ic-fix{color:var(--pv-ink-3);font-size:var(--pv-fs-sm);line-height:1.65;
+  background:var(--pv-surface);padding:var(--pv-2) var(--pv-3);
+  border-radius:var(--pv-r-sm);border:1px solid var(--pv-line)}
+#issue-list .issue-card .ic-goto{align-self:flex-start;padding:5px 10px;font-size:var(--pv-fs-xs)}
+
+/* 空态（health 与日志相关 JS 共用的类名） */
+.empty-state{display:flex;flex-direction:column;align-items:center;justify-content:center;
+  padding:var(--pv-5) var(--pv-4);color:var(--pv-ink-3);text-align:center}
+.empty-state-icon{font-size:24px;margin-bottom:var(--pv-2);opacity:.7}
+.empty-state-title{font-size:var(--pv-fs);font-weight:600;color:var(--pv-ink-2);margin-bottom:2px}
+.empty-state-desc{font-size:var(--pv-fs-sm)}
+
+/* 轻提示 */
+.toast{position:fixed;top:var(--pv-4);right:var(--pv-4);z-index:999;
+  display:flex;align-items:center;gap:var(--pv-2);padding:9px 14px;
+  background:var(--pv-surface-2);border:1px solid var(--pv-line-2);
+  border-left:3px solid var(--pv-gold);border-radius:var(--pv-r);
+  color:var(--pv-ink);font-size:var(--pv-fs);overflow:hidden;
+  opacity:0;transform:translateY(-8px);pointer-events:none;box-shadow:var(--pv-shadow);
+  transition:opacity .2s var(--pv-ease),transform .2s var(--pv-ease)}
+.toast.show{opacity:1;transform:none}
+.toast.success{border-left-color:var(--pv-ok)}
+.toast.error{border-left-color:var(--pv-bad)}
+.toast.info{border-left-color:var(--pv-gold)}
+.toast::before{content:attr(data-icon);width:18px;text-align:center;font-size:13px;line-height:1}
+.toast::after{content:'';position:absolute;left:0;bottom:0;height:2px;width:100%;
+  transform:scaleX(0);transform-origin:left;animation:toastProgress 2s linear forwards;background:var(--pv-gold)}
+.toast.success::after{background:var(--pv-ok)}
+.toast.error::after{background:var(--pv-bad)}
+@keyframes toastProgress{to{transform:scaleX(1)}}
+
+/* ── 引导弹窗：流程 / 文案 / data-step 原样，只换 kit token 与按钮 ── */
+.wizard-overlay{position:fixed;inset:0;z-index:10000;display:none;
+  align-items:center;justify-content:center;background:rgba(8,7,6,.72);backdrop-filter:blur(4px)}
+.wizard-overlay.show{display:flex;animation:overlayIn .22s var(--pv-ease)}
+@keyframes overlayIn{from{opacity:0}to{opacity:1}}
+.wizard-modal{width:92%;max-width:760px;max-height:90vh;overflow:auto;
+  padding:var(--pv-5);background:var(--pv-surface);border:1px solid var(--pv-line-2);
+  border-radius:var(--pv-r-lg);box-shadow:var(--pv-shadow);
+  opacity:0;transform:scale(.96);transition:opacity .22s var(--pv-ease),transform .26s var(--pv-ease)}
+.wizard-overlay.show .wizard-modal{opacity:1;transform:none}
+.wizard-modal .wm-title{font-size:var(--pv-fs-xl);font-weight:600;color:var(--pv-ink);margin-bottom:var(--pv-1)}
+.wizard-modal .wm-desc{color:var(--pv-ink-2);font-size:var(--pv-fs);line-height:1.7;margin-bottom:var(--pv-4)}
+.wizard-modal .w-step-title{font-size:var(--pv-fs-lg);font-weight:600;color:var(--pv-ink);margin-bottom:var(--pv-2)}
+.w-step{display:none}
+.w-step.active{display:block;animation:fadeIn .22s var(--pv-ease)}
+@keyframes fadeIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+.w-progress{display:flex;gap:var(--pv-2);margin-bottom:var(--pv-4)}
+.w-progress .dot{width:26px;height:4px;border-radius:var(--pv-r-full);
+  background:var(--pv-surface-3);transition:background .2s var(--pv-ease)}
+.w-progress .dot.done{background:var(--pv-gold-2)}
+.w-progress .dot.current{background:linear-gradient(90deg,var(--pv-gold-2),var(--pv-gold))}
+.w-check{display:flex;align-items:center;gap:var(--pv-2);padding:var(--pv-2) var(--pv-3);
+  background:var(--pv-surface-2);border:1px solid var(--pv-line);border-radius:var(--pv-r-sm);
+  color:var(--pv-ink-2);font-size:var(--pv-fs);cursor:pointer;margin:0;
+  transition:border-color .15s var(--pv-ease),color .15s var(--pv-ease)}
+.w-check:hover{border-color:var(--pv-gold-2);color:var(--pv-ink)}
+.w-check input{flex:none;width:14px;height:14px;margin:0;accent-color:var(--pv-gold)}
+.w-actions{display:flex;justify-content:space-between;gap:var(--pv-3);
+  margin-top:var(--pv-5);padding-top:var(--pv-4);border-top:1px solid var(--pv-line)}
+.w-note{background:var(--pv-surface-2);border:1px solid var(--pv-line);border-radius:var(--pv-r-sm);
+  padding:var(--pv-3);font-size:var(--pv-fs);line-height:1.85;color:var(--pv-ink-2)}
+.w-plugin{background:var(--pv-surface-2);border:1px solid var(--pv-line);border-radius:var(--pv-r-sm);
+  padding:var(--pv-3);font-size:var(--pv-fs);line-height:1.65;color:var(--pv-ink-2)}
+.w-plugin b{color:var(--pv-ink)}
+.w-summary{background:var(--pv-surface-2);border:1px solid var(--pv-line);border-radius:var(--pv-r-sm);
+  padding:var(--pv-3);font-family:var(--pv-mono);font-size:var(--pv-fs-sm);line-height:1.75;
+  color:var(--pv-ink-2);white-space:pre-wrap}
+
+/* JS 的点击涟漪需要按钮作为定位容器 */
+button{position:relative;overflow:hidden}
+.btn-ripple{position:absolute;border-radius:50%;background:var(--pv-gold);opacity:.22;
+  transform:scale(0);pointer-events:none;animation:rippleAnim 550ms ease-out forwards}
+@keyframes rippleAnim{to{transform:scale(3);opacity:0}}
+
+@media (prefers-reduced-motion:reduce){
+  html{scroll-behavior:auto}
+  *,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}
+}
+</style>
 </head>
 <body>
-  <div class="wrap">
-    <nav class="ego-nav"><a class="ego-nav-item" href="#ego-top">中枢</a><a class="ego-nav-item" href="#ego-modules">开关</a><a class="ego-nav-item" href="#ego-mod-jump">模块</a><a class="ego-nav-item" href="#ego-log">日志</a></nav>
-    <div class="health-banner" id="health-banner" onclick="toggleHealthPanel()" style="display:none">
-      <div class="hb-dot"></div>
-      <div class="grow">
-        <div class="hb-title" id="hb-title">检查中...</div>
-        <div class="hb-desc" id="hb-desc">正在检查 EGO 各模块状态</div>
-        <div class="hb-modules" id="hb-modules"></div>
-      </div>
-      <span class="muted" style="white-space:nowrap">点击查看详情 ▾</span>
+  <div class="pv-head">
+    <div class="pv-head-body">
+      <h1>EGO</h1>
+      <div class="pv-sub">v0.1.0 · 人格 / 记忆 / 节奏 / 说话方式 / 黑话</div>
     </div>
-
-    <div class="panel" id="health-panel" style="display:none">
-      <div class="panel-title">启动状态与问题<span class="meta">健康检查 · 自动刷新</span></div>
-      <div id="issue-list" class="empty">加载中...</div>
-      <div class="row" style="margin-top:12px">
-        <button id="btn-health-refresh" onclick="loadHealth(true)">重新检查</button>
-        <button class="ghost" id="btn-health-reset-wizard" onclick="resetWizard()">重新显示引导</button>
-      </div>
-    </div>
-
-    <div class="panel" id="ego-top">
-      <div class="panel-title">EGO<span class="meta">v0.1.0 · 人格 / 记忆 / 节奏 / 说话方式 / 黑话</span></div>
-      <div class="desc">统一人格与记忆中枢。下面所有按钮都已接真实接口，保存后即时生效。</div>
-      <div class="row" style="margin-top:12px">
-        <label class="inline" style="font-size:13px;color:var(--ink2)">
-          <label class="toggle"><input type="checkbox" id="ego-enabled" checked><span class="slider"></span></label>
-          <span>启用 EGO</span>
-        </label>
-        <label class="inline" style="font-size:13px;color:var(--ink2)">
-          <label class="toggle"><input type="checkbox" id="example-enabled" checked><span class="slider"></span></label>
-          <span>启用 few-shot 示例</span>
-        </label>
-        <button class="primary" id="btn-save-top" onclick="saveTopConfig()">保存顶层开关</button>
-      </div>
-    </div>
-
-    <div class="panel" id="ego-modules">
-      <div class="panel-title">子模块开关<span class="muted">所有开关实时写入配置</span></div>
-      <div class="grid grid-2">
-        <div class="card">
-          <div class="switch-row"><div><div class="card-label">记忆</div><div class="muted">事实 / 事件 / 人格 / 好感度</div></div><label class="toggle"><input type="checkbox" id="ego-memory" checked><span class="slider"></span></label></div>
-          <div class="switch-row"><div><div class="card-label">人格</div><div class="muted">人设 / 语气 / few-shot 示例</div></div><label class="toggle"><input type="checkbox" id="ego-personality" checked><span class="slider"></span></label></div>
-          <div class="switch-row"><div><div class="card-label">说话风格</div><div class="muted">学习群友风格并注入</div></div><label class="toggle"><input type="checkbox" id="ego-style" checked><span class="slider"></span></label></div>
-          <div class="switch-row"><div><div class="card-label">情绪状态机</div><div class="muted">心情曲线 / 影响语气温度</div></div><label class="toggle"><input type="checkbox" id="ego-mood" checked><span class="slider"></span></label></div>
-          <div class="row" style="margin-top:8px"><a class="btn ghost" href="/page?plugin_id=chat_style" target="_self" style="font-size:12px;padding:4px 10px;width:100%;text-align:center">打开说话风格完整页</a></div>
-        </div>
-        <div class="card">
-          <div class="switch-row"><div><div class="card-label">拟人节奏</div><div class="muted">随机延迟 / 打字感</div></div><label class="toggle"><input type="checkbox" id="ego-rhythm" checked><span class="slider"></span></label></div>
-          <div class="switch-row"><div><div class="card-label">黑话学习</div><div class="muted">候选 / 注入 / 过滤</div></div><label class="toggle"><input type="checkbox" id="ego-slang" checked><span class="slider"></span></label></div>
-        </div>
-      </div>
-      <div class="row" style="margin-top:12px">
-        <button class="primary" id="btn-save-module" onclick="saveModuleConfig()">保存子模块开关</button>
-        <button class="ghost" id="btn-refresh-module" onclick="loadModuleConfig()">刷新状态</button>
-      </div>
-    </div>
-
-    <div class="panel" id="ego-mod-jump">
-      <div class="panel-title">模块详情<span class="muted">每个模块有独立完整页，细节在子页管理</span></div>
-      <div class="grid grid-3" style="margin-top:10px">
-        <div class="card">
-          <div class="card-label">人格</div>
-          <div class="muted">人设 / 语气 / few-shot 示例</div>
-          <div class="row" style="margin-top:8px"><a class="btn ghost" href="/page?plugin_id=personality_engine" target="_self" style="font-size:12px;padding:4px 10px;width:100%;text-align:center">打开人格完整页</a></div>
-        </div>
-        <div class="card">
-          <div class="card-label">记忆</div>
-          <div class="muted">事实 / 事件 / 人格 / 好感度</div>
-          <div class="row" style="margin-top:8px"><a class="btn ghost" href="/page?plugin_id=super_memory" target="_self" style="font-size:12px;padding:4px 10px;width:100%;text-align:center">打开记忆完整页</a></div>
-        </div>
-        <div class="card">
-          <div class="card-label">说话风格</div>
-          <div class="muted">学习群友风格并注入</div>
-          <div class="row" style="margin-top:8px"><a class="btn ghost" href="/page?plugin_id=chat_style" target="_self" style="font-size:12px;padding:4px 10px;width:100%;text-align:center">打开风格完整页</a></div>
-        </div>
-        <div class="card">
-          <div class="card-label">拟人节奏</div>
-          <div class="muted">随机延迟 / 打字感</div>
-          <div class="row" style="margin-top:8px"><a class="btn ghost" href="/page?plugin_id=humanlike_rhythm" target="_self" style="font-size:12px;padding:4px 10px;width:100%;text-align:center">打开节奏完整页</a></div>
-        </div>
-        <div class="card">
-          <div class="card-label">心情</div>
-          <div class="muted">心情曲线 / 影响语气温度</div>
-          <div class="row" style="margin-top:8px"><a class="btn ghost" href="/page?plugin_id=mood_engine" target="_self" style="font-size:12px;padding:4px 10px;width:100%;text-align:center">打开心情完整页</a></div>
-        </div>
-        <div class="card">
-          <div class="card-label">黑话学习</div>
-          <div class="muted">候选 / 注入 / 过滤</div>
-          <div class="row" style="margin-top:8px"><a class="btn ghost" href="/page?plugin_id=slang_learner" target="_self" style="font-size:12px;padding:4px 10px;width:100%;text-align:center">打开黑话完整页</a></div>
-        </div>
-      </div>
-    </div>
-
-    <div class="panel" id="ego-log">
-      <div class="panel-title">运行日志</div>
-      <div id="ego-log" class="log">暂无日志</div>
-      <div class="row" style="margin-top:10px">
-        <button id="btn-clear-log" onclick="clearLog()">清空日志</button>
-        <button id="btn-reload-module" onclick="reloadModule()">重载模块</button>
-      </div>
-    </div>
-
-    <div class="back" id="btn-back">← 返回插件列表</div>
   </div>
+
+  <nav class="pv-toolbar ego-nav" aria-label="页面导航">
+    <a class="pv-btn sm" href="#ego-top">中枢</a>
+    <a class="pv-btn sm" href="#ego-modules">开关</a>
+    <a class="pv-btn sm" href="#ego-mod-jump">模块</a>
+    <a class="pv-btn sm" href="#ego-log">日志</a>
+  </nav>
+
+  <div class="health-banner" id="health-banner" onclick="toggleHealthPanel()" style="display:none">
+    <div class="hb-dot"></div>
+    <div class="hb-body">
+      <div class="hb-title" id="hb-title">检查中...</div>
+      <div class="hb-desc" id="hb-desc">正在检查 EGO 各模块状态</div>
+      <div class="hb-modules" id="hb-modules"></div>
+    </div>
+    <span class="pv-hint" style="margin:0;white-space:nowrap">点击查看详情 ▾</span>
+  </div>
+
+  <div class="pv-panel" id="health-panel" style="display:none">
+    <div class="pv-panel-h"><h2>启动状态与问题</h2><i class="pv-rule"></i><span class="pv-count">健康检查 · 自动刷新</span></div>
+    <div id="issue-list" class="empty">加载中...</div>
+    <div class="pv-flex" style="margin-top:var(--pv-3)">
+      <button id="btn-health-refresh" onclick="loadHealth(true)">重新检查</button>
+      <button class="ghost" id="btn-health-reset-wizard" onclick="resetWizard()">重新显示引导</button>
+    </div>
+  </div>
+
+  <div class="pv-panel" id="ego-top">
+    <div class="pv-panel-h"><h2>EGO 总开关</h2><i class="pv-rule"></i><span class="pv-count">v0.1.0</span></div>
+    <div class="ego-lead">统一人格与记忆中枢。下面所有按钮都已接真实接口，保存后即时生效。</div>
+    <div class="pv-flex">
+      <label class="pv-switch">
+        <input type="checkbox" id="ego-enabled" checked>
+        <span class="pv-track"></span>
+        <span class="pv-switch-label">启用 EGO</span>
+      </label>
+      <label class="pv-switch" style="margin-left:var(--pv-4)">
+        <input type="checkbox" id="example-enabled" checked>
+        <span class="pv-track"></span>
+        <span class="pv-switch-label">启用 few-shot 示例</span>
+      </label>
+      <span class="pv-spacer"></span>
+      <button class="primary" id="btn-save-top" onclick="saveTopConfig()">保存顶层开关</button>
+    </div>
+  </div>
+
+  <div class="pv-panel" id="ego-modules">
+    <div class="pv-panel-h"><h2>子模块开关</h2><i class="pv-rule"></i><span class="pv-count">所有开关实时写入配置</span></div>
+    <div class="pv-grid cols-2">
+      <label class="pv-switch ego-switch">
+        <input type="checkbox" id="ego-memory" checked>
+        <span class="pv-track"></span>
+        <span class="pv-switch-label"><b>记忆</b><span class="pv-hint">事实 / 事件 / 人格 / 好感度</span></span>
+      </label>
+      <label class="pv-switch ego-switch">
+        <input type="checkbox" id="ego-personality" checked>
+        <span class="pv-track"></span>
+        <span class="pv-switch-label"><b>人格</b><span class="pv-hint">人设 / 语气 / few-shot 示例</span></span>
+      </label>
+      <label class="pv-switch ego-switch">
+        <input type="checkbox" id="ego-style" checked>
+        <span class="pv-track"></span>
+        <span class="pv-switch-label"><b>说话风格</b><span class="pv-hint">学习群友风格并注入</span></span>
+      </label>
+      <label class="pv-switch ego-switch">
+        <input type="checkbox" id="ego-mood" checked>
+        <span class="pv-track"></span>
+        <span class="pv-switch-label"><b>情绪状态机</b><span class="pv-hint">心情曲线 / 影响语气温度</span></span>
+      </label>
+      <label class="pv-switch ego-switch">
+        <input type="checkbox" id="ego-rhythm" checked>
+        <span class="pv-track"></span>
+        <span class="pv-switch-label"><b>拟人节奏</b><span class="pv-hint">随机延迟 / 打字感</span></span>
+      </label>
+      <label class="pv-switch ego-switch">
+        <input type="checkbox" id="ego-slang" checked>
+        <span class="pv-track"></span>
+        <span class="pv-switch-label"><b>黑话学习</b><span class="pv-hint">候选 / 注入 / 过滤</span></span>
+      </label>
+    </div>
+    <div class="pv-flex" style="margin-top:var(--pv-4)">
+      <button class="primary" id="btn-save-module" onclick="saveModuleConfig()">保存子模块开关</button>
+      <button class="ghost" id="btn-refresh-module" onclick="loadModuleConfig()">刷新状态</button>
+      <span class="pv-spacer"></span>
+      <a class="pv-btn sm" href="/page?plugin_id=chat_style" target="_self">打开说话风格完整页</a>
+    </div>
+  </div>
+
+  <div class="pv-panel" id="ego-mod-jump">
+    <div class="pv-panel-h"><h2>模块详情</h2><i class="pv-rule"></i><span class="pv-count">每个模块有独立完整页，细节在子页管理</span></div>
+    <div class="pv-grid cols-3">
+      <div class="pv-card ego-mod">
+        <b>人格</b>
+        <div class="pv-hint">人设 / 语气 / few-shot 示例</div>
+        <a class="pv-btn sm" href="/page?plugin_id=personality_engine" target="_self">打开人格完整页</a>
+      </div>
+      <div class="pv-card ego-mod">
+        <b>记忆</b>
+        <div class="pv-hint">事实 / 事件 / 人格 / 好感度</div>
+        <a class="pv-btn sm" href="/page?plugin_id=super_memory" target="_self">打开记忆完整页</a>
+      </div>
+      <div class="pv-card ego-mod">
+        <b>说话风格</b>
+        <div class="pv-hint">学习群友风格并注入</div>
+        <a class="pv-btn sm" href="/page?plugin_id=chat_style" target="_self">打开风格完整页</a>
+      </div>
+      <div class="pv-card ego-mod">
+        <b>拟人节奏</b>
+        <div class="pv-hint">随机延迟 / 打字感</div>
+        <a class="pv-btn sm" href="/page?plugin_id=humanlike_rhythm" target="_self">打开节奏完整页</a>
+      </div>
+      <div class="pv-card ego-mod">
+        <b>心情</b>
+        <div class="pv-hint">心情曲线 / 影响语气温度</div>
+        <a class="pv-btn sm" href="/page?plugin_id=mood_engine" target="_self">打开心情完整页</a>
+      </div>
+      <div class="pv-card ego-mod">
+        <b>黑话学习</b>
+        <div class="pv-hint">候选 / 注入 / 过滤</div>
+        <a class="pv-btn sm" href="/page?plugin_id=slang_learner" target="_self">打开黑话完整页</a>
+      </div>
+    </div>
+  </div>
+
+  <div class="pv-panel" id="ego-log-panel">
+    <div class="pv-panel-h"><h2>运行日志</h2><i class="pv-rule"></i><span class="pv-count">自动追加</span></div>
+    <div id="ego-log" class="log pv-scroll">暂无日志</div>
+    <div class="pv-flex" style="margin-top:var(--pv-3)">
+      <button id="btn-clear-log" onclick="clearLog()">清空日志</button>
+      <button id="btn-reload-module" onclick="reloadModule()">重载模块</button>
+    </div>
+  </div>
+
+  <div class="ego-back" id="btn-back">← 返回插件列表</div>
 
   <div id="toast" class="toast"></div>
 
@@ -589,112 +580,123 @@ button.sm{padding:5px 10px;font-size:var(--pv-fs-xs)}
       </div>
 
       <div class="w-step active" data-step="1">
-        <div style="font-size:16px;font-weight:700;margin-bottom:8px">第 1 步：你是谁</div>
+        <div class="w-step-title">第 1 步：你是谁</div>
         <div class="wm-desc">告诉 bot 身份和性格，这是人格模块的核心。</div>
-        <div class="grid" style="margin-top:8px">
-          <div><label>昵称 / 称呼</label><input type="text" id="w-name" placeholder="例如：小a"></div>
-          <div><label>性别 / 年龄（可选）</label><input type="text" id="w-basic" placeholder="例如：18岁男生"></div>
-        </div>
-        <div class="grid grid-2" style="margin-top:10px">
-          <div><label>性格关键词</label><input type="text" id="w-personality" placeholder="例如：懒散但认真、毒舌不过分"></div>
-          <div><label>口头禅（逗号分隔）</label><input type="text" id="w-catch" placeholder="例如：好家伙，笑死"></div>
-        </div>
-        <div class="grid" style="margin-top:10px">
-          <div><label>说话风格</label><input type="text" id="w-style" placeholder="例如：短句为主，口语化，带颜文字"></div>
+        <div class="pv-grid cols-2" style="margin-top:var(--pv-3);gap:var(--pv-3)">
+          <div class="pv-field">
+            <label class="pv-label" for="w-name">昵称 / 称呼</label>
+            <input class="pv-input" type="text" id="w-name" placeholder="例如：小a">
+          </div>
+          <div class="pv-field">
+            <label class="pv-label" for="w-basic">性别 / 年龄（可选）</label>
+            <input class="pv-input" type="text" id="w-basic" placeholder="例如：18岁男生">
+          </div>
+          <div class="pv-field">
+            <label class="pv-label" for="w-personality">性格关键词</label>
+            <input class="pv-input" type="text" id="w-personality" placeholder="例如：懒散但认真、毒舌不过分">
+          </div>
+          <div class="pv-field">
+            <label class="pv-label" for="w-catch">口头禅（逗号分隔）</label>
+            <input class="pv-input" type="text" id="w-catch" placeholder="例如：好家伙，笑死">
+          </div>
+          <div class="pv-field" style="grid-column:1/-1">
+            <label class="pv-label" for="w-style">说话风格</label>
+            <input class="pv-input" type="text" id="w-style" placeholder="例如：短句为主，口语化，带颜文字">
+          </div>
         </div>
       </div>
 
       <div class="w-step" data-step="2">
-        <div style="font-size:16px;font-weight:700;margin-bottom:8px">第 2 步：连接 QQ（协议层）</div>
+        <div class="w-step-title">第 2 步：连接 QQ（协议层）</div>
         <div class="wm-desc">机器人要能说话，先得通过<strong>协议层（NapCat）</strong>连上你的 QQ。通常 1 分钟搞定：</div>
-        <div class="grid" style="margin-top:8px;gap:6px">
-          <div style="background:var(--input);border:1px solid var(--ink4);border-radius:8px;padding:10px;font-size:13px;line-height:1.7">
-            ① 进 <b>「协议」</b> 面板，点 <b>「自动探测」</b> 自动找到 QQ.exe 与 NapCat<br>
-            ② 没找到就点 <b>「浏览」</b> 手动选择路径 → <b>「保存」</b><br>
-            ③ 点 <b>「启动协议层」</b>，QQ 弹出登录就 <b>扫码</b><br>
-            ④ 状态「已就绪」后点 <b>「启动 Bot」</b>
-          </div>
+        <div class="w-note">
+          ① 进 <b>「协议」</b> 面板，点 <b>「自动探测」</b> 自动找到 QQ.exe 与 NapCat<br>
+          ② 没找到就点 <b>「浏览」</b> 手动选择路径 → <b>「保存」</b><br>
+          ③ 点 <b>「启动协议层」</b>，QQ 弹出登录就 <b>扫码</b><br>
+          ④ 状态「已就绪」后点 <b>「启动 Bot」</b>
         </div>
-        <div class="row" style="margin-top:10px;align-items:center">
+        <div class="pv-flex" style="margin-top:var(--pv-3)">
           <button class="primary" onclick="wizardOpenProtocol()">打开协议面板 ›</button>
-          <span class="muted">⚠ NapCat 版本必须匹配你的 QQ 版本（GitHub NapCatQQ Releases 下载对应包）</span>
+          <span class="pv-hint" style="margin:0">⚠ NapCat 版本必须匹配你的 QQ 版本（GitHub NapCatQQ Releases 下载对应包）</span>
         </div>
       </div>
 
       <div class="w-step" data-step="3">
-        <div style="font-size:16px;font-weight:700;margin-bottom:8px">第 3 步：记忆</div>
+        <div class="w-step-title">第 3 步：记忆</div>
         <div class="wm-desc">EGO 会把重要对话沉淀为记忆，在之后聊天中主动召回。向量化让记忆检索更准。</div>
-        <div class="grid" style="margin-top:8px">
+        <div class="pv-grid" style="margin-top:var(--pv-3);gap:var(--pv-2)">
           <label class="w-check"><input type="checkbox" id="w-memory" checked> 启用记忆（事实 / 事件 / 人格沉淀）</label>
           <label class="w-check"><input type="checkbox" id="w-vector" checked> 启用向量检索（需本地向量服务，已配置则自动使用）</label>
-          <div class="muted" style="margin-top:4px">提示：记忆库与向量服务状态可在本页「启动状态与问题」中查看。</div>
+          <div class="pv-hint">提示：记忆库与向量服务状态可在本页「启动状态与问题」中查看。</div>
         </div>
       </div>
 
       <div class="w-step" data-step="4">
-        <div style="font-size:16px;font-weight:700;margin-bottom:8px">第 4 步：说话风格</div>
+        <div class="w-step-title">第 4 步：说话风格</div>
         <div class="wm-desc">bot 会学习群里的说话风格。先选一种基础风格，之后自动进化。</div>
-        <div class="grid grid-2" style="margin-top:8px">
+        <div class="pv-grid cols-2" style="margin-top:var(--pv-3);gap:var(--pv-2)">
           <label class="w-check"><input type="checkbox" id="w-style-learn" checked> 自动学习说话风格</label>
           <label class="w-check"><input type="checkbox" id="w-rhythm" checked> 拟人节奏（随机延迟 / 打字感）</label>
         </div>
-        <div class="wm-desc" style="margin-top:10px">风格学习需要 bot 在群聊中积累样本才会生效，无需手动配置。</div>
+        <div class="wm-desc" style="margin-top:var(--pv-3);margin-bottom:0">风格学习需要 bot 在群聊中积累样本才会生效，无需手动配置。</div>
       </div>
 
       <div class="w-step" data-step="5">
-        <div style="font-size:16px;font-weight:700;margin-bottom:8px">第 5 步：黑话学习</div>
+        <div class="w-step-title">第 5 步：黑话学习</div>
         <div class="wm-desc">黑话让 bot 更像圈内人。可以现在开始学习，也可以之后在页面里随时发起。</div>
-        <div class="grid" style="margin-top:8px">
+        <div class="pv-grid" style="margin-top:var(--pv-3);gap:var(--pv-2)">
           <label class="w-check"><input type="checkbox" id="w-slang" checked> 启用黑话学习</label>
         </div>
-        <div class="row" style="margin-top:10px">
+        <div class="pv-flex" style="margin-top:var(--pv-3)">
           <button class="primary" id="btn-wizard-learn-slang" onclick="wizardLearnSlang()">立即学习黑话</button>
-          <span class="muted">可选，会调用 AI 联网学习候选</span>
+          <span class="pv-hint" style="margin:0">可选，会调用 AI 联网学习候选</span>
         </div>
       </div>
 
       <div class="w-step" data-step="6">
-        <div style="font-size:16px;font-weight:700;margin-bottom:8px">第 6 步：免费 API Key（推荐）</div>
+        <div class="w-step-title">第 6 步：免费 API Key（推荐）</div>
         <div class="wm-desc">群聊决策的「看图」和网页操作的「看图判断」需要一个 AI 视觉 Key。<b>智谱 GLM 的 <code>glm-4-flash</code>（文本）和 <code>glm-4v-flash</code>（看图）完全免费、不限量</b>，注册 30 秒搞定。也可以跳过，之后在「插件」页随时补。</div>
-        <div class="grid" style="margin-top:8px">
-          <label>智谱 API Key <a href="https://open.bigmodel.cn" target="_blank" rel="noopener" style="color:var(--gold)">去 open.bigmodel.cn 注册 ›</a></label>
-          <input type="password" id="w-zhipu-key" placeholder="粘贴 API Key（形如 xxxx.xxxx），可留空跳过" style="font-family:var(--font-m)">
+        <div class="pv-field" style="margin-top:var(--pv-3)">
+          <label class="pv-label" for="w-zhipu-key">智谱 API Key <a href="https://open.bigmodel.cn" target="_blank" rel="noopener">去 open.bigmodel.cn 注册 ›</a></label>
+          <input class="pv-input" type="password" id="w-zhipu-key" placeholder="粘贴 API Key（形如 xxxx.xxxx），可留空跳过">
         </div>
-        <div class="muted" style="margin-top:6px">注册步骤：手机号登录 → 实名认证 → 「API Keys」→ 新建 → 复制。填了之后「群聊决策」与「网页操作」的看图能力自动可用。</div>
+        <div class="pv-hint">注册步骤：手机号登录 → 实名认证 → 「API Keys」→ 新建 → 复制。填了之后「群聊决策」与「网页操作」的看图能力自动可用。</div>
       </div>
 
       <div class="w-step" data-step="7">
-        <div style="font-size:16px;font-weight:700;margin-bottom:8px">第 7 步：插件速览</div>
+        <div class="w-step-title">第 7 步：插件速览</div>
         <div class="wm-desc">以下插件默认已启用，全部可在侧栏「插件」页随时微调：</div>
-        <div style="display:grid;gap:8px;margin-top:8px">
-          <div style="background:var(--input);border:1px solid var(--ink4);border-radius:8px;padding:10px">
-            <b>群聊决策</b> <span class="muted">（判断该不该说话 / 看图 / 主动参与）</span><br>
-            <span class="muted">模型用第 5 步的智谱 Key，看图自动启用。</span>
+        <div class="pv-grid" style="margin-top:var(--pv-3);gap:var(--pv-2)">
+          <div class="w-plugin">
+            <b>群聊决策</b> <span class="pv-muted">（判断该不该说话 / 看图 / 主动参与）</span><br>
+            <span class="pv-muted">模型用第 5 步的智谱 Key，看图自动启用。</span>
           </div>
-          <div style="background:var(--input);border:1px solid var(--ink4);border-radius:8px;padding:10px">
-            <b>联网搜索</b> <span class="muted">（提到"最新 / 股价 / 天气"等自动联网查证）</span><br>
-            <span class="muted">用主模型 Key（设置页已配），无需额外配置。</span>
+          <div class="w-plugin">
+            <b>联网搜索</b> <span class="pv-muted">（提到"最新 / 股价 / 天气"等自动联网查证）</span><br>
+            <span class="pv-muted">用主模型 Key（设置页已配），无需额外配置。</span>
           </div>
-          <div style="background:var(--input);border:1px solid var(--ink4);border-radius:8px;padding:10px">
-            <b>网页操作</b> <span class="muted">（真实打开网页 / 截图 / 点按钮）</span><br>
-            <span class="muted">看图助手可复用第 5 步智谱 Key；浏览器引擎 Playwright 需 <code>pip install playwright</code> + <code>playwright install chromium</code>。</span>
+          <div class="w-plugin">
+            <b>网页操作</b> <span class="pv-muted">（真实打开网页 / 截图 / 点按钮）</span><br>
+            <span class="pv-muted">看图助手可复用第 5 步智谱 Key；浏览器引擎 Playwright 需 <code>pip install playwright</code> + <code>playwright install chromium</code>。</span>
           </div>
-          <div style="background:var(--input);border:1px solid var(--ink4);border-radius:8px;padding:10px">
-            <b>记忆 / 风格 / 黑话</b> <span class="muted">（前几步已配好）</span><br>
-            <span class="muted">记忆向量检索由 LiGGUF 本地引擎驱动，无需外网。</span>
+          <div class="w-plugin">
+            <b>记忆 / 风格 / 黑话</b> <span class="pv-muted">（前几步已配好）</span><br>
+            <span class="pv-muted">记忆向量检索由 LiGGUF 本地引擎驱动，无需外网。</span>
           </div>
         </div>
       </div>
 
       <div class="w-step" data-step="8">
-        <div style="font-size:16px;font-weight:700;margin-bottom:8px">第 8 步：确认并完成</div>
+        <div class="w-step-title">第 8 步：确认并完成</div>
         <div class="wm-desc">将保存你的配置。之后可随时在「子模块开关」中调整。</div>
-        <div class="summary" id="w-summary" style="background:var(--input);border:1px solid var(--ink4);border-radius:8px;padding:12px;font-size:12px;color:var(--ink2);line-height:1.7;white-space:pre-wrap;font-family:var(--font-m)">加载中...</div>
-        <div class="row" style="margin-top:12px">
-          <label class="inline" style="font-size:13px;color:var(--ink2)">
-            <label class="toggle"><input type="checkbox" id="w-enable" checked><span class="slider"></span></label>
-            <span>启用 EGO</span>
+        <div class="w-summary" id="w-summary">加载中...</div>
+        <div class="pv-flex" style="margin-top:var(--pv-3)">
+          <label class="pv-switch">
+            <input type="checkbox" id="w-enable" checked>
+            <span class="pv-track"></span>
+            <span class="pv-switch-label">启用 EGO</span>
           </label>
+          <span class="pv-spacer"></span>
           <button class="primary" id="btn-wizard-finish" onclick="wizardFinish()">完成引导</button>
         </div>
       </div>
@@ -764,7 +766,6 @@ async function saveModuleConfig(){
   toast(data !== undefined && data !== null ? '已保存' : '保存失败', data !== undefined && data !== null ? 'success':'error');
 }
 
-async 
 async function saveMoodConfig(){
   const params={
     decay_seconds:parseInt(egoRoot('#mood-decay').value)||600,
@@ -782,7 +783,6 @@ async function resetMood(){
   /* 详情面板已迁至子页 */
 }
 
-async 
 async function exportPersona(){
   console.log('[ego] exportPersona click');
   const scope=egoRoot('#memory-scope')?egoRoot('#memory-scope').value.trim()||'default':'default';
@@ -835,7 +835,6 @@ async function learnSlang(){
   /* 详情面板已迁至子页 */
 }
 function openCard(id){ window.open('about:blank','_blank'); }
-async 
 async function loadSlangInjected(){
   console.log('[ego] loadSlangInjected start');
   const data=await api(API,{method:'POST',body:JSON.stringify({plugin_id:'ego',action:'slang_injected'})});
@@ -973,7 +972,6 @@ async function importPersonality(e){
   loadPersonality();
 }
 
-async 
 async function saveExamples(){
   console.log('[ego] saveExamples click');
   const exEl=egoRoot('#example-json');
@@ -1002,7 +1000,6 @@ async function deleteExample(idx){
   list.splice(idx,1);const exJson=egoRoot('#example-json');if(exJson)exJson.value=JSON.stringify(list,null,2);await saveExamples();
 }
 
-async 
 async function reloadModule(){
   console.log('[ego] reloadModule click');
   const data=await api(API,{method:'POST',body:JSON.stringify({plugin_id:'ego',action:'reload'})});

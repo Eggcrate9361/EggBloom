@@ -5,184 +5,224 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>人格蒸馏 Persona Distill</title>
 <style>
-  :root{
-    --bg:#0a0a0f;--surface:#111118;--paper:#16161f;--elevated:#1e1e28;--input:#14141b;
-    --ink:#f0f0f5;--ink2:#b8b8c8;--ink3:#8a8f9a;--ink4:#3a3f48;--ink5:#26262f;
-    --gold:#c9a96e;--gold-dim:#8a7350;--red:#b54a4a;--green:#4a9b6a;--blue:#5a7a8e;
-    --purple:#7a5a9e;--orange:#c97a4e;
-    --font-d:'Outfit','Noto Sans SC','PingFang SC',system-ui,sans-serif;
-    --font-m:'JetBrains Mono','Consolas',monospace;--radius:12px;
-    --shadow-sm:0 1px 2px rgba(0,0,0,0.35);--shadow-md:0 4px 14px rgba(0,0,0,0.45);
-    --shadow-lg:0 10px 34px rgba(0,0,0,0.55);--shadow-gold:0 0 22px rgba(201,169,110,0.22);
-    --ease:180ms cubic-bezier(0.4,0,0.2,1);
-  }
-  *{box-sizing:border-box}
-  html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);font-family:var(--font-d);-webkit-font-smoothing:antialiased}
-  body{background-image:radial-gradient(ellipse at 10% 0%,rgba(201,169,110,0.06),transparent 45%),radial-gradient(ellipse at 90% 100%,rgba(122,90,158,0.05),transparent 45%)}
-  ::selection{background:rgba(201,169,110,0.25);color:var(--ink)}
-  .wrap{max-width:1060px;margin:0 auto;padding:24px}
-  .panel{background:linear-gradient(180deg,var(--surface),var(--paper));border:1px solid var(--ink4);border-radius:var(--radius);padding:18px;margin-bottom:14px;position:relative}
-  .panel:hover{border-color:rgba(201,169,110,0.25)}
-  .panel-title{font-size:17px;font-weight:700;margin-bottom:12px;display:flex;justify-content:space-between;align-items:center;user-select:none}
-  .meta{font-size:12px;color:var(--ink3);margin-left:8px;font-weight:400}
-  .desc{color:var(--ink2);font-size:14px;line-height:1.7;margin-top:10px}
-  .grid{display:grid;gap:12px;margin-top:14px}
-  .grid-2{grid-template-columns:repeat(2,1fr)}
-  .grid-3{grid-template-columns:repeat(3,1fr)}
-  .grid-4{grid-template-columns:repeat(4,1fr)}
-  @media(max-width:860px){.grid-2,.grid-3,.grid-4{grid-template-columns:1fr}}
-  .card{background:var(--elevated);border:1px solid var(--ink4);border-radius:var(--radius);padding:12px;transition:all var(--ease)}
-  .card:hover{transform:translateY(-1px);box-shadow:var(--shadow-md);border-color:rgba(201,169,110,0.25)}
-  .card-label{font-size:12px;color:var(--ink3);margin-bottom:4px;font-weight:500}
-  .card-value{font-family:var(--font-m);font-size:14px;color:var(--ink)}
-  button{padding:8px 14px;border:1px solid var(--ink4);background:var(--elevated);color:var(--ink);border-radius:8px;cursor:pointer;font-size:13px;transition:all var(--ease);position:relative;overflow:hidden;font-weight:500;letter-spacing:0.02em}
-  button:hover:not(:disabled){background:var(--paper);border-color:var(--gold);transform:translateY(-1px);box-shadow:var(--shadow-sm)}
-  button:active:not(:disabled){transform:scale(0.97)}
-  button:disabled{opacity:0.5;cursor:not-allowed}
-  button.primary{background:linear-gradient(135deg,rgba(201,169,110,0.18),rgba(201,169,110,0.08));color:var(--gold);border-color:rgba(201,169,110,0.35);font-weight:600}
-  button.primary:hover:not(:disabled){background:linear-gradient(135deg,rgba(201,169,110,0.28),rgba(201,169,110,0.14));border-color:rgba(201,169,110,0.5);box-shadow:var(--shadow-gold)}
-  button.danger{color:#ff8a80;border-color:rgba(255,80,80,0.25);background:rgba(255,80,80,0.08)}
-  button.danger:hover:not(:disabled){background:rgba(255,80,80,0.16);border-color:rgba(255,80,80,0.4)}
-  button.ghost{background:transparent;color:var(--ink2);border-color:var(--ink4)}
-  button.ghost:hover:not(:disabled){color:var(--ink);background:rgba(255,255,255,0.03)}
-  button.small{padding:4px 10px;font-size:12px}
-  input[type="text"],input[type="number"],select,textarea{padding:8px 10px;background:var(--input);color:var(--ink);border:1px solid var(--ink4);border-radius:8px;font-family:inherit;font-size:13px;width:100%;transition:all var(--ease)}
-  textarea{min-height:80px;resize:vertical}
-  input:focus,select:focus,textarea:focus{border-color:var(--gold);outline:none;box-shadow:0 0 0 3px rgba(201,169,110,0.12);transform:translateY(-1px)}
-  .muted{color:var(--ink3);font-size:12px;margin-top:4px}
-  .row{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
-  .section-title{font-size:14px;font-weight:700;margin:14px 0 6px;color:var(--ink)}
-  .section-label{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:var(--gold);margin:16px 0 8px 4px}
-  .section-label:first-child{margin-top:0}
-  .empty{color:var(--ink3);font-size:13px;padding:8px 0}
-  .empty-state{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:36px 16px;color:var(--ink3);text-align:center}
-  .empty-state-icon{font-size:28px;margin-bottom:10px;opacity:0.6}
-  .empty-state-title{font-size:14px;font-weight:600;color:var(--ink2);margin-bottom:4px}
-  .empty-state-desc{font-size:12px;color:var(--ink3)}
-  .tabs{display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap}
-  .tab{border-radius:999px;border:1px solid var(--ink4);background:transparent;color:var(--ink2);padding:6px 14px;font-size:12px;cursor:pointer;transition:all var(--ease);font-weight:500}
-  .tab:hover{border-color:var(--gold);color:var(--ink);background:rgba(255,255,255,0.02)}
-  .tab.active{background:var(--gold);color:#0a0a0f;border-color:var(--gold);font-weight:600;box-shadow:var(--shadow-gold)}
-  .stat-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
-  @media(max-width:600px){.stat-grid{grid-template-columns:repeat(2,1fr)}}
-  .stat-card{background:var(--elevated);border:1px solid var(--ink4);border-radius:var(--radius);padding:12px;text-align:center;transition:all var(--ease)}
-  .stat-card:hover{border-color:rgba(201,169,110,0.3);box-shadow:var(--shadow-md)}
-  .stat-value{font-family:var(--font-m);font-size:20px;color:var(--ink);font-weight:600}
-  .stat-label{font-size:12px;color:var(--ink3);margin-top:6px}
-  .toggle{position:relative;display:inline-block;width:44px;height:24px;flex-shrink:0}
-  .toggle input{opacity:0;width:0;height:0;position:absolute}
-  .slider{position:absolute;cursor:pointer;top:0;left:0;right:0;bottom:0;background-color:var(--ink4);transition:all var(--ease);border-radius:999px;border:1px solid var(--ink4)}
-  .slider:before{position:absolute;content:"";height:18px;width:18px;left:3px;bottom:3px;background-color:#fff;transition:all var(--ease);border-radius:50%;box-shadow:0 1px 3px rgba(0,0,0,0.3)}
-  input:checked+.slider{background-color:var(--gold);border-color:rgba(201,169,110,0.4)}
-  input:checked+.slider:before{transform:translateX(20px)}
-  .switch-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 0;border-bottom:1px solid var(--ink4)}
-  .switch-row:hover{background:rgba(255,255,255,0.02);margin:0 -12px;padding-left:12px;padding-right:12px;border-radius:8px}
-  .switch-row:last-child{border-bottom:none}
-  .badge{display:inline-flex;align-items:center;padding:3px 10px;border-radius:999px;background:var(--ink4);color:var(--ink2);font-size:11px;font-weight:600;transition:all var(--ease)}
-  .badge.ok{background:rgba(74,155,106,0.2);color:var(--green)}
-  .badge.warn{background:rgba(201,169,110,0.2);color:var(--gold)}
-  .badge.err{background:rgba(181,74,74,0.2);color:var(--red)}
-  .badge.info{background:rgba(90,122,138,0.2);color:var(--blue)}
-  .badge.l0{background:rgba(90,122,138,0.2);color:#8ab4c8}
-  .badge.l1{background:rgba(74,155,106,0.2);color:var(--green)}
-  .badge.l2{background:rgba(201,169,110,0.2);color:var(--gold)}
-  .badge.l3{background:rgba(201,122,78,0.2);color:var(--orange)}
-  .badge.l4{background:rgba(122,90,158,0.2);color:var(--purple)}
-  .list-item{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:10px;border-bottom:1px solid var(--ink4);transition:background var(--ease);border-radius:8px}
-  .list-item:hover{background:rgba(255,255,255,0.02)}
-  .list-item:last-child{border-bottom:none}
-  .tag{display:inline-block;padding:3px 8px;border-radius:6px;background:var(--ink4);color:var(--ink2);font-size:11px;margin-right:6px;transition:all var(--ease)}
-  .tag:hover{border-color:var(--gold);color:var(--ink)}
-  .log{background:var(--input);border:1px solid var(--ink4);border-radius:10px;padding:12px;font-family:var(--font-m);font-size:12px;color:var(--ink2);max-height:220px;overflow:auto;white-space:pre-wrap;line-height:1.7;transition:border-color var(--ease)}
-  .log:hover{border-color:rgba(201,169,110,0.25)}
-  .toast{position:fixed;top:16px;right:16px;background:var(--elevated);border:1px solid var(--ink4);color:var(--ink);padding:10px 14px;border-radius:10px;font-size:13px;z-index:999;opacity:0;transform:translateY(-8px);transition:all var(--ease);pointer-events:none;box-shadow:var(--shadow-md);display:flex;align-items:center;gap:8px}
-  .toast.show{opacity:1;transform:translateY(0)}
-  .toast.success{border-left:3px solid #6ecf8e}
-  .toast.error{border-left:3px solid #ff8a80}
-  .toast.info{border-left:3px solid var(--gold)}
-  .progress-bar{height:6px;background:var(--ink5);border-radius:3px;overflow:hidden}
-  .progress-fill{height:100%;background:linear-gradient(90deg,var(--gold),var(--purple));border-radius:3px;transition:width 300ms ease}
-  .level-pipeline{display:flex;gap:6px;align-items:center;justify-content:center;margin:16px 0}
-  .level-step{display:flex;flex-direction:column;align-items:center;gap:4px}
-  .level-dot{width:32px;height:32px;border-radius:50%;border:2px solid var(--ink4);display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:var(--ink3);transition:all var(--ease)}
-  .level-dot.active{border-color:var(--gold);color:var(--gold);box-shadow:var(--shadow-gold)}
-  .level-dot.done{border-color:var(--green);color:var(--green);background:rgba(74,155,106,0.1)}
-  .level-label{font-size:10px;color:var(--ink3)}
-  .level-line{width:20px;height:2px;background:var(--ink4)}
-  .level-line.done{background:var(--green)}
-  .confidence-bar{height:4px;background:var(--ink5);border-radius:2px;overflow:hidden;margin-top:4px}
-  .confidence-fill{height:100%;border-radius:2px;transition:width 500ms ease}
-  .confidence-fill.high{background:var(--green)}
-  .confidence-fill.mid{background:var(--gold)}
-  .confidence-fill.low{background:var(--red)}
-  .inline{display:inline-flex;align-items:center;gap:8px}
-  .grow{flex:1}
-  .panel-divider{height:1px;background:var(--ink5);margin:16px 0;border:none}
-  .checkbox-row{display:flex;align-items:center;gap:8px;padding:6px 0;cursor:pointer}
-  .checkbox-row input[type="checkbox"]{width:16px;height:16px;accent-color:var(--gold);cursor:pointer}
-  .form-group{margin-bottom:12px}
-  .form-label{font-size:13px;font-weight:600;color:var(--ink2);margin-bottom:6px;display:block}
-  .form-hint{font-size:11px;color:var(--ink3);margin-top:4px}
-  .modal-overlay{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.7);z-index:1000;display:none;align-items:center;justify-content:center;backdrop-filter:blur(4px)}
-  .modal-overlay.show{display:flex}
-  .modal{background:var(--surface);border:1px solid var(--ink4);border-radius:var(--radius);padding:24px;max-width:700px;width:90%;max-height:80vh;overflow:auto}
-  .modal-title{font-size:18px;font-weight:700;margin-bottom:16px}
-  .modal-close{float:right;cursor:pointer;font-size:20px;color:var(--ink3);transition:color var(--ease)}
-  .modal-close:hover{color:var(--ink)}
-  .persona-preview{background:var(--input);border:1px solid var(--ink4);border-radius:10px;padding:16px;font-size:13px;line-height:1.8;max-height:500px;overflow:auto;white-space:pre-wrap;font-family:var(--font-m)}
-  .search-box{position:relative}
-  .search-box input{padding-left:32px}
-  .search-icon{position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--ink3);font-size:14px}
-  .review-section{background:var(--elevated);border:1px solid var(--ink4);border-radius:var(--radius);padding:14px;margin-bottom:12px;transition:all var(--ease)}
-  .review-section:hover{border-color:rgba(201,169,110,0.25)}
-  .review-section-title{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
-  .review-section-title h3{margin:0;font-size:14px;font-weight:700;color:var(--ink)}
-  .review-feature{display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid var(--ink4)}
-  .review-feature:last-child{border-bottom:none}
-  .review-feature-label{font-size:12px;color:var(--ink3);width:120px;flex-shrink:0}
-  .review-feature-value{flex:1;font-size:13px;color:var(--ink)}
-  .review-feature-value input{background:var(--input);border:1px solid var(--ink4);border-radius:6px;padding:4px 8px;font-size:13px;width:100%;color:var(--ink);transition:all var(--ease)}
-  .review-feature-value input:focus{border-color:var(--gold);outline:none}
-  .review-conf{display:flex;align-items:center;gap:6px;flex-shrink:0}
-  .review-conf input[type="range"]{width:80px;accent-color:var(--gold)}
-  .review-conf-label{font-family:var(--font-m);font-size:11px;color:var(--ink3);width:36px}
-  .review-del-btn{width:24px;height:24px;border-radius:50%;border:none;background:transparent;color:var(--ink3);cursor:pointer;font-size:14px;display:flex;align-items:center;justify-content:center;transition:all var(--ease)}
-  .review-del-btn:hover{color:var(--red);background:rgba(181,74,74,0.1)}
-  .src-badge{display:inline-block;margin-left:6px;padding:1px 6px;border-radius:999px;background:var(--ink4);color:var(--ink3);font-size:10px;font-weight:600;vertical-align:middle}
-  .evidence-line{margin-top:4px;font-size:11px;color:var(--ink3);line-height:1.7;word-break:break-all}
-  .evidence-line code{font-family:var(--font-m);background:var(--ink4);color:var(--gold);padding:1px 5px;border-radius:4px;margin-right:3px}
-  .evidence-line em{color:var(--ink3);opacity:.75;font-style:normal}
-  .quality-banner{display:block;padding:10px 12px;border-radius:var(--radius);font-size:12px;line-height:1.8;margin-bottom:12px;border:1px solid var(--ink4);background:var(--elevated);color:var(--ink2)}
-  .quality-banner strong{color:var(--ink)}
-  .quality-banner.ok{border-color:rgba(94,160,110,0.35)}
-  .quality-banner.warn{border-color:rgba(201,169,110,0.45)}
-  .quality-banner.bad{border-color:rgba(181,74,74,0.45)}
-  .quality-banner .q-sep{color:var(--ink3);opacity:.5;margin:0 2px}
-  .state-line{margin-top:4px;display:flex;flex-wrap:wrap;gap:6px;align-items:center}
-  .state-badge{display:inline-flex;align-items:center;padding:1px 8px;border-radius:999px;font-size:10px;font-weight:600;border:1px solid var(--ink4);color:var(--ink2)}
-  .state-badge.ok{border-color:rgba(94,160,110,0.5);color:#7fbf8f}
-  .state-badge.warn{border-color:rgba(201,169,110,0.55);color:var(--gold)}
-  .state-badge.gone{border-color:rgba(181,74,74,0.5);color:#c97a7a;opacity:.85}
-  .state-when{font-size:10px;color:var(--ink3);opacity:.7}
-  .chg-badge{display:inline-flex;align-items:center;padding:1px 8px;border-radius:999px;font-size:10px;font-weight:600;background:var(--ink4);color:var(--ink2)}
-  .chg-badge.created,.chg-badge.revived{background:rgba(94,160,110,0.18);color:#7fbf8f}
-  .chg-badge.revised{color:var(--gold)}
-  .chg-badge.contradicted,.chg-badge.retired{background:rgba(181,74,74,0.18);color:#c97a7a}
-  .chg-badge.suspect,.chg-badge.dormant{opacity:.8}
-  .section-label{font-size:12px;font-weight:600;color:var(--ink3);margin:10px 0 6px;letter-spacing:.04em}
-  .stage-row{display:flex;align-items:center;gap:8px;padding:3px 0;font-size:12px;color:var(--ink2)}
-  .stage-row span:first-child{min-width:150px;color:var(--ink3)}
-  .stage-row .meta{margin-left:auto}
-  .review-add-btn{width:28px;height:28px;border-radius:50%;border:1px dashed var(--ink4);background:transparent;color:var(--ink3);cursor:pointer;font-size:16px;display:flex;align-items:center;justify-content:center;transition:all var(--ease)}
-  .review-add-btn:hover{border-color:var(--gold);color:var(--gold)}
-  .review-summary{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px}
-  .review-stat{background:var(--elevated);border:1px solid var(--ink4);border-radius:var(--radius);padding:10px;text-align:center}
-  .review-stat-value{font-family:var(--font-m);font-size:18px;color:var(--ink);font-weight:600}
-  .review-stat-label{font-size:11px;color:var(--ink3);margin-top:4px}
-  .review-status{display:inline-flex;align-items:center;gap:6px;padding:4px 12px;border-radius:999px;font-size:12px;font-weight:600}
-  .review-status.pending{background:rgba(201,169,110,0.15);color:var(--gold)}
-  .review-status.approved{background:rgba(74,155,106,0.15);color:var(--green)}
-  .review-status.rejected{background:rgba(181,74,74,0.15);color:var(--red)}
+/* ═══════════════════════════════════════════════════════════════════════
+   兼容层：页面结构已换成 kit v2 的 .pv-* 原语；
+   但页面脚本动态生成的标记仍是旧类名（badge / list-item /
+   review-section / quality-banner / level-dot …）。
+   这里只把这些旧类名接到 --pv-* token 上，JS 一个字符都不改。
+   ═══════════════════════════════════════════════════════════════════════ */
+:root{color-scheme:dark}
+*{box-sizing:border-box}
+::selection{background:var(--pv-gold-soft);color:var(--pv-gold)}
+
+.wrap{max-width:1120px;margin:0 auto}
+
+/* Tab 条：JS 靠 button.ghost.small + .active 做高亮 */
+.pv-seg button:hover{background:var(--pv-surface-3);color:var(--pv-ink)}
+.pv-seg button.active{background:var(--pv-gold-soft);color:var(--pv-gold);font-weight:600}
+
+/* ── 旧区块标题 / 分栏 ─────────────────────────────────────────────── */
+.section-label{font-size:var(--pv-fs-xs);font-weight:600;text-transform:uppercase;letter-spacing:.14em;
+  color:var(--pv-ink-3);margin:var(--pv-4) 0 var(--pv-2) 2px}
+.section-label:first-child{margin-top:0}
+.panel-divider{height:1px;background:var(--pv-line);margin:var(--pv-4) 0;border:none}
+.row{display:flex;justify-content:space-between;align-items:center;gap:var(--pv-3);flex-wrap:wrap}
+.inline{display:inline-flex;align-items:center;gap:var(--pv-2);flex-wrap:wrap}
+.grow{flex:1}
+.meta{font-size:var(--pv-fs-xs);color:var(--pv-ink-3);font-weight:400;letter-spacing:.02em}
+.muted{color:var(--pv-ink-3);font-size:var(--pv-fs-xs);margin-top:4px}
+.desc{color:var(--pv-ink-2);font-size:var(--pv-fs);line-height:1.75;margin-top:var(--pv-2);max-width:88ch}
+.desc ul{margin:var(--pv-2) 0;padding-left:var(--pv-5)}
+.panel-title{display:flex;justify-content:space-between;align-items:center;gap:var(--pv-3);flex-wrap:wrap;
+  font-size:var(--pv-fs-lg);font-weight:600;color:var(--pv-ink);margin:0 0 var(--pv-3)}
+
+/* ── 网格 / 卡片（modal 与等级卡仍在用） ──────────────────────────── */
+.grid{display:grid;gap:var(--pv-3);margin-top:var(--pv-3)}
+.grid-4{grid-template-columns:repeat(4,minmax(0,1fr))}
+@media(max-width:820px){.grid-4{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.card{background:var(--pv-surface-2);border:1px solid var(--pv-line);border-radius:var(--pv-r-sm);
+  padding:var(--pv-3);transition:border-color .18s var(--pv-ease)}
+.card:hover{border-color:var(--pv-line-2)}
+.card-label{font-size:var(--pv-fs-xs);color:var(--pv-ink-3);letter-spacing:.06em;margin-bottom:4px}
+.card-value{font-family:var(--pv-mono);font-size:var(--pv-fs);color:var(--pv-ink);font-variant-numeric:tabular-nums}
+
+/* ── 标签 / 徽章 ───────────────────────────────────────────────────── */
+.badge{display:inline-flex;align-items:center;gap:4px;padding:2px 9px;border-radius:var(--pv-r-full);
+  border:1px solid var(--pv-line-2);color:var(--pv-ink-2);font-size:var(--pv-fs-xs);font-weight:600;
+  letter-spacing:.04em;white-space:nowrap;vertical-align:middle}
+.badge.ok,.badge.high{color:var(--pv-ok);border-color:var(--pv-ok);background:var(--pv-ok-soft)}
+.badge.warn,.badge.mid{color:var(--pv-warn);border-color:var(--pv-warn);background:var(--pv-warn-soft)}
+.badge.err,.badge.low{color:var(--pv-bad);border-color:var(--pv-bad);background:var(--pv-bad-soft)}
+.badge.info{color:var(--pv-ink-2);background:var(--pv-surface-3)}
+.badge.l0{color:var(--pv-ink-2)}
+.badge.l1{color:var(--pv-ok);border-color:var(--pv-ok);background:var(--pv-ok-soft)}
+.badge.l2{color:var(--pv-gold);background:var(--pv-gold-soft)}
+.badge.l3{color:var(--pv-warn);border-color:var(--pv-warn);background:var(--pv-warn-soft)}
+.badge.l4{color:var(--pv-gold);border-color:var(--pv-gold);background:var(--pv-gold-soft)}
+.tag{display:inline-flex;align-items:center;padding:2px 9px;margin:0 var(--pv-1) var(--pv-1) 0;
+  border-radius:var(--pv-r-full);background:var(--pv-surface-3);color:var(--pv-ink-2);
+  font-size:var(--pv-fs-xs);font-family:var(--pv-mono)}
+
+/* ── 列表 / 空态 / 日志 / 预览 ─────────────────────────────────────── */
+.list-item{display:flex;justify-content:space-between;align-items:center;gap:var(--pv-3);
+  padding:var(--pv-3) var(--pv-2);border-bottom:1px solid var(--pv-line);border-radius:var(--pv-r-sm);
+  transition:background .18s var(--pv-ease)}
+.list-item:hover{background:var(--pv-surface-2)}
+.list-item:last-child{border-bottom:0}
+#recentDistillations .list-item,#historyList .list-item{cursor:pointer}
+.empty{color:var(--pv-ink-3);font-size:var(--pv-fs-sm);padding:var(--pv-2) 0}
+.empty-state{display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;
+  padding:var(--pv-6) var(--pv-4);color:var(--pv-ink-3);border:1px dashed var(--pv-line-2);
+  border-radius:var(--pv-r);background:var(--pv-surface-2)}
+.empty-state-icon{font-size:26px;line-height:1;margin-bottom:var(--pv-2);opacity:.75}
+.empty-state-title{font-size:var(--pv-fs);font-weight:600;color:var(--pv-ink-2);margin-bottom:4px}
+.empty-state-desc{font-size:var(--pv-fs-xs);color:var(--pv-ink-3)}
+.log{background:var(--pv-surface-2);border:1px solid var(--pv-line);border-radius:var(--pv-r-sm);
+  padding:var(--pv-3);font-family:var(--pv-mono);font-size:var(--pv-fs-xs);color:var(--pv-ink-2);
+  max-height:240px;overflow:auto;white-space:pre-wrap;line-height:1.75;
+  scrollbar-width:thin;scrollbar-color:var(--pv-surface-3) transparent}
+.persona-preview{background:var(--pv-surface-2);border:1px solid var(--pv-line);border-radius:var(--pv-r-sm);
+  padding:var(--pv-4);font-family:var(--pv-mono);font-size:var(--pv-fs-sm);line-height:1.8;
+  color:var(--pv-ink-2);max-height:500px;overflow:auto;white-space:pre-wrap;word-break:break-word;
+  scrollbar-width:thin;scrollbar-color:var(--pv-surface-3) transparent}
+.search-box{position:relative;max-width:420px}
+.search-box input[type="text"]{padding-left:32px}
+.search-icon{position:absolute;left:11px;top:50%;transform:translateY(-50%);
+  color:var(--pv-ink-3);font-size:13px;pointer-events:none}
+
+/* ── 表单 ─────────────────────────────────────────────────────────── */
+.form-group{margin:0 0 var(--pv-3)}
+.form-label{display:block;color:var(--pv-ink-2);font-size:var(--pv-fs-sm);margin-bottom:6px}
+.form-hint{font-size:var(--pv-fs-xs);color:var(--pv-ink-3);margin-top:4px}
+input[type="text"],input[type="number"],input[type="search"],select,textarea{
+  width:100%;background:var(--pv-surface-2);color:var(--pv-ink);
+  border:1px solid var(--pv-line-2);border-radius:var(--pv-r-sm);
+  padding:9px 11px;font:var(--pv-fs-sm)/1.6 var(--pv-mono);outline:none;
+  transition:border-color .18s var(--pv-ease),box-shadow .18s var(--pv-ease)}
+input[type="text"]:hover,input[type="number"]:hover,input[type="search"]:hover,select:hover,textarea:hover{
+  border-color:var(--pv-ink-3)}
+input[type="text"]:focus,input[type="number"]:focus,input[type="search"]:focus,select:focus,textarea:focus{
+  border-color:var(--pv-gold);box-shadow:var(--pv-ring)}
+input::placeholder,textarea::placeholder{color:var(--pv-ink-3)}
+textarea{min-height:80px;resize:vertical}
+.checkbox-row{display:flex;align-items:center;gap:var(--pv-2);padding:8px 10px;cursor:pointer;
+  background:var(--pv-surface-2);border:1px solid var(--pv-line);border-radius:var(--pv-r-sm);
+  color:var(--pv-ink-2);font-size:var(--pv-fs-sm);transition:border-color .18s var(--pv-ease)}
+.checkbox-row:hover{border-color:var(--pv-line-2)}
+.checkbox-row input[type="checkbox"]{width:15px;height:15px;flex:none;accent-color:var(--pv-gold);cursor:pointer}
+.small{padding:5px 10px;font-size:var(--pv-fs-xs)}
+
+/* ── 进度 / 等级管线 ───────────────────────────────────────────────── */
+.progress-bar{height:6px;background:var(--pv-surface-3);border-radius:var(--pv-r-full);overflow:hidden}
+.progress-fill{height:100%;border-radius:inherit;
+  background:linear-gradient(90deg,var(--pv-gold-2),var(--pv-gold));transition:width .3s var(--pv-ease)}
+.level-pipeline{display:flex;align-items:center;justify-content:center;gap:var(--pv-2);
+  margin:var(--pv-2) 0 var(--pv-4)}
+.level-step{display:flex;flex-direction:column;align-items:center;gap:var(--pv-1)}
+.level-dot{width:32px;height:32px;border-radius:var(--pv-r-full);border:1px solid var(--pv-line-2);
+  background:var(--pv-surface-2);display:flex;align-items:center;justify-content:center;
+  font-size:var(--pv-fs-xs);font-weight:600;color:var(--pv-ink-3);
+  transition:color .18s var(--pv-ease),border-color .18s var(--pv-ease),background .18s var(--pv-ease)}
+.level-dot:hover{border-color:var(--pv-gold-2);color:var(--pv-ink-2)}
+.level-dot.active{border-color:var(--pv-gold);color:var(--pv-gold);background:var(--pv-gold-soft);
+  box-shadow:0 0 0 4px var(--pv-gold-soft)}
+.level-dot.done{border-color:var(--pv-ok);color:var(--pv-ok);background:var(--pv-ok-soft)}
+.level-label{font-size:10px;color:var(--pv-ink-3);letter-spacing:.08em}
+.level-line{width:56px;height:1px;background:var(--pv-line-2)}
+.level-line.done{background:var(--pv-ok)}
+.confidence-bar{height:4px;background:var(--pv-surface-3);border-radius:var(--pv-r-full);overflow:hidden;margin-top:4px}
+.confidence-fill{height:100%;border-radius:inherit;transition:width .5s var(--pv-ease)}
+.confidence-fill.high{background:var(--pv-ok)}
+.confidence-fill.mid{background:var(--pv-gold)}
+.confidence-fill.low{background:var(--pv-bad)}
+
+/* ── 审核页 ───────────────────────────────────────────────────────── */
+.review-section{background:var(--pv-surface-2);border:1px solid var(--pv-line);border-radius:var(--pv-r);
+  padding:var(--pv-3) var(--pv-4);margin-bottom:var(--pv-3)}
+.review-section:hover{border-color:var(--pv-line-2)}
+.review-section-title{display:flex;justify-content:space-between;align-items:center;gap:var(--pv-3);
+  padding-bottom:var(--pv-2);margin-bottom:4px;border-bottom:1px solid var(--pv-line)}
+.review-section-title h3{margin:0;font-size:var(--pv-fs-sm);font-weight:600;color:var(--pv-ink)}
+.review-feature{display:flex;align-items:flex-start;gap:var(--pv-2);padding:7px 0;
+  border-bottom:1px solid var(--pv-line)}
+.review-feature:last-child{border-bottom:0}
+.review-feature-label{font-size:var(--pv-fs-xs);color:var(--pv-ink-3);width:124px;flex:none;padding-top:8px}
+.review-feature-value{flex:1;min-width:0}
+.review-feature-value input[type="text"]{padding:6px 9px}
+.review-conf{display:flex;align-items:center;gap:6px;flex:none;padding-top:7px}
+.review-conf input[type="range"]{width:72px;padding:0;border:0;background:transparent;
+  -webkit-appearance:none;appearance:none;height:14px;cursor:pointer;accent-color:var(--pv-gold)}
+.review-conf input[type="range"]::-webkit-slider-runnable-track{height:4px;border-radius:var(--pv-r-full);
+  background:var(--pv-surface-3)}
+.review-conf input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none;width:10px;height:10px;
+  margin-top:-3px;border:0;border-radius:var(--pv-r-full);background:var(--pv-gold);cursor:pointer}
+.review-conf input[type="range"]:focus-visible{outline:none;box-shadow:var(--pv-ring);border-radius:var(--pv-r-full)}
+.review-conf-label{font-family:var(--pv-mono);font-size:var(--pv-fs-xs);color:var(--pv-ink-3);
+  width:34px;text-align:right}
+.review-del-btn{flex:none;align-self:center;width:24px;height:24px;padding:0;border:0;
+  border-radius:var(--pv-r-full);background:transparent;color:var(--pv-ink-3);font-size:12px}
+.review-del-btn:hover{color:var(--pv-bad);background:var(--pv-bad-soft)}
+.review-add-btn{width:26px;height:26px;padding:0;border:1px dashed var(--pv-line-2);border-radius:var(--pv-r-full);
+  background:transparent;color:var(--pv-ink-3);font-size:14px}
+.review-add-btn:hover{border-color:var(--pv-gold);color:var(--pv-gold);background:transparent}
+.src-badge{display:inline-block;margin-left:6px;padding:0 5px;border-radius:var(--pv-r-full);
+  background:var(--pv-surface-3);color:var(--pv-ink-3);font-size:10px;font-weight:600;vertical-align:middle}
+.evidence-line{margin-top:4px;font-size:var(--pv-fs-xs);color:var(--pv-ink-3);line-height:1.7;word-break:break-all}
+.evidence-line code{font-family:var(--pv-mono);background:var(--pv-surface-3);color:var(--pv-gold);
+  padding:0 4px;border-radius:3px;margin-right:3px}
+.evidence-line em{color:var(--pv-ink-3);opacity:.8;font-style:normal}
+.state-line{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:4px}
+.state-badge{display:inline-flex;align-items:center;padding:1px 8px;border-radius:var(--pv-r-full);
+  font-size:10px;font-weight:600;border:1px solid var(--pv-line-2);color:var(--pv-ink-2)}
+.state-badge.ok{border-color:var(--pv-ok);color:var(--pv-ok)}
+.state-badge.warn{border-color:var(--pv-warn);color:var(--pv-warn)}
+.state-badge.gone{border-color:var(--pv-bad);color:var(--pv-bad);opacity:.85}
+.state-when{font-size:10px;color:var(--pv-ink-3);opacity:.75}
+.chg-badge{display:inline-flex;align-items:center;padding:1px 8px;border-radius:var(--pv-r-full);
+  font-size:10px;font-weight:600;background:var(--pv-surface-3);color:var(--pv-ink-2)}
+.chg-badge.created,.chg-badge.revived,.chg-badge.confirmed{color:var(--pv-ok);background:var(--pv-ok-soft)}
+.chg-badge.revised{color:var(--pv-gold);background:var(--pv-gold-soft)}
+.chg-badge.contradicted,.chg-badge.retired{color:var(--pv-bad);background:var(--pv-bad-soft)}
+.chg-badge.suspect,.chg-badge.dormant,.chg-badge.weakened{color:var(--pv-ink-3)}
+.stage-row{display:flex;align-items:center;gap:var(--pv-2);padding:4px 0;
+  font-size:var(--pv-fs-sm);color:var(--pv-ink-2)}
+.stage-row span:first-child{min-width:140px;color:var(--pv-ink-3)}
+.stage-row .meta{margin-left:auto}
+
+/* ── 质量横幅（JS 会改 className 加 ok/warn/bad） ─────────────────── */
+.quality-banner{display:block;padding:10px 12px;border:1px solid var(--pv-line);
+  border-left:3px solid var(--pv-line-2);border-radius:var(--pv-r-sm);
+  background:var(--pv-surface-2);color:var(--pv-ink-2);
+  font-size:var(--pv-fs-sm);line-height:1.8;margin-bottom:var(--pv-3)}
+.quality-banner strong{color:var(--pv-ink);font-weight:600}
+.quality-banner.ok{border-left-color:var(--pv-ok)}
+.quality-banner.warn{border-left-color:var(--pv-warn)}
+.quality-banner.bad{border-left-color:var(--pv-bad)}
+.quality-banner .q-sep{color:var(--pv-ink-3);opacity:.5;margin:0 2px}
+
+/* ── Toast / Modal ────────────────────────────────────────────────── */
+.toast{position:fixed;top:var(--pv-4);right:var(--pv-4);z-index:999;
+  display:flex;align-items:center;gap:var(--pv-2);max-width:min(420px,90vw);
+  padding:10px 14px;background:var(--pv-surface-2);border:1px solid var(--pv-line-2);
+  border-left:3px solid var(--pv-gold);border-radius:var(--pv-r-sm);
+  box-shadow:var(--pv-shadow);color:var(--pv-ink);font-size:var(--pv-fs-sm);
+  opacity:0;transform:translateY(-8px);pointer-events:none;
+  transition:opacity .18s var(--pv-ease),transform .18s var(--pv-ease)}
+.toast.show{opacity:1;transform:translateY(0)}
+.toast.success{border-left-color:var(--pv-ok)}
+.toast.error{border-left-color:var(--pv-bad)}
+.toast.info{border-left-color:var(--pv-gold)}
+.modal-overlay{position:fixed;inset:0;z-index:1000;display:none;align-items:center;justify-content:center;
+  background:var(--pv-bg);background:color-mix(in srgb,var(--pv-bg) 86%,transparent);
+  backdrop-filter:blur(3px)}
+.modal-overlay.show{display:flex}
+.modal{background:var(--pv-surface);border:1px solid var(--pv-line-2);border-radius:var(--pv-r-lg);
+  padding:var(--pv-5);width:min(720px,92vw);max-height:84vh;overflow:auto;
+  box-shadow:var(--pv-shadow);scrollbar-width:thin;scrollbar-color:var(--pv-surface-3) transparent}
+.modal-title{font-size:var(--pv-fs-lg);font-weight:600;color:var(--pv-ink);margin-bottom:var(--pv-4)}
+.modal-close{float:right;cursor:pointer;font-size:20px;line-height:1;color:var(--pv-ink-3);
+  transition:color .18s var(--pv-ease)}
+.modal-close:hover{color:var(--pv-ink)}
 </style>
 <style id="pv-kit">/*PV-KIT*/
 /* ═══════════════════════════════════════════════════════════════════════
@@ -441,46 +481,43 @@ button.sm{padding:5px 10px;font-size:var(--pv-fs-xs)}
 </head>
 <body>
 <div class="wrap">
-  <!-- Header -->
-  <div class="panel">
-    <div class="panel-title">
-      <span>这样脆弱的东西 <span class="meta">人格蒸馏 v1.0 · Persona-File</span></span>
-      <div class="inline">
-        <button class="ghost small" onclick="showTab('dashboard')">总览</button>
-        <button class="ghost small" onclick="showTab('new')">新建蒸馏</button>
-        <button class="ghost small" onclick="showTab('review')">审核</button>
-        <button class="ghost small" onclick="showTab('ledger')">人格账本</button>
-        <button class="ghost small" onclick="showTab('history')">历史</button>
-        <button class="ghost small" onclick="showTab('ethics')">伦理</button>
-        <button class="ghost small" onclick="openSettings()">⚙ 设置</button>
-      </div>
+  <div class="pv-head">
+    <div class="pv-head-body">
+      <div class="pv-eyebrow">人格蒸馏 v1.0 · Persona-File</div>
+      <h1>这样脆弱的东西</h1>
+      <div class="pv-sub">从聊天记录、对话记忆、落沙数据中提取人格模型，按数据量分级蒸馏（L0-L4），生成通用人格文件格式（Persona-File v1.0）。蒸馏结果经人工审核后保存。</div>
     </div>
-    <div class="desc">从聊天记录、对话记忆、落沙数据中提取人格模型，按数据量分级蒸馏（L0-L4），生成通用人格文件格式（Persona-File v1.0）。蒸馏结果经人工审核后保存。</div>
   </div>
 
-  <!-- Dashboard Tab -->
+  <div class="pv-toolbar" style="margin-bottom:var(--pv-4)">
+    <div class="pv-seg">
+      <button class="ghost small" onclick="showTab('dashboard')">总览</button>
+      <button class="ghost small" onclick="showTab('new')">新建蒸馏</button>
+      <button class="ghost small" onclick="showTab('review')">审核</button>
+      <button class="ghost small" onclick="showTab('ledger')">人格账本</button>
+      <button class="ghost small" onclick="showTab('history')">历史</button>
+      <button class="ghost small" onclick="showTab('ethics')">伦理</button>
+    </div>
+    <span class="pv-spacer"></span>
+    <button class="ghost small" onclick="openSettings()">⚙ 设置</button>
+  </div>
+
+  <!-- 总览 -->
   <div id="tab-dashboard">
-    <div class="stat-grid" style="margin-bottom:14px">
-      <div class="stat-card">
-        <div class="stat-value" id="statDistillations">--</div>
-        <div class="stat-label">蒸馏记录</div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-value" id="statSubjects">--</div>
-        <div class="stat-label">蒸馏对象</div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-value" id="statTotalTokens">--</div>
-        <div class="stat-label">累计 Token</div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-value" id="statAvgConfidence">--</div>
-        <div class="stat-label">平均置信度</div>
+    <div class="pv-panel">
+      <div class="pv-panel-h"><h2>总览</h2><i class="pv-rule"></i>
+        <span class="pv-count">每次切到本页刷新</span></div>
+      <div class="pv-stats">
+        <div class="pv-stat"><b id="statDistillations">--</b><span>蒸馏记录</span></div>
+        <div class="pv-stat"><b id="statSubjects">--</b><span>蒸馏对象</span></div>
+        <div class="pv-stat"><b id="statTotalTokens">--</b><span>累计 Token</span></div>
+        <div class="pv-stat"><b id="statAvgConfidence">--</b><span>平均置信度</span></div>
       </div>
     </div>
 
-    <div class="panel">
-      <div class="panel-title">最近蒸馏</div>
+    <div class="pv-panel">
+      <div class="pv-panel-h"><h2>最近蒸馏</h2><i class="pv-rule"></i>
+        <span class="pv-count">点击条目查看详情</span></div>
       <div id="recentDistillations">
         <div class="empty-state">
           <div class="empty-state-icon">⏳</div>
@@ -491,25 +528,29 @@ button.sm{padding:5px 10px;font-size:var(--pv-fs-xs)}
     </div>
   </div>
 
-  <!-- New Distillation Tab -->
+  <!-- 新建蒸馏 -->
   <div id="tab-new" style="display:none">
-    <div class="panel">
-      <div class="panel-title">蒸馏配置</div>
+    <div class="pv-panel">
+      <div class="pv-panel-h"><h2>蒸馏配置</h2><i class="pv-rule"></i>
+        <span class="pv-count">目标 · 数据来源</span></div>
 
       <div class="section-label">蒸馏对象</div>
-      <div class="form-group">
-        <label class="form-label">目标用户 ID</label>
-        <input type="text" id="targetId" placeholder="如 10003">
-        <div class="form-hint">QQ 号或用户标识</div>
-      </div>
-      <div class="form-group">
-        <label class="form-label">目标名称（可选）</label>
-        <input type="text" id="targetName" placeholder="如 小a">
+      <div class="pv-grid cols-2" style="gap:var(--pv-3)">
+        <div class="pv-field" style="margin-bottom:0">
+          <label class="pv-label">目标用户 ID</label>
+          <input type="text" class="pv-input" id="targetId" placeholder="如 10003">
+          <div class="pv-hint">QQ 号或用户标识</div>
+        </div>
+        <div class="pv-field" style="margin-bottom:0">
+          <label class="pv-label">目标名称（可选）</label>
+          <input type="text" class="pv-input" id="targetName" placeholder="如 小a">
+        </div>
       </div>
 
       <div class="panel-divider"></div>
+
       <div class="section-label">数据来源</div>
-      <div id="dataSourceList">
+      <div id="dataSourceList" class="pv-grid cols-2" style="gap:var(--pv-2)">
         <label class="checkbox-row">
           <input type="checkbox" value="chat_logs" checked>
           <span>聊天记录 (chat_logs/)</span>
@@ -541,13 +582,17 @@ button.sm{padding:5px 10px;font-size:var(--pv-fs-xs)}
           <span class="muted" style="margin-left:auto">话题流+情绪</span>
         </label>
       </div>
-      <div class="form-group" style="margin-top:8px">
-        <label class="form-label">外部文本导入（可选）</label>
-        <textarea id="externalText" placeholder="粘贴额外文本数据..." style="min-height:60px"></textarea>
-      </div>
 
-      <div class="panel-divider"></div>
-      <div class="section-label">蒸馏等级</div>
+      <div class="pv-field" style="margin-top:var(--pv-4);margin-bottom:0">
+        <label class="pv-label">外部文本导入（可选）</label>
+        <textarea class="pv-textarea" id="externalText" placeholder="粘贴额外文本数据..." style="min-height:70px"></textarea>
+      </div>
+    </div>
+
+    <div class="pv-panel">
+      <div class="pv-panel-h"><h2>蒸馏等级</h2><i class="pv-rule"></i>
+        <span class="pv-count">L0 种子 → L4 完美</span></div>
+
       <div class="level-pipeline">
         <div class="level-step"><div class="level-dot" id="levelDot-L0">L0</div><div class="level-label">种子</div></div>
         <div class="level-line"></div>
@@ -559,7 +604,8 @@ button.sm{padding:5px 10px;font-size:var(--pv-fs-xs)}
         <div class="level-line"></div>
         <div class="level-step"><div class="level-dot" id="levelDot-L4">L4</div><div class="level-label">完美</div></div>
       </div>
-      <div class="grid grid-3" style="margin-top:12px">
+
+      <div class="pv-grid cols-3">
         <div class="card">
           <div class="card-label">L0 种子</div>
           <div class="card-value" style="font-size:13px">&lt;100 条 · 200K tokens</div>
@@ -592,31 +638,34 @@ button.sm{padding:5px 10px;font-size:var(--pv-fs-xs)}
         </div>
       </div>
 
-      <div class="form-group" style="margin-top:12px">
-        <label class="form-label">选择等级</label>
-        <select id="distillLevel">
-          <option value="L0">L0 种子 (&lt;100 条, 200K tokens)</option>
-          <option value="L1" selected>L1 核心 (100-1K 条, 500K tokens)</option>
-          <option value="L2">L2 深度 (1K-10K 条, 2M tokens)</option>
-          <option value="L3">L3 完整 (10K-50K 条, 5M tokens)</option>
-          <option value="L4">L4 完美 (50K+ 条, 20M+ tokens)</option>
-        </select>
-      </div>
-
-      <div class="form-group" style="margin-top:12px">
-        <label class="form-label">蒸馏方式</label>
-        <select id="distillMode">
-          <option value="auto" selected>自动（有账本就只吃新增语料）</option>
-          <option value="incremental">增量延续（只处理新增，最省额度）</option>
-          <option value="full">全量重蒸馏（从头重算，用于首次或数据跳变）</option>
-        </select>
+      <div class="pv-grid cols-2" style="margin-top:var(--pv-4)">
+        <div class="pv-field" style="margin-bottom:0">
+          <label class="pv-label">选择等级</label>
+          <select class="pv-select" id="distillLevel">
+            <option value="L0">L0 种子 (&lt;100 条, 200K tokens)</option>
+            <option value="L1" selected>L1 核心 (100-1K 条, 500K tokens)</option>
+            <option value="L2">L2 深度 (1K-10K 条, 2M tokens)</option>
+            <option value="L3">L3 完整 (10K-50K 条, 5M tokens)</option>
+            <option value="L4">L4 完美 (50K+ 条, 20M+ tokens)</option>
+          </select>
+        </div>
+        <div class="pv-field" style="margin-bottom:0">
+          <label class="pv-label">蒸馏方式</label>
+          <select class="pv-select" id="distillMode">
+            <option value="auto" selected>自动（有账本就只吃新增语料）</option>
+            <option value="incremental">增量延续（只处理新增，最省额度）</option>
+            <option value="full">全量重蒸馏（从头重算，用于首次或数据跳变）</option>
+          </select>
+        </div>
       </div>
 
       <div id="ledgerStatus" class="quality-banner" style="display:none"></div>
+    </div>
 
-      <div class="panel-divider"></div>
-      <div class="section-label">伦理确认</div>
-      <div id="ethicsCheck">
+    <div class="pv-panel">
+      <div class="pv-panel-h"><h2>伦理确认</h2><i class="pv-rule"></i>
+        <span class="pv-count">两项都勾才能开始</span></div>
+      <div id="ethicsCheck" class="pv-grid cols-2" style="gap:var(--pv-2)">
         <label class="checkbox-row">
           <input type="checkbox" id="consentConfirmed">
           <span>我已确认拥有被蒸馏者的知情同意</span>
@@ -626,135 +675,98 @@ button.sm{padding:5px 10px;font-size:var(--pv-fs-xs)}
           <span>我已阅读并同意伦理协议 (ETHICS.md)</span>
         </label>
       </div>
-
-      <div class="row" style="margin-top:16px">
+      <div class="pv-toolbar" style="margin-top:var(--pv-4)">
         <button onclick="scanData()">🔍 扫描数据量</button>
-        <div class="grow"></div>
+        <span class="pv-spacer"></span>
         <button class="primary" onclick="startDistill()" id="btnStart">🚀 开始蒸馏</button>
       </div>
     </div>
 
-    <!-- Progress Panel (hidden initially) -->
-    <div class="panel" id="progressPanel" style="display:none">
-      <div class="panel-title">蒸馏进度</div>
-      <div class="progress-bar" style="margin-bottom:12px">
+    <!-- 蒸馏进度（默认隐藏） -->
+    <div class="pv-panel" id="progressPanel" style="display:none">
+      <div class="pv-panel-h"><h2>蒸馏进度</h2><i class="pv-rule"></i>
+        <span class="pv-count">实时日志</span></div>
+      <div class="progress-bar" style="margin-bottom:var(--pv-4)">
         <div class="progress-fill" id="progressFill" style="width:0%"></div>
       </div>
-      <div class="grid grid-4" style="margin-bottom:12px">
-        <div class="card">
-          <div class="card-label">阶段</div>
-          <div class="card-value" id="progressStage">--</div>
-        </div>
-        <div class="card">
-          <div class="card-label">数据量</div>
-          <div class="card-value" id="progressData">--</div>
-        </div>
-        <div class="card">
-          <div class="card-label">Token 用量</div>
-          <div class="card-value" id="progressTokens">--</div>
-        </div>
-        <div class="card">
-          <div class="card-label">置信度</div>
-          <div class="card-value" id="progressConfidence">--</div>
-        </div>
+      <div class="pv-stats" style="margin-bottom:var(--pv-4)">
+        <div class="pv-stat"><b id="progressStage">--</b><span>阶段</span></div>
+        <div class="pv-stat"><b id="progressData">--</b><span>数据量</span></div>
+        <div class="pv-stat"><b id="progressTokens">--</b><span>Token 用量</span></div>
+        <div class="pv-stat"><b id="progressConfidence">--</b><span>置信度</span></div>
       </div>
-      <div id="stageList" style="margin-bottom:12px"></div>
+      <div id="stageList" style="margin-bottom:var(--pv-3)"></div>
       <div class="log" id="progressLog"></div>
     </div>
   </div>
 
-  <!-- Review Tab -->
+  <!-- 审核 -->
   <div id="tab-review" style="display:none">
     <div id="reviewEmpty">
-      <div class="panel">
-        <div class="empty-state">
-          <div class="empty-state-icon">🔍</div>
-          <div class="empty-state-title">暂无待审核的蒸馏结果</div>
-          <div class="empty-state-desc">蒸馏完成后，特征提取结果会出现在这里供你人工审核</div>
-          <button class="primary" style="margin-top:12px" onclick="showTab('new')">前往新建蒸馏</button>
-        </div>
+      <div class="empty-state">
+        <div class="empty-state-icon">🔍</div>
+        <div class="empty-state-title">暂无待审核的蒸馏结果</div>
+        <div class="empty-state-desc">蒸馏完成后，特征提取结果会出现在这里供你人工审核</div>
+        <button class="primary" style="margin-top:12px" onclick="showTab('new')">前往新建蒸馏</button>
       </div>
     </div>
     <div id="reviewContent" style="display:none">
-      <div class="panel">
-        <div class="panel-title">
-          <span>特征审核 <span class="meta" id="reviewTargetInfo"></span></span>
-          <span class="review-status pending" id="reviewStatusBadge">待审核</span>
-        </div>
+      <div class="pv-panel">
+        <div class="pv-panel-h"><h2>特征审核</h2><i class="pv-rule"></i>
+          <span class="pv-count" id="reviewTargetInfo"></span>
+          <span class="pv-tag warn" id="reviewStatusBadge">待审核</span></div>
         <div class="desc">蒸馏完成后，系统自动提取了以下特征。请逐条审核：可以修改值、调整置信度、删除错误项、添加遗漏项。审核通过后才会保存人格文件。</div>
 
-        <div id="reviewQuality" class="quality-banner" style="display:none"></div>
+        <div id="reviewQuality" class="quality-banner" style="display:none;margin-top:var(--pv-3)"></div>
         <div id="reviewChanges" class="quality-banner" style="display:none"></div>
 
-        <div class="row" style="margin-bottom:12px">
-          <div class="inline">
-            <button class="ghost" onclick="toggleEvidence()" id="btnEvidence">🔍 显示原文引证</button>
-            <button class="ghost" onclick="toggleOnlyChanged()" id="btnOnlyChanged">👁 只看本轮变更</button>
-            <button class="ghost" onclick="copyPersonaPrompt()">📋 复制人格提示词</button>
-          </div>
-          <div class="grow"></div>
+        <div class="pv-toolbar" style="margin:var(--pv-3) 0">
+          <button class="ghost" onclick="toggleEvidence()" id="btnEvidence">🔍 显示原文引证</button>
+          <button class="ghost" onclick="toggleOnlyChanged()" id="btnOnlyChanged">👁 只看本轮变更</button>
+          <button class="ghost" onclick="copyPersonaPrompt()">📋 复制人格提示词</button>
+          <span class="pv-spacer"></span>
           <span class="meta" id="reviewEvidenceStat"></span>
         </div>
 
-        <div class="row" style="margin-bottom:12px">
-          <div class="inline">
-            <span class="meta">批量：</span>
-            <input type="text" id="bulkThreshold" value="0.35" style="max-width:70px">
-            <button class="ghost" onclick="bulkRemoveLowConf()">移除低于此置信度的结论</button>
-          </div>
-          <div class="grow"></div>
-          <div class="inline">
-            <button class="ghost" onclick="exportDoc('persona')">⬇ 人格文件</button>
-            <button class="ghost" onclick="exportDoc('prompt')">⬇ 注入卡</button>
-            <button class="ghost" onclick="exportDoc('appendix')">⬇ 证据附卷</button>
-            <button class="ghost" onclick="exportDoc('ledger')">⬇ 账本 JSON</button>
-          </div>
+        <div class="pv-toolbar" style="margin-bottom:var(--pv-3)">
+          <span class="meta">批量：</span>
+          <input type="text" class="pv-input" id="bulkThreshold" value="0.35" style="max-width:70px">
+          <button class="ghost" onclick="bulkRemoveLowConf()">移除低于此置信度的结论</button>
+          <span class="pv-spacer"></span>
+          <button class="ghost" onclick="exportDoc('persona')">⬇ 人格文件</button>
+          <button class="ghost" onclick="exportDoc('prompt')">⬇ 注入卡</button>
+          <button class="ghost" onclick="exportDoc('appendix')">⬇ 证据附卷</button>
+          <button class="ghost" onclick="exportDoc('ledger')">⬇ 账本 JSON</button>
         </div>
 
-        <div class="review-summary">
-          <div class="review-stat">
-            <div class="review-stat-value" id="reviewTotalFeatures">--</div>
-            <div class="review-stat-label">总特征数</div>
-          </div>
-          <div class="review-stat">
-            <div class="review-stat-value" id="reviewEditedFeatures">--</div>
-            <div class="review-stat-label">已修改</div>
-          </div>
-          <div class="review-stat">
-            <div class="review-stat-value" id="reviewAvgConfidence">--</div>
-            <div class="review-stat-label">平均置信度</div>
-          </div>
-          <div class="review-stat">
-            <div class="review-stat-value" id="reviewLevel">--</div>
-            <div class="review-stat-label">蒸馏等级</div>
-          </div>
+        <div class="pv-stats" style="margin:var(--pv-4) 0">
+          <div class="pv-stat"><b id="reviewTotalFeatures">--</b><span>总特征数</span></div>
+          <div class="pv-stat"><b id="reviewEditedFeatures">--</b><span>已修改</span></div>
+          <div class="pv-stat"><b id="reviewAvgConfidence">--</b><span>平均置信度</span></div>
+          <div class="pv-stat"><b id="reviewLevel">--</b><span>蒸馏等级</span></div>
         </div>
 
         <div id="reviewSections"></div>
 
-        <div class="row" style="margin-top:16px">
-          <div class="inline">
-            <button class="ghost" onclick="discardReview()">🗑 丢弃</button>
-            <button class="ghost" onclick="reDistill()">🔄 重新蒸馏</button>
-          </div>
-          <div class="grow"></div>
+        <div class="pv-toolbar" style="margin-top:var(--pv-4)">
+          <button class="ghost" onclick="discardReview()">🗑 丢弃</button>
+          <button class="ghost" onclick="reDistill()">🔄 重新蒸馏</button>
+          <span class="pv-spacer"></span>
           <button class="primary" onclick="approveReview()">✅ 审核通过并保存</button>
         </div>
       </div>
     </div>
   </div>
 
-  <!-- Ledger Tab -->
+  <!-- 人格账本 -->
   <div id="tab-ledger" style="display:none">
-    <div class="panel">
-      <div class="panel-title">
-        <span>人格账本</span>
-        <span class="meta">连续蒸馏的家底：结论的生老病死都在这里</span>
-      </div>
-      <div class="row" style="margin-bottom:12px">
-        <input type="text" id="ledgerTarget" placeholder="目标用户 ID（如 10003）" style="max-width:260px">
+    <div class="pv-panel">
+      <div class="pv-panel-h"><h2>人格账本</h2><i class="pv-rule"></i>
+        <span class="pv-count">连续蒸馏的家底：结论的生老病死都在这里</span></div>
+      <div class="pv-toolbar" style="margin-bottom:var(--pv-3)">
+        <input type="text" class="pv-input" id="ledgerTarget" placeholder="目标用户 ID（如 10003）" style="max-width:260px">
         <button class="ghost" onclick="loadLedger()">读取账本</button>
-        <div class="grow"></div>
+        <span class="pv-spacer"></span>
         <button class="ghost" onclick="publishPersona()">🚀 发布给 bot</button>
         <button class="ghost" onclick="unpublishPersona()">下线</button>
         <button class="ghost" onclick="exportFromLedger('ledger')">⬇ 导出账本 JSON</button>
@@ -766,13 +778,14 @@ button.sm{padding:5px 10px;font-size:var(--pv-fs-xs)}
     </div>
   </div>
 
-  <!-- History Tab -->
+  <!-- 历史 -->
   <div id="tab-history" style="display:none">
-    <div class="panel">
-      <div class="panel-title">蒸馏历史</div>
-      <div class="search-box" style="margin-bottom:12px">
+    <div class="pv-panel">
+      <div class="pv-panel-h"><h2>蒸馏历史</h2><i class="pv-rule"></i>
+        <span class="pv-count">点击条目查看详情</span></div>
+      <div class="search-box" style="margin-bottom:var(--pv-3)">
         <span class="search-icon">🔍</span>
-        <input type="text" id="searchQuery" placeholder="搜索蒸馏记录..." oninput="filterHistory()">
+        <input type="text" class="pv-input" id="searchQuery" placeholder="搜索蒸馏记录..." oninput="filterHistory()">
       </div>
       <div id="historyList">
         <div class="empty-state">
@@ -784,10 +797,11 @@ button.sm{padding:5px 10px;font-size:var(--pv-fs-xs)}
     </div>
   </div>
 
-  <!-- Ethics Tab -->
+  <!-- 伦理 -->
   <div id="tab-ethics" style="display:none">
-    <div class="panel">
-      <div class="panel-title">伦理协议</div>
+    <div class="pv-panel">
+      <div class="pv-panel-h"><h2>伦理协议</h2><i class="pv-rule"></i>
+        <span class="pv-count">5 条要求</span></div>
       <div class="desc">
         <p>这样脆弱的东西（人格蒸馏）遵循严格的伦理协议。以下操作需要符合伦理要求：</p>
         <ul style="margin:10px 0;padding-left:20px;line-height:2">
@@ -798,11 +812,12 @@ button.sm{padding:5px 10px;font-size:var(--pv-fs-xs)}
           <li>14岁以下未成年人需监护人同意</li>
         </ul>
       </div>
-      <button class="primary" onclick="showEthicsDoc()">📖 查看完整伦理协议</button>
+      <button class="primary" onclick="showEthicsDoc()" style="margin-top:var(--pv-2)">📖 查看完整伦理协议</button>
     </div>
 
-    <div class="panel">
-      <div class="panel-title">审计日志</div>
+    <div class="pv-panel">
+      <div class="pv-panel-h"><h2>审计日志</h2><i class="pv-rule"></i>
+        <span class="pv-count">操作自动记录</span></div>
       <div id="auditLog">
         <div class="empty-state">
           <div class="empty-state-icon">📊</div>
@@ -824,7 +839,6 @@ button.sm{padding:5px 10px;font-size:var(--pv-fs-xs)}
     <div id="modalContent"></div>
   </div>
 </div>
-
 <script>
 const PLUGIN_ID = '这样脆弱的东西';
 let currentTab = 'dashboard';

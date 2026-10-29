@@ -4,46 +4,59 @@
 <meta charset="UTF-8">
 <title>定时任务 · EggBloom</title>
 <style>
-:root{--bg:#0a0a0f;--paper:#16161f;--line:#26262f;--ink:#f0f0f5;--ink2:#b8b8c8;--ink3:#8a8f9a;
-  --gold:#c9a96e;--ok:#6f9e78;--err:#b05a52;--f:'Outfit','Noto Sans SC',system-ui,sans-serif;
-  --m:'JetBrains Mono',Consolas,monospace}
-*{margin:0;padding:0;box-sizing:border-box}
-body{background:var(--bg);color:var(--ink);font-family:var(--f);font-size:13.5px;padding:18px 20px 40px}
-h2{font-size:16px;font-weight:600;margin-bottom:4px}
-.sub{color:var(--ink3);font-size:12px;margin-bottom:14px}
-.bar{display:flex;gap:8px;align-items:center;margin-bottom:14px;flex-wrap:wrap}
-button{font-family:var(--m);font-size:11px;letter-spacing:.08em;padding:6px 12px;cursor:pointer;
-  background:transparent;color:var(--ink2);border:1px solid var(--line);border-radius:4px}
-button:hover{border-color:var(--gold);color:var(--gold)}
-button.primary{color:var(--gold);border-color:#5a4a33}
-button.danger{color:var(--err);border-color:#3a2523}
-.stat{font-family:var(--m);font-size:11px;color:var(--ink3);margin-left:auto}
-.stat b{color:var(--ink2);font-weight:500}
-table{width:100%;border-collapse:collapse}
-th{font-family:var(--m);font-size:10px;letter-spacing:.12em;color:var(--ink3);text-align:left;
-  padding:7px 8px;border-bottom:1px solid var(--line);font-weight:400;text-transform:uppercase}
-td{padding:8px;border-bottom:1px solid #1c1c22;vertical-align:middle}
-tr.off td{opacity:.45}
-td.n{font-family:var(--m);font-size:11.5px;color:var(--ink2)}
-td.s{font-family:var(--m);font-size:11px;color:var(--ink3)}
-.name{font-weight:500}
-.err{color:var(--err);font-size:11px;font-family:var(--m)}
-.dot{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--line);margin-right:6px}
-.dot.on{background:var(--ok)}
-.dot.run{background:var(--gold);animation:p 1.2s infinite}
-@keyframes p{50%{opacity:.3}}
-.add{margin-top:18px;border:1px solid var(--line);border-radius:6px;padding:14px;background:var(--paper)}
-.add h3{font-size:13px;font-weight:600;margin-bottom:10px}
-.row{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end}
-.f{display:flex;flex-direction:column;gap:4px}
-.f label{font-family:var(--m);font-size:10px;color:var(--ink3);letter-spacing:.1em}
-input,select{background:#14141b;border:1px solid var(--line);border-radius:4px;color:var(--ink);
-  font-family:var(--m);font-size:12px;padding:6px 8px;outline:none}
-input:focus,select:focus{border-color:var(--gold)}
-input.wide{width:230px}
-input.sm{width:82px}
-.hint{color:var(--ink3);font-size:11px;margin-top:8px}
-.empty{color:var(--ink3);padding:20px 8px;text-align:center}
+/* ── 页面局部胶水层 ───────────────────────────────────────────────────
+   #list 里的表格 / 状态点 / 空态都由 JS 拼出来，拿不到 pv-* 类；
+   这里按 kit 的 .pv-table / .pv-empty 对齐，颜色与间距只走 --pv-* token。
+   注意：不要在这里重新声明 button 的 color —— kit 的 .primary 靠 --_fg 上色，
+   旧版「button.primary{color:var(--gold)}」正是把金色文字压在金色底上（不可见）的原因。 */
+
+/* 状态行里的数字：金色等宽，标签保持 pv-count 的弱化色 */
+#stat b{color:var(--pv-gold);font-family:var(--pv-mono);font-weight:500;
+  font-variant-numeric:tabular-nums;letter-spacing:.02em}
+#stat{white-space:normal}
+
+/* 任务表 —— 外观对齐 .pv-table */
+#list table{width:100%;border-collapse:separate;border-spacing:0;font-size:var(--pv-fs-sm)}
+#list thead th{color:var(--pv-ink-3);font-weight:500;font-size:var(--pv-fs-xs);letter-spacing:.1em;
+  text-transform:uppercase;text-align:left;padding:0 10px 8px;border-bottom:1px solid var(--pv-line-2);
+  white-space:nowrap}
+#list th:nth-child(1){width:98px}
+#list th:nth-child(3){width:132px}
+#list th:nth-child(4){width:182px}
+#list th:nth-child(5){width:76px}
+#list th:nth-child(6){width:200px}
+#list th:nth-child(7){width:200px}
+#list tbody td{padding:10px;border-bottom:1px solid var(--pv-line);vertical-align:middle}
+#list tbody tr:hover td{background:var(--pv-surface-2)}
+#list tbody tr:last-child td{border-bottom:0}
+#list tbody tr.off td{opacity:.45}
+#list .name{color:var(--pv-ink);font-weight:500}
+#list .err{color:var(--pv-bad);font-family:var(--pv-mono);font-size:var(--pv-fs-xs);
+  line-height:1.5;margin-top:3px}
+#list td.n,#list td.s{font-family:var(--pv-mono);font-variant-numeric:tabular-nums;white-space:nowrap}
+#list td.n{font-size:var(--pv-fs-sm);color:var(--pv-ink-2)}
+#list td.s{font-size:var(--pv-fs-xs);color:var(--pv-ink-3)}
+#list td:last-child{text-align:right;white-space:nowrap}
+#list td:last-child button{margin-left:6px;padding:5px 10px;font-size:var(--pv-fs-xs)}
+
+/* 状态点（JS 只给 .dot / .on / .run 三个类） */
+#list .dot{display:inline-block;width:6px;height:6px;border-radius:var(--pv-r-full);
+  background:var(--pv-ink-3);margin-right:7px;vertical-align:1px}
+#list .dot.on{background:var(--pv-ok);box-shadow:0 0 0 3px var(--pv-ok-soft)}
+#list .dot.run{background:var(--pv-gold);box-shadow:0 0 0 3px var(--pv-gold-soft);
+  animation:pv-pulse 1.2s var(--pv-ease) infinite}
+@keyframes pv-pulse{50%{opacity:.3}}
+
+/* 空态：JS 写的是 <div class="empty">，外观照 kit 的 .pv-empty，并给足高度居中 */
+#list .empty{display:flex;flex-direction:column;align-items:center;justify-content:center;
+  min-height:340px;color:var(--pv-ink-3);font-size:var(--pv-fs-sm);text-align:center;
+  border:1px dashed var(--pv-line-2);border-radius:var(--pv-r)}
+#list .empty::before{content:"◷";display:block;font-size:32px;line-height:1;
+  color:var(--pv-gold-2);opacity:.45;margin-bottom:12px}
+
+/* 新建表单：kindChanged() 直接改 #f_* 的 display，所以用 .f 当列容器（display:flex 列） */
+#addbox .f{display:flex;flex-direction:column;gap:0;min-width:0}
+#addbox .pv-flex>.f{flex:1 1 0}
 </style>
 <style id="pv-kit">/*PV-KIT*/
 /* ═══════════════════════════════════════════════════════════════════════
@@ -301,40 +314,68 @@ button.sm{padding:5px 10px;font-size:var(--pv-fs-xs)}
 </style>
 </head>
 <body>
-<h2>定时任务</h2>
-<div class="sub">全项目只留一处 sleep。任务到点广播事件，由订阅它的插件决定做什么。</div>
-
-<div class="bar">
-  <button onclick="load()">刷新</button>
-  <button class="primary" onclick="document.getElementById('addbox').style.display='block'">＋ 新建任务</button>
-  <span class="stat" id="stat">加载中…</span>
-</div>
-
-<div id="list"></div>
-
-<div class="add" id="addbox" style="display:none">
-  <h3>新建任务</h3>
-  <div class="row">
-    <div class="f"><label>名称</label><input id="a_name" class="wide" placeholder="例如：凌晨蒸馏"></div>
-    <div class="f"><label>类型</label>
-      <select id="a_kind" onchange="kindChanged()">
-        <option value="interval">每隔 N 秒</option>
-        <option value="daily">每天 HH:MM</option>
-        <option value="weekly">每周某天 HH:MM</option>
-      </select></div>
-    <div class="f" id="f_every"><label>间隔（秒）</label><input id="a_every" class="sm" value="900"></div>
-    <div class="f" id="f_at" style="display:none"><label>时间 HH:MM</label><input id="a_at" class="sm" value="04:30"></div>
-    <div class="f" id="f_wd" style="display:none"><label>星期</label>
-      <select id="a_weekday"><option value="0">周一</option><option value="1">周二</option>
-      <option value="2">周三</option><option value="3">周四</option><option value="4">周五</option>
-      <option value="5">周六</option><option value="6">周日</option></select></div>
-    <div class="f"><label>广播事件名</label><input id="a_event" class="wide" value="scheduler.tick"></div>
-    <div class="f"><label>附带参数（JSON）</label><input id="a_payload" class="wide" value="{}"></div>
-    <button class="primary" onclick="add()">创建</button>
-    <button onclick="document.getElementById('addbox').style.display='none'">取消</button>
+  <div class="pv-head">
+    <div class="pv-hero-icon">◷</div>
+    <div class="pv-head-body">
+      <h1>定时任务</h1>
+      <div class="pv-sub">全项目只留一处 sleep。任务到点广播事件，由订阅它的插件决定做什么。</div>
+    </div>
   </div>
-  <div class="hint">订阅方在自己的插件里写 <code>on_event(ctx, event_name, payload)</code> 接收。事件名建议用「插件名.动作」。</div>
-</div>
+
+  <div class="pv-panel">
+    <div class="pv-panel-h">
+      <h2>任务列表</h2><i class="pv-rule"></i>
+      <span class="pv-count" id="stat">加载中…</span>
+    </div>
+    <div class="pv-toolbar" style="margin-bottom:12px">
+      <button onclick="load()">刷新</button>
+      <button class="primary" onclick="document.getElementById('addbox').style.display='block'">＋ 新建任务</button>
+    </div>
+    <div id="list"></div>
+    <div class="pv-hint" style="margin-top:12px">订阅方在自己的插件里写 <code>on_event(ctx, event_name, payload)</code> 接收。事件名建议用「插件名.动作」。</div>
+  </div>
+
+  <div class="pv-panel" id="addbox" style="display:none">
+    <div class="pv-panel-h"><h2>新建任务</h2><i class="pv-rule"></i></div>
+    <div class="pv-grid cols-2" style="gap:14px 16px">
+      <div class="f" style="grid-column:1/-1">
+        <label class="pv-label">名称</label>
+        <input id="a_name" class="pv-input" placeholder="例如：凌晨蒸馏">
+      </div>
+      <div class="f">
+        <label class="pv-label">类型</label>
+        <select id="a_kind" class="pv-select" onchange="kindChanged()">
+          <option value="interval">每隔 N 秒</option>
+          <option value="daily">每天 HH:MM</option>
+          <option value="weekly">每周某天 HH:MM</option>
+        </select>
+      </div>
+      <div class="f">
+        <div class="pv-flex">
+          <div class="f" id="f_every"><label class="pv-label">间隔（秒）</label>
+            <input id="a_every" class="pv-input" value="900"></div>
+          <div class="f" id="f_at" style="display:none"><label class="pv-label">时间 HH:MM</label>
+            <input id="a_at" class="pv-input" value="04:30"></div>
+          <div class="f" id="f_wd" style="display:none"><label class="pv-label">星期</label>
+            <select id="a_weekday" class="pv-select"><option value="0">周一</option><option value="1">周二</option>
+            <option value="2">周三</option><option value="3">周四</option><option value="4">周五</option>
+            <option value="5">周六</option><option value="6">周日</option></select></div>
+        </div>
+      </div>
+      <div class="f">
+        <label class="pv-label">广播事件名</label>
+        <input id="a_event" class="pv-input" value="scheduler.tick">
+      </div>
+      <div class="f">
+        <label class="pv-label">附带参数（JSON）</label>
+        <textarea id="a_payload" class="pv-textarea" style="min-height:96px">{}</textarea>
+      </div>
+    </div>
+    <div class="pv-flex" style="margin-top:16px">
+      <button class="primary" onclick="add()">创建</button>
+      <button onclick="document.getElementById('addbox').style.display='none'">取消</button>
+    </div>
+  </div>
 
 <script>
 const API = '/api/plugins/action';

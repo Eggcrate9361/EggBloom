@@ -5,79 +5,66 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>委员会口音</title>
   <style>
-    :root{
-      --bg:#0a0a0f;--surface:#111118;--paper:#16161f;--elevated:#1e1e28;--input:#14141b;
-      --ink:#f0f0f5;--ink2:#b8b8c8;--ink3:#8a8f9a;--ink4:#3a3f48;--ink5:#26262f;
-      --gold:#c9a96e;--gold-dim:#8a7350;--red:#b54a4a;--green:#4a9b6a;
-      --font-d:'Outfit','Noto Sans SC','PingFang SC',system-ui,sans-serif;
-      --font-m:'JetBrains Mono','Consolas',monospace;--radius:12px;
-      --shadow-sm:0 1px 2px rgba(0,0,0,0.35);--shadow-md:0 4px 14px rgba(0,0,0,0.45);
-      --shadow-gold:0 0 22px rgba(201,169,110,0.22);
-      --ease:180ms cubic-bezier(0.4,0,0.2,1);--ease-spring:280ms cubic-bezier(0.34,1.56,0.64,1);
+    /* ── 旧版遗留样式 ─────────────────────────────────────────────
+       kit 里没有的原语：range 滑块、#enableSwitch 的激活态，
+       以及脚本每次 setStatus 都会重写 className 的 .status 行。
+       颜色 / 间距只用 var(--pv-*)。 */
+
+    /* 滑块：按 v2 输入框的观感重绘 */
+    .slider{
+      -webkit-appearance:none;appearance:none;display:block;
+      width:100%;height:6px;margin:0;padding:0;cursor:pointer;outline:none;
+      background:var(--pv-surface-3);border:1px solid var(--pv-line-2);
+      border-radius:var(--pv-r-full);
+      transition:border-color .18s var(--pv-ease),box-shadow .18s var(--pv-ease);
     }
-    *{box-sizing:border-box}
-    html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);font-family:var(--font-d);-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;text-rendering:optimizeLegibility}
-    body{background-image:radial-gradient(ellipse at 10% 0%, rgba(201,169,110,0.06), transparent 45%),radial-gradient(ellipse at 90% 100%, rgba(90,122,138,0.05), transparent 45%)}
-    ::selection{background:rgba(201,169,110,0.25);color:var(--ink)}
-    ::-webkit-scrollbar{width:7px;height:7px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:var(--ink5);border-radius:3px}::-webkit-scrollbar-thumb:hover{background:var(--ink3)}
-    .wrap{max-width:900px;margin:0 auto;padding:22px}
-    .panel{background:linear-gradient(180deg,var(--surface),var(--paper));border:1px solid var(--ink4);border-radius:var(--radius);padding:18px;position:relative;transition:border-color 200ms ease,box-shadow 200ms ease}
-    .panel:hover{border-color:rgba(201,169,110,0.25);box-shadow:var(--shadow-md)}
-    .panel-title{font-size:17px;font-weight:700;margin-bottom:12px}
-    .meta{font-size:12px;color:var(--ink3);margin-left:8px;font-weight:400}
-    .desc{color:var(--ink2);font-size:14px;line-height:1.7;margin-top:10px}
-    .back{display:inline-block;margin-top:14px;color:var(--gold);cursor:pointer;font-size:14px;transition:opacity 150ms ease}
-    .back:hover{opacity:0.85}
-    .row{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:14px;padding:12px;background:var(--elevated);border:1px solid var(--ink4);border-radius:10px;transition:border-color 200ms ease}
-    .row:hover{border-color:rgba(201,169,110,0.25)}
-    .label{font-size:14px;color:var(--ink2);font-weight:500}
-    .value{font-size:13px;color:var(--ink3);font-family:var(--font-m)}
-    .switch{position:relative;width:44px;height:24px;background:#2a2a35;border-radius:999px;cursor:pointer;border:1px solid var(--ink4);transition:background .2s,box-shadow .2s}
-    .switch:hover{border-color:rgba(201,169,110,0.4)}
-    .switch.on{background:var(--gold);box-shadow:var(--shadow-gold)}
-    .switch::after{content:'';position:absolute;left:2px;top:2px;width:18px;height:18px;background:#fff;border-radius:50%;transition:transform .2s;box-shadow:0 1px 3px rgba(0,0,0,0.3)}
-    .switch.on::after{transform:translateX(20px)}
-    .slider{-webkit-appearance:none;appearance:none;width:100%;height:6px;background:#2a2a35;border-radius:999px;outline:none;border:1px solid var(--ink4);transition:border-color 200ms ease}
-    .slider:hover{border-color:rgba(201,169,110,0.4)}
-    .slider::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:18px;height:18px;background:var(--gold);border-radius:50%;cursor:pointer;box-shadow:0 1px 3px rgba(0,0,0,0.3);transition:transform 150ms ease}
-    .slider::-webkit-slider-thumb:hover{transform:scale(1.1)}
-    .slider::-moz-range-thumb{width:18px;height:18px;background:var(--gold);border-radius:50%;cursor:pointer;border:none}
-    .actions{display:flex;gap:10px;margin-top:14px}
-    .btn{background:var(--elevated);color:var(--ink);border:1px solid var(--ink4);padding:8px 12px;border-radius:8px;cursor:pointer;font-size:13px;transition:all 150ms cubic-bezier(0.4,0,0.2,1);font-family:var(--font-d);font-weight:500}
-    .btn:hover:not(:disabled){background:var(--paper);border-color:var(--gold);transform:translateY(-1px);box-shadow:var(--shadow-sm)}
-    .btn:active:not(:disabled){transform:scale(0.97)}
-    .btn.primary{background:linear-gradient(135deg, rgba(201,169,110,0.18), rgba(201,169,110,0.08));color:var(--gold);border-color:rgba(201,169,110,0.35);font-weight:600}
-    .btn.primary:hover{background:linear-gradient(135deg, rgba(201,169,110,0.28), rgba(201,169,110,0.14));border-color:rgba(201,169,110,0.5);box-shadow:var(--shadow-gold)}
-    .status{font-size:12px;color:var(--ink3);margin-top:8px;min-height:16px}
-    .status.error{color:#ff8a8a}
-    .status.ok{color:#8aff9a}
-    button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-visible{outline:2px solid var(--gold);outline-offset:2px}
-  
-  /* eggb-motion */
-  @media (prefers-reduced-motion: reduce){*,*::before,*::after{animation-duration:0.01ms !important;animation-iteration-count:1 !important;transition-duration:0.01ms !important;scroll-behavior:auto !important}}
-  .btn-ripple{position:absolute;border-radius:50%;background:rgba(201,169,110,0.3);transform:scale(0);pointer-events:none;animation:rippleAnim 550ms ease-out forwards}
-  @keyframes rippleAnim{to{transform:scale(3);opacity:0}}
-  .card,.panel,.stat-card,.tool-item,.list-item{transition:transform 160ms cubic-bezier(0.22,1,0.36,1),box-shadow 200ms ease,border-color 200ms ease}
-  .card:hover,.panel:hover,.stat-card:hover{transform:translateY(-2px);box-shadow:0 4px 14px rgba(0,0,0,0.45)}
-  .tool-item:hover,.list-item:hover{transform:translateX(2px)}
-  button{transition:all 160ms cubic-bezier(0.4,0,0.2,1)}
-  button:active:not(:disabled){transform:scale(0.96)}
-  .tab{transition:transform 160ms ease,background 160ms ease,color 160ms ease,border-color 160ms ease}
-  .tab:hover{transform:translateY(-1px)}
-  .tab.active{transform:scale(1.05)}
-  .toast{display:flex;align-items:center;gap:8px;overflow:hidden;position:relative}
-  .toast::before{content:attr(data-icon);width:18px;text-align:center;font-size:13px;line-height:1;flex-shrink:0}
-  .toast::after{content:'';position:absolute;left:0;bottom:0;height:2px;width:100%;transform:scaleX(0);transform-origin:left;animation:toastProgress 2s linear forwards}
-  .toast.success::after{background:#6ecf8e}
-  .toast.error::after{background:#ff8a80}
-  .toast.info::after{background:#c9a96e}
-  @keyframes toastProgress{to{transform:scaleX(1)}}
-  .toast.show{animation:toastIn 260ms cubic-bezier(0.34,1.56,0.64,1)}
-  @keyframes toastIn{from{opacity:0;transform:translateY(-14px) scale(0.92)}to{opacity:1;transform:translateY(0) scale(1)}}
-  .panel-title{position:relative}
-  .panel-title::after{content:'';position:absolute;bottom:-2px;left:0;width:34px;height:2px;background:linear-gradient(90deg,#c9a96e,transparent);border-radius:2px;transition:width 300ms cubic-bezier(0.22,1,0.36,1)}
-  .panel:hover .panel-title::after{width:60px}
-  
+    .slider:hover{border-color:var(--pv-gold-2)}
+    .slider:focus-visible{outline:none;border-color:var(--pv-gold);box-shadow:var(--pv-ring)}
+    .slider::-webkit-slider-thumb{
+      -webkit-appearance:none;appearance:none;width:16px;height:16px;border-radius:50%;
+      background:var(--pv-gold);border:2px solid var(--pv-bg);
+      box-shadow:0 1px 4px rgba(0,0,0,.45);
+      transition:transform .15s var(--pv-ease);
+    }
+    .slider::-webkit-slider-thumb:hover{transform:scale(1.12)}
+    .slider::-moz-range-thumb{
+      width:16px;height:16px;border-radius:50%;background:var(--pv-gold);
+      border:2px solid var(--pv-bg);box-shadow:0 1px 4px rgba(0,0,0,.45);cursor:pointer;
+    }
+    .slider::-moz-range-track{background:transparent;border:0}
+
+    /* #enableSwitch 由脚本切换 .on / aria-checked：把 kit 的 pv-track 接上激活态 */
+    #enableSwitch{
+      cursor:pointer;outline:none;
+      transition:background .2s var(--pv-ease),border-color .2s var(--pv-ease),box-shadow .2s var(--pv-ease);
+    }
+    #enableSwitch:focus-visible{box-shadow:var(--pv-ring)}
+    #enableSwitch.on{background:var(--pv-gold-soft);border-color:var(--pv-gold-2)}
+    #enableSwitch.on::after{transform:translateX(16px);background:var(--pv-gold)}
+
+    /* 脚本会同步 aria-checked / .on，但不会改 enabledValue 的 class：
+       用 :has 让状态胶囊跟着开关一起变绿（等价于 kit 的 .pv-tag.ok） */
+    .pv-card:has(#enableSwitch.on) #enabledValue{
+      color:var(--pv-ok);background:var(--pv-ok-soft);
+      border-color:color-mix(in srgb, var(--pv-ok) 40%, transparent);
+      transition:color .2s var(--pv-ease),background .2s var(--pv-ease),border-color .2s var(--pv-ease);
+    }
+
+    /* 状态行：setStatus() 每次重写 className，所以不能依赖 .pv-msg 的状态类 */
+    .status{
+      font-size:var(--pv-fs-sm);line-height:1.65;color:var(--pv-ink-3);
+      margin-top:var(--pv-3);min-height:18px;
+    }
+    .status.ok{color:var(--pv-ok)}
+    .status.error{color:var(--pv-bad)}
+
+    /* 旧版点击涟漪：v2 按钮已有按下反馈，涟漪还会溢出卡片，停用（脚本未改） */
+    .btn-ripple{display:none}
+
+    @media (prefers-reduced-motion: reduce){
+      *,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;
+        transition-duration:.01ms!important;scroll-behavior:auto!important}
+    }
   </style>
 <style id="pv-kit">/*PV-KIT*/
 /* ═══════════════════════════════════════════════════════════════════════
@@ -335,33 +322,98 @@ button.sm{padding:5px 10px;font-size:var(--pv-fs-xs)}
 </style>
 </head>
 <body>
-  <div class="wrap">
-    <div class="panel">
-      <div class="panel-title">委员会口音<span class="meta">board_voice v1.2.0</span></div>
-      <div class="desc">模仿《控制》The Board 说话风格，通过词对替换、斜杠分割、官僚前缀/后缀实现委员会口音转换。</div>
-
-      <div class="row">
-        <div>
-          <div class="label">启用</div>
-          <div class="value" id="enabledValue">加载中...</div>
-        </div>
-        <div class="switch" id="enableSwitch" role="switch" aria-checked="false" tabindex="0"></div>
-      </div>
-
-      <div class="row">
-        <div style="width:100%">
-          <div class="label">转换强度 <span class="value" id="intensityValue">0.7</span></div>
-          <input class="slider" id="intensitySlider" type="range" min="0" max="1" step="0.05" value="0.7" style="margin-top:10px">
-        </div>
-      </div>
-
-      <div class="actions">
-        <button class="btn primary" id="saveBtn">保存</button>
-        <button class="btn" id="resetBtn">重置</button>
-      </div>
-      <div class="status" id="status"></div>
-      <div class="back" onclick="window.parent.postMessage({type:'eggbloom:navigate',page:'plugins'},'*')">返回插件列表</div>
+  <div class="pv-head">
+    <div class="pv-hero-icon">◈</div>
+    <div class="pv-head-body">
+      <div class="pv-eyebrow">VOICE · BOARD</div>
+      <h1>委员会口音</h1>
+      <div class="pv-sub" style="max-width:none">模仿《控制》The Board 说话风格，通过词对替换、斜杠分割、官僚前缀/后缀实现委员会口音转换。</div>
     </div>
+    <span class="pv-tag gold" style="flex:none;margin-top:var(--pv-1)">board_voice v1.2.0</span>
+  </div>
+
+  <div class="pv-panel">
+    <div class="pv-panel-h"><h2>状态</h2><i class="pv-rule"></i>
+      <span class="pv-count">即时生效 · 不用保存</span></div>
+    <div class="pv-card" style="display:flex;align-items:center;gap:var(--pv-4);flex-wrap:wrap">
+      <div style="flex:1;min-width:240px">
+        <div class="pv-label" style="margin:0">启用</div>
+        <div class="pv-hint">纯文本改写，不调用模型；关掉后回复原样返回。</div>
+      </div>
+      <div class="pv-flex" style="flex:none;flex-wrap:nowrap;gap:var(--pv-3)">
+        <span class="pv-tag" id="enabledValue">加载中...</span>
+        <span class="pv-switch"><span class="pv-track" id="enableSwitch" role="switch" aria-checked="false" tabindex="0" aria-label="启用"></span></span>
+      </div>
+    </div>
+  </div>
+
+  <div class="pv-panel">
+    <div class="pv-panel-h"><h2>转换强度</h2><i class="pv-rule"></i>
+      <span class="pv-count">0 – 1 · 步进 0.05</span></div>
+    <div class="pv-stats">
+      <div class="pv-stat"><b id="intensityValue">0.70</b><span>当前强度</span></div>
+      <div class="pv-stat"><b>0.70</b><span>默认值</span></div>
+      <div class="pv-stat"><b>0.50</b><span>斜杠门槛</span></div>
+      <div class="pv-stat"><b>0.95</b><span>模板门槛</span></div>
+    </div>
+    <div class="pv-field" style="margin:var(--pv-4) 0 0">
+      <input class="slider" id="intensitySlider" type="range" min="0" max="1" step="0.05" value="0.7" aria-label="转换强度">
+    </div>
+    <div class="pv-flex" style="justify-content:space-between;margin-top:var(--pv-1)">
+      <span class="pv-hint" style="margin:0">0</span>
+      <span class="pv-hint" style="margin:0">1</span>
+    </div>
+    <div class="pv-flex" style="margin-top:var(--pv-4);flex-wrap:nowrap">
+      <button class="primary" id="saveBtn">保存</button>
+      <button id="resetBtn">重置</button>
+      <span class="pv-spacer"></span>
+      <span class="pv-hint" style="margin:0">重置只改滑块，点保存才写入</span>
+    </div>
+    <div class="pv-msg status" id="status"></div>
+  </div>
+
+  <div class="pv-panel">
+    <div class="pv-panel-h"><h2>处理流程</h2><i class="pv-rule"></i>
+      <span class="pv-count">after_reply 时执行</span></div>
+    <table class="pv-table">
+      <thead><tr>
+        <th style="width:56px">顺序</th>
+        <th style="width:130px">机制</th>
+        <th>说明</th>
+        <th style="width:150px">触发</th>
+      </tr></thead>
+      <tbody>
+        <tr>
+          <td class="mono pv-muted">01</td>
+          <td class="k">词对替换</td>
+          <td>把口语词写成「原词/替代」，句子越长替换得越多</td>
+          <td><span class="pv-tag ok">始终</span></td>
+        </tr>
+        <tr>
+          <td class="mono pv-muted">02</td>
+          <td class="k">斜杠分割</td>
+          <td>在逗号、句号前插入「/并且/同时/以及」这类选项</td>
+          <td><span class="pv-tag">强度 ≥ 0.50</span></td>
+        </tr>
+        <tr>
+          <td class="mono pv-muted">03</td>
+          <td class="k">前缀 / 后缀</td>
+          <td>按句式补一句委员会开场白或收尾套话</td>
+          <td><span class="pv-tag">概率 0.30</span></td>
+        </tr>
+        <tr>
+          <td class="mono pv-muted">04</td>
+          <td class="k">整体替换</td>
+          <td>丢掉原句，整句套进委员会模板</td>
+          <td><span class="pv-tag gold">强度 ≥ 0.95</span></td>
+        </tr>
+      </tbody>
+    </table>
+    <div class="pv-hint">3 字以内的短句、以 [ 或 / 开头的系统消息、以及搜索结果回合都不做转换。</div>
+  </div>
+
+  <div class="pv-flex" style="margin-top:var(--pv-4)">
+    <button class="ghost" onclick="window.parent.postMessage({type:'eggbloom:navigate',page:'plugins'},'*')">返回插件列表</button>
   </div>
 
   <script>
