@@ -5,42 +5,48 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>心情 · EGO</title>
 <style>
-  :root{
-    --bg:#0a0a0f;--surface:#111118;--paper:#16161f;--elevated:#1e1e28;--input:#14141b;
-    --ink:#f0f0f5;--ink2:#b8b8c8;--ink3:#8a8f9a;--ink4:#3a3f48;--ink5:#26262f;
-    --gold:#c9a96e;--gold-dim:#8a7350;--red:#b54a4a;--green:#4a9b6a;
-    --font-d:'Outfit','Noto Sans SC','PingFang SC',system-ui,sans-serif;
-    --font-m:'JetBrains Mono','Consolas',monospace;--radius:12px;
-    --shadow-sm:0 1px 2px rgba(0,0,0,0.35);--shadow-md:0 4px 14px rgba(0,0,0,0.45);
-    --shadow-lg:0 10px 34px rgba(0,0,0,0.55);--shadow-gold:0 0 22px rgba(201,169,110,0.22);
-  }
-  *{box-sizing:border-box;margin:0;padding:0}
-  body{background:var(--bg);color:var(--ink);font-family:var(--font-d);font-size:14px;line-height:1.6;padding:18px}
-  .wrap{max-width:860px;margin:0 auto}
-  .head{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px}
-  .head .t{font-size:18px;font-weight:800}
-  .head .m{font-size:12px;color:var(--ink3);margin-top:2px}
-  .back{font-size:12px;color:var(--gold);cursor:pointer;text-decoration:none;border:1px solid var(--gold);padding:4px 12px;border-radius:7px}
-  .panel{background:var(--paper);border:1px solid var(--ink5);border-radius:var(--radius);padding:16px;margin-bottom:14px}
-  .panel-title{font-weight:700;font-size:15px;margin-bottom:10px;color:var(--ink)}
-  .panel-title .meta{font-size:12px;color:var(--ink3);font-weight:400;margin-left:8px}
-  .row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
-  .muted{color:var(--ink3);font-size:12px}
-  .badge{display:inline-block;padding:4px 14px;border-radius:999px;font-size:13px;font-weight:600}
-  .badge.ok{background:rgba(74,155,106,0.18);color:#7fd7a5;border:1px solid rgba(74,155,106,0.4)}
-  .badge.err{background:rgba(181,74,74,0.18);color:#ff9a9a;border:1px solid rgba(181,74,74,0.4)}
-  .badge.flat{background:var(--input);color:var(--ink2);border:1px solid var(--ink5)}
-  button.btn,.btn{background:var(--input);color:var(--ink);border:1px solid var(--ink5);padding:7px 16px;border-radius:8px;cursor:pointer;font-size:13px;transition:all .15s ease}
-  button.btn.primary{background:var(--gold);color:#0a0a0f;border-color:var(--gold);font-weight:700}
-  button.btn.danger{background:transparent;color:#ff9a9a;border-color:rgba(181,74,74,0.5)}
-  button.btn:hover{filter:brightness(1.1)}
-  input[type=number]{background:var(--input);color:var(--ink);border:1px solid var(--ink5);border-radius:8px;padding:7px 10px;font-size:13px;width:140px;font-family:var(--font-m)}
-  .mood-list{margin-top:12px}
-  .mood-item{display:flex;align-items:center;justify-content:space-between;padding:8px 12px;background:var(--surface);border:1px solid var(--ink5);border-radius:8px;margin-bottom:8px}
-  .mood-item .gid{font-family:var(--font-m);font-size:12px;color:var(--ink3)}
-  .mood-item .score{font-weight:700;font-size:14px}
-  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
-  @media(max-width:640px){.grid2{grid-template-columns:1fr}}
+  /* 本页只保留 JS 直接生成/改写的类（badge / mood-item / muted / toast），
+     其余一律走 kit v2 组件，颜色只用 var(--pv-*)。 */
+  .badge{display:inline-flex;align-items:center;gap:6px;padding:7px 16px;
+    border-radius:var(--pv-r-full);border:1px solid var(--pv-line-2);
+    background:var(--pv-surface-2);color:var(--pv-ink-2);
+    font-size:var(--pv-fs);font-weight:600;letter-spacing:.02em;white-space:nowrap;
+    transition:background .18s var(--pv-ease),border-color .18s var(--pv-ease),color .18s var(--pv-ease)}
+  .badge.flat{background:var(--pv-gold-soft);border-color:var(--pv-gold-2);color:var(--pv-gold)}
+  .badge.ok{background:var(--pv-ok-soft);border-color:var(--pv-ok);color:var(--pv-ok)}
+  .badge.err{background:var(--pv-bad-soft);border-color:var(--pv-bad);color:var(--pv-bad)}
+
+  /* 心情记录：JS 用 innerHTML 写 .mood-item / .muted，这里只给外观 */
+  .mood-list{margin-top:var(--pv-4)}
+  .mood-list>.muted{display:grid;justify-items:center;align-content:center;gap:var(--pv-2);
+    min-height:206px;padding:var(--pv-5);text-align:center;
+    color:var(--pv-ink-3);font-size:var(--pv-fs-sm);
+    border:1px dashed var(--pv-line-2);border-radius:var(--pv-r)}
+  .mood-list>.muted::before{content:"◔";font-size:26px;line-height:1;opacity:.75}
+  .mood-list>.mood-item{display:flex;align-items:center;justify-content:space-between;
+    gap:var(--pv-3);padding:10px var(--pv-4);background:var(--pv-surface-2);
+    border:1px solid var(--pv-line);border-radius:var(--pv-r-sm);
+    transition:border-color .18s var(--pv-ease)}
+  .mood-list>.mood-item:hover{border-color:var(--pv-line-2)}
+  .mood-list .gid{font-family:var(--pv-mono);font-size:var(--pv-fs-sm);color:var(--pv-ink-2);
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .mood-list .score{font-family:var(--pv-mono);font-size:var(--pv-fs-lg);font-weight:600;
+    font-variant-numeric:tabular-nums}
+
+  /* 副标题在宽屏一行读完，不被 kit 的 72ch 截断 */
+  .pv-head .pv-sub{max-width:none}
+  /* 堆叠布局时数字框不拉满整屏 */
+  .pv-panel .pv-field{max-width:420px}
+  /* 右栏参数卡按内容高度，不跟左栏拉齐 */
+  .pv-split{align-items:start}
+  /* 返回链接借 .pv-btn，去掉 a:hover 的下划线 */
+  .pv-head>.pv-btn,.pv-head>.pv-btn:hover{flex:none;text-decoration:none}
+
+  #toast{position:fixed;top:var(--pv-4);left:50%;transform:translateX(-50%);
+    background:var(--pv-surface-3);color:var(--pv-ink);border:1px solid var(--pv-line-2);
+    border-radius:var(--pv-r-full);padding:8px 18px;font-size:var(--pv-fs-sm);
+    box-shadow:var(--pv-shadow);opacity:0;pointer-events:none;z-index:99;
+    transition:opacity .2s var(--pv-ease)}
 </style>
 <style id="pv-kit">/*PV-KIT*/
 /* ═══════════════════════════════════════════════════════════════════════
@@ -298,44 +304,49 @@ button.sm{padding:5px 10px;font-size:var(--pv-fs-xs)}
 </style>
 </head>
 <body>
-<div class="wrap">
-  <div class="head">
-    <div>
-      <div class="t">心情 · EGO 子模块</div>
-      <div class="m">Bot 因收到开心/难过/夸奖/辱骂而改变心情，随时间自然恢复，注入回复语气并微调温度</div>
+  <div class="pv-head">
+    <div class="pv-hero-icon">☾</div>
+    <div class="pv-head-body">
+      <h1>心情 · EGO 子模块</h1>
+      <div class="pv-sub">Bot 因收到开心/难过/夸奖/辱骂而改变心情，随时间自然恢复，注入回复语气并微调温度</div>
     </div>
-    <a class="back" href="/page?plugin_id=ego" target="_self">← 返回 EGO</a>
+    <a class="pv-btn" href="/page?plugin_id=ego" target="_self">← 返回 EGO</a>
   </div>
 
-  <div class="panel">
-    <div class="panel-title">当前心情</div>
-    <div class="row">
-      <span class="badge flat" id="mood-current">加载中...</span>
-      <button class="btn ghost" onclick="loadMood()">刷新</button>
-      <button class="btn danger" onclick="resetAll()">全部重置</button>
-    </div>
-    <div class="mood-list" id="mood-list"><div class="muted">加载中...</div></div>
-  </div>
-
-  <div class="panel">
-    <div class="panel-title">情绪配置</div>
-    <div class="grid2">
-      <div>
-        <div class="muted">情绪衰减时长（秒）</div>
-        <input type="number" id="mood-decay" min="30" step="30" value="600">
+  <div class="pv-split">
+    <div class="pv-panel">
+      <div class="pv-panel-h"><h2>当前心情</h2><i class="pv-rule"></i>
+        <span class="pv-count">按群记录 · 需手动刷新</span></div>
+      <div class="pv-flex">
+        <span class="badge flat" id="mood-current">加载中...</span>
+        <span class="pv-spacer"></span>
+        <button onclick="loadMood()">刷新</button>
+        <button class="danger" onclick="resetAll()">全部重置</button>
       </div>
-      <div>
-        <div class="muted">单次最大情绪冲击</div>
-        <input type="number" id="mood-max-boost" min="1" max="10" value="8">
+      <div class="mood-list" id="mood-list"><div class="muted">加载中...</div></div>
+      <div class="pv-hint">每个群一条记录；分值 −10 ～ +10，0 附近为平静，按衰减时长回归中性。</div>
+    </div>
+
+    <div class="pv-panel">
+      <div class="pv-panel-h"><h2>情绪配置</h2><i class="pv-rule"></i>
+        <span class="pv-count">全局参数 · 保存即生效</span></div>
+      <div class="pv-field">
+        <label class="pv-label" for="mood-decay">情绪衰减时长（秒）</label>
+        <input class="pv-input" type="number" id="mood-decay" min="30" step="30" value="600">
+        <div class="pv-hint">越小回归越快；0 表示不衰减。</div>
+      </div>
+      <div class="pv-field">
+        <label class="pv-label" for="mood-max-boost">单次最大情绪冲击</label>
+        <input class="pv-input" type="number" id="mood-max-boost" min="1" max="10" value="8">
+        <div class="pv-hint">单次事件最多改变多少分。</div>
+      </div>
+      <div class="pv-flex">
+        <button class="primary" onclick="saveConfig()">保存配置</button>
       </div>
     </div>
-    <div class="row" style="margin-top:12px">
-      <button class="btn primary" onclick="saveConfig()">保存配置</button>
-    </div>
   </div>
-</div>
 
-<div id="toast" style="position:fixed;top:16px;left:50%;transform:translateX(-50%);background:#1e1e28;color:#f0f0f5;padding:8px 18px;border-radius:8px;font-size:13px;opacity:0;transition:opacity .2s;pointer-events:none;border:1px solid #26262f;z-index:99"></div>
+  <div id="toast"></div>
 
 <script>
 const API='/api/plugins/action';

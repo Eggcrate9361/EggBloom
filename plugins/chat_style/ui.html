@@ -5,80 +5,53 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>chat_style 插件</title>
 <style>
-  :root{
-    --bg:#0a0a0f;--surface:#111118;--paper:#16161f;--elevated:#1e1e28;--input:#14141b;
-    --ink:#f0f0f5;--ink2:#b8b8c8;--ink3:#8a8f9a;--ink4:#3a3f48;--ink5:#26262f;
-    --gold:#c9a96e;--gold-dim:#8a7350;--red:#b54a4a;--green:#4a9b6a;
-    --font-d:'Outfit','Noto Sans SC','PingFang SC',system-ui,sans-serif;
-    --font-m:'JetBrains Mono','Consolas',monospace;--radius:12px;
-    --shadow-sm:0 1px 2px rgba(0,0,0,0.35);--shadow-md:0 4px 14px rgba(0,0,0,0.45);
-    --shadow-gold:0 0 22px rgba(201,169,110,0.22);
-    --ease:180ms cubic-bezier(0.4,0,0.2,1);--ease-spring:280ms cubic-bezier(0.34,1.56,0.64,1);
-  }
-  *{box-sizing:border-box}
-  html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);font-family:var(--font-d);-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;text-rendering:optimizeLegibility}
-  body{background-image:radial-gradient(ellipse at 10% 0%, rgba(201,169,110,0.06), transparent 45%),radial-gradient(ellipse at 90% 100%, rgba(90,122,138,0.05), transparent 45%)}
-  ::selection{background:rgba(201,169,110,0.25);color:var(--ink)}
-  ::-webkit-scrollbar{width:7px;height:7px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:var(--ink5);border-radius:3px}::-webkit-scrollbar-thumb:hover{background:var(--ink3)}
-  .wrap{max-width:900px;margin:0 auto;padding:22px}
-  .panel{background:linear-gradient(180deg,var(--surface),var(--paper));border:1px solid var(--ink4);border-radius:var(--radius);padding:18px;margin-bottom:14px;position:relative;transition:border-color 200ms ease,box-shadow 200ms ease,transform 200ms ease}
-  .panel:hover{border-color:rgba(201,169,110,0.25);box-shadow:var(--shadow-md);transform:translateY(-1px)}
-  .panel-title{font-size:17px;font-weight:700;margin-bottom:12px}
-  .meta{font-size:12px;color:var(--ink3);margin-left:8px;font-weight:400}
-  .desc{color:var(--ink2);font-size:14px;line-height:1.7;margin-top:10px}
-  .grid{display:grid;gap:12px;margin-top:14px}
-  .grid-2{grid-template-columns:repeat(2,1fr)}
-  @media (max-width:860px){ .grid-2{grid-template-columns:1fr} }
-  .card{background:var(--elevated);border:1px solid var(--ink4);border-radius:var(--radius);padding:12px;transition:border-color 150ms ease,box-shadow 150ms ease}
-  .card:hover{border-color:rgba(201,169,110,0.25);box-shadow:var(--shadow-md)}
-  .card-label{font-size:12px;color:var(--ink3);margin-bottom:4px;font-weight:500}
-  .card-value{font-family:var(--font-m);font-size:14px;color:var(--ink)}
-  .back{display:inline-block;margin-top:14px;color:var(--gold);cursor:pointer;font-size:14px;transition:opacity 150ms ease}
-  .back:hover{opacity:0.85}
-  button{padding:6px 12px;border:1px solid var(--ink4);background:var(--elevated);color:var(--ink);border-radius:6px;cursor:pointer;font-size:13px;transition:all 150ms cubic-bezier(0.4,0,0.2,1);font-family:var(--font-d);font-weight:500}
-  button:hover{background:var(--paper);border-color:var(--gold);transform:translateY(-1px)}
-  button:active:not(:disabled){transform:scale(0.97)}
-  button.primary{background:linear-gradient(135deg, rgba(201,169,110,0.18), rgba(201,169,110,0.08));color:var(--gold);border-color:rgba(201,169,110,0.35);font-weight:600}
-  button.primary:hover{background:linear-gradient(135deg, rgba(201,169,110,0.28), rgba(201,169,110,0.14));border-color:rgba(201,169,110,0.5);box-shadow:var(--shadow-gold)}
-  input[type="text"],input[type="number"],textarea,select{padding:8px 10px;background:var(--input);color:var(--ink);border:1px solid var(--ink4);border-radius:6px;font-family:inherit;font-size:13px;width:100%;transition:all 200ms cubic-bezier(0.4,0,0.2,1)}
-  input[type="text"]:focus,input[type="number"]:focus,textarea:focus,select:focus{border-color:var(--gold);outline:none;box-shadow:0 0 0 3px rgba(201,169,110,0.12)}
-  textarea{min-height:80px;resize:vertical}
-  .muted{color:var(--ink3);font-size:12px;margin-top:4px}
-  .row{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
-  .tag{display:inline-block;background:var(--elevated);color:var(--gold);padding:2px 8px;border-radius:6px;margin:2px;font-size:12px;border:1px solid var(--ink4);transition:border-color 150ms ease}
-  .tag:hover{border-color:rgba(201,169,110,0.5)}
-  .section-title{font-size:14px;font-weight:700;margin:14px 0 6px;color:var(--ink)}
-  .empty{color:var(--ink3);font-size:13px;padding:8px 0}
-  button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-visible{outline:2px solid var(--gold);outline-offset:2px}
-  @keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
-  .panel{animation:fadeIn 0.3s cubic-bezier(0.22,1,0.36,1)}
+  /* ── 页面自用样式 ─────────────────────────────────────────────────────
+     v2 的 kit 已经接管色板 / 卡片 / 按钮 / 表单 / 胶囊，这里只留 kit 没覆盖
+     且由本页脚本写死的标记：
+       .tag              —— loadFeatures() / renderTargetTags() 拼出来的胶囊
+       #features>.empty  —— loadFeatures() 的空态卡（虚线 + 居中提示）
+       .btn-ripple       —— 旧版点击涟漪（脚本未改，这里停用，免得金圈溢出卡片）
+     颜色 / 间距 / 圆角一律走 var(--pv-*)，本页不再自带色板。 */
+  :root{color-scheme:dark}
 
-  /* eggb-motion */
-  @media (prefers-reduced-motion: reduce){*,*::before,*::after{animation-duration:0.01ms !important;animation-iteration-count:1 !important;transition-duration:0.01ms !important;scroll-behavior:auto !important}}
-  .btn-ripple{position:absolute;border-radius:50%;background:rgba(201,169,110,0.3);transform:scale(0);pointer-events:none;animation:rippleAnim 550ms ease-out forwards}
-  @keyframes rippleAnim{to{transform:scale(3);opacity:0}}
-  .card,.panel,.stat-card,.tool-item,.list-item{transition:transform 160ms cubic-bezier(0.22,1,0.36,1),box-shadow 200ms ease,border-color 200ms ease}
-  .card:hover,.panel:hover,.stat-card:hover{transform:translateY(-2px);box-shadow:0 4px 14px rgba(0,0,0,0.45)}
-  .tool-item:hover,.list-item:hover{transform:translateX(2px)}
-  button{transition:all 160ms cubic-bezier(0.4,0,0.2,1)}
-  button:active:not(:disabled){transform:scale(0.96)}
-  .tab{transition:transform 160ms ease,background 160ms ease,color 160ms ease,border-color 160ms ease}
-  .tab:hover{transform:translateY(-1px)}
-  .tab.active{transform:scale(1.05)}
-  .toast{display:flex;align-items:center;gap:8px;overflow:hidden;position:relative}
-  .toast::before{content:attr(data-icon);width:18px;text-align:center;font-size:13px;line-height:1;flex-shrink:0}
-  .toast::after{content:'';position:absolute;left:0;bottom:0;height:2px;width:100%;transform:scaleX(0);transform-origin:left;animation:toastProgress 2s linear forwards}
-  .toast.success::after{background:#6ecf8e}
-  .toast.error::after{background:#ff8a80}
-  .toast.info::after{background:#c9a96e}
-  @keyframes toastProgress{to{transform:scaleX(1)}}
-  .toast.show{animation:toastIn 260ms cubic-bezier(0.34,1.56,0.64,1)}
-  @keyframes toastIn{from{opacity:0;transform:translateY(-14px) scale(0.92)}to{opacity:1;transform:translateY(0) scale(1)}}
-  .panel-title{position:relative}
-  .panel-title::after{content:'';position:absolute;bottom:-2px;left:0;width:34px;height:2px;background:linear-gradient(90deg,#c9a96e,transparent);border-radius:2px;transition:width 300ms cubic-bezier(0.22,1,0.36,1)}
-  .panel:hover .panel-title::after{width:60px}
-  
-  </style>
+  /* 纯表单页：收在 1040 内居中，铺满 1180 的长输入框太散 */
+  .pv-wrap{max-width:1040px;margin:0 auto}
+
+  /* 两列学习卡：输入区吃掉剩余高度，两卡的按钮行齐底 */
+  .pv-grid>.pv-panel{margin:0}
+  .pv-stack{display:flex;flex-direction:column}
+  .pv-grow{flex:1;min-height:0;display:flex;flex-direction:column}
+  .pv-grow>.pv-textarea{flex:1;min-height:132px}
+  .pv-stack .pv-msg{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+  /* 胶囊：脚本给的是 .tag，外观对齐 kit 的 .pv-tag */
+  .tag{display:inline-flex;align-items:center;gap:6px;max-width:100%;
+    padding:4px 10px;border-radius:var(--pv-r-full);
+    border:1px solid var(--pv-line-2);background:var(--pv-surface-2);
+    color:var(--pv-ink-2);font-family:var(--pv-mono);font-size:var(--pv-fs-xs);
+    line-height:1.6;letter-spacing:.02em;
+    transition:border-color .18s var(--pv-ease),background .18s var(--pv-ease)}
+  .tag:hover{border-color:var(--pv-gold-2);background:var(--pv-surface-3)}
+  .tag strong{color:var(--pv-gold);font-weight:600}
+
+  /* 特征区：有特征时是胶囊流，空态是虚线卡 + 居中提示 */
+  #features{display:flex;flex-wrap:wrap;align-items:flex-start;gap:var(--pv-2)}
+  #features>.empty{flex:1 1 100%;display:flex;flex-direction:column;
+    align-items:center;justify-content:center;gap:var(--pv-2);
+    min-height:176px;padding:var(--pv-6) var(--pv-4);
+    text-align:center;color:var(--pv-ink-3);font-size:var(--pv-fs-sm);
+    border:1px dashed var(--pv-line-2);border-radius:var(--pv-r)}
+  #features>.empty::before{content:"❝";font-size:34px;line-height:1;
+    color:var(--pv-gold-2);opacity:.5}
+
+  /* 旧版点击涟漪：v2 按钮已有按下反馈，涟漪还会溢出卡片，停用（脚本未改） */
+  .btn-ripple{display:none}
+
+  @media (prefers-reduced-motion: reduce){
+    *,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;
+      transition-duration:.01ms!important;scroll-behavior:auto!important}
+  }
+</style>
 <style id="pv-kit">/*PV-KIT*/
 /* ═══════════════════════════════════════════════════════════════════════
    EggBloom 插件 UI 套件 v2（2026-10-29）
@@ -335,48 +308,73 @@ button.sm{padding:5px 10px;font-size:var(--pv-fs-xs)}
 </style>
 </head>
 <body>
-  <div class="wrap">
-    <div class="panel">
-      <div class="panel-title">聊天风格<span class="meta">chat_style v0.2.0</span></div>
-      <div class="desc">学习群友说话方式并注入风格提示。</div>
+  <div class="pv-wrap">
+    <div class="pv-head">
+      <div class="pv-hero-icon">❝</div>
+      <div class="pv-head-body">
+        <h1>聊天风格</h1>
+        <div class="pv-sub">学习群友说话方式并注入风格提示。</div>
+      </div>
+      <span class="pv-tag gold" style="flex:none;margin-top:var(--pv-1)">chat_style v0.2.0</span>
     </div>
-    <div class="panel">
-      <div class="row">
-        <div>
-          <div class="section-title" style="margin:0">启用插件</div>
-          <div class="muted">学习群友说话方式并注入风格提示。</div>
-        </div>
-        <button id="toggleBtn" onclick="toggle()">加载中...</button>
+
+    <div class="pv-panel">
+      <div class="pv-panel-h"><h2>启用插件</h2><i class="pv-rule"></i>
+        <span class="pv-count">即时生效</span></div>
+      <div class="pv-flex">
+        <button id="toggleBtn" class="primary" onclick="toggle()">加载中...</button>
       </div>
     </div>
-    <div class="panel">
-      <div class="section-title">学习目标用户ID</div>
-      <div class="muted">输入要学习的用户ID，多个用逗号分隔。</div>
-      <input id="targets" type="text" placeholder="例如：u123, u456" />
-      <button style="margin-top:8px" onclick="saveTargets()">保存</button>
-      <div id="targetTags" style="margin-top:8px;"></div>
+
+    <div class="pv-panel">
+      <div class="pv-panel-h"><h2>学习目标用户ID</h2><i class="pv-rule"></i>
+        <span class="pv-count">learn_targets</span></div>
+      <div class="pv-flex" style="flex-wrap:nowrap;align-items:stretch">
+        <input id="targets" type="text" class="pv-input" placeholder="例如：u123, u456">
+        <button onclick="saveTargets()">保存</button>
+      </div>
+      <div class="pv-hint">输入要学习的用户ID，多个用逗号分隔。</div>
+      <div id="targetTags" class="pv-flex" style="margin-top:var(--pv-3)"></div>
     </div>
-    <div class="panel">
-      <div class="section-title">手动添加学习样本</div>
-      <div class="muted">粘贴该用户的历史发言，每行一条。</div>
-      <textarea id="samples" placeholder="今天开播了&#10;真的假的&#10;我先看一眼"></textarea>
-      <button style="margin-top:8px" onclick="addSamples()">添加样本</button>
+
+    <div class="pv-grid cols-2">
+      <div class="pv-panel pv-stack">
+        <div class="pv-panel-h"><h2>手动添加学习样本</h2><i class="pv-rule"></i>
+          <span class="pv-count">style_samples</span></div>
+        <div class="pv-grow">
+          <div class="pv-hint" style="margin:0 0 var(--pv-2)">粘贴该用户的历史发言，每行一条。</div>
+          <textarea id="samples" class="pv-textarea" placeholder="今天开播了&#10;真的假的&#10;我先看一眼"></textarea>
+        </div>
+        <div class="pv-flex" style="margin-top:var(--pv-3)"><button onclick="addSamples()">添加样本</button></div>
+      </div>
+
+      <div class="pv-panel pv-stack">
+        <div class="pv-panel-h"><h2>从记忆自动学习</h2><i class="pv-rule"></i>
+          <span class="pv-count">super_memory</span></div>
+        <div class="pv-grow">
+          <div class="pv-hint" style="margin:0 0 var(--pv-2)">从 super_memory 的历史消息中自动提取该用户的说话风格。</div>
+          <input id="memoryUserId" type="text" class="pv-input" placeholder="用户ID">
+        </div>
+        <div class="pv-flex" style="flex-wrap:nowrap;margin-top:var(--pv-3)">
+          <button onclick="learnFromMemory()">开始学习</button>
+          <span class="pv-spacer"></span>
+          <span id="memoryStatus" class="pv-msg" style="margin:0;text-align:right"></span>
+        </div>
+      </div>
     </div>
-    <div class="panel">
-      <div class="section-title">从记忆自动学习</div>
-      <div class="muted">从 super_memory 的历史消息中自动提取该用户的说话风格。</div>
-      <input id="memoryUserId" type="text" placeholder="用户ID" />
-      <button style="margin-top:8px" onclick="learnFromMemory()">开始学习</button>
-      <div id="memoryStatus" class="muted" style="margin-top:6px;"></div>
+
+    <div class="pv-panel">
+      <div class="pv-panel-h"><h2>已提取风格特征</h2><i class="pv-rule"></i>
+        <span class="pv-count">style_features</span></div>
+      <div class="pv-hint" style="margin:0 0 var(--pv-3)">基于历史样本自动提取，权重高的特征会优先使用。</div>
+      <div id="features"><div class="empty">加载中...</div></div>
     </div>
-    <div class="panel">
-      <div class="section-title">已提取风格特征</div>
-      <div class="muted">基于历史样本自动提取，权重高的特征会优先使用。</div>
-      <div id="features" class="empty">加载中...</div>
+
+    <div class="pv-flex" style="margin-top:var(--pv-4)">
+      <button class="ghost" onclick="window.parent.postMessage({type:'eggbloom:navigate',page:'plugins'},'*')">返回插件列表</button>
     </div>
-    <div class="back" onclick="window.parent.postMessage({type:'eggbloom:navigate',page:'plugins'},'*')">返回插件列表</div>
   </div>
-  <script>
+<script>
   async function api(path, opts={}) {
     const res = await fetch(path, Object.assign({headers: {'Content-Type':'application/json'}}, opts));
     return res.json();
