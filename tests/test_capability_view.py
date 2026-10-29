@@ -160,5 +160,66 @@ class TestCapabilityWiring(unittest.TestCase):
         self.assertIn("stable_parts.append(_cap_block)", seg)
 
 
+class TestGroupNameCapabilityConsistency(unittest.TestCase):
+    """A3（2026-10-29）：**群名权限口径只许有一份**。
+
+    背景：能力清单里「改群名」曾写成"只有群主能改，admin 改不了"，
+    而 `_do_group_admin` 的执行层根本不看群角色（只看主人授权），
+    两边口径打架 —— 模型据清单回答，就会把能做的事说成不能。
+
+    10-27 带 `no_cache` 重测结论：**群主与管理员都能改**（QQ 规则）。
+    本组测试把这条定案钉死，防止再次分叉：
+      ① 能力清单仍声明 group_name（不能偷偷删掉这个能力）
+      ② 执行层没有按群角色否决 set_group_name 的分支
+      ③ 执行层必须带回读校验（retcode=0 ≠ 改成功）
+      ④ 清单文案里不出现"只有群主""改不了群名"这类旧口径
+    """
+
+    def test_admin_commands_declare_group_name(self):
+        import capabilities_view as cv
+        names = {k for k, _v, _l in cv.ADMIN_COMMANDS}
+        self.assertIn("group_name", names, "「改群名」必须仍在管理指令表里")
+
+    def test_executor_has_no_role_veto_for_group_name(self):
+        with io.open(os.path.join(_ROOT, "bot_core.py"), encoding="utf-8") as f:
+            src = f.read()
+        seg = src[src.find('if action == "set_group_name":'):]
+        seg = seg[:2200]
+        for bad in ('只有群主', '群主才能', '机器人不是群主'):
+            self.assertNotIn(bad, seg, f"执行层出现旧口径：{bad}")
+
+    def test_executor_reads_back_with_no_cache(self):
+        with io.open(os.path.join(_ROOT, "bot_core.py"), encoding="utf-8") as f:
+            src = f.read()
+        seg = src[src.find('if action == "set_group_name":'):]
+        seg = seg[:4000]
+        self.assertIn("set_group_name", seg)
+        self.assertIn("_read_group_name", seg, "改完必须回读")
+        # 回读必须带 no_cache —— 不带就读到 OneBot 侧缓存，把成功误判成失败
+        i = src.find("def _read_group_name")
+        self.assertGreater(i, 0, "找不到 _read_group_name")
+        reader = src[i:i + 900]
+        self.assertIn("no_cache", reader, "回读必须 no_cache=True")
+
+    def test_capability_text_has_no_stale_claim(self):
+        import capabilities_view as cv
+        for role in ("owner", "admin", "member"):
+            out = "\n".join(cv.render(cv.build_snapshot(
+                offered_tools=("search_web",), all_tools=("search_web",),
+                is_group=True, bot_role=role, sender_is_admin=True)))
+            self.assertNotIn("只有群主", out, f"{role} 的能力清单出现旧口径")
+            self.assertNotIn("改不了群名", out, f"{role} 的能力清单出现旧口径")
+        # owner/admin 必须明确说能改；member 必须明确说不能
+        owner = "\n".join(cv.render(cv.build_snapshot(
+            offered_tools=("search_web",), all_tools=("search_web",),
+            is_group=True, bot_role="owner", sender_is_admin=True)))
+        member = "\n".join(cv.render(cv.build_snapshot(
+            offered_tools=("search_web",), all_tools=("search_web",),
+            is_group=True, bot_role="member", sender_is_admin=True)))
+        self.assertIn("改群名", owner)
+        self.assertIn("改群名", member)
+        self.assertIn("办不了", member)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

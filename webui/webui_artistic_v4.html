@@ -4803,6 +4803,11 @@ const CFG_OPTIONS = {
               ['INFO', 'INFO（默认）'],
               ['WARNING', 'WARNING（只要警告与错误）'],
               ['ERROR', 'ERROR（只要错误）']],
+  /* 反问闸（1.5.9 §3.6）：reply_gate.guard_mode 只认这三个值，写错退回 off。
+     不给自由文本，避免"配了个没人读的字符串"。 */
+  reply_question_guard: [['off', 'off（只记口癖，不重生）'],
+                         ['regen', 'regen（末句是问号就重生一次）'],
+                         ['regen_private', 'regen_private（只在私聊 / 被 @ 时重生）']],
 };
 function cfGet(cfg, k) {
   const p = String(k).split('.');

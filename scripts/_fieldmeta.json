@@ -1108,6 +1108,116 @@
    "id": "sBotNicknames",
    "default": [],
    "default_text": "空"
+  },
+  "speak_gate_tier": {
+   "label": "发言闸档位",
+   "desc": "进模型前的纯代码闸：1 只认点名 / 2 关键词 / 3 关键词+概率（默认）/ 4 全响应。被点名一律放行，任何频控都拦不住",
+   "ctl": "number",
+   "panel": "trigger",
+   "unit": "",
+   "id": "sSpeakGateTier",
+   "default": 3,
+   "default_text": "3"
+  },
+  "speak_probability": {
+   "label": "档位概率",
+   "desc": "档 3 下，命中关键词的消息里有多大比例真的进模型（0–1）。档位不是 3 时这一项不参与判定",
+   "ctl": "number",
+   "panel": "trigger",
+   "unit": "",
+   "id": "sSpeakProbability",
+   "default": 0.15,
+   "default_text": "0.15"
+  },
+  "speak_rate_max_per_100": {
+   "label": "发言率上限",
+   "desc": "窗口内「回复数/消息数」超过 N/100 就静默；样本少于 20 条不判，避免刚开始聊就误拦",
+   "ctl": "number",
+   "panel": "trigger",
+   "unit": "/100",
+   "id": "sSpeakRateMax",
+   "default": 10,
+   "default_text": "10"
+  },
+  "speak_rate_window_min": {
+   "label": "发言率窗口",
+   "desc": "统计发言率的滑动窗口长度；窗口越短越容易被拦，越长越平滑",
+   "ctl": "number",
+   "panel": "trigger",
+   "unit": "分钟",
+   "id": "sSpeakRateWindow",
+   "default": 30,
+   "default_text": "30"
+  },
+  "consecutive_reply_limit": {
+   "label": "连说上限",
+   "desc": "连续自己说 N 条后强制静默 5 分钟（期间有人说话即清零）。被点名不受此限",
+   "ctl": "number",
+   "panel": "trigger",
+   "unit": "条",
+   "id": "sConsecutiveLimit",
+   "default": 2,
+   "default_text": "2"
+  },
+  "decider_min_score": {
+   "label": "决策器放行线",
+   "desc": "会话决策器的置信度下限（0–1）：调低更容易接话，调高更沉默；临界区 ±0.1 交给 AI 表态",
+   "ctl": "number",
+   "panel": "trigger",
+   "unit": "",
+   "id": "sDeciderMinScore",
+   "default": 0.5,
+   "default_text": "0.5"
+  },
+  "persona_sharpness": {
+   "label": "嘴毒程度",
+   "desc": "人格形式参数（0–1）：语气词池分档 + 句首语气词概率。只改说话形式，不改文本内容",
+   "ctl": "number",
+   "panel": "deai",
+   "unit": "",
+   "id": "sPersonaSharp",
+   "default": 0.75,
+   "default_text": "0.75"
+  },
+  "persona_curiosity": {
+   "label": "好奇程度",
+   "desc": "人格形式参数（0–1）：对方说陈述句时追问的概率。调高更像会接话的活人，也更容易变成十万个为什么",
+   "ctl": "number",
+   "panel": "deai",
+   "unit": "",
+   "id": "sPersonaCurious",
+   "default": 0.55,
+   "default_text": "0.55"
+  },
+  "persona_warmth": {
+   "label": "亲近温度",
+   "desc": "人格形式参数（0–1）：表情概率 + 句末句号软化成～的概率。调高更软，调低更像冷脸",
+   "ctl": "number",
+   "panel": "deai",
+   "unit": "",
+   "id": "sPersonaWarm",
+   "default": 0.35,
+   "default_text": "0.35"
+  },
+  "reply_question_guard": {
+   "label": "反问闸",
+   "desc": "末句是问号时怎么办：off 只记口癖 / regen 重生一次 / regen_private 只在私聊与被 @ 时重生。重生会把首字从 5 秒推到 7–8 秒",
+   "ctl": "select",
+   "panel": "length",
+   "unit": "",
+   "id": "sQuestionGuard",
+   "default": "off",
+   "default_text": "off"
+  },
+  "reply_long_ratio": {
+   "label": "长句档概率",
+   "desc": "抽到长句档（2–3 条、每条 ≤40 字）的概率（0–0.5）；只调 C 档权重，A:B 比例不变",
+   "ctl": "number",
+   "panel": "length",
+   "unit": "",
+   "id": "sReplyLongRatio",
+   "default": 0.1,
+   "default_text": "0.1"
   }
  },
  "actions": {
