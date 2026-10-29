@@ -198,3 +198,113 @@ def rewrite_unsupported(reply, hits):
     # 清掉可能出现的空行堆积
     out = re.sub(r"\n{3,}", "\n\n", out).strip()
     return out
+
+
+# ══════════════════════════════════════════════════════════════════
+# 第三类：能力自述（2026-10-30，方案 v2 §5 / 10-29 私聊真机复盘）
+# ------------------------------------------------------------------
+# 前两类（操作完成态 / 知识类）管的是"做了没说"和"知道不知道"。
+# 还有第三类，一直没人管：
+#
+#     17:33  「收了啊」                      ← 图根本没进视觉
+#     19:19  「图我这儿还是糊的」             ← 这一轮连视觉块都没有
+#     18:25  「我这边没谁戳我」               ← 把"我收不到"说成"没人做"
+#     17:58  「图是系统自己配的」             ← 把后台搬到台面上
+#
+# 判据只有一条：**"我看不到"这句话，要么本轮有过失败的工具调用，要么就是假的。**
+# 不需要维护一张会漂移的能力表 —— trace 本身就是事实（方案 v2 §5）。
+# ══════════════════════════════════════════════════════════════════
+
+#: 「我看不到」类措辞。只在本轮**确实有图**时才判，否则这只是句普通的感慨。
+_CAP_VISION_PHRASES = (
+    "看不到", "看不见", "看不着", "读不到", "读不出来", "认不出",
+    "没读到", "没看到", "没看出来", "看不出", "糊的", "糊了", "是一团",
+)
+
+#: 露后台：把实现细节端到用户面前。**窄列表**，宁可漏判也别误伤正常聊天
+#: （"模型"单独出现可能是手办，所以只认"视觉模型/语言模型"这种组合）。
+_CAP_MECH_PHRASES = (
+    "占位", "一个框", "一个空框", "渲染", "解析失败", "系统配的",
+    "系统自己配", "系统挑的", "视觉链", "视觉模型", "语言模型", "大模型那边",
+    "接口没返回", "接口返回", "prompt", "token",
+)
+
+#: 「收不到」被说成「没发生」。否定断言只能证明自己没看到，证明不了世界。
+#: 只认**带观察动词**的组合，避免把"我没有什么想说的"这种正常句子卷进来。
+_CAP_NEGATIVE_RE = re.compile(
+    r"(没有|没人|没谁|不存在|没发生过)[^，。！？\n]{0,6}"
+    r"(戳|找我|跟我说|发(消息|图)?给我|在群里|进群|加我|艾特|提到我)"
+)
+
+#: 命中后替换成的固定话术（方案 v2 §3 第六章「失败长什么样」）。
+#: 统一话术的目的不是好看，是**让模型没有自由发挥的空间** ——
+#: "糊的""一个框""解析失败"全是自由发挥出来的。
+_REWRITE_CAP = {
+    "mechanism": "图我这儿没取到，你说是啥",
+    "vision_seen_but_denied": "刚才那张我看到了",
+    "vision_not_tried": "我这轮没去取，你说说是什么",
+    "negative": "我这边没记录到",
+}
+
+#: 视觉类工具名（子串匹配）。与 _KIND_TOOLS 分开：那边是"操作完成态"的溯源，
+#: 这边只关心"这一轮到底有没有真的调用过视觉"。
+_VISION_TOOLS = ("vision", "describe_image", "image_understand", "看图", "识图")
+
+
+def _calls_matching(calls, names):
+    """返回 (有没有成功调用, 有没有失败调用)。"""
+    ok_any, fail_any = False, False
+    for _ts, name, ok, _detail in (calls or []):
+        low = str(name or "").lower()
+        if any(t in low for t in names):
+            if ok:
+                ok_any = True
+            else:
+                fail_any = True
+    return ok_any, fail_any
+
+
+def find_capability_claims(reply, tool_calls, had_media=False):
+    """找出「能力自述」类的问题句。
+
+    参数
+      had_media  : 这一轮用户是不是**真的发了图**（调用方用 images 判断）。
+                   没图时不判"看不到" —— 那只是普通聊天，不是谎报能力。
+
+    返回 [(kind, sentence), ...]，kind ∈ {mechanism, vision_seen_but_denied,
+    vision_not_tried, negative}。
+
+    三态处置（方案 v2 §5）：
+      · 有成功的视觉调用却还说看不到 → vision_seen_but_denied（自相矛盾）
+      · 有失败的视觉调用             → **放过**（它是真试过，允许说看不到）
+      · 一次都没调                   → vision_not_tried（拦，给了动作就该去做）
+    """
+    if not reply:
+        return []
+    calls = list(tool_calls or [])
+    seen_ok, seen_fail = _calls_matching(calls, _VISION_TOOLS)
+    hits = []
+    for sent in _sentences(reply):
+        if any(p in sent for p in _CAP_MECH_PHRASES):
+            hits.append(("mechanism", sent))
+            continue
+        if had_media and any(p in sent for p in _CAP_VISION_PHRASES):
+            if seen_ok:
+                hits.append(("vision_seen_but_denied", sent))
+            elif not seen_fail:
+                hits.append(("vision_not_tried", sent))
+            continue
+        if _CAP_NEGATIVE_RE.search(sent):
+            hits.append(("negative", sent))
+    return hits
+
+
+def rewrite_capability_claims(reply, hits):
+    """把能力自述的问题句换成固定话术。整句替换，不拼接。"""
+    if not hits:
+        return reply
+    out = str(reply or "")
+    for kind, sent in hits:
+        out = out.replace(sent, _REWRITE_CAP.get(kind, "我这边没取到"))
+    out = re.sub(r"\n{3,}", "\n\n", out).strip()
+    return out

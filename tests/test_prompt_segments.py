@@ -85,7 +85,8 @@ class TestPromptSegments(unittest.TestCase):
     def test_segments_registered_in_order(self):
         names = bot_core.prompt_segment_names()
         self.assertEqual(names, ["回答多样性", "去AI味铁律", "表情包", "诚实铁律",
-                                 "别怕不体面", "怎么接话", "群聊规则"],
+                                 "别怕不体面", "别露后台", "怎么接话", "表态",
+                                 "降级", "群聊规则"],
                          f"段顺序变了：{names}")
 
     def test_scope_filtering(self):

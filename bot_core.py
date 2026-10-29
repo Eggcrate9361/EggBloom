@@ -4200,6 +4200,39 @@ def _seg_allow_rude(is_group):
     return _persona_rule_segment("别怕不体面")
 
 
+@register_prompt_segment("别露后台", order=44, scope="both")
+def _seg_no_backstage(is_group):
+    """【别露后台】/ 能力边界 / 不许编状态 / 收不到≠没发生（2026-10-30 真机复盘）。
+
+    ★ 这条原来埋在【群聊规则 | scope=group】里的一条 bullet 里，私聊整段被过滤掉 →
+      私聊没有任何"别露后台"约束。真机后果（10-29 私聊）：
+        "我这边就显示个图，看不到里面是啥"、"我这边就一个[图片]占位"、
+        "那些不是我挑的…图是系统自己配的"。
+    私聊一对一才是最容易露后台的场景，所以提成 both 独立段。
+    """
+    return _persona_rule_segment("别露后台")
+
+
+@register_prompt_segment("表态", order=48, scope="both")
+def _seg_stance(is_group):
+    """表态铁律（2026-10-30 真机复盘）：被问判断必须给判断，且不许无新信息改口。
+
+    10-28 23:45 起连续 11 轮只捧哏，用户爆"你就不能有些主见吗"，
+    给了立场 67 秒后又收回（"放不放你自己定"）。
+    """
+    return _persona_rule_segment("表态")
+
+
+@register_prompt_segment("降级", order=49, scope="both")
+def _seg_soften(is_group):
+    """降级通道（2026-10-30 真机复盘）：对方示弱/收场时闭嘴，不许加倍。
+
+    10-29 17:38 用户说"我对你这么好，你还骂我"，bot 加倍顶回去，
+    12 分钟后用户只回了一句"算了"。
+    """
+    return _persona_rule_segment("降级")
+
+
 @register_prompt_segment("群聊规则", order=50, scope="group")
 def _seg_group_rules(is_group):
     """规则文本已搬到 plugins/personality.txt【不许】段（2026-10-29 B1）。
@@ -13353,6 +13386,23 @@ def _pipeline_step(group_id):
                             sent_text = _before      # 改空了就保留原文，宁可发也别吞
                 except Exception as e:
                     log(f"[reply_audit] 校验跳过: {e}")
+                # ── 能力自述校验（2026-10-30，方案 v2 §5 / 10-29 私聊复盘）──
+                #  第三类断言：前两类管"做了没说"和"知道不知道"，这一类管
+                #  "我看不到""糊的""一个框""没人戳我""系统配的"。
+                #  判据：本轮有失败的视觉调用 → 放过；有成功的却说看不到 → 矛盾；
+                #        一次没调 → 拦。没图时不判，那只是普通聊天。
+                try:
+                    _cap = _ra.find_capability_claims(
+                        sent_text, _tr2.recent_tool_calls(), had_media=bool(images))
+                    if _cap:
+                        _bc = sent_text
+                        sent_text = _ra.rewrite_capability_claims(sent_text, _cap)
+                        log(f"群[{group_id}] [能力校验] {_cap[0][0]}: "
+                            f"{_cap[0][1][:36]} → {sent_text[:36]}")
+                        if not sent_text:
+                            sent_text = _bc
+                except Exception as e:
+                    log(f"[capability_audit] 校验跳过: {e}")
                 # ── persona 形式微调（1.5.9 §C.2，#9）──
                 #   放在所有改写**之后**：判/改的是最终要发出去的那串字。
                 #   只动形式（句末软化 / 句首语气词 / 追加一句短追问），
@@ -15254,6 +15304,22 @@ def main():
                                     sent_text = _before
                         except Exception as e:
                             log(f"[reply_audit] 校验跳过: {e}")
+                        # ── 能力自述校验（2026-10-30，与群聊同款）──
+                        #  私聊是"我看不到图""图是系统配的"这类话的高发区：
+                        #  10-29 的 7 次"我看不到"里有 5 次发生在私聊。
+                        try:
+                            _cap = _ra.find_capability_claims(
+                                sent_text, _tr2.recent_tool_calls(),
+                                had_media=bool(images))
+                            if _cap:
+                                _bc = sent_text
+                                sent_text = _ra.rewrite_capability_claims(sent_text, _cap)
+                                log(f"私聊[{sender}] [能力校验] {_cap[0][0]}: "
+                                    f"{_cap[0][1][:36]} → {sent_text[:36]}")
+                                if not sent_text:
+                                    sent_text = _bc
+                        except Exception as e:
+                            log(f"[capability_audit] 校验跳过: {e}")
                         ok = smart_send(sent_text, sender)
                     else:
                         log("私聊 仅表情标记，跳过文本发送")
