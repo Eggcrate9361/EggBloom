@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>疾病与精神疾病</title>
+<style>
+  :root{
+    --bg:#141210; --panel:#1b1815; --line:#332c23; --ink:#e8e2d6; --dim:#9a8f7d;
+    --gold:#c9a96e; --warn:#c96e5f; --ok:#7fae8a;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:13px/1.65 'Segoe UI','Microsoft YaHei',system-ui,sans-serif;padding:20px 22px 40px}
+  h1{font-size:16px;letter-spacing:.14em;color:var(--gold);margin:0}
+  .sub{color:var(--dim);font-size:12px;margin:6px 0 18px;letter-spacing:.04em}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:14px 16px;margin-bottom:14px}
+  .panel h2{font-size:12px;letter-spacing:.18em;color:var(--dim);margin:0 0 12px;font-weight:500}
+  .rows{display:grid;gap:9px}
+  .row{display:grid;grid-template-columns:96px 1fr 52px;align-items:center;gap:10px}
+  .lab{color:var(--dim);font-size:12px}
+  .bar{height:8px;background:#241f19;border-radius:6px;overflow:hidden;border:1px solid #2b251e}
+  .bar i{display:block;height:100%;width:0;background:linear-gradient(90deg,#8d6b3f,var(--gold));
+    transition:width .35s ease}
+  .val{text-align:right;font-variant-numeric:tabular-nums;color:var(--ink);font-size:12px}
+  .btns{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}
+  button{background:#241f19;color:var(--ink);border:1px solid var(--line);border-radius:6px;
+    padding:7px 14px;cursor:pointer;font:12px/1 'Segoe UI','Microsoft YaHei'}
+  button:hover{border-color:var(--gold);color:var(--gold)}
+  button.primary{background:var(--gold);color:#141210;border-color:var(--gold);font-weight:600}
+  table{width:100%;border-collapse:collapse;font-size:12px}
+  th,td{text-align:left;padding:6px 8px;border-bottom:1px solid #262119}
+  th{color:var(--dim);font-weight:500;letter-spacing:.06em}
+  td.k{color:var(--gold);white-space:nowrap}
+  .status{color:var(--dim);font-size:12px;margin-top:10px;min-height:18px}
+  .legend{color:var(--dim);font-size:11px;margin-left:4px}
+</style>
+</head>
+<body>
+  <h1>疾病与精神疾病</h1>
+  <div class="sub">为什么会这样呢 · 互动有后果，只改形式不动人格</div>
+
+  <div class="panel">
+    <h2>当前状态（0–1，越高越明显）</h2>
+    <div class="rows" id="rows"></div>
+    <div class="btns">
+      <button class="primary" id="refresh">刷新</button>
+      <button id="reset">全部清零</button>
+      <span class="legend" id="meta"></span>
+    </div>
+    <div class="status" id="status"></div>
+  </div>
+
+  <div class="panel">
+    <h2>疾病目录（数据驱动）</h2>
+    <table>
+      <thead><tr><th>类</th><th>病</th><th>触发</th><th>表现</th></tr></thead>
+      <tbody id="diseases"></tbody>
+    </table>
+  </div>
+
+<script>
+const API = '/api/plugins/action';
+const NAMES = {
+  cold: '感冒', fever: '发烧', insomnia: '失眠', loneliness: '孤独',
+  wounded: '受伤', guard: '戒备', irritability: '易怒', burnout: '倦怠',
+};
+const st = document.getElementById('status');
+const meta = document.getElementById('meta');
+
+async function call(action, params){
+  const r = await fetch(API, {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({plugin_id:'vitals', action, params: params || {}})
+  });
+  const t = await r.text();
+  try { return JSON.parse(t); } catch { return {raw:t}; }
+}
+
+function bar(name, v){
+  const pct = Math.max(0, Math.min(1, Number(v) || 0));
+  return '<div class="row">'
+    + '<div class="lab">' + name + '</div>'
+    + '<div class="bar"><i style="width:' + (pct*100).toFixed(1) + '%"></i></div>'
+    + '<div class="val">' + pct.toFixed(2) + '</div></div>';
+}
+
+async function load(){
+  st.textContent = '读取中…';
+  const d = await call('get_vitals');
+  if (!d || d.error || !d.vitals){ st.textContent = '读取失败：' + JSON.stringify(d && (d.error||d.raw||d)); return; }
+  const v = d.vitals;
+  document.getElementById('rows').innerHTML =
+    Object.keys(NAMES).map(k => bar(NAMES[k], v[k])).join('');
+  const upd = Number(v.updated || 0);
+  meta.textContent = upd ? ('更新于 ' + new Date(upd*1000).toLocaleString()) : '';
+  st.textContent = '病表 ' + (d.diseases || 0) + ' 条 · 形式参数只朝「更短更少」';
+  await loadDiseases();
+}
+
+async function loadDiseases(){
+  const d = await call('get_diseases');
+  const list = (d && d.diseases) || [];
+  document.getElementById('diseases').innerHTML = list.map(x => {
+    const kind = x.kind === 'physical' ? '生理' : '心理';
+    const eff = Array.isArray(x.effects) ? x.effects.join('、') : String(x.effects || '');
+    return '<tr><td>' + kind + '</td><td class="k">' + x.name + '</td>'
+      + '<td><code>' + (x.trigger || '') + '</code></td><td>' + eff + '</td></tr>';
+  }).join('') || '<tr><td colspan="4" style="color:#9a8f7d">病表为空或读取失败</td></tr>';
+}
+
+document.getElementById('refresh').onclick = load;
+document.getElementById('reset').onclick = async () => {
+  if (!confirm('把所有状态清零？（求助信号也会自动触发这个）')) return;
+  const r = await call('reset_vitals');
+  st.textContent = (r && r.ok) ? '已清零' : ('清零失败：' + JSON.stringify(r));
+  load();
+};
+load();
+</script>
+</body>
+</html>

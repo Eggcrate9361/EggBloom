@@ -134,3 +134,22 @@ def save_config(params: dict) -> dict:
 #: 插件页/动作分发用的别名（与 get_config 对称）
 def set_config(params: dict) -> dict:
     return save_config(params)
+
+
+def _act_get_config(_params=None) -> dict:
+    return get_config()
+
+
+def _act_set_config(params=None) -> dict:
+    return save_config(params or {})
+
+
+def _act_today(_params=None) -> dict:
+    return get_today()
+
+
+PLUGIN_ACTIONS = {
+    "get_config": _act_get_config,
+    "set_config": _act_set_config,
+    "today": _act_today,
+}

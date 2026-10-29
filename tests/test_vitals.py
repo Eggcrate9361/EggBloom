@@ -88,6 +88,14 @@ fp = core.form_params({"cold": 0.8})
 check("生病只会更短（≤1）", 0 < fp["max_chars_factor"] <= 1 and fp["max_parts_factor"] <= 1, fp)
 check("无症状零注入", core.symptom_line(core.default_state()) == "")
 
+
+print("\n[7] 插件 UI 与动作通道")
+import plugins.vitals as vp  # noqa: E402
+check("PLUGIN_ACTIONS 声明", isinstance(getattr(vp, "PLUGIN_ACTIONS", None), dict)
+      and {"get_vitals", "get_diseases", "reset_vitals"} <= set(vp.PLUGIN_ACTIONS))
+check("动作可调用且返回 dict", isinstance(vp.PLUGIN_ACTIONS["get_vitals"]({}), dict))
+check("ui.html 存在", os.path.isfile(os.path.join(ROOT, "plugins", "vitals", "ui.html")))
+
 print("\n" + "=" * 56)
 print(f"通过 {len(PASS)} / 失败 {len(FAIL)}")
 if FAIL:

@@ -88,6 +88,14 @@ try:
 finally:
     sp._CACHE.update(_old)
 
+
+print("\n[6] 插件 UI 与动作通道")
+import plugins.schedule as sp2  # noqa: E402
+check("PLUGIN_ACTIONS 声明", isinstance(getattr(sp2, "PLUGIN_ACTIONS", None), dict)
+      and {"get_config", "set_config", "today"} <= set(sp2.PLUGIN_ACTIONS))
+check("get_config 动作返回 dict", isinstance(sp2.PLUGIN_ACTIONS["get_config"]({}), dict))
+check("ui.html 存在", os.path.isfile(os.path.join(ROOT, "plugins", "schedule", "ui.html")))
+
 print("\n" + "=" * 56)
 print(f"通过 {len(PASS)} / 失败 {len(FAIL)}")
 if FAIL:

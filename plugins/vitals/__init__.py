@@ -280,4 +280,34 @@ def get_form_params() -> dict:
 
 
 def get_diseases() -> list:
+    # 插件未启用时 on_load 没跑过 → 病表为空；插件页仍应能看到目录，所以惰性加载一次
+    if not _DISEASES:
+        load_diseases()
     return list(_DISEASES)
+
+
+def reset_vitals(_params=None) -> dict:
+    """一键清零（§16.6 的"可重置"）：插件页/管理员安抚用。"""
+    save_state(core.reset_all(load_state()))
+    return {"ok": True, "vitals": get_vitals()}
+
+
+def _act_get_vitals(_params=None) -> dict:
+    if not _DISEASES:
+        load_diseases()
+    return {"vitals": get_vitals(), "form": get_form_params(), "diseases": len(_DISEASES)}
+
+
+def _act_get_diseases(_params=None) -> dict:
+    return {"diseases": get_diseases()}
+
+
+def _act_reset(_params=None) -> dict:
+    return reset_vitals()
+
+
+PLUGIN_ACTIONS = {
+    "get_vitals": _act_get_vitals,
+    "get_diseases": _act_get_diseases,
+    "reset_vitals": _act_reset,
+}
