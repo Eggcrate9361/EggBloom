@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """config.py - Configuration with env override, API provider selection"""
 import json
 import logging
@@ -342,6 +342,17 @@ DEFAULT_CONFIG = {
     # 抽到长句档（档 C，2–3 条 ≤40 字）的概率。1.5.9 §3.3 三档分布：
     # A 60% / B 30% / C 10%，这个键只调 C 的权重，A:B 比例不变。0–0.5。
     "reply_long_ratio": 0.1,
+    # ── 插件注入预算（1.5.10 F3，2026-10-30）──────────────────────
+    # `before_reply` 的注入以前没有上限，一个插件话多就能把消息尾撑到几百字。
+    # 两个维度分开算，因为要防的东西不一样：
+    #   plugin_inject_max_chars   一次回复里**所有插件注入合计**的字数上限（prompt 体积）
+    #   plugin_inject_daily_chars **每个插件每天**累计的字数上限（防某个插件刷屏）
+    # 账本落 data/plugin_budget.json，按本地日期换天 —— bot 一天重启七八次，
+    # 只放内存的每日预算等于没有。
+    # 0 = 该维度不限；整段放不下就整段跳过，截断点取句末/换行，不塞半句。
+    "plugin_inject_budget_enabled": True,
+    "plugin_inject_max_chars": 80,
+    "plugin_inject_daily_chars": 600,
     "group_last_exit_cooldown": 3000,
     # 2026-10-25：30 秒太短 —— 实测两次戳相隔 2 分钟，计数都从 1 重来，
     # 用户看到的就是"计数不动"。改为 10 分钟，覆盖正常人连续戳的间隔。

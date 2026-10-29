@@ -316,17 +316,76 @@ def _run_ego_before_reply(message: str, group_id: str = "", ctx: Optional[dict] 
             if blocks:
                 content = "\n".join(str(b) for b in blocks) + ("\n" + content if content else "")
             if content:
-                parts.append(content)
+                # F3/F4：带插件名与 priority 下去排序、计预算（原来只拼字符串）
+                try:
+                    _pri = pm.get_meta(plugin_name).get("priority", 50)
+                except Exception:
+                    _pri = 50
+                parts.append((plugin_name, _pri, content))
             if temperature is None and "temperature" in result:
                 try:
                     temperature = float(result["temperature"])
                 except (TypeError, ValueError):
                     temperature = None
         if parts:
-            inject_text = "\n".join(parts)
+            inject_text, _ = _plan_plugin_inject(parts, tag="[私聊] ")
     except Exception:
         return "", None
     return inject_text, temperature
+
+
+# ── 插件注入：排序 + 预算（1.5.10 F3/F4，2026-10-30）───────────────
+# 两个注入点（群聊 / 私聊 ego）都从这里过一遍，避免"两套拼法各管一段"。
+# 逻辑全在 harness.plugin_budget，这里只负责单例账本与日志。
+_PLUGIN_BUDGET = {"ledger": None, "path": ""}
+
+
+def _plugin_budget_ledger():
+    """当日账本的进程内单例。路径变了就重建（测试/换 data 目录）。"""
+    try:
+        from harness import plugin_budget as _pbudget
+        path = _pbudget.default_path()
+    except Exception:
+        return None
+    if _PLUGIN_BUDGET["ledger"] is None or _PLUGIN_BUDGET["path"] != path:
+        try:
+            _PLUGIN_BUDGET["ledger"] = _pbudget.Ledger(path)
+            _PLUGIN_BUDGET["path"] = path
+        except Exception:
+            return _PLUGIN_BUDGET["ledger"]
+    return _PLUGIN_BUDGET["ledger"]
+
+
+def _plan_plugin_inject(items, tag=""):
+    """[(name, priority, content)] → (注入文本, 报告)。
+
+    ★ 预算模块坏了就**退回旧行为**（只排序、拼起来），注入不能因为计费模块
+      出问题整段消失 —— 那会把"少说两句"变成"人格注入没了"。
+    """
+    items = [it for it in (items or []) if str(it[2] or "").strip()]
+    _empty = {"total": 0, "kept": [], "dropped": [], "trimmed": []}
+    if not items:
+        return "", dict(_empty)
+    try:
+        from harness import plugin_budget as _pbudget
+    except Exception:
+        _pbudget = None
+    if _pbudget is None:
+        _ordered = sorted(items, key=lambda it: int(it[1] or 50))
+        return "\n".join(str(it[2]) for it in _ordered), dict(_empty)
+    try:
+        _ordered = _pbudget.order(items)
+        _ledger = _plugin_budget_ledger()
+        text, rep = _pbudget.plan(_ordered, _pbudget.config_of(_config), _ledger)
+        if _ledger is not None:
+            _ledger.save()
+        _line = _pbudget.describe(rep)
+        if _line:
+            log(f"{tag}{_line}")
+        return text, rep
+    except Exception as e:
+        log(f"{tag}[插件预算] 异常，退回不限额拼接: {e}")
+        return "\n".join(str(it[2]) for it in _ordered), dict(_empty)
 
 
 def _inject_ego_context(dynamic_parts, inject_text: str, tag: str = "EGO"):
@@ -12834,7 +12893,7 @@ def _pipeline_step(group_id):
                             if plugin_name == "group_chat_decider" and _decider_ctx_text:
                                 plugin_intervened = True
                                 continue
-                            inject_parts.append((priority, content))
+                            inject_parts.append((plugin_name, priority, content))
                         elif action == "override":
                             if override_reply is None or priority < override_priority:
                                 override_reply = result.get("reply", "")
@@ -12861,8 +12920,10 @@ def _pipeline_step(group_id):
                                       "poke_uid": buffer.get("poke_uid")})
                         return
                     if inject_parts:
-                        inject_parts.sort(key=lambda x: x[0])
-                        merged_inject = "\n".join(part for _, part in inject_parts)
+                        # F4 排序 + F3 预算：原来只有 `sort(priority)` 和裸 join，
+                        # 同优先级的顺序取决于注册顺序，长度则完全没人管。
+                        merged_inject, _pb_rep = _plan_plugin_inject(
+                            inject_parts, tag=f"群[{group_id}] ")
                         # EGO 上下文（人格/记忆/风格）提升为 system 级，其余插件注入仍拼消息尾
                         for _pn, _pr in intervention:
                             if _pn == "ego" and isinstance(_pr, dict) and _pr.get("action") == "inject":
@@ -13035,6 +13096,20 @@ def _pipeline_step(group_id):
             _budget = reply_budget.pick(
                 shift=_budget_shift(_form.get("budget_shift", 0), _tal),
                 long_ratio=_config.get("reply_long_ratio", 0.1))
+            # ── vitals 的形式参数接进预算（1.5.10 F4 尾项，2026-10-30）──
+            # 生病 = 说得更短 / 条数更少，方向只有向下（系数那边已夹到 0–1）。
+            # 插件没启用就**完全不读**：没开的功能不该偷偷改回复长度。
+            try:
+                _pmv = get_plugin_manager()
+                if _pmv is not None and _pmv.is_enabled("vitals"):
+                    from plugins.vitals import get_form_params as _vitals_form
+                    _budget = reply_budget.apply_factors(_budget, _vitals_form())
+                    _vp = _budget.get("factors") or {}
+                    if _vp:
+                        log(f"群[{group_id}] [vitals] 预算下调 chars×{_vp.get('chars')}"
+                            f" parts×{_vp.get('parts')} → 每条 ≤{_budget.get('max_chars')} 字")
+            except Exception as e:
+                log(f"群[{group_id}] [vitals] 系数读取失败（用原档位）: {e}")
             merged_text_for_ai = f"{merged_text_for_ai}\n[系统提示] {reply_budget.prompt_line(_budget)}"
             _phase_set(group_id, "generating")
             reply = call_deepseek(merged_text_for_ai, images, group_id=group_id, is_group=True, personality_temperature=_ST.get("personality_temperature"), ego_inject_context=_ego_ctx, scene_context=_scene_ctx, sender=sender)

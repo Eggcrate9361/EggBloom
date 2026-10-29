@@ -137,12 +137,47 @@ def test_regen_hint():
     check("重生提示带原因与数字", "42" in hint and "8" in hint, hint)
 
 
+def test_apply_factors():
+    """vitals 的形式参数接预算（1.5.10 F4 尾项，2026-10-30）。"""
+    a = {"name": "A", "parts_min": 1, "parts_max": 1, "max_chars": 8, "max_total": 8}
+    c = {"name": "C", "parts_min": 2, "parts_max": 3, "max_chars": 40, "max_total": 80}
+
+    # ① 没病（系数全 1）= 恒等：不写新键，与旧行为逐字节等价
+    same = rb.apply_factors(a, {"max_chars_factor": 1.0, "max_parts_factor": 1.0})
+    check("系数全 1 → 不改变档位", same == a, same)
+    check("系数全 1 → 不写 factors 键", "factors" not in same)
+    check("没有 factors 参数 → 不改变", rb.apply_factors(c, None) == c)
+
+    # ② 生病只压不换档：档名不变，上限变小
+    sick = rb.apply_factors(c, {"max_chars_factor": 0.5, "max_parts_factor": 0.5})
+    check("档名不变（压上限不换档）", sick["name"] == "C", sick)
+    check("每条上限减半", sick["max_chars"] == 20, sick["max_chars"])
+    check("总上限减半", sick["max_total"] == 40, sick["max_total"])
+    check("条数上限减半", sick["parts_max"] == 2 or sick["parts_max"] == 1, sick["parts_max"])
+    check("parts_min 不超 parts_max", sick["parts_min"] <= sick["parts_max"], sick)
+
+    # ③ 下界：压过头也不低于 FACTOR_MIN_CHARS，否则只会退化成「行」
+    worst = rb.apply_factors(a, {"max_chars_factor": 0.0, "max_parts_factor": 0.0})
+    check("有下限，不会压成 0 字", worst["max_chars"] == rb.FACTOR_MIN_CHARS, worst)
+    check("条数至少 1 条", worst["parts_max"] == 1, worst)
+
+    # ④ 只下调，不上调：传 >1 被夹成 1
+    up = rb.apply_factors(c, {"max_chars_factor": 3.0, "max_parts_factor": 2.0})
+    check("系数 >1 不会让回复变长", up["max_chars"] <= c["max_chars"]
+          and up["parts_max"] <= c["parts_max"], up)
+
+    # ⑤ 脏值不炸
+    check("脏系数当 1.0", rb.apply_factors(c, {"max_chars_factor": "abc"}) == c)
+    check("factors 非 dict 不炸", rb.apply_factors(c, "nonsense") == c)
+    check("空档位也能返回 dict", isinstance(rb.apply_factors({}, {"max_chars_factor": 0.5}), dict))
+
+
 def main():
     print("=" * 58)
     print("回复预算（B3）")
     print("=" * 58)
     for fn in (test_distribution, test_prompt_line, test_visible, test_check,
-               test_fit, test_anchor_ok, test_regen_hint):
+               test_fit, test_anchor_ok, test_regen_hint, test_apply_factors):
         print(f"\n[{fn.__name__}]")
         fn()
     print("\n" + "=" * 58)

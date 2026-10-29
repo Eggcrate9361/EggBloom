@@ -279,6 +279,54 @@ def regen_hint(reason: str, b: Dict) -> str:
     return f"（上一条{reason}，重写：最多 {b.get('parts_max', 1)} 条，每条 {b.get('max_chars', 8)} 字以内）"
 
 
+#: 生病时最多压到这么短 —— 再短就不是人话了（"行"已经是极限）。
+FACTOR_MIN_CHARS = 6
+FACTOR_MIN_TOTAL = 8
+
+
+def apply_factors(b: Dict, factors: Optional[Dict] = None) -> Dict:
+    """把「状态」给的形式参数叠到档位上（1.5.10 F4 尾项，2026-10-30）。
+
+    factors 来自 `plugins/vitals/core.form_params()`：
+
+        max_chars_factor   0.35–1.0   生病 → 每条更短
+        max_parts_factor   0.3–1.0    生病 → 条数更少
+
+    ★ 只做乘法、**不换档**：档位是 A/B/C 的分布（多常说话），换档会改分布；
+      压上限只改"这次说多长"。两件事不能混。
+    ★ 系数夹在 0–1：传 1.5 也不会让回复变长 —— 生病只会让人话少。
+    ★ 系数都是 1 时**原样返回入参的副本**（不写任何新键）：vitals 关掉/没病
+      必须与"没有这个功能"逐字节等价。
+    """
+    out = dict(b or {})
+    f = factors if isinstance(factors, dict) else {}
+
+    def _f(key: str) -> float:
+        try:
+            v = float(f.get(key, 1.0))
+        except (TypeError, ValueError):
+            return 1.0
+        return max(0.0, min(1.0, v))
+
+    cf, pf = _f("max_chars_factor"), _f("max_parts_factor")
+    if cf >= 0.999 and pf >= 0.999:
+        return out
+
+    per = int(out.get("max_chars") or HARD_MAX_CHARS)
+    tot = int(out.get("max_total") or HARD_MAX_TOTAL)
+    pmax = int(out.get("parts_max") or HARD_MAX_PARTS)
+    out["max_chars"] = max(FACTOR_MIN_CHARS, min(per, int(round(per * cf))))
+    out["max_total"] = max(FACTOR_MIN_TOTAL, min(tot, int(round(tot * cf))))
+    out["parts_max"] = max(1, min(pmax, int(round(pmax * pf))))
+    try:
+        out["parts_min"] = min(int(out.get("parts_min") or 1), out["parts_max"])
+    except (TypeError, ValueError):
+        out["parts_min"] = 1
+    out["factors"] = {"chars": round(cf, 3), "parts": round(pf, 3)}
+    return out
+
+
 __all__ = ["BUDGETS", "HARD_MAX_CHARS", "HARD_MAX_PARTS", "HARD_MAX_TOTAL",
+           "FACTOR_MIN_CHARS", "FACTOR_MIN_TOTAL",
            "pick", "prompt_line", "visible", "parts", "check", "fit",
-           "anchor_ok", "regen_hint", "strip_ctx_marks"]
+           "anchor_ok", "regen_hint", "strip_ctx_marks", "apply_factors"]
