@@ -1,0 +1,56 @@
+<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8">
+<title>日程表</title>
+<style>
+body{background:#141210;color:#e8e2d6;font:13px/1.6 'Segoe UI','Microsoft YaHei',monospace;padding:18px}
+h1{font-size:15px;letter-spacing:.12em;color:#c9a96e;margin:0 0 12px}
+textarea{width:100%;min-height:220px;background:#1d1a16;color:#e8e2d6;border:1px solid #3a332a;
+border-radius:6px;padding:10px;font:12px/1.7 'Consolas',monospace}
+.hint{color:#9a8f7d;font-size:12px;margin:8px 0}
+button{background:#c9a96e;color:#141210;border:0;border-radius:6px;padding:8px 16px;cursor:pointer;font-weight:600}
+.status{margin-top:10px;color:#9a8f7d;font-size:12px}
+</style></head><body>
+<h1>日程表 · 周表</h1>
+<div class="hint">每行：<b>天数 起-止 标题 [@地点]</b>　天数写 1-5 或 6,7（1=周一）<br>
+例：<code>1-5 08:00-11:40 上课 @教室</code>　保存后下一轮生效；空表 = 不注入任何日程。</div>
+<textarea id="lines" placeholder="1-5 08:00-11:40 上课 @教室"></textarea>
+<div class="hint">自由时状态：<input id="free" style="background:#1d1a16;color:#e8e2d6;border:1px solid #3a332a;border-radius:4px;padding:4px 8px" value="在家"></div>
+<button id="save">保存</button><div class="status" id="st"></div>
+<script>
+const API='/api/plugins/action';
+const st=document.getElementById('st');
+async function call(action, params){
+  const r=await fetch(API,{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({plugin_id:'schedule',action,params})});
+  const t=await r.text(); try{return JSON.parse(t)}catch{return {raw:t}}
+}
+function toLines(entries){
+  return (entries||[]).map(e=>{
+    const days=(e.days||[]).join(',');
+    return `${days} ${e.start}-${e.end} ${e.title}${e.place?(' @'+e.place):''}`;
+  }).join('\n');
+}
+function parseLines(txt){
+  const out=[];
+  txt.split(/\r?\n/).forEach(raw=>{
+    const line=raw.trim(); if(!line||line.startsWith('#')) return;
+    const m=line.split(/\s+/); if(m.length<3) return;
+    const days=[]; m[0].split(',').forEach(c=>{const p=c.split('-');
+      if(p.length===2){for(let i=+p[0];i<=+p[1];i++)days.push(i)}else days.push(+p[0])});
+    const sp=m[1].split('-'); let title=m.slice(2).join(' '), place='';
+    if(title.includes('@')){const t=title.split('@'); title=t[0].trim(); place=(t[1]||'').trim();}
+    out.push({days,start:sp[0],end:sp[1],title:title.trim(),place});
+  });
+  return out;
+}
+(async()=>{
+  const cfg=await call('get_config');
+  document.getElementById('lines').value=toLines(cfg.entries);
+  document.getElementById('free').value=cfg.state_when_free||'在家';
+  st.textContent='已加载';
+})();
+document.getElementById('save').onclick=async()=>{
+  const entries=parseLines(document.getElementById('lines').value);
+  const r=await call('set_config',{entries, state_when_free:document.getElementById('free').value.trim()||'在家'});
+  st.textContent=(r && (r.ok===false))?('保存失败：'+(r.error||'')):'已保存，下一轮生效';
+};
+</script></body></html>
