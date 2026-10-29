@@ -5328,6 +5328,26 @@ def search_web(query):
             log(f"股票 API 失败: {e}")
             # 降级到 Bing 搜索
 
+    # ★ 2026-10-29（用户要求）：**优先模型搜索**开关。
+    #   真机证据：问「明日方舟 2026 半周年限定」时自家抓取返回 2024/2025 的
+    #   SEO 盘点页，模型据此答「还没官宣」；同一时刻 DeepSeek 原生搜索能返回
+    #   带发布日期的结构化结果。开关在兜底插件配置里（prefer_model_search，
+    #   默认开），这里只读不写。拿不到结果就按原路回退，不让开关变成单点故障。
+    _prefer_model = False
+    try:
+        from search_prefs import prefer_model_search as _prefer_fn
+        _prefer_model = bool(_prefer_fn())
+    except Exception:
+        _prefer_model = False
+    if _prefer_model:
+        _ds_first = _search_via_deepseek(query, _log_prefix="搜索[模型优先]")
+        if _ds_first:
+            _ds_txt = _render_ds_search(_ds_first, query, _log_prefix="搜索[模型优先]")
+            if _ds_txt:
+                log(f"搜索「{query}」→ 模型搜索(DeepSeek)命中")
+                return _ds_txt
+        log(f"搜索「{query}」模型搜索没拿到结果，回退自家搜索")
+
     # 普通搜索（2026-10-23 二次重排，用户要求以自家搜索为主）：
     #   ① 自家抓取（web_access：Bing + 360 → 合并 → 补分 → 抓正文）
     #   ② DeepSeek 原生搜索 —— 只在自家没出结果时兜底
@@ -5344,6 +5364,10 @@ def search_web(query):
         log(f"搜索「{query}」自家没出结果，走 DeepSeek 兜底")
     except Exception as e:
         log(f"搜索「{query}」自家搜索异常，走 DeepSeek 兜底: {str(e)[:100]}")
+
+    # 优先模型搜索已经试过一次 → 这里不再重复一次（既省时间也省 0.005 元/次）
+    if _prefer_model:
+        return f"搜索「{query}」失败或无结果。如实告诉用户没搜到，**不要编造搜索结果**。"
 
     _ds_results = _search_via_deepseek(query)
     if _ds_results is None:

@@ -15,6 +15,7 @@ import sys
 import os
 import json
 import re
+import time
 
 # 确保能导入根目录下的 web_access.py
 PLUGIN_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -80,6 +81,42 @@ DEFAULT_HALLUCINATION_PATTERNS = [
 
 CONFIG_PATH = os.path.join(PLUGIN_DIR, "data", "config.json")
 
+# ── 「本轮真的联网过吗」标记（2026-10-29 修）────────────────────────
+# 事故（真机 13:35:34，私聊）：用户发图 → 图片理解失败 → 模型回「图挂了」，
+# 随后 after_reply 把整句覆盖成「这事我没查到确切结果，不确定的事我不瞎说了。」
+# 用户看到的是一条莫名其妙的拒绝。根因是幻觉拦截**不看有没有搜过** ——
+# 只要回复里出现「应该/可能/好像」这种日常词就整句替换。
+#
+# 现在：before_reply 真的注入过搜索结果才记一个短时标记（同一对象 180 秒），
+# after_reply 只在标记存在时才可能拦截。没联网 = 永不改写回复。
+_INJECTED = {}
+_INJECT_TTL = 180.0
+
+
+def _reply_key(group_id="", context=None):
+    ctx = context or {}
+    who = str(ctx.get("sender") or ctx.get("user_id") or ctx.get("uid") or "")
+    return f"{group_id or 'private'}:{who}"
+
+
+def _mark_injected(group_id="", context=None):
+    try:
+        _INJECTED[_reply_key(group_id, context)] = time.time()
+        # 防无界：只留最近 50 条
+        if len(_INJECTED) > 50:
+            for k in sorted(_INJECTED, key=_INJECTED.get)[:10]:
+                _INJECTED.pop(k, None)
+    except Exception:
+        pass
+
+
+def _recently_injected(group_id="", context=None):
+    try:
+        ts = _INJECTED.get(_reply_key(group_id, context))
+        return bool(ts) and (time.time() - ts) <= _INJECT_TTL
+    except Exception:
+        return False
+
 
 def _load_json(path: str, default):
     try:
@@ -102,6 +139,13 @@ def get_config():
     cfg = _load_json(CONFIG_PATH, {})
     return {
         "enabled": bool(PLUGIN_META.get("enabled")),
+        # ★ 2026-10-29（用户要求）：优先模型搜索。默认开 ——
+        #   自家抓取的长问句结果质量太差（真机：2026 的问题返回 2024 的盘点页），
+        #   而 DeepSeek 原生搜索返回带日期的结构化结果。开关只在配置里，
+        #   主链的 search_web 也读同一个键（search_prefs）。
+        "prefer_model_search": bool(cfg.get("prefer_model_search", True)),
+        # ★ 2026-10-29：幻觉拦截开关。默认开，但只在"本轮真的联网过"时才可能生效。
+        "block_uncertain_reply": bool(cfg.get("block_uncertain_reply", True)),
         "need_search_keywords": cfg.get("need_search_keywords") or list(DEFAULT_NEED_SEARCH_KEYWORDS),
         "skip_patterns": cfg.get("skip_patterns") or list(DEFAULT_SKIP_PATTERNS),
         "hallucination_patterns": cfg.get("hallucination_patterns") or list(DEFAULT_HALLUCINATION_PATTERNS),
@@ -222,6 +266,24 @@ def _is_uncertain_reply(reply: str) -> bool:
     return _matches_any(reply, DEFAULT_HALLUCINATION_PATTERNS)
 
 
+def _text_content_only(message: str) -> str:
+    """去掉图片/表情/语音占位符与视觉描述块，只留**用户打出来的字**。
+
+    为什么（2026-10-29 用户）：「图片应该由模型理解，不该触发搜索」。
+    图片消息的文本是 `[图片]` 或一段【视觉识别 · …图片内容】转述，
+    在里面做关键词匹配等于让"图里出现的字"决定要不要联网 —— 双层错误。
+    """
+    s = str(message or "")
+    # 视觉描述块整段丢掉（它是转述，不是用户说的话）
+    s = re.sub(r"【视觉识别[^】]*】.*", " ", s, flags=re.S)
+    # 媒体占位符
+    s = re.sub(r"\[(?:图片|表情|动画表情|语音|视频|卡片|分享|文件|引用)[^\]]{0,40}\]", " ", s)
+    # 群聊消息前缀：[HH:MM] [昵称] / 昵称：
+    s = re.sub(r"(?m)^\s*(?:\[\d{1,2}:\d{2}(?::\d{2})?\]\s*)?(?:\[[^\]]{0,40}\]\s*|[^\s：:\[\]]{1,16}\s*[：:]\s*)", "", s)
+    s = re.sub(r"@\S{1,40}", " ", s)
+    return s.strip()
+
+
 def before_reply(message: str = "", group_id: str = "", context: dict = None, **kwargs) -> dict | None:
     """
     如果检测到需要联网查证，执行搜索并注入结果；否则放行。
@@ -230,18 +292,58 @@ def before_reply(message: str = "", group_id: str = "", context: dict = None, **
     if not msg:
         return None
 
+    # ★ 2026-10-29：纯图片/表情消息永不联网。图片理解走视觉层（bot_core），
+    #   搜索插件不该因为图里的字或占位符去查网。
+    _text_only = _text_content_only(msg)
+    if not _text_only:
+        return None
+
     # 判定用原文（整批），检索词用**挑出来的一行**（见 _pick_search_query）。
     # 判定不能改用清理后的文本：清理只删前缀，不影响关键词命中，但保留原文
     # 更符合"这条消息本身要不要查"的语义，改动面也最小。
-    if not _needs_search(msg):
+    if not _needs_search(_text_only):
         return None
-    query = _pick_search_query(msg) or _strip_nick_prefixes(msg) or msg
+    query = _pick_search_query(_text_only) or _strip_nick_prefixes(_text_only) or _text_only
 
+    # 2026-10-29：检索前整形（去「是谁/帮我查/今年」这类问句成分），
+    # 与 search_prefs 的短查询重搜共用同一套规则。
     try:
-        search_result = search_web(query)
+        from search_prefs import shape_query
+        shaped = shape_query(query)
+        if shaped:
+            query = shaped
+    except Exception:
+        pass
+
+    # ★ 2026-10-29（用户要求）：优先模型搜索（DeepSeek 原生），开关=prefer_model_search。
+    #   先模型、模型拿不到再回自家抓取 —— 反过来（先自家）已经实测过：
+    #   长问句会把 2024 年的盘点页当答案，模型据此回「还没官宣」。
+    #   这里与 bot_core 的 search_web 共用 search_prefs，两处不会分叉。
+    search_result = ""
+    try:
+        from search_prefs import prefer_model_search, model_search_text
+        if prefer_model_search():
+            search_result = model_search_text(query, log=lambda m: print(f"[web_search] {m}"))
+            if search_result:
+                print(f"[web_search] 模型搜索命中: {query}")
     except Exception as e:
-        print(f"[web_search] 搜索失败: {e}")
-        search_result = f"搜索「{query}」失败，请稍后再试。"
+        print(f"[web_search] 模型搜索不可用（回退自家搜索）: {e}")
+        search_result = ""
+
+    if not search_result:
+        try:
+            search_result = search_web(query)
+            print(f"[web_search] 自家搜索: {query}")
+        except Exception as e:
+            print(f"[web_search] 搜索失败: {e}")
+            search_result = f"搜索「{query}」失败，请稍后再试。"
+
+    # 真的拿到内容才记标记（失败提示语不算"查过"，否则又会去拦截正常回复）
+    try:
+        if search_result and "失败" not in str(search_result)[:40]:
+            _mark_injected(group_id, context)
+    except Exception:
+        pass
 
     return {
         "action": "inject",
@@ -259,20 +361,32 @@ def before_reply(message: str = "", group_id: str = "", context: dict = None, **
 
 
 def after_reply(message: str = "", reply: str = "", context: dict = None, **kwargs) -> dict | None:
-    """
-    如果 AI 回复里出现了明显的不确定性/瞎猜表达，直接拦截。
-    避免把“可能”“应该”“据我所知”这类内容发给用户。
+    """幻觉拦截：**只对本轮真的联网查过的回复生效**。
+
+    2026-10-29 真机事故：没联网的私聊回复（「图挂了」）因为日常词被整句换成
+    罐头拒绝语。所以这里先查标记；没标记就直接放行，并且可在插件页关掉拦截。
     """
     if not reply:
+        return None
+
+    group_id = str(kwargs.get("group_id") or "")
+    try:
+        if not bool(get_config().get("block_uncertain_reply", True)):
+            return None
+    except Exception:
+        pass
+
+    if not _recently_injected(group_id, context):
+        # 没联网 → 这一句的不确定性是人格的一部分，不该被插件改写
         return None
 
     if _is_uncertain_reply(reply):
         return {
             "action": "override",
-            "reply": "这事我没查到确切结果，不确定的事我不瞎说了。",
+            "reply": "这个我联网查了，没看到确切说法，就不瞎说了。",
             "meta": {
                 "trigger": "web_search",
-                "reason": "uncertain",
+                "reason": "uncertain_after_search",
             },
         }
 

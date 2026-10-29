@@ -97,6 +97,29 @@
         <div class="switch" id="enableSwitch" role="switch" aria-checked="false" tabindex="0"></div>
       </div>
 
+      <div class="row">
+        <div>
+          <div class="label">优先模型搜索（DeepSeek 原生）</div>
+          <div class="hint" style="margin-top:4px;max-width:560px">
+            开启后先走 DeepSeek 原生搜索（每次约 0.005 元，无结果/失败不计费），
+            拿不到再回自家抓取。自家抓取在长问句上容易返回旧年份的盘点页
+            —— 真机实测：问 2026 的半周年限定，返回的是 2024 年的"限定干员介绍"。
+          </div>
+        </div>
+        <div class="switch" id="modelSwitch" role="switch" aria-checked="true" tabindex="0"></div>
+      </div>
+
+      <div class="row">
+        <div>
+          <div class="label">拦截含不确定词的回复</div>
+          <div class="hint" style="margin-top:4px;max-width:560px">
+            只在这一轮**真的联网查过**时才生效：回复里出现「应该/可能/好像」这类词会被换成
+            「查了，没看到确切说法」。没联网的闲聊永不改写。
+          </div>
+        </div>
+        <div class="switch" id="blockSwitch" role="switch" aria-checked="true" tabindex="0"></div>
+      </div>
+
       <div class="field">
         <div class="field-title">触发联网搜索的关键词</div>
         <textarea id="needSearchKeywords" placeholder="一行一个关键词"></textarea>
@@ -132,6 +155,8 @@
     const needSearchKeywords = document.getElementById('needSearchKeywords');
     const skipPatterns = document.getElementById('skipPatterns');
     const hallucinationPatterns = document.getElementById('hallucinationPatterns');
+    const modelSwitch = document.getElementById('modelSwitch');
+    const blockSwitch = document.getElementById('blockSwitch');
     const saveBtn = document.getElementById('saveBtn');
     const resetBtn = document.getElementById('resetBtn');
     let defaults = {};
@@ -148,6 +173,37 @@
     function toLines(value){
       return (value || '').split(/\r?\n/).map(s => s.trim()).filter(Boolean);
     }
+    function setModelUI(on){
+      modelSwitch.classList.toggle('on', !!on);
+      modelSwitch.setAttribute('aria-checked', String(!!on));
+    }
+    function setBlockUI(on){
+      blockSwitch.classList.toggle('on', !!on);
+      blockSwitch.setAttribute('aria-checked', String(!!on));
+    }
+    blockSwitch.addEventListener('click', async ()=>{
+      const next = !blockSwitch.classList.contains('on');
+      setBlockUI(next);
+      try {
+        await call('set_config', { block_uncertain_reply: next });
+        setStatus(next ? '已开启幻觉拦截（仅联网轮）' : '已关闭幻觉拦截', 'ok');
+      } catch (e){
+        setBlockUI(!next);
+        setStatus('保存失败：' + e.message, 'error');
+      }
+    });
+    modelSwitch.addEventListener('click', async ()=>{
+      const next = !modelSwitch.classList.contains('on');
+      setModelUI(next);
+      setStatus('保存中...');
+      try {
+        await call('set_config', { prefer_model_search: next });
+        setStatus(next ? '已优先模型搜索' : '已改为自家搜索优先', 'ok');
+      } catch (e){
+        setModelUI(!next);
+        setStatus('保存失败：' + e.message, 'error');
+      }
+    });
     async function call(action, params){
       const body = {plugin_id:'web_search', action, ...(params ? {params} : {})};
       const res = await fetch(API, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
@@ -166,6 +222,8 @@
         defaults.need_search_keywords = Array.isArray(cfg.need_search_keywords) ? cfg.need_search_keywords : [];
         defaults.skip_patterns = Array.isArray(cfg.skip_patterns) ? cfg.skip_patterns : [];
         defaults.hallucination_patterns = Array.isArray(cfg.hallucination_patterns) ? cfg.hallucination_patterns : [];
+        setModelUI(cfg.prefer_model_search !== false);
+        setBlockUI(cfg.block_uncertain_reply !== false);
         needSearchKeywords.value = defaults.need_search_keywords.join('\n');
         skipPatterns.value = defaults.skip_patterns.join('\n');
         hallucinationPatterns.value = defaults.hallucination_patterns.join('\n');
@@ -190,11 +248,12 @@
       setStatus('保存中...');
       try {
         const saved = await call('set_config', {
+          prefer_model_search: modelSwitch.classList.contains('on'),
           need_search_keywords: toLines(needSearchKeywords.value),
           skip_patterns: toLines(skipPatterns.value),
           hallucination_patterns: toLines(hallucinationPatterns.value),
         });
-        const cfg = saved && saved.config ? saved.config : {};
+        const cfg = (saved && (saved.config || saved)) || {};
         if (Array.isArray(cfg.need_search_keywords)) defaults.need_search_keywords = cfg.need_search_keywords;
         if (Array.isArray(cfg.skip_patterns)) defaults.skip_patterns = cfg.skip_patterns;
         if (Array.isArray(cfg.hallucination_patterns)) defaults.hallucination_patterns = cfg.hallucination_patterns;

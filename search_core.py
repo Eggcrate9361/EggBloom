@@ -438,6 +438,11 @@ _AGGREGATOR_TITLE = (
 #: 给太多会让「新但无关」压过「旧但正是答案」。
 _RECENCY_BONUS_MAX = 0.35
 
+#: 下载站/入口页的降权（query 不是在问下载时）。数值必须**大于**
+#: "同主题分差"的常见量级（实测 0.2 上下）——它要表达的是
+#: "这页不回答'最新版本是什么'"，不是"它稍微差一点"。
+_AGGREGATOR_PENALTY = 0.25
+
 #: 时效加权的半衰期（天）。一个月内的内容拿满分，90 天后归零。
 _RECENCY_HALFLIFE_DAYS = 30
 
@@ -462,6 +467,22 @@ def _age_bonus(date_str, today=None):
         return 0.0
 
 
+def _is_aggregator(it, query):
+    """这条结果是不是"下载站/入口页"，且用户**不是在问下载**。
+
+    为什么单独成函数（2026-10-29）：原来只在 final_score 里内联做"扣 0.25"，
+    于是时效加分会把它救回来 —— 问「原神最新版本」时，下载站页面天天重抓、
+    永远吃满 +0.35 时效分，扣 0.25 之后净赚 0.10，压过真正的更新说明。
+    当日用例只赢 0.0008，隔一天就翻（真机：测试长期红）。
+    判据改成"下载站不享受时效加分"后，这个顺序与日期无关。
+    """
+    q = str(query or "").lower()
+    if "下载" in q or "安装" in q:
+        return False                      # 问下载时它就是答案，不许降权/不许扣分
+    title = str(it.get("title") or "")
+    return any(w in title for w in _AGGREGATOR_TITLE)
+
+
 def final_score(it, query):
     """相关度 + 时效（条件性）− 下载站降权。
 
@@ -472,18 +493,20 @@ def final_score(it, query):
       （页面天天重抓），但不是答案。
     ★ 所以用混合分。它只在分差本来就小的时候起作用，不会把明显更相关的
       结果挤下去。这是启发式，不保证对。
+
+    ★ 2026-10-29：**下载站不吃时效分**。理由见 _is_aggregator ——
+      "页面天天重抓"意味着它的日期不携带任何"这条更新"的证据；
+      给它时效加分再扣固定分，等于让两套启发式互相抵账，结果随时钟漂移。
     """
     try:
         total = float(it.get("score") or 0)
     except Exception:
         total = 0.0
-    q = str(query or "").lower()
-    if wants_recency(query):
+    agg = _is_aggregator(it, query)
+    if wants_recency(query) and not agg:
         total += _age_bonus(it.get("date"))
-    if "下载" not in q and "安装" not in q:
-        title = str(it.get("title") or "")
-        if any(w in title for w in _AGGREGATOR_TITLE):
-            total -= 0.25
+    if agg:
+        total -= _AGGREGATOR_PENALTY
     return total
 
 

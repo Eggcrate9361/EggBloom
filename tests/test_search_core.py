@@ -361,12 +361,39 @@ class TestFinalScore(unittest.TestCase):
                          "完全对题的旧文档")
 
     def test_download_site_demoted(self):
-        """下载站的日期永远最新（页面天天重抓），但不回答「最新版本是什么」。"""
+        """下载站的日期永远最新（页面天天重抓），但不回答「最新版本是什么」。
+
+        ★ 2026-10-29：原用例把两条日期都写死（10-16 / 9-22），只在
+          10-27 当天以 0.0008 险胜，隔一天就翻红 —— 判据本身跟时钟绑死。
+          现在改成**相对今天**构造：下载站就是今天，官网更新说明已经放了 40 天。
+          下载站不吃时效分（_is_aggregator），所以这个顺序与日期无关。
+        """
+        import datetime
+        today = datetime.date.today()
         dl = _it(title="原神app-官方正版软件2026最新版游戏免费下载",
-                 score=2.44, date="2026-10-16")
-        info = _it(title="《原神》7.1 版本更新说明", score=2.22, date="2026-09-22")
+                 score=2.44, date=today.isoformat())
+        info = _it(title="《原神》7.1 版本更新说明",
+                   score=2.22,
+                   date=(today - datetime.timedelta(days=40)).isoformat())
         self.assertEqual(sc.rank([dl, info], "原神最新版本")[0]["title"],
                          "《原神》7.1 版本更新说明")
+
+    def test_download_site_never_gets_recency(self):
+        """下载站拿不到时效分 —— 否则"天天重抓"就是它的固定外挂。
+
+        同一条：新旧日期差再大，也不能让下载站凭"新"翻盘。
+        """
+        import datetime
+        today = datetime.date.today()
+        dl = _it(title="原神手游网-免费下载", score=2.44, date=today.isoformat())
+        old_info = _it(title="《原神》7.1 版本更新说明", score=2.22,
+                       date=(today - datetime.timedelta(days=200)).isoformat())
+        got = sc.rank([dl, old_info], "原神最新版本")
+        self.assertEqual(got[0]["title"], "《原神》7.1 版本更新说明")
+
+    def test_aggregator_penalty_is_meaningful(self):
+        """降权必须大于同主题常见分差（0.2 上下），否则这条启发式等于没有。"""
+        self.assertGreaterEqual(sc._AGGREGATOR_PENALTY, 0.2)
 
     def test_download_site_kept_when_asked_for(self):
         """问「在哪下载」时下载站就是答案，不许降权。"""
