@@ -4103,7 +4103,10 @@ def extract_text(msg, _depth=0):
                     card_text = _extract_card_text(d.get("data", ""))
                     parts.append(f"[卡片] {card_text}" if card_text else "[卡片]")
                 elif seg_type in ("record", "voice"):
-                    parts.append("[语音]")
+                    # 2026-10-29：没有 ASR（1.5.10 不做清单明确不转写）。占位符要带上
+                    # "你听不到"这条事实，否则模型只能猜内容 —— 用户唱了首歌却得不到
+                    # 任何回应，或得到一段瞎猜。让它如实说听不清、请对方打字。
+                    parts.append("[语音]（对方发了语音，你听不到内容；别猜，直说听不清、让他打字）")
                 elif seg_type in ("image", 2):     # OneBot "image" / NT elementType 2
                     # 图片在文本里留一个占位：否则"只发了一张图"的消息会变成空字符串，
                     # 被当成无意义消息跳过（明明有人发图却像什么都没发生）。
@@ -8383,10 +8386,15 @@ def _handle_poke_event(ev):
         #   `[群名片]`，这里再写一遍就变成 `[DeepSeek v41f] [Texas] （戳了戳你…）`。
         #   线上 20:19 模型据此认定"戳我的是另一个人"，还解释"我收到的原文"。
         #   名字只由 _display_name 给一次（群名片优先）。
+        # ★ 2026-10-29（真机 14:44）：原来 forced=False，结果"戳一下"要过两道闸 ——
+        #   决策器先判 observe（评分 0.36 < 0.50），25 秒后发言闸再按档 3 概率拦一次，
+        #   用户体感就是"戳了不理"。戳一戳是**直接指向 Bot 的动作**，等价于点名：
+        #   只反戳不说话等于没反应。所以这里改成 forced=True（进决策器、放行发言闸），
+        #   频率由 POKE_COUNTS/poke_timeout 计数和回复预算约束，不会无限刷。
         _pipeline_upsert(
             gid_str, sender=poke_uid,
             text=f"（戳了戳你，这是第 {poke_n} 次）",
-            forced=False, source="poke", poke_uid=poke_uid)
+            forced=True, source="poke", poke_uid=poke_uid)
     else:
         # 私聊戳一戳
         # ★ 2026-10-28：先过私聊名单（与私聊消息同一条门槛），再谈反戳。
@@ -11196,13 +11204,19 @@ def quote_target_for(buffer: dict) -> int:
     return 0
 
 
-def _schedule_observe(group_id: str, text: str, after: float, reason: str = ""):
-    """安排"潜水前观察"：N 秒后把这段上下文再看一眼（只会发生一次）。"""
+def _schedule_observe(group_id: str, text: str, after: float, reason: str = "",
+                      keep: dict = None):
+    """安排"潜水前观察"：N 秒后把这段上下文再看一眼（只会发生一次）。
+
+    keep：原批次的身份标记（forced/source/poke_uid）——二次决策是"同一批再看一眼"，
+    不是新消息，标记丢了就会从"必须回"退化成"掷概率"（真机 15:06）。
+    """
     try:
         after = max(5.0, min(300.0, float(after or 0)))
     except Exception:
         after = 25.0
-    rec = {"text": text, "at": time.time(), "timer": None, "reason": reason}
+    rec = {"text": text, "at": time.time(), "timer": None, "reason": reason,
+           "keep": dict(keep or {})}
     t = Timer(after, lambda gid=group_id: _observe_second_look(gid))
     try:
         t.daemon = True
@@ -11249,7 +11263,9 @@ def _observe_second_look(group_id: str):
             "in_session": False, "has_context": False, "images": [],
             "observe_retry": True, "timer": None,
             # 流水线字段（2026-10-25）：合成批次没有触发者，也没有戳主。
-            "forced": False, "poke_uid": None,
+            "forced": bool((rec.get("keep") or {}).get("forced")),
+            "source": (rec.get("keep") or {}).get("source") or "message",
+            "poke_uid": (rec.get("keep") or {}).get("poke_uid"),
         }
     try:
         process_buffered_message(group_id)
@@ -11752,6 +11768,8 @@ def _pipeline_merge_locked(buffer, *, group_id, sender, text, now,
     # 同批多人戳时取最近一条（C2 用它决定追问权给谁）
     if source == "poke" and poke_uid:
         buffer["poke_uid"] = str(poke_uid)
+    if source == "poke":
+        buffer["source"] = "poke"
     # 图片也要跟着合并：窗口内多条消息可能各自带图
     _bi = list(buffer.get("images") or [])
     for _ip in (images or []):
@@ -11910,6 +11928,8 @@ def _pipeline_upsert(group_id, *, sender, text, images=None, flags=None,
             "speakers": {str(sender): _new_tag},
             # ★ 2026-10-25 流水线：触发批次免过决策器；戳批次记下发起人。
             "forced": bool(forced),
+            # ★ 2026-10-29：source 之前没进批次，speak_gate 的 source=="poke" 永不命中。
+            "source": str(source or "message"),
             "poke_uid": str(poke_uid) if (source == "poke" and poke_uid) else None,
             "timer": _new_timer,
         }
@@ -11973,6 +11993,8 @@ def _decide(group_id, batch):
                       or batch.get("has_bot_nick") or batch.get("has_text_at")
                       or batch.get("in_session")
                       or (batch.get("has_quote") and batch.get("quote_me")))
+    if not forced and batch.get("source") == "poke":
+        forced = True   # 戳一戳是直接指向 Bot 的动作（2026-10-29）
     if forced:
         return {"act": "reply", "reason": "触发", "ctx": "", "after": 0}
 
@@ -12191,12 +12213,18 @@ def _pipeline_step(group_id):
     #   在**决策器之前**判：没命中就一次模型都不调（决策器本身是 AI）。
     #   被点名（forced）在这之前就返回了，此处 force 只作兜底。
     _gate_ok, _gate_why = True, ""
+    # ★ 2026-10-29：戳批次直通发言闸。它本来就被 forced 覆盖，但二次决策的
+    #   合成批次会丢标记（真机 15:06 被档 3 按 0.74 概率拦掉），所以在闸门口
+    #   再兜一层：有 poke_uid / source==poke 就一次模型都不省。
+    _is_poke_batch = bool(buffer.get("poke_uid") or buffer.get("source") == "poke")
     try:
         from speak_gate import allow as _speak_allow
         _gate_ok, _gate_why = _speak_allow(
             buffer, _config, stats=_speak_stats(group_id))
     except Exception as _ge:
         log(f"[发言闸] 判定失败（按放行处理）: {_ge}")
+        _gate_ok, _gate_why = True, ""
+    if _is_poke_batch:
         _gate_ok, _gate_why = True, ""
     if not _gate_ok:
         log(f"群[{group_id}] [跳过:{_gate_why}] 不进决策器: {merged_text[:60]}")
@@ -12207,7 +12235,10 @@ def _pipeline_step(group_id):
         _after = float(_decision.get("after") or 0)
         if _after > 0 and group_id not in GROUP_OBSERVE:
             _schedule_observe(group_id, merged_text, _after,
-                              _decision.get("reason") or "")
+                              _decision.get("reason") or "",
+                              keep={"forced": buffer.get("forced"),
+                                    "source": buffer.get("source"),
+                                    "poke_uid": buffer.get("poke_uid")})
         return
     if _decision["act"] == "skip":
         _why = str(_decision.get("reason") or "")
@@ -12508,7 +12539,11 @@ def _pipeline_step(group_id):
                         if group_id in GROUP_OBSERVE:
                             log(f"群[{group_id}] [观察] 已有观察窗口，不重复排: {merged_text[:40]}")
                         else:
-                            _schedule_observe(group_id, merged_text, _obs_after, _obs_reason)
+                            _schedule_observe(
+                                group_id, merged_text, _obs_after, _obs_reason,
+                                keep={"forced": buffer.get("forced"),
+                                      "source": buffer.get("source"),
+                                      "poke_uid": buffer.get("poke_uid")})
                         return
                     if inject_parts:
                         inject_parts.sort(key=lambda x: x[0])

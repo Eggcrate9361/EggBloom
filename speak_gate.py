@@ -111,6 +111,12 @@ def hit_topic(text):
         return True
     if len(s) <= _ADDRESS_MAX_LEN and any(w in s for w in _ADDRESS_WORDS):
         return True
+    # ★ 2026-10-29（真机）：用户「戳一下 + 发一句歌词」时，歌词被当成旁白跳过 ——
+    #   没有话头词、也不是短句点名，档 3 掷不中就永远不理。
+    #   判据只加一条保守的：**带波浪号且够长**（拖音/哼唱/撒娇的常见写法，
+    #   正经旁白极少这么写）。命中后仍交给决策器判要不要接，不是直接放行。
+    if len(s) >= 6 and ("～" in s or "~" in s):
+        return True
     return False
 
 

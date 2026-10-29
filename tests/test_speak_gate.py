@@ -53,7 +53,10 @@ def test_config():
     check("默认上限 10/100", c["max_per_100"] == 10, c)
     check("默认连说 2", c["consecutive_limit"] == 2, c)
     check("档位越界夹住", speak_gate.get_config({"speak_gate_tier": 9})["tier"] == 4)
-    check("概率越界夹住", speak_gate.get_config({"speak_probability": -1})["probability"] == 0.0)
+    check("★带波浪号的长句算话头（歌词/拖音）", speak_gate.hit_topic("你不要这样看着我的眼睛～") is True)
+check("★波浪号短句不算（「哦～」太短）", speak_gate.hit_topic("哦～") is False)
+check("★无波浪号的长旁白不算话头", speak_gate.hit_topic("今天服务器又崩了一次") is False)
+check("概率越界夹住", speak_gate.get_config({"speak_probability": -1})["probability"] == 0.0)
 
 
 def test_tiers():
