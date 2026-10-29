@@ -156,8 +156,39 @@ def check_config_readpoints():
           not real, real)
 
 
+
+# ═══════════════════════════════════════════════════════════════════
+# 1.5.10 H3：分离键在读取点可枚举（数据源 = docs/separation-keys.md）
+# ═══════════════════════════════════════════════════════════════════
+def check_separation_keys():
+    """分离白名单里的每个键都必须至少有一个读取点。
+
+    这是 1.6.0 分离启用脚本收尾 grep 闸的**同一份核对数据**：脚本删键时
+    要保证"删掉的每个键都真的被某处读过"，否则会漏删/删错。
+    """
+    p = os.path.join(ROOT, "docs", "separation-keys.md")
+    if not os.path.isfile(p):
+        check("分离键清单存在", False, p)
+        return
+    bad = []
+    total = 0
+    for line in io.open(p, encoding="utf-8").read().splitlines():
+        if not line.startswith("| ") or "`" not in line:
+            continue
+        cols = [c.strip() for c in line.strip("|").split("|")]
+        if len(cols) < 3:
+            continue
+        key = cols[1].strip("`")
+        point = cols[2]
+        total += 1
+        if point in ("—", "-", "") or "无读取点" in " ".join(cols):
+            bad.append(key)
+    check("★ 分离键全部可枚举（%d 个）" % total, total > 0 and not bad, bad)
+
+
 def main():
     check_config_readpoints()
+    check_separation_keys()
     print()
     meta = json.load(io.open(META, encoding="utf-8"))
     want_panels = [p[0] for p in meta["panels"] if any(

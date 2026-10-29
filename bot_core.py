@@ -124,6 +124,39 @@ except Exception as e:
     print(f"[MemeEngine] 加载失败: {e}")
 
 # ── 插件系统 ──
+#: 1.5.10 H5：一条消息从入站到出站共用同一个 trace_id。
+#: 只**加**：日志行尾追加 `trace=xxx`，事件载荷加 trace_id 字段；
+#: 既有字段名与日志格式不改（log_stats / 事件统计仍能解析）。
+_TRACE_LOCAL = threading.local()
+_GROUP_TRACE: Dict[str, str] = {}
+
+
+def _new_trace_id() -> str:
+    import uuid
+    return uuid.uuid4().hex[:12]
+
+
+def _set_trace(tid: str = "") -> str:
+    tid = str(tid or "") or _new_trace_id()
+    try:
+        _TRACE_LOCAL.id = tid
+    except Exception:
+        pass
+    return tid
+
+
+def _cur_trace() -> str:
+    try:
+        return getattr(_TRACE_LOCAL, "id", "") or ""
+    except Exception:
+        return ""
+
+
+def _trace_suffix() -> str:
+    t = _cur_trace()
+    return f" trace={t}" if t else ""
+
+
 def _plugin_send_text(text, target=None, group_id=None) -> bool:
     """插件发文本的唯一出口（1.5.10 F1）。群/私聊分别走 smart_send_group / smart_send。
 
@@ -2192,6 +2225,7 @@ def api_call(endpoint: str, data: Optional[Dict] = None, timeout: float = 15) ->
                 "text": _text,
                 "ts": time.time(),
                 "reply_to": int((data or {}).get("message_id") or 0),
+                "trace_id": _cur_trace(),
             })
     except Exception:
         pass
@@ -2415,14 +2449,16 @@ def send_message(text, target_qq=None):
     if len(parts) <= 1:
         resp = api_call("send_private_msg",
             {"user_id": int(target_qq), "message": text})
-        log(f"[发送] 私聊 → {target_qq}: retcode={resp.get('retcode')} msg={resp.get('msg','')}")
+        log(f"[发送] 私聊 → {target_qq}: retcode={resp.get('retcode')} msg={resp.get('msg','')}"
+            f"{_trace_suffix()}")
         return resp.get("retcode") == 0
 
     for i, part in enumerate(parts):
         prefix = f"({i+1}/{len(parts)}) " if len(parts) > 1 else ""
         resp = api_call("send_private_msg",
             {"user_id": int(target_qq), "message": prefix + part})
-        log(f"[发送] 私聊 → {target_qq} ({i+1}/{len(parts)}): retcode={resp.get('retcode')}")
+        log(f"[发送] 私聊 → {target_qq} ({i+1}/{len(parts)}): retcode={resp.get('retcode')}"
+            f"{_trace_suffix()}")
         if resp.get("retcode") != 0:
             return False
         if len(parts) > 1:
@@ -2714,6 +2750,7 @@ def smart_send_group(group_id, text, reply_id: int = 0):
                     f"msg={str(resp.get('msg',''))[:60]} 内容={msg[:40]}")
                 return False
             _remember_own_group_msg(group_id, msg, resp)
+            log(f"[发送] 群[{group_id}] 已发 {len(msg)} 字{_trace_suffix()}")
             _quoted_done.append(True)
             time.sleep(0.4)
         GROUP_LAST_BOT_MSG[group_id] = time.time()
@@ -12042,6 +12079,8 @@ def _pipeline_upsert(group_id, *, sender, text, images=None, flags=None,
     quote_me = bool(flags.get("quote_me"))
     # ★ 1.5.10 F2：入站事件（只两个核心事件之一）。放在并批/新建之前 ——
     #   每条真实消息都该被订阅方看到，不管它最后并进哪个批次。
+    # ★ H5：一开始就给这条消息一个 trace_id，后续并批/生成/发送都沿用它。
+    _tid = _new_trace_id()
     if source == "message":
         _emit_plugin_event("message.in", {
             "group_id": str(group_id),
@@ -12049,6 +12088,7 @@ def _pipeline_upsert(group_id, *, sender, text, images=None, flags=None,
             "text": str(text),
             "ts": now,
             "at_bot": bool(at_bot or xiao_a or bot_nick or text_at),
+            "trace_id": _tid,
         })
 
     def _merge(buf, force=False):
@@ -12154,6 +12194,8 @@ def _pipeline_upsert(group_id, *, sender, text, images=None, flags=None,
             "images": buffer_images,
             # 本批参与人：{sender: 标签}，批次头用它给名单（1.5.9 §B1.3）
             "speakers": {str(sender): _new_tag},
+            # ★ 1.5.10 H5：整批共用一条 trace（首条消息的 id）。
+            "trace_id": _tid,
             # ★ 2026-10-25 流水线：触发批次免过决策器；戳批次记下发起人。
             "forced": bool(forced),
             # ★ 2026-10-29：source 之前没进批次，speak_gate 的 source=="poke" 永不命中。
@@ -12432,6 +12474,11 @@ def _pipeline_step(group_id):
     _batch_addressed = bool(is_at_bot or has_xiao_a or has_bot_nick
                              or quote_forces or has_text_at)
     
+    # ★ 1.5.10 H5：本批的 trace 进入线程上下文，后续决策/发送日志都带上它。
+    _batch_tid = _set_trace(str(buffer.get("trace_id") or ""))
+    if group_id:
+        _GROUP_TRACE[str(group_id)] = _batch_tid
+
     # ── 决策点（唯一）：_decide 返回 reply / skip / observe ──
     # 旧代码这段内联在这里，且只有"无触发"才会走到；现在触发批次也经过它，
     # forced=True 时短路为 reply，日志多一行「[决策放行] 触发」，用来回答
@@ -12475,7 +12522,7 @@ def _pipeline_step(group_id):
             + f": {merged_text[:80]}")
         return
     if _decision.get("reason") == "触发":
-        log(f"群[{group_id}] [决策放行] 触发: {merged_text[:60]}")
+        log(f"群[{group_id}] [决策放行] 触发: {merged_text[:60]}{_trace_suffix()}")
     else:
         _decider_approved = True
         # 决策器放行后就不再处于"观察"状态（旧代码在 inject 分支里 pop）

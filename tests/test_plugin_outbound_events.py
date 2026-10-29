@@ -108,8 +108,9 @@ try:
         bot_core.REQUESTS_OK, bot_core.urllib.request.urlopen = orig
     replied = [e for e in events if e[0] == "bot.replied"]
     check("★ 只有 send_*_msg 成功才发 bot.replied", len(replied) == 1, events)
+    # H5 起 bot.replied 额外带 trace_id（只加字段，不改既有字段名）
     check("bot.replied 载荷字段齐全",
-          replied and set(replied[0][1]) == {"group_id", "text", "ts", "reply_to"}, replied)
+          replied and {"group_id", "text", "ts", "reply_to"} <= set(replied[0][1]), replied)
     check("非发送接口不发事件", len(events) == 2, events)
 finally:
     bot_core.get_plugin_manager = _orig_pm
