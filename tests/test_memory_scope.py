@@ -95,8 +95,8 @@ def main():
         import config
         check("DEFAULT_CONFIG 有 memory_scope_share",
               "memory_scope_share" in config.DEFAULT_CONFIG)
-        check("默认值是 False（不默认放宽）",
-              config.DEFAULT_CONFIG.get("memory_scope_share") is False,
+        check("默认值是 True（2026-10-30 用户拍板「记忆全打通」）",
+              config.DEFAULT_CONFIG.get("memory_scope_share") is True,
               config.DEFAULT_CONFIG.get("memory_scope_share"))
         import io
         ex = io.open(os.path.join(ROOT, "bot_config.json.example"),

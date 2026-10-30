@@ -483,14 +483,14 @@ def _scope_share():
     **群与群之间仍然隔离**（A 群的记忆不会进 B 群）。放宽的只是私聊与群聊
     之间那一层：群聊能召回私聊内容，私聊能召回群聊内容。
 
-    隐私代价是真实的：群友的发言可能被带到私聊里复述。所以做成开关、
-    默认关，由使用者在知道代价后自己打开。
+    隐私代价是真实的：群友的发言可能被带到私聊里复述。
+    ★ 2026-10-30 用户拍板「记忆全打通」→ 默认值改为 True（仍可用配置关掉）。
     """
     try:
         from config import load_config
-        return bool((load_config() or {}).get("memory_scope_share", False))
+        return bool((load_config() or {}).get("memory_scope_share", True))
     except Exception:
-        return False
+        return True
 
 
 def _scope_match(text, scope):
@@ -525,6 +525,60 @@ def _scope_match(text, scope):
             return share
         return f"({key})]" in t or f"[{key}]" in t
     return True
+
+
+def cross_scene_recent(uid, *, exclude_group="", hours=6.0, limit=3, now=None):
+    """他在**另一个场景**最近说过的话（2026-10-30 记忆全打通）。
+
+    私聊（`exclude_group=""`）→ 取他带 `[群:` 的行（他在群里说的）。
+    群聊（`exclude_group=gid`）→ 取他不带 `[群:` 的行（他私聊说的）。
+
+    只回 `hours` 小时内的**用户行**，且必须带 `(uid)` 归属 ——
+    agent/assistant 行、无归属行一律不取（无法证明是谁说的）。
+    """
+    uid = str(uid or "").strip()
+    if not uid:
+        return []
+    path = _vault_file()
+    if not path:
+        return []
+    now = time.time() if now is None else float(now)
+    cutoff = now - max(1.0, float(hours)) * 3600.0
+    tag = f"({uid})]"
+    out = []
+    try:
+        with open(path, "r", encoding="utf-8", errors="ignore") as f:
+            lines = f.readlines()[-1500:]
+    except Exception:
+        return []
+    for ln in reversed(lines):
+        parts = ln.rstrip("\r\n").split(" | ", 2)
+        if len(parts) != 3:
+            continue
+        if parts[1].strip() != "user":
+            continue
+        try:
+            ts = time.mktime(time.strptime(parts[0].strip()[:19], "%Y-%m-%d %H:%M:%S"))
+        except Exception:
+            continue
+        if ts < cutoff:
+            continue
+        body = parts[2]
+        if tag not in body:
+            continue
+        has_group = "[群:" in body
+        if exclude_group:
+            if has_group:
+                continue        # 已经在群里，别把群里的再喂一遍
+        elif not has_group:
+            continue            # 私聊时只要"他在群里说的"
+        text = re.sub(r"^(?:\[[^\]]*\]\s*)+", "", body).strip()
+        if not text or text in out:
+            continue
+        out.append(text[:80])
+        if len(out) >= max(1, int(limit)):
+            break
+    return list(reversed(out))
 
 
 def _collect_results(message, limit=3, scored=False, scope=None):

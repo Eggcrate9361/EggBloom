@@ -3292,6 +3292,28 @@ def _people_alias_prompt(sender) -> str:
         return ""
 
 
+def _cross_scene_block(sender, group_id="") -> str:
+    """「他最近在另一边说过」块（记忆全打通，2026-10-30）。
+
+    只注入**私聊**：那边只有他自己看，不存在把谁的私聊搬到群里。
+    群聊侧仍走 `memory_scope_share` 的关键词召回 —— 不主动整段搬运，
+    否则群友的私聊内容会被贴进群里（那是泄露，不是记忆）。
+    """
+    if group_id:
+        return ""
+    try:
+        if not bool(_config.get("memory_scope_share", True)):
+            return ""
+        from sandglass_bridge import cross_scene_recent
+        rows = cross_scene_recent(sender, exclude_group="", hours=6.0, limit=3)
+    except Exception:
+        return ""
+    if not rows:
+        return ""
+    return ("【另一边】他最近在群里说过的话（要接得上就接，不确定就别提）：\n"
+            + "\n".join("- " + r for r in rows))
+
+
 #: 表情包画面描述（后台补，用户看不见）。只描述，不评价。
 _MEME_DESC_PROMPT = ("这是一张 QQ 聊天表情包。20 字以内说清：画面里是什么/谁、"
                      "什么表情或动作。只描述，别评价、别猜梗。")
@@ -11192,6 +11214,15 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
         _pa = _people_alias_prompt(_pl_sender)
         if _pa:
             dynamic_parts.append(_pa)
+    except Exception:
+        pass
+
+    # 记忆全打通（2026-10-30）：私聊里补一句"他刚在群里说过什么"。
+    # 只在私聊注入（群里注入=把别人的私聊贴出去，不做）。
+    try:
+        _xs = _cross_scene_block(_pl_sender, group_id if is_group else "")
+        if _xs:
+            dynamic_parts.append(_xs)
     except Exception:
         pass
 

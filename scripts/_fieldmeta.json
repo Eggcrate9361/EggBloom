@@ -734,8 +734,8 @@
    "panel": "switches",
    "unit": "",
    "id": "sMemoryScopeShare",
-   "default": false,
-   "default_text": "关闭"
+   "default": true,
+   "default_text": "开启"
   },
   "slang_injector_enable": {
    "label": "俚语注入",

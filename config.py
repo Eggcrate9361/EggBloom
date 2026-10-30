@@ -529,9 +529,11 @@ DEFAULT_CONFIG = {
     #     值=2 表示"至少被两次独立发言验证过"。调高更保守（3 更严）。
     "self_learn_min_count": 2,
     "private_memory_enable": True,
-    # 私聊与群聊共享记忆（2026-10-25）。默认关：群友发言可能被带到私聊复述。
-    # 打开后群聊能召回私聊内容、私聊能召回群聊内容；**群与群之间仍隔离**。
-    "memory_scope_share": False,
+    # 私聊与群聊共享记忆（2026-10-25 加，2026-10-30 改默认开）。
+    # 打开后：群聊能召回私聊内容、私聊能召回群聊内容；**群与群之间仍隔离**。
+    # 2026-10-30 用户拍板「记忆全打通」→ 默认 True。隐私代价是真实的
+    # （群友的发言可能被带进私聊复述），不想要就写 False 退回各记各的。
+    "memory_scope_share": True,
     "slang_injector_enable": True,
     "nsfw_enabled": True,
 
