@@ -20,6 +20,7 @@ INDEX_FILE = os.path.join(MEME_ROOT, "collected", "index.json")
 DESC_FILE = os.path.join(MEME_ROOT, "descriptions.json")
 
 _SEND = None
+_TURN = {"images": [], "is_group": False, "sender": "", "group_id": ""}
 
 MEME_TOOLS = [
     {
@@ -41,6 +42,21 @@ MEME_TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "meme_save",
+            "description": ("把用户这一轮发来的图片存进表情库（用户说「存/收下/留着」时用）。"
+                            "不传 path 就存这一轮的全部图。"),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "可选：指定某张本地路径"},
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "meme_send",
             "description": "把 meme_find 找到的那张表情包发到当前对话。id 用返回里的 id。",
             "parameters": {
@@ -53,6 +69,15 @@ MEME_TOOLS = [
         },
     },
 ]
+
+
+def set_turn(*, images=None, is_group: bool = False, sender: str = "",
+             group_id: str = "") -> None:
+    """每轮由主链写入：这一轮有哪些图、在哪个场景、发给谁。"""
+    _TURN["images"] = [str(x) for x in (images or []) if str(x or "").strip()]
+    _TURN["is_group"] = bool(is_group)
+    _TURN["sender"] = str(sender or "")
+    _TURN["group_id"] = str(group_id or "")
 
 
 def set_sender(fn) -> None:
@@ -152,12 +177,37 @@ def meme_send(meme_id: str) -> Dict[str, Any]:
     return {"ok": True, "sent": os.path.relpath(full, MEME_ROOT).replace("\\", "/")}
 
 
+def meme_save(path: str = "") -> Dict[str, Any]:
+    """存这一轮（或指定）的图到表情库。返回每张的结果。"""
+    paths = [str(path)] if str(path or "").strip() else list(_TURN.get("images") or [])
+    if not paths:
+        return {"ok": False, "error": "这一轮没有可存的图片"}
+    scene_group = bool(_TURN.get("is_group") and _TURN.get("group_id"))
+    saved, failed = [], []
+    for p in paths[:4]:
+        try:
+            import meme_collect as _mc
+            rel = _mc.maybe_collect(
+                p, source=("group" if scene_group else "private"),
+                from_group=(_TURN.get("group_id") if scene_group else ""))
+        except Exception as e:
+            failed.append({"path": p, "error": f"{type(e).__name__}: {e}"})
+            continue
+        if rel:
+            saved.append(rel)
+        else:
+            failed.append({"path": p, "error": "重复/过大/格式不支持"})
+    return {"ok": bool(saved), "saved": saved, "failed": failed,
+            "count": len(saved), "scene": "group" if scene_group else "private"}
+
+
 def register_all() -> Dict[str, Any]:
     from . import tool_registry as _tr
-    fns = {"meme_find": meme_find, "meme_send": meme_send}
+    fns = {"meme_find": meme_find, "meme_send": meme_send, "meme_save": meme_save}
     for sch in MEME_TOOLS:
         name = sch["function"]["name"]
-        groups = (_tr.GROUP_WORK,) if name == "meme_find" else (_tr.GROUP_PROC,)
+        groups = (_tr.GROUP_WORK,) if name == "meme_find" else (
+            (_tr.GROUP_WRITE,) if name == "meme_save" else (_tr.GROUP_PROC,))
         _tr.register(name, sch, fn=fns.get(name), groups=groups, source="harness")
     return fns
 

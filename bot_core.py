@@ -883,52 +883,6 @@ def _private_flush(sender: str):
     })
 
 
-def _private_save_intent(text: str) -> bool:
-    """私聊里是不是在说"把这个表情包存下来"。
-
-    ★ 2026-10-30 真机：用户发图 +「存」，bot 回「只能看不能存，真没这功能」。
-      私聊图以前确实不进图库（设计如此），但用户明确说了「存」就该存。
-    """
-    t = str(text or "").strip()
-    if not t or len(t) > 30:
-        return False
-    if t.endswith(("吗", "么", "？", "?")):
-        return False
-    return any(t.startswith(w) for w in ("存", "收下", "收一下", "保存", "收好"))
-
-
-def _private_save_worker(sender: str, images) -> None:
-    """后台：把私聊里说「存」的图收进图库，然后回一句结果。"""
-    try:
-        import meme_collect as _mcs
-        saved = []
-        for _p in (images or []):
-            try:
-                _rel = _mcs.maybe_collect(_p, source="private")
-            except Exception as _e:
-                log(f"私聊存表情包失败(单张): {_e}")
-                _rel = ""
-            if _rel:
-                saved.append(_rel)
-        if not saved:
-            send_message("这张我存不下（可能是太大、重复或格式不认）", sender)
-            return
-        _tags0 = ""
-        try:
-            for _v in (_mcs._index() or {}).values():
-                if isinstance(_v, dict) and _v.get("path") == saved[0]:
-                    _tags0 = "、".join(_v.get("tags") or [])
-                    break
-        except Exception:
-            pass
-        _ok = ("存好了" + (f"（{_tags0}）" if _tags0 else "") + "，以后想看我发你")
-        send_message(_ok, sender)
-        save_chat_log(sender, _bot_nicknames()[0], "", _ok)
-        log(f"私聊[{sender}] 存表情包 {saved}")
-    except Exception as _e:
-        log(f"私聊存表情包失败: {_e}")
-
-
 def _should_buffer_private(text: str, images, msg) -> bool:
     """这条私聊该不该先攒进缓冲（而不是立刻处理）。
 
@@ -11375,6 +11329,14 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
                         personality_temperature: Optional[float] = None,
                         ego_inject_context: str = '', sender: str = '',
                         scene_context: str = '', progress=None) -> Optional[str]:
+    # 表情包工具要看到"这一轮发了什么图"（2026-10-30，替代关键词硬判）。
+    try:
+        from harness import tool_meme as _tmm
+        _tmm.set_turn(images=list(images or []), is_group=bool(is_group),
+                      sender=str(sender or target_qq or ""),
+                      group_id=str(group_id or ""))
+    except Exception:
+        pass
     """同步调用 DeepSeek API（在后台线程中运行），支持工具调用和重试。
 
     `progress`：可选的"还在推进"回调（2026-10-27）。每完成一个阶段（摘要压缩、
@@ -11475,7 +11437,8 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
                 "子 agent，然后正常回一句（别装成已经查完了）；他问进度就用 task_status。")
             dynamic_parts.append(
                 "【表情包】用户要你发之前收的那张图时，用 meme_find 找到 id、"
-                "再用 meme_send 发；别用 match_meme 随便配一张。")
+                "再用 meme_send 发；别用 match_meme 随便配一张。用户发图并说"
+                "「存/收下/留着」时，用 meme_save 存进表情库，再回一句存好了。")
     except Exception:
         pass
 
@@ -16428,14 +16391,6 @@ def main():
                                 # 没有答案也没错误 → 不 continue，交给正常回复流程
                     except Exception as _p_e:
                         log(f"[Agent] 私聊执行异常: {_p_e}")
-
-                # 私聊「存」表情包（2026-10-30）：发图 + 说存 → 入库，不劳模型。
-                # 放后台线程：判情绪要走视觉，别让「存」字卡住回复。
-                if images and _private_save_intent(text):
-                    threading.Thread(
-                        target=_private_save_worker, args=(sender, list(images)),
-                        daemon=True, name="meme-save").start()
-                    continue
 
                 log("  → 进入AI聊天流程")
                 # 3. AI 聊天（私聊记忆由 EGO/super_memory 向量召回经 before_reply 注入，见下方 ego 钩子）
