@@ -5206,18 +5206,22 @@ def describe_video(path, question: str = "") -> str:
 def bili_script(url, p=None) -> dict:
     """B 站链接 → 字幕稿。返回 `{ok, data, error}`，绝不抛。
 
-    ★ 2026-10-30 起**登录态归 `plugins/bili_script` 管**（在插件面板里扫码/粘贴，
+    ★ 2026-10-30 起**登录态归 `plugins/bili` 管**（在插件面板里扫码/粘贴，
     cookie 只存在插件自己的 data/ 里）。这里只是给主链和 agent 留一个稳定的调用口：
-    插件在就用插件（带 cookie、走 24h 缓存），插件不在就退回 harness 匿名读
-    —— 匿名只能拿标题/UP/时长，字幕轨恒空，`source` 会是 `none`。
+    插件在就用插件（带 cookie、带弹幕热评、走 24h 缓存），插件不在就退回
+    `harness.bili_api` 匿名读 —— 匿名能拿标题/弹幕/热评，字幕轨恒空。
     """
     try:
         try:
-            from plugins.bili_script import read_link as _plug_read
+            from plugins.bili import read as _plug_read
             r = _plug_read(str(url or ""))
         except Exception:
-            from harness.bili_transcript import BiliTranscript
-            r = BiliTranscript().run(str(url or ""), p)
+            from harness.bili_api import BiliAPI, parse_url
+            _i = parse_url(str(url or ""))
+            _view = BiliAPI().view(_i.get("bvid", ""), int(_i.get("aid") or 0))
+            r = ({"ok": True, "data": {"info": _view, "transcript": {"cues": []}},
+                  "error": ""} if _view else {"ok": False, "data": None,
+                                              "error": "取视频信息失败"})
         if r.get("ok"):
             _d = r.get("data") or {}
             log(f"[B站] {str(_d.get('title'))[:30]} 来源={_d.get('source')} "
