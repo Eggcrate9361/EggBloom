@@ -384,8 +384,8 @@
    "panel": "llm",
    "unit": "",
    "id": "sAiTopP",
-   "default": 0.9,
-   "default_text": "0.9"
+   "default": 1.0,
+   "default_text": "1.0"
   },
   "ai_frequency_penalty": {
    "label": "频率惩罚",
@@ -394,8 +394,8 @@
    "panel": "llm",
    "unit": "",
    "id": "sAiFreqPenalty",
-   "default": 0.0,
-   "default_text": "0.0"
+   "default": 0.1,
+   "default_text": "0.1"
   },
   "ai_presence_penalty": {
    "label": "存在惩罚",
@@ -404,8 +404,8 @@
    "panel": "llm",
    "unit": "",
    "id": "sAiPresencePenalty",
-   "default": 0.0,
-   "default_text": "0.0"
+   "default": 0.15,
+   "default_text": "0.15"
   },
   "session_ttl": {
    "label": "对话超时（秒）",
@@ -534,8 +534,8 @@
    "panel": "group",
    "unit": "秒",
    "id": "sPokeTimeout",
-   "default": 30,
-   "default_text": "30"
+   "default": 600,
+   "default_text": "600"
   },
   "group_send_max_parts": {
    "label": "单次回复最多拆几条",
@@ -584,8 +584,8 @@
    "panel": "group",
    "unit": "秒",
    "id": "sGroupMsgBufferSession",
-   "default": 5,
-   "default_text": "5"
+   "default": 3,
+   "default_text": "3"
   },
   "group_msg_buffer_window_trigger": {
    "label": "触发缓冲窗口（秒）",
@@ -594,8 +594,8 @@
    "panel": "group",
    "unit": "秒",
    "id": "sGroupMsgBufferTrigger",
-   "default": 8,
-   "default_text": "8"
+   "default": 2,
+   "default_text": "2"
   },
   "agent_group_enable": {
    "label": "群聊内可派活",
@@ -1074,6 +1074,46 @@
    "default": [],
    "default_text": "空",
    "restart": true
+  },
+  "qq_agent_enable": {
+   "label": "回复链走 agent",
+   "desc": "打开后，命中意图闸的私聊/群聊消息先进 agent 循环（自己拼原语去查），拿不到答案自动回落老链路。默认关闭；还必须在下方的名单里点名，否则谁都不走。",
+   "ctl": "bool",
+   "panel": "group",
+   "unit": "",
+   "id": "sQqAgentEnable",
+   "default": false,
+   "default_text": "关闭"
+  },
+  "qq_agent_allow": {
+   "label": "走 agent 的对象（每行一个）",
+   "desc": "私聊填 QQ 号；群聊必须写成 group:群号（裸号码只开私聊，防止手滑把同号群也开了）。留空 = 谁都不走，即使上面的开关是开的。",
+   "ctl": "lines",
+   "panel": "group",
+   "unit": "",
+   "id": "sQqAgentAllow",
+   "default": [],
+   "default_text": "空"
+  },
+  "qq_agent_hosts": {
+   "label": "agent 额外可抓域名（每行一个）",
+   "desc": "默认只能抓头像域名（qlogo.cn 等）。填了这里才允许 agent 抓别的站，留空最安全。",
+   "ctl": "lines",
+   "panel": "group",
+   "unit": "",
+   "id": "sQqAgentHosts",
+   "default": [],
+   "default_text": "空"
+  },
+  "qq_agent_allow_write": {
+   "label": "agent 可发消息/踢人",
+   "desc": "写类 OneBot 动作（发消息、踢人、禁言）的总开关。默认关闭：被拒时它会如实说这个要授权。",
+   "ctl": "bool",
+   "panel": "group",
+   "unit": "",
+   "id": "sQqAgentWrite",
+   "default": false,
+   "default_text": "关闭"
   },
   "group_quote_mode": {
    "label": "群引用回复",
