@@ -11443,6 +11443,22 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
     except Exception:
         pass
 
+    # 对话对象锚（2026-10-30）：私聊里模型拿不到发送者名字，容易"不知道在跟谁说话"。
+    if not is_group and _pl_sender:
+        try:
+            import people as _pp
+            _nm = _pp.display(_pl_sender) or ""
+            _rel = ""
+            try:
+                import sandglass_bridge as _sb
+                _rel = (_sb.build_people_block("") or "")
+            except Exception:
+                _rel = ""
+            _line = f"【对话对象】你现在私聊的是{('「' + _nm + '」') if _nm else ''}（QQ {_pl_sender}）。"
+            dynamic_parts.append(_line)
+        except Exception:
+            pass
+
     # 头像（2026-10-30）：被问就取 QQ 头像看一眼，注入描述。
     # 只在命中"头像/自拍/长什么样"时取，平时不花视觉的钱。
     try:

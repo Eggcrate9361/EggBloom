@@ -323,6 +323,13 @@ def _build_messages(cfg: dict, state: dict, target: str) -> list:
         "- 可以损他、念叨他、分享刚想到的东西、接着之前的话茬、提醒他作息\n"
         "- 只输出消息本身，每行一条，不要任何解释"
     )
+    try:
+        import people as _people
+        _card = _people.card(target, private=True)
+        if _card:
+            sys_prompt += f"\n你对这个人的了解（只用于说话分寸，不要背出来）：\n{_card}\n"
+    except Exception:
+        pass
     if nickname:
         sys_prompt += f"\n- 你管他叫「{nickname}」"
     if extra:
@@ -332,9 +339,12 @@ def _build_messages(cfg: dict, state: dict, target: str) -> list:
     recent_lines = "\n".join(
         f"  - [{m.get('via', '私聊')}] {m.get('text', '')[:50]}" for m in recent[-5:]
     ) or "  （暂无）"
-    history = state.get("history") or []
+    # 2026-10-30：主题/历史必须按目标隔离。旧版是全局 pending_topic，
+    # 给老大生成的「刷本」被拿去对 Texas 说 —— 跨人泄话。
+    _hmap = state.get("history_map") or {}
+    history = _hmap.get(target) or []
     last_proactive = history[-1]["text"] if history else "（还没主动说过话）"
-    topic = str(state.get("pending_topic") or "").strip()
+    topic = _topic_for(state, target)
     topic_line = f"你最近一直有点惦记的事：{topic}（可以接着想，也可以不想了）" if topic else ""
 
     memory_line = ""
@@ -378,16 +388,27 @@ def _ai_text(messages: list, max_tokens: int = 300) -> str:
     return ""
 
 
-def _update_pending_topic(bubbles: list):
-    """用一次小调用提炼「惦记的事」，让下次开口有连续性；失败则保留旧值。"""
+def _topic_for(state: dict, target: str) -> str:
+    """这个人专属的「惦记的事」。旧全局字段只在没有按人存储时兜底。"""
+    m = state.get("pending_topics") or {}
+    if isinstance(m, dict) and target and m.get(target):
+        return str(m[target]).strip()
+    return ""
+
+
+def _update_pending_topic(bubbles: list, target: str = ""):
+    """用一次小调用提炼「惦记的事」，按**这个人**存；失败保留旧值。"""
     try:
-        old = str(_ctx.get_state("pending_topic", "") or "")
+        topics = dict(_ctx.get_state("pending_topics", {}) or {})
+        old = str(topics.get(target) or "") if target else ""
         msgs = [
             {"role": "system", "content": "用 15 字以内的一句话总结这个 AI 此刻的心情或惦记的事，只输出这句话，不要标点"},
             {"role": "user", "content": " / ".join(bubbles)},
         ]
         t = _ai_text(msgs, max_tokens=60)
-        _ctx.set_state("pending_topic", t[:30] if t else old)
+        if target and t:
+            topics[target] = t[:30]
+            _ctx.set_state("pending_topics", topics)
     except Exception:
         pass
 
@@ -488,11 +509,13 @@ def _proactive_once(force: bool = False) -> dict:
             return {"ok": False, "error": "发送失败（OneBot 未连接？）"}
 
         joined = " / ".join(bubbles)
-        history = list(state.get("history") or [])
-        history.append({"ts": time.time(), "text": joined[:120]})
-        _ctx.set_state("history", history[-10:])
+        hmap = dict(state.get("history_map") or {})
+        hist = list(hmap.get(target) or [])
+        hist.append({"ts": time.time(), "text": joined[:120]})
+        hmap[target] = hist[-10:]
+        _ctx.set_state("history_map", hmap)
         _ctx.set_state("last_proactive_ts", time.time())
-        _update_pending_topic(bubbles)
+        _update_pending_topic(bubbles, target)
         _log(f"主动开口 → {target}: {joined[:60]}")
         return {"ok": True, "target": target, "bubbles": bubbles}
 
@@ -630,7 +653,7 @@ def get_status(params=None):
         "heartbeat_alive": bool(_thread and _thread.is_alive()),
         "last_proactive_ts": state.get("last_proactive_ts") or 0,
         "last_user_ts": state.get("last_user_ts") or 0,
-        "pending_topic": state.get("pending_topic") or "",
+        "pending_topics": state.get("pending_topics") or {},
         "history": history[-5:],
     }
 

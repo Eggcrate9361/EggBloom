@@ -611,7 +611,13 @@ class SuperMemory:
 
     # ── 关键记忆召回 ──
 
-    def recall_key_memories(self, scope: str, scope_id: str, current_msg: str = "", limit: int = 5) -> List[Dict[str, Any]]:
+    def recall_key_memories(self, scope: str, scope_id: str, current_msg: str = "",
+                            limit: int = 5, focus_user: str = "") -> List[Dict[str, Any]]:
+        """召回本作用域的关键记忆。
+
+        focus_user：只带这个人的好感度/事实（2026-10-30 真机：群里把所有人的
+        好感度一起注进 prompt，聊着聊着就把 A 的事说到 B 头上）。
+        """
         try:
             conn = sqlite3.connect(DB_PATH)
             now = time.time()
@@ -638,8 +644,11 @@ class SuperMemory:
             # 1. 高置信度事实（向量优先）
             raw_facts = []
             cur = conn.execute(
-                "SELECT category, content, confidence, last_used, embedding, tier FROM facts WHERE scope_id=? AND confidence > 0.6 AND (? = 0 OR (embedding IS NOT NULL AND embedding != '')) ORDER BY confidence DESC, last_used DESC LIMIT 100",
-                (str(scope_id), 1 if use_vec else 0),
+                "SELECT category, content, confidence, last_used, embedding, tier FROM facts "
+                "WHERE scope_id=? AND confidence > 0.6 AND (? = 0 OR (embedding IS NOT NULL AND embedding != '')) "
+                "AND (? = '' OR user_id=? OR user_id='' OR user_id IS NULL) "
+                "ORDER BY confidence DESC, last_used DESC LIMIT 100",
+                (str(scope_id), 1 if use_vec else 0, str(focus_user or ""), str(focus_user or "")),
             )
             for row in cur.fetchall():
                 raw_facts.append((row, _sim(row[4])))
@@ -707,8 +716,9 @@ class SuperMemory:
             # 3. 高好感度用户
             affection = []
             cur = conn.execute(
-                "SELECT user_id, score, interactions, mood FROM affection WHERE scope_id=? ORDER BY score DESC LIMIT ?",
-                (str(scope_id), limit),
+                "SELECT user_id, score, interactions, mood FROM affection "
+                "WHERE scope_id=? AND (? = '' OR user_id=?) ORDER BY score DESC LIMIT ?",
+                (str(scope_id), str(focus_user or ""), str(focus_user or ""), limit),
             )
             for row in cur.fetchall():
                 affection.append({
@@ -730,10 +740,12 @@ class SuperMemory:
         except Exception:
             return []
 
-    def get_prompt_block(self, scope: str, scope_id: str, current_msg: str = "") -> str:
+    def get_prompt_block(self, scope: str, scope_id: str, current_msg: str = "", focus_user: str = "") -> str:
         if not self.config.get("inject_into_prompt", True):
             return ""
-        memories = self.recall_key_memories(scope, scope_id, current_msg, limit=self.config.get("recall_top_k", 5))
+        memories = self.recall_key_memories(scope, scope_id, current_msg,
+                                         limit=self.config.get("recall_top_k", 5),
+                                         focus_user=focus_user)
         if not memories:
             return ""
         lines = []
@@ -1085,7 +1097,7 @@ def before_reply(scope: str = "", scope_id: str = "", message: str = "", user_id
         scope_id = user_id or "private"
     parts: List[str] = []
     if scope in ("private", "group") and scope_id:
-        block = _memory.get_prompt_block(scope, scope_id, message)
+        block = _memory.get_prompt_block(scope, scope_id, message, focus_user=user_id)
         if block:
             parts.append(block)
     if user_id and _memory.config.get("affection_enabled", True):
