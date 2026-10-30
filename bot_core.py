@@ -11629,6 +11629,165 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
     return None
 
 
+# ══════════════════════════════════════════════════════════════════
+# A3：QQ 主链进 agent（2026-10-30，方案 v2 §2/§6）
+# ------------------------------------------------------------------
+# 链路：意图闸 → 占位 → QQAgent.run() → tool_results 转写进 tool_runner 台账
+#       → 有答案就用它的文本；没答案返回 ""，调用方**原样回落老链路**。
+#
+# 为什么回落是一等公民：这是新通道第一次上线，它挂了不能让人的消息也没了。
+# 代价是极端情况下多花一次调用，换的是"接错线不会静默丢消息"。
+#
+# 默认两把锁都上（qq_agent_enable=False + qq_agent_allow 空 = 谁都不许），
+# 第一次只开给自己私聊：影响面是一个人，不是一个群。
+# ══════════════════════════════════════════════════════════════════
+
+def _qq_agent_cfg() -> Dict:
+    return {
+        "qq_agent_enable": bool(_config.get("qq_agent_enable", False)),
+        "qq_agent_allow": _config.get("qq_agent_allow", []) or [],
+        "qq_agent_hosts": _config.get("qq_agent_hosts", []) or [],
+        "qq_agent_allow_write": bool(_config.get("qq_agent_allow_write", False)),
+    }
+
+
+def _qq_agent_fetch(url: str, dest: Optional[str] = None,
+                    max_bytes: int = 8 * 1024 * 1024) -> Dict:
+    """agent 的 http_fetch。只落沙箱（由原语先 resolve）、有字节上限。
+
+    不复用 download_image_url：那条只认图片且不报状态码/字节数，
+    而 agent 要的 evidence 恰好是"HTTP 状态 + 字节数"。
+    """
+    try:
+        sess = _get_session()
+        r = sess.get(url, timeout=20, stream=True)
+        status = int(getattr(r, "status_code", 0) or 0)
+        buf = bytearray()
+        for chunk in r.iter_content(65536):
+            if not chunk:
+                continue
+            buf.extend(chunk)
+            if len(buf) > int(max_bytes):
+                return {"ok": False, "status": status, "bytes": len(buf),
+                        "error": f"超过字节上限 {max_bytes}"}
+        data = bytes(buf)
+        if dest:
+            _d = os.path.dirname(os.path.abspath(dest))
+            if _d:
+                os.makedirs(_d, exist_ok=True)
+            with open(dest, "wb") as f:
+                f.write(data)
+        ok = 200 <= status < 300
+        return {"ok": ok, "status": status, "bytes": len(data),
+                "error": "" if ok else f"HTTP {status}"}
+    except Exception as e:
+        return {"ok": False, "status": 0, "bytes": 0,
+                "error": f"{type(e).__name__}: {e}"}
+
+
+def _qq_agent_vision(path: str, question: str = "") -> Dict:
+    """agent 的 vision。describe_image 失败返回 ""（绝不抛），这里如实转成 ok=False。"""
+    txt = describe_image(path, question or "")
+    txt = str(txt or "").strip()
+    return {"ok": bool(txt), "text": txt,
+            "error": "" if txt else "没读出来"}
+
+
+def _qq_agent_recall(query: str):
+    """agent 的 recall：查沙漏记忆。"""
+    from sandglass_bridge import search_memory
+    return search_memory(str(query or ""), limit=5) or []
+
+
+def _qq_agent_chat(messages, tools=None, on_reasoning=None):
+    """agent 用的模型调用（宿主注入）。
+
+    走 _agent_stream_chat 而不是 _call_chat_sync：前者能带 tools，也能把
+    思维链增量交给回调（群里做"正在查"的进度条要用）。返回 3 元组，
+    与 run_agent 的 chat_fn 契约一致。
+    """
+    _pt = _resolve_provider_type(_llm_config(None))
+    if _pt in ("anthropic", "gemini"):
+        # 这两家走 providers.py 的专属适配器，没有 tools+SSE 这一层。
+        # 直接抛：QQAgent 会收敛成"没查到"，最终回落老链路。
+        raise RuntimeError(f"{_pt} 协议暂不支持 agent 通道")
+    r = _agent_stream_chat(messages, tools=tools, max_tokens=900,
+                           on_reasoning=on_reasoning)
+    return (str(r.get("content") or ""),
+            list(r.get("tool_calls") or []),
+            dict(r.get("usage") or {}))
+
+
+def _qq_agent_placeholder(text: str, is_group: bool, group_id: str, sender: str):
+    """抢在 LLM 之前发的那条短句。群聊走 send_group_message（不走引用的智能发送）。"""
+    if is_group and group_id:
+        send_group_message(group_id, text)
+    elif sender:
+        send_message(text, sender)
+
+
+def _qq_agent_note_call(name: str, ok: bool):
+    """把 agent 的工具留痕写进主台账 —— reply_audit 的第三类断言吃这一份。"""
+    from harness import tool_runner as _tr
+    _tr.note_tool_call(str(name or ""), bool(ok), detail="qq_agent")
+
+
+def _qq_agent_ledger() -> list:
+    """当前台账快照（桥拿去去重：agent_loop 执行工具时自己已经记过一条）。"""
+    from harness import tool_runner as _tr
+    return _tr.recent_tool_calls()
+
+
+def _qq_agent_history(entries) -> list:
+    """私聊历史 → run_agent 能直接用的 messages（只留 role/content，剔掉 ts 等本机字段）。"""
+    out = []
+    for m in (entries or []):
+        try:
+            role = str(m.get("role") or "")
+            if role not in ("user", "assistant"):
+                continue
+            out.append({"role": role, "content": str(m.get("content") or "")[:2000]})
+        except Exception:
+            continue
+    return out
+
+
+def _qq_agent_reply(text: str, images, *, is_group: bool, group_id: str = "",
+                    sender: str = "", history=None) -> str:
+    """A3 入口。返回非空 = 这一轮交给 agent 了；返回 "" = 调用方走老链路。"""
+    try:
+        from harness import qq_agent_bridge as _qab
+        cfg = _qq_agent_cfg()
+        if not _qab.should_try(cfg, text, has_media=bool(images),
+                               is_group=bool(is_group),
+                               group_id=str(group_id or ""),
+                               sender=str(sender or "")):
+            return ""
+        # 原语/模型/deps 全部注入：桥不 import bot_core，离线可测。
+        deps = {
+            "onebot": lambda action, params=None: api_call(str(action), dict(params or {})),
+            "vision": _qq_agent_vision,
+            "recall": _qq_agent_recall,
+            "fetch": _qq_agent_fetch,
+            "chat": _qq_agent_chat,
+            "placeholder": _qq_agent_placeholder,
+            "note_call": _qq_agent_note_call,
+            "ledger": _qq_agent_ledger,
+        }
+        br = _qab.Bridge(deps=deps, root=SCRIPT_DIR, cfg=cfg, log=log)
+        res = br.run(str(text or ""), has_media=bool(images), is_group=bool(is_group),
+                     group_id=str(group_id or ""), sender=str(sender or ""),
+                     system_prompt=_build_static_prompt(bool(is_group)),
+                     history=_qq_agent_history(history))
+        out = str(res.get("text") or "")
+        if not out:
+            log(f"[qq_agent] 本轮没拿到答案，回落老链路（{res.get('error') or '空答案'}）")
+        return out
+    except Exception as e:
+        log(f"[qq_agent] 桥接异常，回落老链路: {type(e).__name__}: {e}")
+        return ""
+
+
 def call_deepseek(user_msg: str, images: Optional[List[str]] = None,
                   target_qq: Optional[str] = None, group_id: Optional[str] = None,
                   is_group: bool = False, private_memory_context: str = '',
@@ -13526,7 +13685,12 @@ def _pipeline_step(group_id):
                 log(f"群[{group_id}] [vitals] 系数读取失败（用原档位）: {e}")
             merged_text_for_ai = f"{merged_text_for_ai}\n[系统提示] {reply_budget.prompt_line(_budget)}"
             _phase_set(group_id, "generating")
-            reply = call_deepseek(merged_text_for_ai, images, group_id=group_id, is_group=True, personality_temperature=_ST.get("personality_temperature"), ego_inject_context=_ego_ctx, scene_context=_scene_ctx, sender=sender)
+            # ── A3：能交给 agent 就交给它（群聊 2 步预算），失败回落老链路 ──
+            #  传 merged_text（人说的话），不传 merged_text_for_ai（那是加了
+            #  [系统提示] 预算话术的版本，对 agent 是噪音）。
+            _qa_text = _qq_agent_reply(merged_text, images, is_group=True,
+                                       group_id=group_id, sender=sender)
+            reply = _qa_text or call_deepseek(merged_text_for_ai, images, group_id=group_id, is_group=True, personality_temperature=_ST.get("personality_temperature"), ego_inject_context=_ego_ctx, scene_context=_scene_ctx, sender=sender)
 
         # 群聊联网搜索循环（共用函数，最多2轮；标记兜底剥离，绝不漏发）
         reply = _apply_search_tag_loop(reply, merged_text_for_ai, group_id=group_id,
@@ -15598,7 +15762,13 @@ def main():
                     _p_delay = _p_react + (0.5 if len(text) > 50 else 0) + random.uniform(0, 0.5)
                     log(f"私聊[{sender}] [反应延迟] {_p_delay:.1f}s")
                     time.sleep(_p_delay)
-                reply = call_deepseek(text, _pm_call_images, sender, private_memory_context=pm_ctx, personality_temperature=_ego_temp, ego_inject_context=_ego_ctx)
+                # ── A3：能交给 agent 就交给它，拿不到就回落老链路（2026-10-30）──
+                #  传的是**已追加图片描述**的 text：describe 模式下 agent 不必再读一遍图；
+                #  真要看图时（比如问头像）它自己调 vision。
+                _qa_text = _qq_agent_reply(
+                    text, images, is_group=False, sender=sender,
+                    history=chat_history.get(sender))
+                reply = _qa_text or call_deepseek(text, _pm_call_images, sender, private_memory_context=pm_ctx, personality_temperature=_ego_temp, ego_inject_context=_ego_ctx)
                 # 私聊联网搜索标记循环（与群聊共用函数；旧版私聊吐 [搜索:] 会原样漏发）
                 reply = _apply_search_tag_loop(reply, text, group_id=None,
                                                is_group=False, temperature=_ego_temp,
