@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from typing import Any, Dict, List
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -20,6 +21,8 @@ INDEX_FILE = os.path.join(MEME_ROOT, "collected", "index.json")
 DESC_FILE = os.path.join(MEME_ROOT, "descriptions.json")
 
 _SEND = None
+_FAIL_COUNT = 0
+_FAIL_UNTIL = 0.0
 _TURN = {"images": [], "is_group": False, "sender": "", "group_id": ""}
 
 MEME_TOOLS = [
@@ -197,9 +200,21 @@ def meme_save(path: str = "") -> Dict[str, Any]:
         if rel:
             saved.append(rel)
         else:
-            failed.append({"path": p, "error": "重复/过大/格式不支持"})
+            failed.append({"path": p, "error": "这张存不进去"})
+    # 连续失败冷却（真机 21:11–21:12 连试三回，模型只能反复说同一句）
+    global _FAIL_COUNT, _FAIL_UNTIL
+    if saved:
+        _FAIL_COUNT = 0
+    else:
+        _FAIL_COUNT += 1
+        if _FAIL_COUNT >= 3:
+            _FAIL_UNTIL = time.time() + 600
+            _FAIL_COUNT = 0
     return {"ok": bool(saved), "saved": saved, "failed": failed,
-            "count": len(saved), "scene": "group" if scene_group else "private"}
+            "count": len(saved), "scene": "group" if scene_group else "private",
+            "cooldown": _FAIL_UNTIL > time.time(),
+            "note": ("这张存不进去，先别试了" if _FAIL_UNTIL > time.time()
+                     else ("存好了" if saved else "没存成，换个说法或稍后再试"))}
 
 
 def register_all() -> Dict[str, Any]:

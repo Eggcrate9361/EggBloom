@@ -427,6 +427,9 @@ DEFAULT_CONFIG = {
     # 表情包自动采集（2026-10-30）：群聊里别人发的表情包 → 图库 → 可被找回/重发。
     # 预设 vs 主模型（2026-10-30）：开=用预设话术、不调模型；关=让主模型现说一句。
     # 工具注入（2026-10-30）：开=按场景全量给（模型想用就用），关=旧的关键词猜测。
+    # 免费视觉车道（2026-10-30 真机：每次 2 轮失败再熔断，循环噪音+白等；
+    # 主模型约 1~2 秒能读，默认关）
+    "image_free_lane_enable": False,
     "tools_full_inject_enable": True,
     "recall_feedback_use_preset": True,   # 撤回反馈：预设
     "recall_feedback_context_window": 300,  # 秒：bot 多久内说过话才回撤回（否则沉默）

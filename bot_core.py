@@ -5382,7 +5382,9 @@ def describe_image(image_ref, prompt: str = "") -> str:
         #    ★ 2026-10-30 加熔断：免费链挂一次要串 3 条模型 × 2 轮（实测 23 秒），
         #      而主模型读同一张图只要 1 秒。挂过就 10 分钟内直接走主模型 ——
         #      不然每张图都要先白等半分钟，"图我这儿没取到"会变成常态。
-        if _vision_main_enabled() and time.time() < _VISION_FREE_DOWN_UNTIL:
+        if not bool(_config.get("image_free_lane_enable", False)):
+            log("[图片理解] 免费链已关，直接走主模型")
+        elif _vision_main_enabled() and time.time() < _VISION_FREE_DOWN_UNTIL:
             log("[图片理解] 免费链熔断中，直接走主模型")
         else:
             for _attempt in (1, 2):
@@ -12862,7 +12864,12 @@ def _strip_context_marks(text: str) -> str:
     **一条规则只能有一个权威源**（仓库已因"同一概念两处判据"踩过多次）。
     """
     try:
-        return reply_budget.strip_ctx_marks(text)
+        _clean = reply_budget.strip_ctx_marks(text)
+        try:
+            _clean = reply_budget.strip_tool_errors(_clean)
+        except Exception:
+            pass
+        return _clean
     except Exception:
         return text
 

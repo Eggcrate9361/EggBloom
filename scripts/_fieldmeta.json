@@ -1358,6 +1358,16 @@
    "id": "sToolsFullInject",
    "default": true,
    "default_text": "开启"
+  },
+  "image_free_lane_enable": {
+   "label": "图片理解走免费链",
+   "desc": "开：先用免费视觉车道（挂掉时会白等并熔断）。关（默认）：直接走主模型，约 1~2 秒。真机免费链已连续空响应，关掉更稳。",
+   "ctl": "bool",
+   "panel": "llm",
+   "unit": "",
+   "id": "sImageFreeLane",
+   "default": false,
+   "default_text": "关闭"
   }
  },
  "actions": {

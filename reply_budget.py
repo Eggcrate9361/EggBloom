@@ -137,6 +137,22 @@ _CTX_MARK_PLAIN = re.compile(
 )
 
 
+_TOOL_ERR_RE = re.compile(
+    r'工具执行异常|Traceback|"ok"\s*:\s*false|重复/过大/格式不支持'
+    r'|"failed"\s*:|"error"\s*:|\{"ok"\s*:')
+
+
+def strip_tool_errors(text: str) -> str:
+    """删掉落进回复里的工具报错原文（2026-10-30 真机：bot 直接复读了
+    「重复/过大/格式不支持」）。逐行删；删空就返回空串，调用方当无声处理。"""
+    out = []
+    for ln in str(text or "").split("\n"):
+        if _TOOL_ERR_RE.search(ln):
+            continue
+        out.append(ln)
+    return "\n".join(out).strip()
+
+
 def strip_ctx_marks(text: str) -> str:
     """剥掉行首的上下文标记。
 
