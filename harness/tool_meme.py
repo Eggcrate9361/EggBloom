@@ -106,7 +106,15 @@ def meme_find(query: str = "", limit: int = 5) -> Dict[str, Any]:
         })
     rows.sort(key=lambda r: float(r.get("collected_at") or 0), reverse=True)
     n = max(1, min(20, int(limit or 5)))
-    return {"ok": True, "count": len(rows[:n]), "items": rows[:n]}
+    out = {"ok": True, "count": len(rows[:n]), "total": len(idx),
+           "items": rows[:n]}
+    if q and not rows and idx:
+        # 别让模型把"没匹配到关键词"说成"库里一张都没有"（真机 20:07 就这么说的）
+        _tags = sorted({tag for rec in idx.values() if isinstance(rec, dict)
+                        for tag in (rec.get("tags") or [])})[:12]
+        out["hint"] = (f"没匹配到「{query}」；库里共 {len(idx)} 张，"
+                       f"可用标签：{'、'.join(_tags) or '无'}。可换关键词或空查询取最近收的。")
+    return out
 
 
 def _resolve(meme_id: str) -> str:

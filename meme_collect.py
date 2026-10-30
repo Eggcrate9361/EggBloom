@@ -217,7 +217,8 @@ def maybe_collect(path: str, *, tags=None, source: str = "auto",
     try:
         import self_actions as _acts
         _tags_txt = "、".join(str(t) for t in (tags or [])[:2]) or "未打标签"
-        _acts.record("collect", scene="group", target=str(from_group or ""),
+        _acts.record("collect", scene=("group" if from_group else "private"),
+                     target=str(from_group or ""),
                      detail=f"{rel}｜{_tags_txt}")
     except Exception:
         pass
