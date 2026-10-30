@@ -1,13 +1,13 @@
 # -*- coding: utf-8 -*-
 """行为账本（self_actions.py，2026-10-30）。
 
-用户要的"行为知晓"：它知道自己干过什么（发图/戳人/采集），下一轮能看到。
+用户要的"行为知晓"：它知道自己干过什么（发图/戳人/采集/说过的话），下一轮能看到。
 
 钉死：
   1. 记账按场景/对象/时间过滤
   2. 渲染成【你刚做过的事】，没有动作时返回空串（零 token）
-  3. 落盘后重载还在
-  4. 只记事实，不评价
+  3. 私聊可以带"我在群里说过的话"（只带自己的），默认不带
+  4. 落盘后重载还在
 
 运行：python tests/test_self_actions.py
 """
@@ -39,7 +39,7 @@ try:
     sa.record("meme", scene="group", target="777", detail="得意", ts=now - 60)
     sa.record("collect", scene="group", target="777", detail="尴尬", ts=now - 30)
     sa.record("poke", scene="private", target="10001", ts=now - 10)
-    sa.record("meme", scene="group", target="777", detail="开心", ts=now - 40 * 60)  # 超时
+    sa.record("meme", scene="group", target="777", detail="开心", ts=now - 40 * 60)
 
     r = sa.recent(minutes=15, now=now)
     kinds = [x["kind"] for x in r]
@@ -62,12 +62,18 @@ try:
     check("没有动作 → 空串",
           sa.render(scene="group", target="999", minutes=5, now=now) == "")
 
-    # 落盘重载
+    sa.record("say", scene="group", target="777", detail="群里刚说的那句", ts=now - 5)
+    sa.record("say", scene="private", target="10001", detail="私聊说的", ts=now - 6)
+    plain = sa.render(scene="private", target="10001", minutes=15, now=now)
+    check("默认不带群发言", "群里刚说的那句" not in plain, plain)
+    full = sa.render(scene="private", target="10001", minutes=15, now=now,
+                     include_group_say=True)
+    check("私聊可查自己在群里说过什么", "群里刚说的那句" in full, full)
+
     sa._MEM = None
     r2 = sa.recent(minutes=15, now=now + 1)
-    check("重载后还在", len(r2) == 3, len(r2))
+    check("重载后还在", len(r2) == 5, len(r2))
 
-    # 只保留事实字段
     rec = sa.record("image", scene="private", target="10001", detail="发了一张图", ts=now)
     check("记录字段齐全", set(rec) >= {"ts", "kind", "scene", "target", "detail"}, rec)
 finally:

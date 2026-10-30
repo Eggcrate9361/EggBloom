@@ -119,6 +119,7 @@ def recent(*, scene: str = "", target: str = "", minutes: float = 15.0,
 
 
 _KIND_WORD = {
+    "say": "说了一句",
     "meme": "发了一张表情包",
     "image": "发了一张图",
     "poke": "戳了对方",
@@ -129,9 +130,19 @@ _KIND_WORD = {
 
 
 def render(*, scene: str = "", target: str = "", minutes: float = 15.0,
-           limit: int = 5, now: Optional[float] = None) -> str:
-    """一段【你刚做过】。没有动作就返回空串（零 token）。"""
+           limit: int = 6, now: Optional[float] = None,
+           include_group_say: bool = False) -> str:
+    """一段【你刚做过】。没有动作就返回空串（零 token）。
+
+    `include_group_say`：私聊里问"你刚在群里说什么了"时，把自己的群发言
+    也带进来（只带**自己说的**，不带群友的话）。
+    """
     rows = recent(scene=scene, target=target, minutes=minutes, limit=limit, now=now)
+    if include_group_say and scene == "private":
+        extra = [r for r in recent(scene="group", minutes=minutes, limit=3, now=now)
+                 if str(r.get("kind") or "") == "say"]
+        if extra:
+            rows = sorted(rows + extra, key=lambda r: float(r.get("ts") or 0))[-limit:]
     if not rows:
         return ""
     lines = []

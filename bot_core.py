@@ -3251,6 +3251,15 @@ def _record_bot_group_msg(group_id, text):
       **不入 history** → 别人引用它时模型不记得是自己写的，当成陌生人的话
       回"别写小作文了 看得我眼睛疼"。补上这轮 assistant，模型才认得自家话。"""
     track_bot_reply(group_id, text)
+    # 行为账本（2026-10-30）：自己说过的话进账，私聊问起才答得出来。
+    # 表情包那行由 _note_sent_meme 单独记，这里跳过避免重复。
+    try:
+        if not str(text).startswith("【表情包】"):
+            import self_actions as _sa
+            _sa.record("say", scene="group", target=str(group_id),
+                       detail=str(text)[:40])
+    except Exception:
+        pass
     try:
         gh = group_chat_history.setdefault(group_id, [])
         gh.append({"role": "assistant", "content": str(text)[:300],
@@ -11327,7 +11336,8 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
         import self_actions as _acts
         _acts_blk = _acts.render(
             scene=("group" if is_group else "private"),
-            target=str(group_id if is_group else (_pl_sender or target_qq or "")))
+            target=str(group_id if is_group else (_pl_sender or target_qq or "")),
+            include_group_say=(not is_group))
         if _acts_blk:
             dynamic_parts.append(_acts_blk)
     except Exception:
@@ -12149,7 +12159,8 @@ def _qq_agent_reply(text: str, images, *, is_group: bool, group_id: str = "",
             try:
                 import self_actions as _acts
                 _ab = _acts.render(scene=("group" if is_group else "private"),
-                                   target=str(group_id if is_group else (sender or "")))
+                                   target=str(group_id if is_group else (sender or "")),
+                                   include_group_say=(not is_group))
                 if _ab:
                     _ctx2["acts"] = _ab
             except Exception:
@@ -16398,6 +16409,12 @@ def main():
                     ch.append({"role": "user", "content": text, "ts": time.time()})
                     ch.append({"role": "assistant", "content": reply[:500],
                                "ts": time.time()})
+                    try:
+                        import self_actions as _sa
+                        _sa.record("say", scene="private", target=str(sender),
+                                   detail=str(reply)[:40])
+                    except Exception:
+                        pass
                     # C2 存储对齐：私聊截断 60→24 轮（组装只取最近10轮，储存更多纯占内存+IO）
                     chat_history[sender] = ch[-24:]
                     # P1-3：把刚发的表情包也记进 history —— 模型下一轮才知道
