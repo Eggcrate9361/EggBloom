@@ -11345,6 +11345,9 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
             dynamic_parts.append(
                 "【派活】用户让你查资料/看文件/办具体事时，用 dispatch_task(goal) 交给后台"
                 "子 agent，然后正常回一句（别装成已经查完了）；他问进度就用 task_status。")
+            dynamic_parts.append(
+                "【表情包】用户要你发之前收的那张图时，用 meme_find 找到 id、"
+                "再用 meme_send 发；别用 match_meme 随便配一张。")
     except Exception:
         pass
 
@@ -12129,6 +12132,20 @@ def _qq_agent_history(entries) -> list:
         except Exception:
             continue
     return out
+
+
+def _meme_tool_send(path: str, ctx=None) -> bool:
+    """宿主给 meme_send 的发送实现（按当轮对话场景发）。"""
+    c = dict(ctx or {})
+    try:
+        if c.get("is_group") and c.get("group_id"):
+            return bool(send_group_image(str(c["group_id"]), path))
+        sender = str(c.get("sender") or "")
+        if sender:
+            return bool(send_image(path, sender))
+    except Exception as e:
+        log(f"[表情检索] 发送失败: {e}")
+    return False
 
 
 def _qq_agent_run(text: str, *, is_group: bool, group_id: str = "",
@@ -15015,6 +15032,14 @@ def main():
                 log(f"[harness] 派活工具已接入: {sorted(_task_fns)}")
             except Exception as _te:
                 log(f"[harness] 派活工具接入失败: {_te}")
+            try:
+                from harness import tool_meme as _tmeme
+                _meme_fns = _tmeme.register_all()
+                _work_fns.update(_meme_fns)
+                _tmeme.set_sender(_meme_tool_send)
+                log(f"[harness] 表情包检索工具已接入: {sorted(_meme_fns)}")
+            except Exception as _me:
+                log(f"[harness] 表情包检索工具接入失败: {_me}")
             TOOL_FUNCTIONS.update(_work_fns)
             log(f"[harness] 工作型工具已接入: {sorted(_work_fns)}（工作区根 {_WORKSPACE_ROOT}）")
         except Exception as _we:

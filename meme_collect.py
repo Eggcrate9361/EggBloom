@@ -199,8 +199,9 @@ def maybe_collect(path: str, *, tags=None, source: str = "auto",
     # 行为账本（2026-10-30）：它要记得"我捡了张图"。来源只记群，不记人。
     try:
         import self_actions as _acts
+        _tags_txt = "、".join(str(t) for t in (tags or [])[:2]) or "未打标签"
         _acts.record("collect", scene="group", target=str(from_group or ""),
-                     detail="、".join(str(t) for t in (tags or [])[:2]) or "未打标签")
+                     detail=f"{rel}｜{_tags_txt}")
     except Exception:
         pass
     try:
