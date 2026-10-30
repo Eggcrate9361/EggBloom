@@ -241,8 +241,8 @@ def execute_tool_call(tc, *, tool_functions, offered_names=None,
             msg = f"未知工具: {name}"
         else:
             avail = "、".join(sorted(offered_names)) or "无"
-            msg = (f"本轮未提供工具 {name}（本轮只提供：{avail}）。"
-                   f"请使用既有工具，或用自然语言直接回答。")
+            msg = (f"没有权限调用 {name}（本轮只提供：{avail}）。"
+                   f"要么用既有工具，要么直接回答；不要编造结果。")
         base.update(inline=msg, full_text=msg, blocked="not_offered")
         return base
 

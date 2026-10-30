@@ -162,6 +162,7 @@
   "meme_idle_exit_enable": true,
   "meme_auto_detect_emotion": true,
   "tools_full_inject_enable": true,
+  "private_tool_whitelist": [],
   "image_free_lane_enable": false,
   "recall_feedback_use_preset": true,
   "recall_feedback_context_window": 300,

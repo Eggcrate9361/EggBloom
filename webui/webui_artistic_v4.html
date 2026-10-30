@@ -4860,6 +4860,8 @@ window.FIELD_META = {
     "recall_feedback_context_window": {"label": "撤回反馈关联窗口（秒）", "desc": "只有 bot 在这么多秒内说过话（或这条撤回截断了 bot 的回复）才回。群一直安静、bot 没参与 → 沉默。默认 300 秒。", "ctl": "number", "panel": "recall", "unit": "秒", "id": "sRecallContextWindow", "default": 300, "default_text": "300"},
     "tools_full_inject_enable": {"label": "工具全量注入", "desc": "开：按场景把可用工具全给模型（私聊含读写/执行/桌面，群聊去掉本机能力），用不用由模型判断。关：退回旧的关键词猜测注入——没命中词就说没这功能。", "ctl": "bool", "panel": "llm", "unit": "", "id": "sToolsFullInject", "default": true, "default_text": "开启"},
     "image_free_lane_enable": {"label": "图片理解走免费链", "desc": "开：先用免费视觉车道（挂掉时会白等并熔断）。关（默认）：直接走主模型，约 1~2 秒。真机免费链已连续空响应，关掉更稳。", "ctl": "bool", "panel": "llm", "unit": "", "id": "sImageFreeLane", "default": false, "default_text": "关闭"},
+    "private_tool_whitelist": {"label": "私聊特权工具白名单（每行一个 QQ）", "desc": "只有名单里的 QQ 能在私聊拿到写文件/执行/桌面这些工具；其他人只给只读工具，越权调用一律回「没有权限」。留空 = 谁都不给。", "ctl": "lines", "panel": "llm", "unit": "", "id": "sPrivateToolWhitelist", "default": [], "default_text": "空"},
+    "max_tool_rounds": {"label": "单次回复工具轮次", "desc": "一次聊天回复里最多几轮工具调用（默认 3）。调大能做多步任务，但更慢更贵；Agent/派活链路不受这个限制。", "ctl": "number", "panel": "llm", "unit": "轮", "id": "sMaxToolRounds", "default": 3, "default_text": "3"},
   }
 };
 /* ══ FIELD_META_END */

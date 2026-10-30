@@ -7373,7 +7373,18 @@ def _scope_policy_block(kind, sid):
         return ""
 
 
-def _tools_subset_for_scene(is_group: bool) -> list:
+def _private_tool_allowed(uid) -> bool:
+    """私聊里这个人能不能拿到特权工具（写/执行/桌面）。空名单 = 谁都不给。"""
+    try:
+        wl = _config.get("private_tool_whitelist") or []
+        u = str(uid or "")
+        u = u.split("(")[-1].rstrip(")") if "(" in u else u
+        return any(str(x).strip() == u for x in wl)
+    except Exception:
+        return False
+
+
+def _tools_subset_for_scene(is_group: bool, privileged: bool = True) -> list:
     """按场景返回该给模型的工具名（稳定顺序）。
 
     私聊：core/work/write/proc/desktop/web/skill/todo/plugin/mcp —— 全给。
@@ -7385,7 +7396,7 @@ def _tools_subset_for_scene(is_group: bool) -> list:
               _tr.GROUP_SKILL, _tr.GROUP_TODO, "plugin"]
     if is_group:
         groups.append(_tr.GROUP_GROUP)
-    else:
+    elif privileged:
         groups.extend([_tr.GROUP_WRITE, _tr.GROUP_PROC,
                        _tr.GROUP_DESKTOP, _tr.GROUP_MCP])
     seen, names = set(), []
@@ -11740,7 +11751,8 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
         # 2026-10-30：默认全量注入（按场景的许可边界，不按关键词猜意图）。
         # 用户原话："工具不是想用就用吗"——注册表里有就给他看，用不用模型自己判。
         if bool(_config.get("tools_full_inject_enable", True)):
-            _subset = _tools_subset_for_scene(bool(is_group))
+            _priv_ok = True if is_group else _private_tool_allowed(_pl_sender)
+            _subset = _tools_subset_for_scene(bool(is_group), privileged=_priv_ok)
             if is_group:
                 _allowed_names = {t["function"]["name"] for t in _build_group_tools(group_id)}
                 _subset = [n for n in _subset if n in _allowed_names]

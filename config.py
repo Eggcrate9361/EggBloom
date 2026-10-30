@@ -430,6 +430,9 @@ DEFAULT_CONFIG = {
     # 免费视觉车道（2026-10-30 真机：每次 2 轮失败再熔断，循环噪音+白等；
     # 主模型约 1~2 秒能读，默认关）
     "image_free_lane_enable": False,
+    # 私聊工具白名单（2026-10-30）：只有名单里的人能拿到写/执行/桌面工具；
+    # 其他人私聊只给只读工具，越权调用一律回"没有权限"。
+    "private_tool_whitelist": [],
     "tools_full_inject_enable": True,
     "recall_feedback_use_preset": True,   # 撤回反馈：预设
     "recall_feedback_context_window": 300,  # 秒：bot 多久内说过话才回撤回（否则沉默）

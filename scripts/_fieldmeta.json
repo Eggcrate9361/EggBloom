@@ -1368,6 +1368,26 @@
    "id": "sImageFreeLane",
    "default": false,
    "default_text": "关闭"
+  },
+  "private_tool_whitelist": {
+   "label": "私聊特权工具白名单（每行一个 QQ）",
+   "desc": "只有名单里的 QQ 能在私聊拿到写文件/执行/桌面这些工具；其他人只给只读工具，越权调用一律回「没有权限」。留空 = 谁都不给。",
+   "ctl": "lines",
+   "panel": "llm",
+   "unit": "",
+   "id": "sPrivateToolWhitelist",
+   "default": [],
+   "default_text": "空"
+  },
+  "max_tool_rounds": {
+   "label": "单次回复工具轮次",
+   "desc": "一次聊天回复里最多几轮工具调用（默认 3）。调大能做多步任务，但更慢更贵；Agent/派活链路不受这个限制。",
+   "ctl": "number",
+   "panel": "llm",
+   "unit": "轮",
+   "id": "sMaxToolRounds",
+   "default": 3,
+   "default_text": "3"
   }
  },
  "actions": {
