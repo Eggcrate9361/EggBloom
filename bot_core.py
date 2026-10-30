@@ -11337,6 +11337,17 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
     except Exception:
         pass
 
+    # 派活提示（2026-10-30，qq_agent_mode=tools）：教它用后台子 agent，
+    # 而不是自己假装查完了，或让固定占位句顶掉人格。
+    try:
+        if (str(_config.get("qq_agent_mode", "inline")) == "tools"
+                and bool(_config.get("qq_agent_enable", False))):
+            dynamic_parts.append(
+                "【派活】用户让你查资料/看文件/办具体事时，用 dispatch_task(goal) 交给后台"
+                "子 agent，然后正常回一句（别装成已经查完了）；他问进度就用 task_status。")
+    except Exception:
+        pass
+
     # 行为账本（2026-10-30）：它要知道自己刚干过什么（发图/戳人/采集）。
     # 只给"何时、在哪、做了什么"，不给别人的原始隐私。
     try:
