@@ -104,17 +104,20 @@ try:
     check("坏账本不抛且记为空", L3.used_today("ego") == 0)
 
     # ── 5. plan：单条合计上限 ────────────────────────────────────────
+    # ★ 2026-10-30：ego 现在是**预算豁免**（它注入的是人格/关系，见
+    #   EXEMPT_PLUGINS）。这里用普通插件名验预算机制，ego 的豁免单独测
+    #   （tests/test_plugin_budget_exempt.py）。
     budget = {"enabled": True, "max_chars": 80, "daily_chars": 600}
     items = pb.order([
         ("group_chat_decider", 10, "决" * 20),
-        ("ego", 20, "人" * 200),          # 会被截到剩下的 60 字
+        ("chat_style", 20, "人" * 200),   # 会被截到剩下的 60 字
         ("web_search", 60, "搜" * 30),    # 预算已用完 → 跳过
     ])
     text5, rep5 = pb.plan(items, budget, ledger=None)
     check("单条合计不超 80", pb.text_len(text5) <= 80, pb.text_len(text5))
     check("合计等于 80", pb.text_len(text5) == 80, pb.text_len(text5))
     check("报告 total 与文本一致", rep5["total"] == pb.text_len(text5))
-    check("被截的那个记进 trimmed", [x[0] for x in rep5["trimmed"]] == ["ego"],
+    check("被截的那个记进 trimmed", [x[0] for x in rep5["trimmed"]] == ["chat_style"],
           rep5["trimmed"])
     check("放不下的记进 dropped", [x[0] for x in rep5["dropped"]] == ["web_search"],
           rep5["dropped"])
@@ -123,29 +126,28 @@ try:
     # ── 6. plan：每天上限（按插件）────────────────────────────────────
     Ld = pb.Ledger(os.path.join(_TMP, "daily.json"))
     b2 = {"enabled": True, "max_chars": 0, "daily_chars": 25}
-    it = [("ego", 20, "人" * 20)]
+    it = [("chat_style", 20, "人" * 20)]
     t1, r1 = pb.plan(it, b2, ledger=Ld)
     check("首次全量注入", pb.text_len(t1) == 20 and not r1["dropped"], r1)
     t2, r2 = pb.plan(it, b2, ledger=Ld)      # 今日已用 20，剩 5 → 截不出来就丢
     check("超出每日预算后丢弃", t2 == "" and r2["dropped"][0][1] == "今日预算用完", r2)
-    check("账本累计到 20", Ld.used_today("ego") == 20, Ld.used_today("ego"))
+    check("账本累计到 20", Ld.used_today("chat_style") == 20, Ld.used_today("chat_style"))
 
     # 另一个插件不受影响（每天是**按插件**分开算的）
     t3, r3 = pb.plan([("web_search", 60, "搜" * 20)], b2, ledger=Ld)
     check("别的插件还有自己的额度", pb.text_len(t3) == 20, r3)
 
     # ── 7. plan：关闭预算 ───────────────────────────────────────────
-    ts, rs = pb.plan([("ego", 20, "人" * 500)], {"enabled": False,
-                                                "max_chars": 80, "daily_chars": 600})
+    ts, rs = pb.plan([("chat_style", 20, "人" * 500)], {"enabled": False,
+                                                        "max_chars": 80, "daily_chars": 600})
     check("关掉预算就不截", pb.text_len(ts) == 500, pb.text_len(ts))
     check("关掉预算不记账", not rs["dropped"] and not rs["trimmed"])
 
     # ── 8. plan：杂项 ───────────────────────────────────────────────
-    te, _ = pb.plan([("ego", 20, ""), ("ego2", 20, "   ")], budget)
+    te, _ = pb.plan([("chat_style", 20, ""), ("web_search", 20, "   ")], budget)
     check("空注入不产生空行", te == "")
-    tt, rt = pb.plan([("ego", 20, "这句话挺长的应该放不下")], {"enabled": True,
-                                                             "max_chars": 3,
-                                                             "daily_chars": 600})
+    tt, rt = pb.plan([("chat_style", 20, "这句话挺长的应该放不下")],
+                     {"enabled": True, "max_chars": 3, "daily_chars": 600})
     check("额度放不下一句 → 整段丢掉",
           tt == "" and rt["dropped"][0][1] == "单条预算用完", rt)
     check("describe 无问题时为空串", pb.describe({"dropped": [], "trimmed": [], "total": 1}) == "")

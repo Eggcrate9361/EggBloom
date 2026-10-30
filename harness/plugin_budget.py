@@ -56,6 +56,13 @@ DEFAULT_DAILY_CHARS = 600
 #: 截断后剩这么少就当没这段 —— 半句话比没有更糟（模型会去圆它）。
 MIN_KEEP_CHARS = 8
 
+#: **预算豁免**：这些插件注入的是"人格 / 关系 / 记忆"，不是注入噪音，不占预算。
+#: 2026-10-30 实测：ego 一轮想注入约 330 字，而单条合计上限 80 →
+#: 每轮被砍到 78（`截断 ego:328→80`），当天 600 字用完后彻底没有 ——
+#: 用户体感就是"越聊越不像它、像重新认识"。所以 ego 走豁免，
+#: 但它的体积仍由自身 manifest 的 budget 与 overall prompt 预算约束。
+EXEMPT_PLUGINS = frozenset({"ego"})
+
 #: 来源类别固定档位（数值小 = 先占预算）。不在表里的插件用 DEFAULT_RANK。
 SOURCE_RANK = {
     # 现场/决策：这一轮该不该说、说什么，最该先占位置
@@ -307,7 +314,9 @@ def plan(items: List[Tuple[str, int, str]], budget: Dict[str, object],
             continue
         n = text_len(body)
         allowed = -1
-        if enabled:
+        # 豁免插件：不参与单条/每日预算，也不占用别人的额度（见 EXEMPT_PLUGINS）
+        _exempt = enabled and str(name) in EXEMPT_PLUGINS
+        if enabled and not _exempt:
             day_left = -1
             if ledger is not None and daily_chars > 0:
                 day_left = ledger.remaining(name, daily_chars)

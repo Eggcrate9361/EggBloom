@@ -95,17 +95,16 @@ def _request_id(seed: str) -> str:
 #   kilo stepfun/step-5-preview-free  文本 1.2s / 视觉 3.6s
 #   zen  mimo-v2.6-flash-free    文本 1.4~24s（波动大，放后面）
 #   kilo openrouter/free         视觉 8~37s（慢，兜底）
+#
+# ★ 2026-10-30：**zen 车道摘掉**。实测连续两次 400
+#   （`Model is unavailable`），每次白等约 8 秒才轮到 kilo 或主模型；
+#   留着重试只会把"看图"拖成十几秒。要加回来，往下面两个链里塞 ("zen", …) 即可。
 # ══════════════════════════════════════════════════════════════════
 DEFAULT_TEXT_CHAIN = [
-    ("zen", "space-bunny-free"),
     ("kilo", "stepfun/step-5-preview-free"),
-    ("zen", "mimo-v2.6-flash-free"),
 ]
-# 视觉链（实测：space-bunny 2.8~3.3s 描述最细；mimo 3.6s 可用；
-#  kilo 的 nano-omni 12.5s 兜底。其余要么不支持图、要么只回 "User Safety: safe"）
+# 视觉链（zen 已下线；kilo 的 nano-omni 约 12.5s，再兜不住就走主模型）
 DEFAULT_VISION_CHAIN = [
-    ("zen", "space-bunny-free"),
-    ("zen", "mimo-v2.6-flash-free"),
     ("kilo", "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free"),
 ]
 
