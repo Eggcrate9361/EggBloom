@@ -3292,6 +3292,29 @@ def _people_alias_prompt(sender) -> str:
         return ""
 
 
+#: 被问到这些词时才去取头像（平时不花视觉的钱）
+_AVATAR_ASK = ("头像", "头象", "自拍", "长什么样", "照片是谁")
+
+
+def _avatar_desc(sender, user_msg) -> str:
+    """被问头像时取 QQ 头像并看一眼。取不到/看不懂返回空串（不编、不说空白）。
+
+    2026-10-30：真机两次「我的头像是谁」都答"头像那边是空白" —— 主链从来
+    没取过头像。QQ 头像是公开 URL（qlogo.cn），取一次缓存 7 天。
+    """
+    try:
+        if not any(k in str(user_msg or "") for k in _AVATAR_ASK):
+            return ""
+        import avatar as _av
+        d = _av.describe(str(sender or ""), describe_image)
+        if d:
+            log(f"[头像] {sender} 描述 {len(d)} 字")
+        return d
+    except Exception as e:
+        log(f"[头像] 失败（不影响回复）: {e}")
+        return ""
+
+
 def _cross_scene_block(sender, group_id="") -> str:
     """「他最近在另一边说过」块（记忆全打通，2026-10-30）。
 
@@ -11259,6 +11282,16 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
     except Exception:
         pass
 
+    # 头像（2026-10-30）：被问就取 QQ 头像看一眼，注入描述。
+    # 只在命中"头像/自拍/长什么样"时取，平时不花视觉的钱。
+    try:
+        _avd = _avatar_desc(_pl_sender, user_msg)
+        if _avd:
+            dynamic_parts.append("【他的头像】" + _avd
+                                 + "（问起就照这个说，别说看不到/没到你手上）")
+    except Exception:
+        pass
+
     # 记忆全打通（2026-10-30）：私聊里补一句"他刚在群里说过什么"。
     # 只在私聊注入（群里注入=把别人的私聊贴出去，不做）。
     try:
@@ -11942,9 +11975,20 @@ def _qq_agent_fetch(url: str, dest: Optional[str] = None,
 
 
 def _qq_agent_vision(path: str, question: str = "") -> Dict:
-    """agent 的 vision。describe_image 失败返回 ""（绝不抛），这里如实转成 ok=False。"""
-    txt = describe_image(path, question or "")
-    txt = str(txt or "").strip()
+    """agent 的 vision。**优先主模型**（1~3 秒），失败再走免费链/缓存。
+
+    ★ 2026-10-30 修：以前直接 `describe_image()`，而免费车道挂掉时要串
+      2 轮 × 8 秒才轮到主模型（实测整条链 38 秒）—— agent 总预算 25 秒，
+      于是工具明明成功、循环却被 abort，最后答"我这儿没查到"。
+      agent 是"必须可靠"的路径，不差这一张图的 0.0002 元。
+    """
+    txt = ""
+    try:
+        txt = str(describe_image_via_main(path, question or "") or "").strip()
+    except Exception:
+        txt = ""
+    if not txt:
+        txt = str(describe_image(path, question or "") or "").strip()
     return {"ok": bool(txt), "text": txt,
             "error": "" if txt else "没读出来"}
 
@@ -12037,10 +12081,22 @@ def _qq_agent_reply(text: str, images, *, is_group: bool, group_id: str = "",
             "ledger": _qq_agent_ledger,
         }
         br = _qab.Bridge(deps=deps, root=SCRIPT_DIR, cfg=cfg, log=log)
-        # 1.6.0 铺路：本轮上下文走统一拼装（记忆 → ego → 场景 → 称呼 → 另一边）
+        # 1.6.0 铺路：本轮上下文走统一拼装（记忆 → 头像 → ego → 场景 → 称呼 → 另一边）
         try:
+            _ctx2 = dict(extra_ctx or {})
+            # ★ 2026-10-30：先把"你在跟谁说话"告诉 agent。没有这一行，它
+            #   调 get_stranger_info 时 user_id 是空的（真机 15:31 连调两次
+            #   都失败），然后只能盲猜目录、最后答"连你是哪个号都没认出来"。
+            _uid = str(sender or "").strip()
+            if _uid:
+                _where = f"群 {group_id}" if (is_group and group_id) else "私聊"
+                _ctx2["who"] = (f"你正在 QQ {_where}里和这个人说话：QQ={_uid}。"
+                                f"要查他的资料/头像/群，直接用这个 QQ 号，别问他要号。")
+            _avd = _avatar_desc(sender, text)
+            if _avd:
+                _ctx2["avatar"] = _avd
             from harness import life_context as _lctx
-            _extra = _lctx.compose(extra_ctx)
+            _extra = _lctx.compose(_ctx2)
         except Exception:
             _extra = ""
         res = br.run(str(text or ""), has_media=bool(images), is_group=bool(is_group),
