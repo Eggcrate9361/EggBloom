@@ -7371,6 +7371,30 @@ def _scope_policy_block(kind, sid):
         return ""
 
 
+def _tools_subset_for_scene(is_group: bool) -> list:
+    """按场景返回该给模型的工具名（稳定顺序）。
+
+    私聊：core/work/write/proc/desktop/web/skill/todo/plugin/mcp —— 全给。
+    群聊：去掉 write/proc/desktop（本机能力不进群），其余全给；
+    最终还会再过一遍 group_tool_allowlist 白名单。
+    """
+    from harness import tool_registry as _tr
+    groups = [_tr.GROUP_CORE, _tr.GROUP_WORK, _tr.GROUP_WEB,
+              _tr.GROUP_SKILL, _tr.GROUP_TODO, "plugin"]
+    if is_group:
+        groups.append(_tr.GROUP_GROUP)
+    else:
+        groups.extend([_tr.GROUP_WRITE, _tr.GROUP_PROC,
+                       _tr.GROUP_DESKTOP, _tr.GROUP_MCP])
+    seen, names = set(), []
+    for g in groups:
+        for n in _tr.names_in(g):
+            if n not in seen:
+                seen.add(n)
+                names.append(n)
+    return names
+
+
 def _build_group_tools(group_id=None, *, registry=None):
     """根据配置 group_tool_allowlist 动态生成群聊可用工具列表。
 
@@ -11695,14 +11719,20 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
     try:
         from harness import tool_registry as _treg
         from harness import bot_hook as _bh
-        if is_group:
-            # 群聊：注册表子集必须**同时**落在 group_tool_allowlist 白名单内
-            #   （白名单是安全边界，按需加载不能把它放开）
-            _allowed_names = {t["function"]["name"] for t in _build_group_tools(group_id)}
-            _subset = [n for n in _bh.tool_names_for(user_msg, is_group=True)
-                       if n in _allowed_names]
+        # 2026-10-30：默认全量注入（按场景的许可边界，不按关键词猜意图）。
+        # 用户原话："工具不是想用就用吗"——注册表里有就给他看，用不用模型自己判。
+        if bool(_config.get("tools_full_inject_enable", True)):
+            _subset = _tools_subset_for_scene(bool(is_group))
+            if is_group:
+                _allowed_names = {t["function"]["name"] for t in _build_group_tools(group_id)}
+                _subset = [n for n in _subset if n in _allowed_names]
         else:
-            _subset = _bh.tool_names_for(user_msg, is_group=False)
+            if is_group:
+                _allowed_names = {t["function"]["name"] for t in _build_group_tools(group_id)}
+                _subset = [n for n in _bh.tool_names_for(user_msg, is_group=True)
+                           if n in _allowed_names]
+            else:
+                _subset = _bh.tool_names_for(user_msg, is_group=False)
         if _subset:
             _resolved = _treg.resolve(_subset, lazy=True)
             if _resolved:

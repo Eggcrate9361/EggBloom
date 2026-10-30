@@ -161,6 +161,7 @@
   "meme_enable": true,
   "meme_idle_exit_enable": true,
   "meme_auto_detect_emotion": true,
+  "tools_full_inject_enable": true,
   "recall_feedback_use_preset": true,
   "recall_feedback_context_window": 300,
   "group_idle_exit_use_preset": true,
