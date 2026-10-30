@@ -68,7 +68,7 @@ if ROOT_DIR not in sys.path:
 
 PLUGIN_META = {
     "name": "bili",
-    "version": "2.0.0",
+    "version": "1.6.0",
     "description": "B站：读信息/字幕稿/弹幕/热评，可生成 AI 摘要；登录在本插件内。",
     "author": "EggBloom",
     "group_only": False,
@@ -100,6 +100,14 @@ _DEFAULTS = {
     "ttl_hours": 24,
     "qr_key": "",
     "qr_ts": 0,
+    # ── 写（1.6.0）：默认全关，功能是完整的 ──
+    "write_enabled": False,
+    "write_dry_run": True,
+    "write_daily_max": 3,
+    "write_video_cooldown_h": 24,
+    "write_min_seconds": 20,
+    "write_text_max": 180,
+    "write_up_whitelist": [],
 }
 
 
@@ -320,7 +328,8 @@ def get_config() -> dict:
             "with_comments": bool(cfg.get("with_comments")),
             "ttl_hours": int(cfg.get("ttl_hours") or 24),
             "logged_in": bool(cfg.get("cookie")),
-            "cookie_tail": _mask(cfg.get("cookie"))}
+            "cookie_tail": _mask(cfg.get("cookie")),
+            "write": write_status()}
 
 
 def set_config(params: dict = None) -> dict:
@@ -563,6 +572,250 @@ def get_stats() -> dict:
     return st
 
 
+# ── 写：发言（1.6.0）────────────────────────────────────────────
+# 设计前提：**默认全关**。打开后还要过一道 dry_run，确认文案没问题再真发。
+# 每一道闸的理由都写在 _write_guard 里 —— 这不是形式主义，写接口翻车是封号级别的。
+AUDIT_PATH = os.path.join(DATA_DIR, "actions.jsonl")
+
+
+def _audit(entry: dict) -> None:
+    """每次写动作（含干跑、拒绝）都留痕。一行一条 JSON，方便直接 tail。"""
+    try:
+        os.makedirs(DATA_DIR, exist_ok=True)
+        e = dict(entry)
+        e.setdefault("ts", time.time())
+        e.setdefault("date", time.strftime("%Y-%m-%d"))
+        e.setdefault("at", time.strftime("%Y-%m-%d %H:%M:%S"))
+        with open(AUDIT_PATH, "a", encoding="utf-8") as f:
+            f.write(json.dumps(e, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+
+
+def _recent_actions(n: int = 40) -> list:
+    """读审计日志最近 n 条（新的在前）。读不到返回空列表。"""
+    try:
+        with open(AUDIT_PATH, "r", encoding="utf-8") as f:
+            lines = f.readlines()[-n:]
+        out = []
+        for ln in reversed(lines):
+            ln = ln.strip()
+            if ln:
+                try:
+                    out.append(json.loads(ln))
+                except Exception:
+                    continue
+        return out
+    except Exception:
+        return []
+
+
+def _write_guard(kind: str, info: dict, text: str = "") -> tuple:
+    """所有写动作的唯一闸门。返回 `(ok, reason)`；reason 是给人看的一句话。
+
+    六道闸，从便宜到贵：
+      1. 总开关         —— 默认关，用户开了才算
+      2. 登录 + CSRF    —— SESSDATA 和 bili_jct 缺一不可
+      3. 熔断           —— 最近连续 2 次失败就停手（不重试、不换姿势）
+      4. 冷却           —— 两次写之间 ≥20 秒
+      5. 日上限         —— 默认 3 次/天（全站），同视频 24h 内只发一次
+      6. UP 白名单      —— 配了就只对这些 UP 发言（空=不限）
+    """
+    cfg = _cfg()
+    if not cfg.get("write_enabled"):
+        return False, "写功能未启用（插件里默认关闭）"
+    if not str(cfg.get("cookie") or ""):
+        return False, "未登录"
+    from harness.bili_api import BiliAPI
+    api = BiliAPI(cookie=str(cfg.get("cookie") or ""))
+    if not api.csrf():
+        return False, "cookie 里没有 bili_jct（CSRF）—— 请重新扫码登录"
+    t = str(text or "").strip()
+    if kind in ("comment", "danmaku"):
+        if not t:
+            return False, "内容为空"
+        limit = int(cfg.get("write_text_max") or 180) if kind == "comment" else 100
+        if len(t) > limit:
+            return False, f"太长了（上限 {limit} 字）"
+
+    recent = _recent_actions(30)
+    # ★ 只有"真的打到接口但失败了"才算熔断计数。被闸门挡下的（blocked）不计 ——
+    #   否则用户连打三次超长文案，写功能就被自己锁死了。
+    fails = 0
+    for a in recent:
+        if a.get("blocked"):
+            continue
+        if a.get("ok"):
+            break
+        if not a.get("dry_run") and not a.get("blocked"):
+            fails += 1
+    if fails >= 2:
+        return False, "连续两次写失败，已停手 —— 看「最近动作」里的失败原因"
+
+    # ★ 冷却只看**真正发出去成功过**的记录；被挡下的尝试不该锁住用户。
+    #   0 是合法配置（关掉冷却），所以不能写 `or 20`。
+    _min_s = cfg.get("write_min_seconds")
+    _min_s = 20.0 if _min_s is None else float(_min_s)
+    last_ok = next((a for a in recent
+                    if a.get("ok") and not a.get("dry_run")
+                    and not a.get("blocked")), None)
+    if last_ok and _min_s > 0 and time.time() - float(last_ok.get("ts") or 0) < _min_s:
+        return False, f"太频繁了，歇一下（两次写之间至少 {int(_min_s)} 秒）"
+
+    today = str(time.strftime("%Y-%m-%d"))
+    today_ok = [a for a in recent
+                if a.get("date") == today and a.get("ok") and not a.get("dry_run")]
+    daily = int(cfg.get("write_daily_max") or 3)
+    if len(today_ok) >= daily:
+        return False, f"今天已经发过 {len(today_ok)} 次了（上限 {daily}）"
+
+    bvid = str((info or {}).get("bvid") or "")
+    cooldown_h = float(cfg.get("write_video_cooldown_h") or 24)
+    if bvid:
+        for a in recent:
+            if a.get("bvid") == bvid and a.get("ok") and not a.get("dry_run"):
+                if time.time() - float(a.get("ts") or 0) < cooldown_h * 3600:
+                    return False, f"这个视频 {int(cooldown_h)} 小时内已经发过了"
+
+    wl = [str(x).strip() for x in (cfg.get("write_up_whitelist") or []) if str(x).strip()]
+    if wl and str((info or {}).get("owner_mid") or "") not in wl:
+        return False, "这个 UP 不在白名单里"
+
+    return True, ""
+
+
+def write_status() -> dict:
+    cfg = _cfg()
+    recent = _recent_actions(30)
+    today = str(time.strftime("%Y-%m-%d"))
+    today_ok = [a for a in recent
+                if a.get("date") == today and a.get("ok") and not a.get("dry_run")]
+    fails = 0
+    for a in recent:
+        if a.get("blocked"):
+            continue
+        if a.get("ok"):
+            break
+        if not a.get("dry_run"):
+            fails += 1
+    return {"enabled": bool(cfg.get("write_enabled")),
+            "dry_run": bool(cfg.get("write_dry_run")),
+            "daily_max": int(cfg.get("write_daily_max") or 3),
+            "used_today": len(today_ok),
+            "cooldown_h": int(cfg.get("write_video_cooldown_h") or 24),
+            "min_seconds": int(cfg.get("write_min_seconds") or 20),
+            "whitelist": cfg.get("write_up_whitelist") or [],
+            "text_max": int(cfg.get("write_text_max") or 180),
+            "breaker": fails >= 2,
+            "consecutive_failures": fails,
+            "recent": recent[:8],
+            "total": len(recent)}
+
+
+def set_write_config(params: dict = None) -> dict:
+    if not isinstance(params, dict):
+        return {"ok": False, "error": "params must be dict"}
+    cfg = _cfg()
+    for k in ("write_enabled", "write_dry_run", "write_daily_max",
+              "write_video_cooldown_h", "write_min_seconds", "write_text_max",
+              "write_up_whitelist"):
+        if k in params:
+            cfg[k] = params[k]
+    if isinstance(cfg.get("write_up_whitelist"), str):
+        cfg["write_up_whitelist"] = [x.strip() for x in
+                                     cfg["write_up_whitelist"].replace(",", " ").split()
+                                     if x.strip()]
+    _save(CONFIG_PATH, cfg)
+    return {"ok": True, "status": write_status()}
+
+
+def _do_write(kind: str, url: str, text: str = "", **kw) -> dict:
+    """写动作的统一执行：闸门 → 干跑 → 真发 → 回读 → 审计。"""
+    from harness.bili_api import BiliAPI, parse_url
+    t0 = time.time()
+    i = parse_url(str(url or ""))
+    if not i:
+        return {"ok": False, "error": "需要一个含 BV/av 的链接"}
+    cfg = _cfg()
+    api = BiliAPI(cookie=str(cfg.get("cookie") or ""))
+    info = api.view(i.get("bvid", ""), int(i.get("aid") or 0)) or {}
+    okg, why = _write_guard(kind, info, text)
+    entry = {"kind": kind, "bvid": info.get("bvid", ""), "owner": info.get("owner", ""),
+             "text": str(text or "")[:200], "elapsed": 0}
+    if not okg:
+        _audit({**entry, "ok": False, "error": why, "blocked": True})
+        return {"ok": False, "error": why, "blocked": True}
+
+    if cfg.get("write_dry_run"):
+        _audit({**entry, "ok": True, "dry_run": True, "elapsed": round(time.time() - t0, 2)})
+        return {"ok": True, "dry_run": True,
+                "text": text or "",
+                "hint": "干跑：闸门都过了，真发请关掉「先干跑」"}
+
+    aid, cid = int(info.get("aid") or 0), int(info.get("cid") or 0)
+    if kind == "comment":
+        r = api.post_comment(aid, text, bvid=info.get("bvid", ""))
+    elif kind == "danmaku":
+        r = api.send_danmaku(cid, text, int(kw.get("progress_ms") or 0))
+    elif kind == "like":
+        r = api.like(aid, bool(kw.get("on", True)))
+    elif kind == "coin":
+        r = api.coin(aid, int(kw.get("n") or 1))
+    elif kind == "follow":
+        r = api.follow(int(info.get("owner_mid") or 0), bool(kw.get("on", True)))
+    else:
+        return {"ok": False, "error": f"未知写动作：{kind}"}
+
+    verified = None
+    if r.get("ok") and kind == "comment":
+        u = api.nav_user()
+        verified = bool(api.find_my_comment(aid, int(u.get("mid") or 0),
+                                            int(r.get("rpid") or 0), pages=2))
+    entry.update({"ok": bool(r.get("ok")), "rpid": r.get("rpid"),
+                  "code": r.get("code"), "error": r.get("error", ""),
+                  "verified": verified, "elapsed": round(time.time() - t0, 2)})
+    _audit(entry)
+    out = {"ok": bool(r.get("ok")), "error": r.get("error", ""),
+           "code": r.get("code"), "rpid": r.get("rpid"),
+           "elapsed": entry["elapsed"]}
+    if kind == "comment" and r.get("ok"):
+        out["verified"] = verified
+        out["hint"] = ("回读到了，评论已可见" if verified
+                       else "接口收下了，但前两页没读到自己那条 —— 可能审核中")
+    return out
+
+
+def post_comment(params: dict = None) -> dict:
+    p = params or {}
+    return _do_write("comment", p.get("url", ""), str(p.get("text") or ""))
+
+
+def send_danmaku(params: dict = None) -> dict:
+    p = params or {}
+    return _do_write("danmaku", p.get("url", ""), str(p.get("text") or ""),
+                     progress_ms=p.get("progress_ms") or 0)
+
+
+def like_video(params: dict = None) -> dict:
+    p = params or {}
+    return _do_write("like", p.get("url", ""), on=bool(p.get("on", True)))
+
+
+def coin_video(params: dict = None) -> dict:
+    p = params or {}
+    return _do_write("coin", p.get("url", ""), n=int(p.get("n") or 1))
+
+
+def follow_up(params: dict = None) -> dict:
+    p = params or {}
+    return _do_write("follow", p.get("url", ""), on=bool(p.get("on", True)))
+
+
+def write_log(params: dict = None) -> dict:
+    n = int((params or {}).get("n") or 20)
+    return {"ok": True, "items": _recent_actions(n)}
+
+
 #: 给 A3（harness/qq_agent.py）的机读声明：这个插件在 agent 链路里负责什么。
 #: 不是装饰 —— 单测会钉住形状，接 A3 时直接读它决定要不要注册工具、算多贵的成本。
 PLUGIN_AGENT = {
@@ -571,7 +824,14 @@ PLUGIN_AGENT = {
     "intents": ["这个视频讲了什么", "帮我读稿", "有没有字幕", "弹幕在刷什么",
                 "热评怎么说", "这链接是啥", "总结一下这个B站视频"],
     "tools": ["bili_read", "bili_info", "bili_transcript",
-              "bili_danmaku", "bili_comments", "bili_summary"],
+              "bili_danmaku", "bili_comments", "bili_summary",
+              "bili_comment", "bili_send_danmaku", "bili_like",
+              "bili_coin", "bili_follow"],
+    # 写能力（1.6.0）：默认关，开了也先干跑。agent 调之前必须先看 write_status。
+    "write": {"enabled_by_default": False, "dry_run_by_default": True,
+              "requires": ["login", "bili_jct"], "guards": ["熔断", "冷却",
+                                                            "日上限", "同视频冷却",
+                                                            "UP 白名单"]},
     # 成本画像：给 A3 做预算决策用（网络请求 + 可能的 1 次 LLM）
     "cost": {"network": 3, "llm_calls": "0 或 1（只有 summary）", "est_seconds": "2–4"},
     # 降级链：任何一环拿不到，都必须落到"如实说"，不许猜
@@ -615,6 +875,37 @@ def agent_tools() -> list:
          "desc": "把稿子 + 弹幕梗 + 热评压成 3–5 句摘要。会调一次模型；没稿子时会拒绝。",
          "params": {"type": "object", "properties": {"url": {"type": "string"}},
                     "required": ["url"], "additionalProperties": False}},
+        # ── 写（默认关；调之前先看 write_status，被闸门挡住会返回 blocked=true）──
+        {"name": "bili_comment",
+         "desc": "在视频下发一条评论。需要登录 + bili_jct；默认干跑。"
+                 "成功后会回读校验是否真的可见。",
+         "params": {"type": "object",
+                    "properties": {"url": {"type": "string"},
+                                   "text": {"type": "string", "description": "评论正文"}},
+                    "required": ["url", "text"], "additionalProperties": False}},
+        {"name": "bili_send_danmaku",
+         "desc": "发一条视频弹幕（1–100 字）。",
+         "params": {"type": "object",
+                    "properties": {"url": {"type": "string"},
+                                   "text": {"type": "string"},
+                                   "progress_ms": {"type": "integer",
+                                                   "description": "出现在第几毫秒"}},
+                    "required": ["url", "text"], "additionalProperties": False}},
+        {"name": "bili_like",
+         "desc": "给视频点赞/取消。",
+         "params": {"type": "object", "properties": {"url": {"type": "string"},
+                                                     "on": {"type": "boolean"}},
+                    "required": ["url"], "additionalProperties": False}},
+        {"name": "bili_coin",
+         "desc": "给视频投币（1 或 2 枚）。",
+         "params": {"type": "object", "properties": {"url": {"type": "string"},
+                                                     "n": {"type": "integer", "enum": [1, 2]}},
+                    "required": ["url"], "additionalProperties": False}},
+        {"name": "bili_follow",
+         "desc": "关注/取关该视频的 UP。",
+         "params": {"type": "object", "properties": {"url": {"type": "string"},
+                                                     "on": {"type": "boolean"}},
+                    "required": ["url"], "additionalProperties": False}},
     ]
 
 
@@ -649,6 +940,12 @@ def agent_call(name: str, args: dict = None) -> dict:
             return {"ok": True, "data": d.get("comments") or [], "error": ""}
         if name == "bili_summary":
             return summary({"url": url})
+        if name in ("bili_comment", "bili_send_danmaku", "bili_like",
+                    "bili_coin", "bili_follow"):
+            fn = {"bili_comment": post_comment, "bili_send_danmaku": send_danmaku,
+                  "bili_like": like_video, "bili_coin": coin_video,
+                  "bili_follow": follow_up}[name]
+            return fn({**a, "url": url})
         return {"ok": False, "data": None, "error": f"没有这个工具：{name}"}
     except Exception as e:
         return {"ok": False, "data": None, "error": f"{type(e).__name__}: {e}"}
@@ -667,4 +964,13 @@ PLUGIN_ACTIONS = {
     "logout": logout,
     "get_stats": get_stats,
     "clear_cache": clear_cache,
+    # ── 写（1.6.0）──
+    "write_status": write_status,
+    "set_write_config": set_write_config,
+    "post_comment": post_comment,
+    "send_danmaku": send_danmaku,
+    "like_video": like_video,
+    "coin_video": coin_video,
+    "follow_up": follow_up,
+    "write_log": write_log,
 }

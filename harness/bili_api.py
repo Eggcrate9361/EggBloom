@@ -285,8 +285,152 @@ class BiliAPI:
                         "text": str(c.get("message") or "").strip(),
                         "like": int(r.get("like") or 0),
                         "rcount": int(r.get("rcount") or 0),
-                        "ctime": int(r.get("ctime") or 0)})
+                        "ctime": int(r.get("ctime") or 0),
+                        "mid": int((r.get("member") or {}).get("mid") or 0),
+                        "rpid": int(r.get("rpid") or 0)})
         return out
+
+    # -- 写：发评论（2026-10-30）---------------------------------
+    def csrf(self) -> str:
+        """从 cookie 里取 bili_jct —— 写接口的 CSRF token，缺了必失败。"""
+        for part in str(self.cookie or "").split(";"):
+            k, _, v = part.strip().partition("=")
+            if k.strip() == "bili_jct":
+                return v.strip()
+        return ""
+
+    def nav_user(self) -> Dict[str, Any]:
+        """当前登录用户 `{ok, mid, uname, is_login}`。"""
+        j = self._j(f"{API}/x/web-interface/nav", {})
+        d = j.get("data") or {}
+        return {"ok": bool(d.get("isLogin")), "is_login": bool(d.get("isLogin")),
+                "mid": int(d.get("mid") or 0), "uname": str(d.get("uname") or ""),
+                "level": int(d.get("level_info", {}).get("current_level") or 0)}
+
+    def post_comment(self, oid: int, text: str, bvid: str = "",
+                     root: int = 0, parent: int = 0) -> Dict[str, Any]:
+        """发一条评论。返回 `{ok, rpid, code, message, error}`，**绝不抛**。
+
+        三道门缺一不可：`bili_jct`（CSRF）、视频页 Referer/Origin、
+        表单编码（不是 JSON —— 用 JSON 会 -400）。
+
+        失败码值得记住：
+          -101 未登录 / -111 CSRF 失败 / -352 风控 / -412 请求被拦截 /
+          -404 视频不存在 / 12002 评论已关闭 / 12061 该视频评论已关闭
+        """
+        text = str(text or "").strip()
+        if not text:
+            return {"ok": False, "error": "评论内容为空", "code": None}
+        csrf = self.csrf()
+        if not csrf:
+            return {"ok": False, "error": "cookie 里没有 bili_jct（CSRF），无法发评论",
+                    "code": None}
+        form = {"oid": str(int(oid)), "type": "1", "message": text,
+                "plat": "1", "csrf": csrf}
+        if root:
+            form["root"] = str(int(root))
+        if parent:
+            form["parent"] = str(int(parent))
+        headers = {
+            "Referer": (f"https://www.bilibili.com/video/{bvid}/" if bvid
+                        else "https://www.bilibili.com/"),
+            "Origin": "https://www.bilibili.com",
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Accept": "application/json, text/plain, */*",
+        }
+        try:
+            s = session(self.cookie)
+            r = s.post(f"{API}/x/v2/reply/add", data=form, headers=headers,
+                       timeout=self.timeout)
+            try:
+                j = r.json()
+            except Exception:
+                return {"ok": False, "error": f"返回不是 JSON（HTTP {r.status_code}）",
+                        "code": r.status_code}
+        except Exception as e:
+            return {"ok": False, "error": f"{type(e).__name__}: {e}", "code": None}
+        code = j.get("code")
+        if code != 0:
+            return {"ok": False, "code": code,
+                    "error": str(j.get("message") or j.get("msg") or "未知错误")}
+        d = j.get("data") or {}
+        return {"ok": True, "code": 0, "rpid": int(d.get("rpid") or 0),
+                "rpid_str": str(d.get("rpid_str") or ""), "error": ""}
+
+    def find_my_comment(self, aid: int, mid: int, rpid: int = 0,
+                        pages: int = 2) -> Optional[Dict[str, Any]]:
+        """回读校验：在热评/时间序前几页里找**自己那条**。找不到返回 None。
+
+        为什么必须回读：`code=0` 只代表接口收下了，不代表评论真的出现在评论区
+        （影子删除、审核中、账号被限制都会让 code=0 但内容不可见）。
+        """
+        for pn in range(1, max(1, pages) + 1):
+            for hot in (False, True):
+                for c in self.comments(aid, ps=20, pn=pn, sort_hot=hot):
+                    if rpid and int(c.get("rpid") or 0) == int(rpid):
+                        return c
+                    if not rpid and mid and int(c.get("mid") or 0) == int(mid):
+                        return c
+        return None
+
+    # -- 写：通用 POST -------------------------------------------
+    def _post(self, path: str, form: Dict[str, Any],
+              referer: str = "https://www.bilibili.com/") -> Dict[str, Any]:
+        """写接口统一出口：自动带 csrf、表单编码、Referer/Origin。绝不抛。
+
+        ★ 必须是**表单编码**，不是 JSON —— 发 JSON 会 -400。
+        """
+        csrf = self.csrf()
+        if not csrf:
+            return {"ok": False, "code": None,
+                    "error": "cookie 里没有 bili_jct（CSRF），无法写"}
+        body = {str(k): str(v) for k, v in (form or {}).items()}
+        body["csrf"] = csrf
+        headers = {"Referer": referer, "Origin": "https://www.bilibili.com",
+                   "Content-Type": "application/x-www-form-urlencoded",
+                   "Accept": "application/json, text/plain, */*"}
+        try:
+            r = session(self.cookie).post(f"{API}{path}", data=body,
+                                          headers=headers, timeout=self.timeout)
+            j = r.json()
+        except Exception as e:
+            return {"ok": False, "code": None, "error": f"{type(e).__name__}: {e}"}
+        code = j.get("code")
+        if code != 0:
+            return {"ok": False, "code": code,
+                    "error": str(j.get("message") or j.get("msg") or "未知错误")}
+        return {"ok": True, "code": 0, "data": j.get("data"), "error": ""}
+
+    def send_danmaku(self, cid: int, text: str, progress_ms: int = 0,
+                     mode: int = 1) -> Dict[str, Any]:
+        """发一条视频弹幕。`progress_ms` 是它出现在视频里的时刻（毫秒）。"""
+        text = str(text or "").strip()
+        if not (1 <= len(text) <= 100):
+            return {"ok": False, "error": "弹幕长度必须在 1–100 字"}
+        return self._post("/x/v2/dm/post", {
+            "type": "1", "oid": str(int(cid)), "msg": text,
+            "progress": str(int(max(0, progress_ms))), "mode": str(int(mode)),
+            "fontsize": "25", "color": "16777215", "pool": "0",
+        })
+
+    def like(self, aid: int, on: bool = True) -> Dict[str, Any]:
+        """点赞 / 取消点赞。"""
+        return self._post("/x/web-interface/archive/like", {
+            "aid": str(int(aid)), "like": "1" if on else "2",
+        })
+
+    def coin(self, aid: int, n: int = 1) -> Dict[str, Any]:
+        """投币（1 或 2 枚）。"""
+        n = 2 if int(n or 1) >= 2 else 1
+        return self._post("/x/web-interface/coin/add", {
+            "aid": str(int(aid)), "multiply": str(n), "select_like": "0",
+        })
+
+    def follow(self, mid: int, on: bool = True) -> Dict[str, Any]:
+        """关注 / 取关某个 UP。"""
+        return self._post("/x/relation/modify", {
+            "fid": str(int(mid)), "act": "1" if on else "2", "re_src": "11",
+        }, referer="https://space.bilibili.com/")
 
 
 # ── 辅助 ──────────────────────────────────────────────────────────

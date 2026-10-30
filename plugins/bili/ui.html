@@ -443,6 +443,12 @@ label.sw input{accent-color:var(--pv-gold);width:15px;height:15px}
   background:var(--pv-surface-2);border:1px solid var(--pv-line);border-radius:10px;
   padding:10px 12px;white-space:pre-wrap;word-break:break-word}
 
+/* 发言输入行：全局 input{width:100%} 会把这一行撑成三行，这里强制单行 */
+.composer{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.composer input[type=text]{flex:1 1 260px;width:auto;min-width:200px;margin:0}
+.composer select{flex:0 0 108px;width:108px}
+.composer .btn-go{flex:0 0 auto;padding:9px 18px}
+
 /* toast */
 .toast{position:fixed;left:50%;bottom:28px;transform:translate(-50%,20px);opacity:0;
   pointer-events:none;transition:.24s var(--pv-ease);z-index:60;
@@ -529,6 +535,7 @@ label.sw input{accent-color:var(--pv-gold);width:15px;height:15px}
       <button class="tab" data-pane="dm">弹幕<span class="cnt" id="c-dm"></span></button>
       <button class="tab" data-pane="cm">热评<span class="cnt" id="c-cm"></span></button>
       <button class="tab" data-pane="sum">摘要</button>
+      <button class="tab" data-pane="write">发言<span class="cnt" id="c-write"></span></button>
     </div>
 
     <div class="panes">
@@ -548,6 +555,33 @@ label.sw input{accent-color:var(--pv-gold);width:15px;height:15px}
       <div class="pane" data-pane="cm"><div class="cm" id="cm-list"></div></div>
       <div class="pane" data-pane="sum">
         <div class="sum empty" id="sum">点上面的「AI 摘要」，让模型把稿子、弹幕梗和热评压成 3–5 句。</div>
+      </div>
+      <div class="pane" data-pane="write">
+        <div class="row" style="margin-bottom:10px">
+          <span class="chip" id="w-enable"><i></i><span>写：关</span></span>
+          <span class="chip" id="w-dry"><i></i><span>干跑</span></span>
+          <span class="chip" id="w-quota"><i></i><span>今日 0/3</span></span>
+          <span class="chip" id="w-breaker" style="display:none"><i></i><span>熔断</span></span>
+          <span style="margin-left:auto"></span>
+          <button class="ghost" id="w-settings">写设置</button>
+        </div>
+        <div class="note" id="w-hint">写能力默认关闭。开启后仍需关掉「先干跑」才会真的发出去。</div>
+        <div class="sp"></div>
+        <div class="composer">
+          <input class="pv-input" id="w-text" type="text"
+                 placeholder="写点什么…（默认发到这个视频的评论区）" maxlength="180">
+          <select class="pv-select" id="w-kind">
+            <option value="comment">评论</option>
+            <option value="danmaku">弹幕</option>
+            <option value="like">点赞</option>
+            <option value="coin">投币</option>
+            <option value="follow">关注 UP</option>
+          </select>
+          <button class="btn-go" id="w-send">执行</button>
+        </div>
+        <div class="sp"></div>
+        <div class="note" id="w-result"></div>
+        <ul class="dmlist" id="w-log" style="margin-top:10px"></ul>
       </div>
     </div>
   </div>
@@ -817,6 +851,63 @@ $('btn-open').onclick=()=>{
   window.open('https://www.bilibili.com/video/'+(D.info.bvid||('av'+D.info.aid)),
               '_blank','noopener');
 };
+
+/* ── 发言（写能力，1.6.0）────────────────────────────────── */
+async function loadWrite(){
+  const st=await call('write_status');
+  if(!st||st.error) return;
+  $('w-enable').classList.toggle('on',!!st.enabled);
+  $('w-enable').classList.toggle('warn',!st.enabled);
+  $('w-enable').querySelector('span').textContent=st.enabled?'写：开':'写：关';
+  $('w-dry').classList.toggle('on',!!st.dry_run);
+  $('w-dry').querySelector('span').textContent=st.dry_run?'干跑中':'真实发送';
+  $('w-quota').querySelector('span').textContent='今日 '+st.used_today+'/'+st.daily_max;
+  $('w-breaker').style.display=st.breaker?'':'none';
+  $('w-hint').textContent=!st.enabled
+    ? '写能力默认关闭。开启后仍需关掉「先干跑」才会真的发出去。'
+    : (st.dry_run?'已开启，但还在干跑：闸门都会过，不会真的发。'
+                 :'已开启且真实发送 —— 每视频 24h 一条、每天 '+st.daily_max+' 条。');
+  const items=st.recent||[];
+  $('c-write').textContent=st.total?(' '+st.total):'';
+  $('w-log').innerHTML=items.length?items.map(a=>
+    '<li><span class="t">'+(a.dry_run?'干跑':(a.ok?'成功':'失败'))+'</span><span>'+
+    (a.kind||'')+' · '+((a.text||a.error||'')+'').slice(0,42)+'</span></li>').join('')
+    :'<li><span class="t">—</span><span class="note">还没有任何写动作</span></li>';
+}
+async function doWrite(){
+  if(!D){toast('先解析一个视频');return;}
+  const kind=$('w-kind').value, text=$('w-text').value.trim();
+  if(kind==='comment'||kind==='danmaku'){ if(!text){toast('写点内容');return;} }
+  $('w-result').textContent='执行中…';
+  const map={comment:'post_comment',danmaku:'send_danmaku',like:'like_video',
+             coin:'coin_video',follow:'follow_up'};
+  const params={url:D.info.bvid||('av'+D.info.aid)};
+  if(kind==='comment'||kind==='danmaku') params.text=text;
+  const r=await call(map[kind],params);
+  if(r.ok){
+    $('w-result').textContent = r.dry_run ? ('干跑通过：'+(r.hint||'未真实发送'))
+      : ((r.hint||'已发送')+(r.rpid?(' · rpid '+r.rpid):''));
+    toast(r.dry_run?'干跑完成':'已发送');
+    if(!r.dry_run) $('w-text').value='';
+  }else{
+    $('w-result').textContent='被拒/失败：'+(r.error||'未知');
+    toast('没有执行：'+(r.error||'').slice(0,20));
+  }
+  loadWrite();
+}
+async function openWriteSettings(){
+  const st=await call('write_status'); if(!st||st.error) return;
+  const on=confirm('写能力当前：'+(st.enabled?'开启':'关闭')+'；'+(st.dry_run?'干跑':'真实发送')+'\n\n确定切换「开启/关闭」吗？');
+  if(!on) return;
+  await call('set_write_config',{write_enabled:!st.enabled});
+  toast(st.enabled?'写能力已关闭':'写能力已开启（仍在干跑）');
+  loadWrite();
+}
+$('w-send').onclick=doWrite;
+$('w-settings').onclick=openWriteSettings;
+switchTab = (function(orig){
+  return function(name){ orig(name); if(name==='write') loadWrite(); };
+})(switchTab);
 
 loadCfg(); loadStats();
 </script>
