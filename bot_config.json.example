@@ -210,6 +210,7 @@
   "recall_private_post_messages": [],
   "image_cache_enable": true,
   "image_reply_mode": "native",
+  "vision_main_fallback": true,
   "reply_vision_max_images": 3,
   "self_learning_enable": true,
   "self_learn_min_count": 2,

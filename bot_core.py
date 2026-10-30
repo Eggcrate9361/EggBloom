@@ -4741,6 +4741,10 @@ def image_to_base64(file_path):
 CQ_IMAGE_RE = re.compile(r"\[CQ:image,([^\]]*)\]")
 _IMG_DESC_CACHE: Dict[str, str] = {}      # "路径|mtime|size" → 描述（同一张图不重复付费/耗时）
 _IMG_DESC_CACHE_MAX = 64
+#: 免费视觉链的熔断窗（2026-10-30）。免费链挂一次要串 3 条模型 × 2 轮 ≈ 23 秒，
+#: 主模型读同一张 ≈ 1 秒。挂过之后这个时间点之前一律直接走主模型。
+_VISION_FREE_DOWN_UNTIL = 0.0
+_VISION_FREE_DOWN_SEC = 600
 _IMG_DESC_PROMPT = ("这是一条 QQ 聊天里发来的图片。请用中文直接描述：画面里是什么、"
                     "有没有文字/梗/表情，一两句话说清楚，不要客套，不要输出 JSON。")
 
@@ -4861,11 +4865,127 @@ def download_image_url(url: str):
     return None
 
 
+def _vision_main_enabled() -> bool:
+    """主模型兜底是否开启（配置项 `vision_main_fallback`，默认开）。"""
+    try:
+        return bool(_config.get("vision_main_fallback", True))
+    except Exception:
+        return True
+
+
+#: 主模型看图时单张图的上限。**按官方文档**（api-docs.deepseek.com/zh-cn/guides/vision）：
+#: 单图 32 MiB、请求体 48 MiB、单边最长 8192px，且格式按**文件内容**判、不看 MIME。
+#: 也就是说本地这点表情包（1–2MB）根本不需要压缩 —— 之前那版按 1.2MB 就压，
+#: 纯属自己给自己加的伤（压完反而更容易读不出细节）。留 30MiB 只是兜底。
+_VISION_MAX_RAW_BYTES = 30 * 1024 * 1024
+_VISION_MAX_SIDE = 4096
+
+
+def _vision_b64_for_main(path: str) -> str:
+    """图 → data URI。只有超过官方单图上限（32MiB）才缩，其余原样发。
+
+    ★ 2026-10-30：别在这里"顺手压一下"。官方会把每张图自动缩到约 1300×1300
+      再计费（≤1024 token），本地预压缩只会丢细节、还多一次解码开销。
+    """
+    try:
+        size = os.path.getsize(path)
+    except Exception:
+        size = 0
+    if size and size <= _VISION_MAX_RAW_BYTES:
+        return image_to_base64(path) or ""
+    try:
+        import io as _io
+        from PIL import Image
+        with Image.open(path) as im:
+            im = im.convert("RGB")
+            im.thumbnail((_VISION_MAX_SIDE, _VISION_MAX_SIDE))
+            buf = _io.BytesIO()
+            im.save(buf, "JPEG", quality=90)
+        import base64 as _b64
+        data = buf.getvalue()
+        log(f"[图片理解] 原图 {size // 1024}KB 超过官方单图上限，已压到 {len(data) // 1024}KB")
+        return "data:image/jpeg;base64," + _b64.b64encode(data).decode()
+    except Exception as e:
+        log(f"[图片理解] 压缩失败（按原图发，可能被拒）: {type(e).__name__}: {e}")
+        return image_to_base64(path) or ""
+
+
+def describe_image_via_main(image_ref, prompt: str = "") -> str:
+    """让**主模型自己看图**（多模态）。失败返回 ""，绝不抛。
+
+    为什么需要这条：`free_llm` 的三条免费视觉链（zen/kilo）经常**一起返回空**，
+    而且失败要串完三条才认输（实测 36 秒起步），最后给用户一句"图糊了"。
+    `deepseek-flash` 本身就支持图片输入（官方文档：图像理解），让它直接看一眼
+    比等免费链靠谱得多（2026-10-30）。
+
+    ★ 两个官方约束已经在这里落实：
+      · 图片只能出现在 `user` 消息里 —— system 只放文字，否则 400；
+      · 格式按文件内容判，所以 `data:image/gif` 这类 MIME 写错不影响。
+
+    ★ 推理模型的关键坑：`thinking` 开着时，reasoning 会把 max_tokens 吃满，
+      content 返回空串（实测 reasoning_tokens=400 / content=""），表现成
+      "同一张图时好时坏"。这里默认关思考，失败再退回开启并给足预算。
+
+    仍然只返回字面描述；看不到就返回空串，由调用方按【能力边界】说
+    "图我这儿没取到，你说是啥"—— 不许在这里编。
+    """
+    ref = str(image_ref or "").strip()
+    if not ref:
+        return ""
+    try:
+        from config import load_config as _lc, get_provider_api_key
+        from ai_client import AIClient
+        _cfg = _lc()
+        _pid = str(_cfg.get("api_provider") or "openai")
+        _ak = (get_provider_api_key(_pid) or _cfg.get("api_key")
+               or _cfg.get("deepseek_api_key", ""))
+        if not _ak:
+            log("[图片理解] 主模型兜底跳过：没有 api key")
+            return ""
+        _b64 = _vision_b64_for_main(ref)
+        if not _b64:
+            return ""
+        _msgs = [
+            {"role": "system",
+             "content": "你在做看图。只说你真的看到的：主体、画风、两个最显眼的细节。"
+                        "看不到就直接说看不到，不许猜、不许编、不许描述你没看见的东西。"},
+            {"role": "user", "content": [
+                {"type": "text", "text": prompt or _IMG_DESC_PROMPT},
+                {"type": "image_url", "image_url": {"url": _b64}},
+            ]},
+        ]
+        # ① 先关思考（快、便宜、结果稳定）；② 万一中转不认这个字段，退回开着，
+        #    并把预算给足 —— 开着思考时 400 会被 reasoning 吃光（真机实证）。
+        for _extra, _mt in (({"thinking": {"type": "disabled"}}, 600), (None, 1200)):
+            try:
+                _client = AIClient(_cfg.get("api_url", DEEPSEEK_URL), _ak,
+                                   _cfg.get("model_name", "deepseek-flash"),
+                                   provider=_pid, temperature=0.2,
+                                   extra_body=_extra)
+                _out = _client.call(_msgs, max_tokens=_mt)
+            except Exception as e:
+                log(f"[图片理解] 主模型调用失败(extra={bool(_extra)}): "
+                    f"{type(e).__name__}: {e}")
+                continue
+            _t = _out[0] if isinstance(_out, (tuple, list)) else (_out or "")
+            _t = str(_t or "").strip()
+            if _t:
+                return _t
+            log(f"[图片理解] 主模型返回空(extra={bool(_extra)}, max_tokens={_mt})")
+        return ""
+    except Exception as e:
+        log(f"[图片理解] 主模型兜底失败: {type(e).__name__}: {e}")
+        return ""
+
+
 def describe_image(image_ref, prompt: str = "") -> str:
     """一张图 → 一句话描述（带缓存）。失败返回 ""，**绝不抛异常**。
 
     2026-10-12 起改走**免费车道**（根目录 free_llm：直连 dsh-our-free-model 的
     zen/kilo 免密车道，免 key、无第三方云依赖）——此前用的智谱视觉管线已下线。
+
+    ★ 2026-10-30 加了两道：免费链**重试一次**，仍空则走**主模型兜底**
+      （`vision_main_fallback`）。原因见 describe_image_via_main 的说明。
     """
     ref = str(image_ref or "").strip()
     if not ref:
@@ -4888,11 +5008,29 @@ def describe_image(image_ref, prompt: str = "") -> str:
         if SCRIPT_DIR not in _sys.path:
             _sys.path.insert(0, SCRIPT_DIR)
         import free_llm
-        r = free_llm.chat_vision(ref, prompt or _IMG_DESC_PROMPT) or {}
-        if r.get("ok"):
-            desc = str(r.get("summary") or "").strip()
+        # ① 免费链：失败重试一次（原来一次不成就算了，30% 的偶发失败全算在账上）
+        #    ★ 2026-10-30 加熔断：免费链挂一次要串 3 条模型 × 2 轮（实测 23 秒），
+        #      而主模型读同一张图只要 1 秒。挂过就 10 分钟内直接走主模型 ——
+        #      不然每张图都要先白等半分钟，"图我这儿没取到"会变成常态。
+        if _vision_main_enabled() and time.time() < _VISION_FREE_DOWN_UNTIL:
+            log("[图片理解] 免费链熔断中，直接走主模型")
         else:
-            log(f"[图片理解] 免费车道失败: {str(r.get('error'))[:140]}")
+            for _attempt in (1, 2):
+                r = free_llm.chat_vision(ref, prompt or _IMG_DESC_PROMPT) or {}
+                if r.get("ok"):
+                    desc = str(r.get("summary") or "").strip()
+                    if desc:
+                        break
+                log(f"[图片理解] 免费车道失败({_attempt}/2): {str(r.get('error'))[:120]}")
+            if not desc and _vision_main_enabled():
+                globals()["_VISION_FREE_DOWN_UNTIL"] = time.time() + _VISION_FREE_DOWN_SEC
+                log(f"[图片理解] 免费链整体失败，熔断 {_VISION_FREE_DOWN_SEC}s")
+        # ② 主模型兜底：多模态时自己看一眼（免费链全空的那 36 秒就省了）
+        if not desc and _vision_main_enabled():
+            _m = describe_image_via_main(ref, prompt)
+            if _m:
+                desc = _m
+                log("[图片理解] 主模型读到了")
     except Exception as e:
         log(f"[图片理解] 调用免费车道异常: {e}")
     if desc:
