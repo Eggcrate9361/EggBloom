@@ -73,10 +73,22 @@ try:
     # 分类器兜底（不传 tags 时自动判）
     g2 = make_img("b.gif")
     mc._cfg = lambda: {"meme_collect_enable": True, "meme_collect_classify": True,
-                       "meme_collect_daily_cap": 30}
+                       "meme_collect_daily_cap": 30, "meme_collect_fill_desc": True}
+    mc.set_describer(lambda p: "蓝发少女竖大拇指")
     rel2 = mc.maybe_collect(g2)
     tags2 = json.load(open(mc.TAGS_FILE, encoding="utf-8"))
     check("自动判情绪并打标签", tags2.get(rel2) == ["开心"], tags2.get(rel2))
+    desc_path = os.path.join(mc.MEME_DIR, "descriptions.json")
+    descs = json.load(open(desc_path, encoding="utf-8")) if os.path.isfile(desc_path) else {}
+    check("后台补的画面描述已落盘", "蓝发少女" in str(descs.get(rel2) or ""), descs.get(rel2))
+
+    # 关掉补描述：仍入库，但不写描述
+    g2b = make_img("b2.gif")
+    mc._cfg = lambda: {"meme_collect_enable": True, "meme_collect_classify": True,
+                       "meme_collect_daily_cap": 30, "meme_collect_fill_desc": False}
+    rel2b = mc.maybe_collect(g2b)
+    descs2 = json.load(open(desc_path, encoding="utf-8")) if os.path.isfile(desc_path) else {}
+    check("关掉补描述后不再写", rel2b and rel2b not in descs2, descs2.get(rel2b))
 
     # 每日上限
     mc._cfg = lambda: {"meme_collect_enable": True, "meme_collect_classify": False,

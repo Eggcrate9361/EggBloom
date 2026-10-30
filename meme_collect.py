@@ -45,6 +45,7 @@ MAX_BYTES = 3 * 1024 * 1024
 DEFAULT_DAILY_CAP = 30
 
 _CLASSIFIER = None
+_DESCRIBER = None
 _LOCK = threading.Lock()
 _LOG = print
 
@@ -59,6 +60,12 @@ def set_classifier(fn) -> None:
     """注入情绪分类器（path -> 情绪词）。宿主注入后不再自己 import bot_core。"""
     global _CLASSIFIER
     _CLASSIFIER = fn
+
+
+def set_describer(fn) -> None:
+    """注入画面描述器（path -> 描述）。宿主注入后不再自己 import bot_core。"""
+    global _DESCRIBER
+    _DESCRIBER = fn
 
 
 def _cfg() -> dict:
@@ -186,6 +193,16 @@ def maybe_collect(path: str, *, tags=None, source: str = "auto",
         if not tags and bool(cfg.get("meme_collect_classify", True)):
             tags = _classify(src)
         _add_tags(rel, tags)
+        # 采集后补画面描述（2026-10-30，配置 meme_collect_fill_desc）。
+        # 有了描述，「那个蓝发竖大拇指的图」才找得回来；失败不影响入库。
+        if bool(cfg.get("meme_collect_fill_desc", True)) and callable(_DESCRIBER):
+            try:
+                _desc = str(_DESCRIBER(dst) or "").strip()
+                if _desc:
+                    import meme_desc
+                    meme_desc.save_desc(MEME_DIR, rel, _desc[:300])
+            except Exception:
+                pass
         idx[sha] = {"path": rel, "tags": [str(t) for t in (tags or [])],
                     "ts": time.time(), "src": str(source or "")[:40],
                     "from_group": str(from_group or "")[:24]}
@@ -225,5 +242,5 @@ def maybe_collect_async(path: str, *, source: str = "auto",
         pass
 
 
-__all__ = ["maybe_collect", "maybe_collect_async", "set_classifier", "set_logger",
+__all__ = ["maybe_collect", "maybe_collect_async", "set_classifier", "set_describer", "set_logger",
            "MEME_DIR", "COLLECT_DIR", "INDEX_FILE", "TAGS_FILE"]

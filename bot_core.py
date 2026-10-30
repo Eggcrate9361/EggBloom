@@ -14886,6 +14886,16 @@ def main():
     except Exception as _mb_e:
         log(f"[记忆备份] 跳过（不影响启动）: {_mb_e}")
 
+    # 表情包采集的两个外部能力（2026-10-30）：判情绪 + 补描述。
+    # 注入后采集侧不再 import bot_core，后台线程只回调。
+    try:
+        import meme_collect as _mc
+        _mc.set_classifier(_classify_meme_emotion)
+        _mc.set_describer(lambda p: describe_image(p, _MEME_DESC_PROMPT))
+        log("[表情采集] 分类器/描述器已注入")
+    except Exception as _mc_e:
+        log(f"[表情采集] 注入失败（采集仍可用，只是没标签/描述）: {_mc_e}")
+
     # ★ 2026-10-30 修：这句以前是「启动冷却完毕，开始监听消息」，但它打在
     #   `startup_time` 赋值**之前** —— 冷却还没开始就先报"完毕"，
     #   日志里于是出现「完毕 → 冷却中 1/5/10… → 完毕」的自相矛盾。

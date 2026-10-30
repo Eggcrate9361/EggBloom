@@ -4849,6 +4849,10 @@ window.FIELD_META = {
     "persona_warmth": {"label": "亲近温度", "desc": "人格形式参数（0–1）：表情概率 + 句末句号软化成～的概率。调高更软，调低更像冷脸", "ctl": "number", "panel": "deai", "unit": "", "id": "sPersonaWarm", "default": 0.35, "default_text": "0.35"},
     "reply_question_guard": {"label": "反问闸", "desc": "末句是问号时怎么办：off 只记口癖 / regen 重生一次 / regen_private 只在私聊与被 @ 时重生。重生会把首字从 5 秒推到 7–8 秒", "ctl": "select", "panel": "length", "unit": "", "id": "sQuestionGuard", "default": "off", "default_text": "off"},
     "reply_long_ratio": {"label": "长句档概率", "desc": "抽到长句档（2–3 条、每条 ≤40 字）的概率（0–0.5）；只调 C 档权重，A:B 比例不变", "ctl": "number", "panel": "length", "unit": "", "id": "sReplyLongRatio", "default": 0.1, "default_text": "0.1"},
+    "meme_collect_enable": {"label": "自动采集表情包", "desc": "群聊里别人发的表情包自动收进图库（sha1 去重、只收 2KB–3MB 的图）。私聊的图不收。收进来的图可以被 meme_find 找回、meme_send 发出。", "ctl": "bool", "panel": "meme", "unit": "", "id": "sMemeCollectEnable", "default": true, "default_text": "开启"},
+    "meme_collect_classify": {"label": "采集时判情绪", "desc": "收图时让视觉模型判一个情绪标签，匹配时才能用上。关掉仍会入库，但不打标签、不会随机发出（省钱开关）。", "ctl": "bool", "panel": "meme", "unit": "", "id": "sMemeCollectClassify", "default": true, "default_text": "开启"},
+    "meme_collect_fill_desc": {"label": "采集后补画面描述", "desc": "入库后后台补一句画面描述（一次视觉约 ¥0.003）。有了描述，才找得回「那个蓝发竖大拇指的图」；关掉就只能按标签找。", "ctl": "bool", "panel": "meme", "unit": "", "id": "sMemeCollectFillDesc", "default": true, "default_text": "开启"},
+    "meme_collect_daily_cap": {"label": "每日采集上限（张）", "desc": "每天最多收几张，防刷屏。0 = 不限。", "ctl": "number", "panel": "meme", "unit": "张", "id": "sMemeCollectDailyCap", "default": 30, "default_text": "30"},
   }
 };
 /* ══ FIELD_META_END */

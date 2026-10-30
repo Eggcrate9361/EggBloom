@@ -424,6 +424,11 @@ DEFAULT_CONFIG = {
 
     # 表情包
     "meme_enable": True,
+    # 表情包自动采集（2026-10-30）：群聊里别人发的表情包 → 图库 → 可被找回/重发。
+    "meme_collect_enable": True,      # 总开关（关了不下载、不分类、不入库）
+    "meme_collect_classify": True,    # 采集时用视觉判一个情绪标签
+    "meme_collect_fill_desc": True,   # 采集后后台补一句画面描述（按描述找图靠它）
+    "meme_collect_daily_cap": 30,     # 每天最多收几张（防刷）
     "meme_idle_exit_enable": True,
     "meme_auto_detect_emotion": True,
 
