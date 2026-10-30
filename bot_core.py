@@ -3370,6 +3370,19 @@ def _note_sent_meme(meme_path, *, target_qq: str = "", group_id: str = "") -> No
             ch = chat_history.setdefault(str(target_qq), [])
             ch.append({"role": "assistant", "content": line, "ts": time.time()})
             chat_history[str(target_qq)] = ch[-24:]
+        # 行为账本（2026-10-30）：它要知道"我刚发了一张表情包"。
+        # 只记事实，不评价；下一轮由 self_actions.render 注入一小段。
+        try:
+            import self_actions as _acts
+            _tags = ""
+            try:
+                _tags = "、".join(meme_desc.tags_for(MEME_DIR, meme_path)[:2])
+            except Exception:
+                pass
+            _acts.record("meme", scene=("group" if group_id else "private"),
+                         target=str(group_id or target_qq or ""), detail=_tags)
+        except Exception:
+            pass
         # 后台补画面：同一张图只打一次视觉，已有缓存直接跳过
         meme_desc.warm(MEME_DIR, meme_path,
                        lambda p: describe_image(p, _MEME_DESC_PROMPT))
@@ -4934,8 +4947,9 @@ def extract_images(msg):
     try:
         if str((msg or {}).get("message_type") or "") == "group":
             import meme_collect as _mcollect
+            _gid = str((msg or {}).get("group_id") or "")
             for _p in images:
-                _mcollect.maybe_collect_async(_p, source="group")
+                _mcollect.maybe_collect_async(_p, source="group", from_group=_gid)
     except Exception:
         pass
     return images
@@ -9305,6 +9319,12 @@ def _send_poke_back(user_id, group_id=None):
             code = resp.get("retcode") if isinstance(resp, dict) else resp
             if code == 0:
                 log(f"[事件] 反戳 {action} user={user_id} group={group_id or '私聊'} retcode=0")
+                try:
+                    import self_actions as _acts
+                    _acts.record("poke", scene=("group" if gid else "private"),
+                                 target=str(group_id or user_id))
+                except Exception:
+                    pass
                 return True
             log(f"[事件] 反戳 {action} retcode={code}（试下一个动作）")
         except Exception as e:
@@ -11301,6 +11321,18 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
     except Exception:
         pass
 
+    # 行为账本（2026-10-30）：它要知道自己刚干过什么（发图/戳人/采集）。
+    # 只给"何时、在哪、做了什么"，不给别人的原始隐私。
+    try:
+        import self_actions as _acts
+        _acts_blk = _acts.render(
+            scene=("group" if is_group else "private"),
+            target=str(group_id if is_group else (_pl_sender or target_qq or "")))
+        if _acts_blk:
+            dynamic_parts.append(_acts_blk)
+    except Exception:
+        pass
+
     # 记忆全打通（2026-10-30）：私聊里补一句"他刚在群里说过什么"。
     # 只在私聊注入（群里注入=把别人的私聊贴出去，不做）。
     try:
@@ -12114,6 +12146,14 @@ def _qq_agent_reply(text: str, images, *, is_group: bool, group_id: str = "",
             _avd = _avatar_desc(sender, text)
             if _avd:
                 _ctx2["avatar"] = _avd
+            try:
+                import self_actions as _acts
+                _ab = _acts.render(scene=("group" if is_group else "private"),
+                                   target=str(group_id if is_group else (sender or "")))
+                if _ab:
+                    _ctx2["acts"] = _ab
+            except Exception:
+                pass
             from harness import life_context as _lctx
             _extra = _lctx.compose(_ctx2)
         except Exception:

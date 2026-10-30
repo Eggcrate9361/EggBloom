@@ -15,7 +15,7 @@ agent 侧只有一句 `context_hint`，A3 侧干脆没有 ego 和画像。
 
 - 输入：`{"ego": ..., "memory": ..., "scene": ..., "alias": ..., "cross_scene": ...}`
 - 输出：一段可直接拼进 system prompt 尾部的文本（空 dict → ""）
-- 顺序固定（`ORDER`）：对话对象 → 记忆 → 头像 → 情绪关系 → 场景 → 称呼约定 → 另一边近况。
+- 顺序固定（`ORDER`）：对话对象 → 刚做的事 → 记忆 → 头像 → 情绪关系 → 场景 → 称呼约定 → 另一边近况。
   固定顺序是为了**前缀缓存**：同一轮重复渲染必须逐字节一致。
 - 预算：总字数超 `budget` 时**从后往前**整块丢（近况最先丢，记忆最后丢），
   不切半句 —— 半句话比没有更容易让模型去圆。
@@ -26,7 +26,7 @@ from __future__ import annotations
 from typing import Dict, Iterable, List, Optional, Tuple
 
 #: 注入顺序（也是"被丢的逆序"：越靠后越先丢）。
-ORDER: Tuple[str, ...] = ("who", "memory", "avatar", "ego", "scene", "alias", "cross_scene")
+ORDER: Tuple[str, ...] = ("who", "acts", "memory", "avatar", "ego", "scene", "alias", "cross_scene")
 
 #: 默认预算：这几块都是"补充信息"，不该挤掉人格与当前消息。
 DEFAULT_BUDGET = 2000

@@ -142,7 +142,8 @@ def _today_count(idx: dict) -> int:
     return n
 
 
-def maybe_collect(path: str, *, tags=None, source: str = "auto") -> str:
+def maybe_collect(path: str, *, tags=None, source: str = "auto",
+                  from_group: str = "") -> str:
     """把一张图收进图库。返回相对路径；跳过返回空串。"""
     cfg = _cfg()
     if not bool(cfg.get("meme_collect_enable", True)):
@@ -186,12 +187,20 @@ def maybe_collect(path: str, *, tags=None, source: str = "auto") -> str:
             tags = _classify(src)
         _add_tags(rel, tags)
         idx[sha] = {"path": rel, "tags": [str(t) for t in (tags or [])],
-                    "ts": time.time(), "src": str(source or "")[:40]}
+                    "ts": time.time(), "src": str(source or "")[:40],
+                    "from_group": str(from_group or "")[:24]}
         _save_index(idx)
 
     try:
         import meme_engine
         meme_engine.reload_index()
+    except Exception:
+        pass
+    # 行为账本（2026-10-30）：它要记得"我捡了张图"。来源只记群，不记人。
+    try:
+        import self_actions as _acts
+        _acts.record("collect", scene="group", target=str(from_group or ""),
+                     detail="、".join(str(t) for t in (tags or [])[:2]) or "未打标签")
     except Exception:
         pass
     try:
@@ -201,11 +210,12 @@ def maybe_collect(path: str, *, tags=None, source: str = "auto") -> str:
     return rel
 
 
-def maybe_collect_async(path: str, *, source: str = "auto") -> None:
+def maybe_collect_async(path: str, *, source: str = "auto",
+                        from_group: str = "") -> None:
     """后台收（下载完立刻返回，不挡回复）。"""
     def _run():
         try:
-            maybe_collect(path, source=source)
+            maybe_collect(path, source=source, from_group=from_group)
         except Exception:
             pass
     try:
