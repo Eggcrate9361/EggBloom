@@ -15,6 +15,7 @@ from socketserver import ThreadingMixIn
 import capabilities_view
 import inbound
 import meme_desc
+import people_alias
 import reply_budget
 import reply_drop
 import speech_pace
@@ -3257,6 +3258,38 @@ def _record_bot_group_msg(group_id, text):
         group_chat_history[group_id] = gh[-16:]
     except Exception:
         pass
+
+
+# ── P0-4：称呼与约定（2026-10-30）────────────────────────────────────
+# 10-29 18:18「你现在暂时叫我拉普兰德」→ 答应了，之后一次都没用过；
+# 18:13 的暗号「天王盖地虎」也没进群聊。根因是**答应了没有写回动作**。
+# 现在：从话里认出要存的，存进 data/people_aliases.json；
+# 生成时用同一个出口注入 prompt（私聊群聊共用）。
+def _people_alias_capture(sender, text) -> None:
+    """认出「叫我 X」「说 A 答 B」并落盘。失败只记日志，绝不影响回复。"""
+    who = str(sender or "").strip()
+    if not who:
+        return
+    try:
+        alias = people_alias.parse_alias(text)
+        if alias and people_alias.set_alias(who, alias):
+            log(f"[人档案] {who} 的称呼 → {alias}")
+        trig, rep = people_alias.parse_agreement(text)
+        if trig and people_alias.add_agreement(who, trig, rep):
+            log(f"[人档案] {who} 的约定 → 「{trig}」答「{rep or '（未指定）'}」")
+    except Exception as e:
+        log(f"[人档案] 记录失败（不影响回复）: {e}")
+
+
+def _people_alias_prompt(sender) -> str:
+    """称呼/约定的 prompt 行。没有就空串（零 token）。"""
+    who = str(sender or "").strip()
+    if not who:
+        return ""
+    try:
+        return people_alias.prompt_line(who)
+    except Exception:
+        return ""
 
 
 #: 表情包画面描述（后台补，用户看不见）。只描述，不评价。
@@ -11117,6 +11150,10 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
     # 按 (is_group, config_rev, personality_mtime) 缓存，前缀稳定 → 命中 DeepSeek 硬盘缓存
     static_prompt = _build_static_prompt(is_group)
     dynamic_parts = []
+    # P0-4：先把这句话里可能的「叫我 X」「说 A 答 B」记下来，再注入 ——
+    # 同一轮里说改称呼，这一轮就生效（不然等于答应了当轮不认）。
+    _pl_sender = str(sender or "") or str(target_qq or "")
+    _people_alias_capture(_pl_sender, user_msg)
     # ★ stable_parts（2026-10-13 结构二次重排）：一天变不了几次的块 —— 构建器会
     #   把它们放在"摘要账本之后、滑动近轮之前"，让它们进入可缓存前缀。
     #   此前它们混在 dynamic_parts 里排在近轮之后 = 每轮必 miss（22 时段实测
@@ -11146,6 +11183,15 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
                                   resolve_qq_nick, sender=_tag_sender)
         if _tag_text:
             dynamic_parts.append(_tag_text)
+    except Exception:
+        pass
+
+    # P0-4：称呼与约定。同一份数据私聊/群聊共用 —— 这是"跨场景"的最小实现：
+    # 人只有一个档案，场景只是场景。
+    try:
+        _pa = _people_alias_prompt(_pl_sender)
+        if _pa:
+            dynamic_parts.append(_pa)
     except Exception:
         pass
 
@@ -12490,6 +12536,14 @@ def _display_name(sender, group_id="") -> str:
         return "群友"
     if s == str(BOT_QQ):
         return "我(Bot)"
+    # P0-4：对方明确要求过称呼 → 用它（比群名片更"他说的"）。
+    # 过期在 people_alias 里判，这里只读。
+    try:
+        _alias = people_alias.get_alias(s)
+        if _alias:
+            return _alias
+    except Exception:
+        pass
     if group_id:
         _g = GROUP_MEMBERS.get(str(group_id)) or {}
         _card = str(_g.get(s) or "").strip()
@@ -13333,8 +13387,24 @@ def _pipeline_step(group_id):
         _gate_ok, _gate_why = True, ""
     if not _gate_ok:
         log(f"群[{group_id}] [跳过:{_gate_why}] 不进决策器: {merged_text[:60]}")
+        # P2-1（2026-10-30）：连决策器都没进的那批也要留痕，否则"为什么没人理"
+        # 在日志里和"决策器说不回"长得一样。
+        try:
+            save_event_log(group_id, "决策",
+                           f"gate_skip｜{_gate_why}｜{merged_text[:80]}", is_group=True)
+        except Exception:
+            pass
         return
     _decision = _decide(group_id, buffer)
+    # P2-1（2026-10-30）：决策摘要落 chat_logs。此前"回不回 / 为什么不回"只在
+    # 滚动日志里，复盘要翻几千行；写进日文件才能按时间线读。
+    try:
+        save_event_log(
+            group_id, "决策",
+            f"{_decision.get('act')}｜{_decision.get('reason') or '无理由'}"
+            f"｜{merged_text[:80]}", is_group=True)
+    except Exception as _de:
+        log(f"群[{group_id}] [决策日志] 写入失败（不影响回复）: {_de}")
     _decider_ctx_text = str(_decision.get("ctx") or "")
     if _decision["act"] == "observe":
         _after = float(_decision.get("after") or 0)

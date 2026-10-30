@@ -87,6 +87,13 @@ try:
     seg = src[i:i + 2000]
     check("戳一戳处理里调了 save_event_log", "save_event_log(" in seg, seg[:200])
     check("戳一戳落的是事件标记", '"戳一戳"' in seg, "")
+
+    # ── 5. 群聊决策摘要（P2-1 的另一半）────────────────────────
+    j = src.find("def _pipeline_step(")
+    pseg = src[j:j + 12000]
+    check("决策点落 save_event_log", "save_event_log(" in pseg, pseg[:200])
+    check("放行/跳过都带 act 字段", '"决策"' in pseg and "get('act')" in pseg, "")
+    check("没进决策器的也留痕", "gate_skip" in pseg, "")
 finally:
     bot_core.CHAT_LOG_DIR = _orig_dir
     bot_core.log = _orig_log
