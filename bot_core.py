@@ -4071,24 +4071,33 @@ def send_file(file_path: str, target_qq: Optional[str] = None) -> bool:
 
 
 def save_chat_log(target_qq, speaker, text, reply=""):
-    """消息转存到 Markdown 日志，按日期和 QQ 号分文件"""
+    """消息转存到 Markdown 日志，按日期和 QQ 号分文件。
+
+    ★ 2026-10-30 修：回复侧以前会把**用户的原话**再写一遍，挂在 Bot 名字下面
+      （`save_chat_log(sender, bot, text, reply)`），于是日志读起来像"Bot 把
+      对方的话重复了一遍 / 又打了个招呼"。用户消息在入口（15836 附近）已经
+      以「对方」写过一次，这里只该写回复。现在 `text` 留空即只写 `> 回复`。
+    """
     try:
         today = datetime.datetime.now().strftime("%Y-%m-%d")
         log_dir = os.path.join(CHAT_LOG_DIR, f"QQ_{target_qq}")
         os.makedirs(log_dir, exist_ok=True)
         log_file = os.path.join(log_dir, f"chat_{today}.md")
-        
+
         ts = datetime.datetime.now().strftime("%H:%M:%S")
         exists = os.path.exists(log_file)
-        
+        body = str(text or "").strip()
+
         with open(log_file, "a", encoding="utf-8") as f:
             if not exists:
                 f.write(f"# QQ 聊天记录 - {target_qq}\n")
                 f.write(f"## {today}\n\n")
-            if reply:
-                f.write(f"**{speaker}** `{ts}`\n\n{text}\n\n> {reply}\n\n---\n\n")
+            if reply and not body:
+                f.write(f"**{speaker}** `{ts}`\n\n> {reply}\n\n---\n\n")
+            elif reply:
+                f.write(f"**{speaker}** `{ts}`\n\n{body}\n\n> {reply}\n\n---\n\n")
             else:
-                f.write(f"**{speaker}** `{ts}`\n\n{text}\n\n---\n\n")
+                f.write(f"**{speaker}** `{ts}`\n\n{body}\n\n---\n\n")
     except Exception as e:
         log(f"转存日志失败: {e}")
 
@@ -15967,8 +15976,7 @@ def main():
                                                      "content": _p_ans[:500],
                                                      "ts": time.time()})
                                         chat_history[sender] = _pch[-24:]
-                                        save_chat_log(sender, _bot_nicknames()[0], text,
-                                                      _p_ans[:500])
+                                        save_chat_log(sender, _bot_nicknames()[0], "", _p_ans[:500])
                                     except Exception as _p_hist_e:
                                         log(f"[Agent] 私聊留痕失败（不影响发送）: {_p_hist_e}")
                                     try:
@@ -16239,7 +16247,7 @@ def main():
                     if _pm_meme_path:
                         _note_sent_meme(_pm_meme_path, target_qq=sender)
                     # 转存 AI 回复
-                    save_chat_log(sender, _bot_nicknames()[0], text, reply[:500])
+                    save_chat_log(sender, _bot_nicknames()[0], "", reply[:500])
                     save_instruction(text, reply)
                     # 统一记忆分发（1.5 任务 2.3）：私聊回复侧同步
                     try:
