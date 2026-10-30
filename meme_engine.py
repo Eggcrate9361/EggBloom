@@ -11,6 +11,13 @@ from difflib import SequenceMatcher
 MEME_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "memes", "memes")
 TAGS_FILE = os.path.join(MEME_DIR, "tags.json")
 
+#: 情绪词在 tag 库里**没有**对应标签时的近义库存（2026-10-30）。
+#: 以前会掉进 Step 4「全库随机」——对方说"无语"，它可能回一张哭泣图。
+FALLBACK_TAGS = {
+    "无语": "呆滞", "烦躁": "炸毛", "兴奋": "开心", "惊喜": "开心",
+    "崩溃": "炸毛", "好奇": "疑惑", "生气": "炸毛", "无聊": "呆滞",
+}
+
 # 用户情绪词 → 数据库标签（所有 key 必须是 tags.json 中实际存在的标签）
 SYNONYM_MAP = {
     "开心":     ["开心", "哈哈", "笑死", "好棒", "太好了", "nice", "恭喜", "高兴", "快乐", "喜悦", "兴奋", "欢快", "好耶", "芜湖"],
@@ -80,6 +87,13 @@ def _init():
 
 _tag_db, _inverted_index = _init()
 
+
+def reload_index():
+    """重新读 tags.json 重建索引（自动采集入库后调用）。"""
+    global _tag_db, _inverted_index
+    _tag_db, _inverted_index = _init()
+    return len(_tag_db)
+
 # 最近发送过的表情包（去重用，避免连续重复）
 _recent_memes = []
 _RECENT_MAX = 20
@@ -98,10 +112,16 @@ def _pick_random(filenames):
         return None
     if len(existing) == 1:
         return existing[0]
-    # 避开最近发过的
-    available = [f for f in existing if f not in _recent_memes]
+    # 避开最近发过的。★ 2026-10-30 修：_record_meme 存的是 basename，
+    # 这里以前拿完整相对路径比 → 永远不命中，去重等于没做（所以总那几张）。
+    available = [f for f in existing if os.path.basename(f) not in _recent_memes]
     if not available:
-        available = existing  # 全都发过了就重置
+        # ★ 全都发过时按 LRU 挑**最久没发**的，而不是随机重置（否则刚发完
+        #   就可能立刻又抽到同一张，加上池子小，体感就是"总是那几个"）。
+        def _age(f):
+            b = os.path.basename(f)
+            return _recent_memes.index(b) if b in _recent_memes else -1
+        return min(existing, key=_age)
     return random.choice(available)
 
 
@@ -171,6 +191,15 @@ def match_meme(emotion_or_keyword):
                 _record_meme(result)
                 return path
     
+    # Step 3.5: 词表里没有这个标签 → 用近义库存（比全库随机靠谱）
+    _fb = FALLBACK_TAGS.get(s)
+    if _fb and _fb in _inverted_index:
+        result = _pick_random(_inverted_index[_fb])
+        if result:
+            path = os.path.join(MEME_DIR, result)
+            _record_meme(result)
+            return path
+
     # Step 4: 兜底随机（排除最近发过的）
     all_files = list(_tag_db.keys())
     if all_files:

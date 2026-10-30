@@ -4929,6 +4929,15 @@ def extract_images(msg):
                         log(f"图片下载失败: {e}")
                         continue
                 images.append(local)
+    # 群聊表情包自动采集（2026-10-30）：只收群里的（私聊图是对方的照片，
+    # 收进表情库越界）；后台线程跑，失败不影响这条消息。
+    try:
+        if str((msg or {}).get("message_type") or "") == "group":
+            import meme_collect as _mcollect
+            for _p in images:
+                _mcollect.maybe_collect_async(_p, source="group")
+    except Exception:
+        pass
     return images
 
 
