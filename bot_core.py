@@ -9521,6 +9521,22 @@ def _handle_poke_event(ev):
         except Exception as e:
             log(f"私聊戳一戳AI回复失败: {e}")
 
+def _recall_should_fire(*, buffer_cancelled: bool, last_bot_msg: float,
+                        now: float, window: float = 300.0) -> bool:
+    """撤回反馈值不值得回：只看"跟 bot 有没有关系"。
+
+    · 撤回前 bot 正憋着一条回复（buffer_cancelled）→ 必回（截断反馈）；
+    · 否则要 bot 最近 window 秒在这个群说过话 → 才回；
+    · 群里一直安静、bot 没参与 → 沉默（用户原话：不要什么撤回都回）。
+    """
+    if buffer_cancelled:
+        return True
+    try:
+        return bool(last_bot_msg) and (float(now) - float(last_bot_msg)) <= max(10.0, float(window))
+    except Exception:
+        return False
+
+
 def _model_oneliner(action: str, context: str = "", max_chars: int = 40) -> str:
     """让主模型按人格说一句（用于"预设关掉"的动作反馈）。失败返回空串。"""
     try:
@@ -9574,6 +9590,16 @@ def _handle_recall_event(ev):
         # 检查冷却
         if recall_key in RECALL_FEEDBACK_TIME and now - RECALL_FEEDBACK_TIME[recall_key] < _config.get("recall_feedback_cooldown", 60):
             log("撤回反馈冷却中，跳过")
+            return
+
+        # 2026-10-30：不是所有撤回都值得回。只有"截断了 bot 的回复"或
+        # "bot 最近在这个群说过话"才回；安静群里的随手撤回 → 沉默。
+        _bot_last = GROUP_LAST_BOT_MSG.get(str(recall_gid), 0)
+        if not _recall_should_fire(
+                buffer_cancelled=buffer_cancelled, last_bot_msg=_bot_last,
+                now=now,
+                window=_config.get("recall_feedback_context_window", 300)):
+            log("[撤回反馈] 与 bot 无关（没被截断、最近没在这个群说过话），不回")
             return
 
         # 提取用户QQ号

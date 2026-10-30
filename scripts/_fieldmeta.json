@@ -1338,6 +1338,16 @@
    "id": "sGroupSessionGate",
    "default": false,
    "default_text": "关闭"
+  },
+  "recall_feedback_context_window": {
+   "label": "撤回反馈关联窗口（秒）",
+   "desc": "只有 bot 在这么多秒内说过话（或这条撤回截断了 bot 的回复）才回。群一直安静、bot 没参与 → 沉默。默认 300 秒。",
+   "ctl": "number",
+   "panel": "recall",
+   "unit": "秒",
+   "id": "sRecallContextWindow",
+   "default": 300,
+   "default_text": "300"
   }
  },
  "actions": {

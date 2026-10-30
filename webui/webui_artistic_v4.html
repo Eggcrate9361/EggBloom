@@ -4857,6 +4857,7 @@ window.FIELD_META = {
     "group_idle_exit_use_preset": {"label": "空闲退场用预设", "desc": "开：用退场语预设。关：让主模型现写一段退场话（会花 token）。", "ctl": "bool", "panel": "group", "unit": "", "id": "sIdleExitUsePreset", "default": true, "default_text": "开启"},
     "reply_stale_drop_enable": {"label": "回复超时丢弃（旧行为）", "desc": "开：回复生成太久（超过实测线）就整条不发。关：一律发送——agent 链路可能跑十分钟，宁可晚到也别吞。", "ctl": "bool", "panel": "group", "unit": "", "id": "sReplyStaleDrop", "default": false, "default_text": "关闭"},
     "group_session_gate_enable": {"label": "群会话配额闸（旧行为）", "desc": "开：群会话配额用完就不再回复非点名消息。关：决策放行/被点名的消息不再被吞（默认关）。", "ctl": "bool", "panel": "group", "unit": "", "id": "sGroupSessionGate", "default": false, "default_text": "关闭"},
+    "recall_feedback_context_window": {"label": "撤回反馈关联窗口（秒）", "desc": "只有 bot 在这么多秒内说过话（或这条撤回截断了 bot 的回复）才回。群一直安静、bot 没参与 → 沉默。默认 300 秒。", "ctl": "number", "panel": "recall", "unit": "秒", "id": "sRecallContextWindow", "default": 300, "default_text": "300"},
   }
 };
 /* ══ FIELD_META_END */

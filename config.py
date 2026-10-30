@@ -427,6 +427,7 @@ DEFAULT_CONFIG = {
     # 表情包自动采集（2026-10-30）：群聊里别人发的表情包 → 图库 → 可被找回/重发。
     # 预设 vs 主模型（2026-10-30）：开=用预设话术、不调模型；关=让主模型现说一句。
     "recall_feedback_use_preset": True,   # 撤回反馈：预设
+    "recall_feedback_context_window": 300,  # 秒：bot 多久内说过话才回撤回（否则沉默）
     "group_idle_exit_use_preset": True,   # 空闲退场：预设
     "reply_stale_drop_enable": False,     # 回复超时丢弃（默认关：agent 可能跑十分钟）
     "group_session_gate_enable": False,   # 群会话配额闸（默认关：被点名/决策放行不再被吞）

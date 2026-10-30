@@ -162,6 +162,7 @@
   "meme_idle_exit_enable": true,
   "meme_auto_detect_emotion": true,
   "recall_feedback_use_preset": true,
+  "recall_feedback_context_window": 300,
   "group_idle_exit_use_preset": true,
   "reply_stale_drop_enable": false,
   "group_session_gate_enable": false,
