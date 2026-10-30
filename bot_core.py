@@ -5869,6 +5869,20 @@ def _render_ds_search(results, query, _log_prefix="搜索"):
     if not items:
         return ""
 
+    # ★ 2026-10-30：黑名单在这条兜底路上同样生效。过滤放在"结果离开引擎"的
+    #   咽喉点（与 search_prefs / web_access 同一个判据源），否则用户在插件页
+    #   屏蔽的域名会从这条路原样回来。
+    try:
+        from search_prefs import blocked_domains as _blocked_domains
+        _blocked = _blocked_domains()
+        if _blocked:
+            items = search_core.filter_blocked_domains(items, _blocked)
+            if not items:
+                log(f"[{_log_prefix}] 结果全部命中域名黑名单")
+                return ""
+    except Exception:
+        pass
+
     q_info = search_core.quality_of(items, query)
     log(f"[{_log_prefix}] DeepSeek「{query}」→ {len(items)} 条 "
         f"(质量 {q_info['verdict']}, top {q_info['top_score']})")
@@ -5876,12 +5890,12 @@ def _render_ds_search(results, query, _log_prefix="搜索"):
     body = search_core.format_for_model(items, query)
     if not body:
         return ""
-    # ★ 2026-10-30（移植自 dsh-free-search）：网页文本包进「不可信数据」边界，
-    #   并剥掉正文里自带的同名标记（防止提前闭合）。这是唯一一处会同时被
-    #   主链和插件读到的排版口，所以放在这里，不放到各个调用方。
+    # ★ 2026-10-30：网页文本包进「外部数据」边界，并剥掉正文里自带的同名标记
+    #   （防止提前闭合）。这是唯一一处会同时被主链和插件读到的排版口，
+    #   所以放在这里，不放到各个调用方。
     parts = [f"【{query}】搜索结果：",
-             search_core.wrap_untrusted(body),
-             search_core.UNTRUSTED_NOTE]
+             search_core.wrap_external(body),
+             search_core.EXTERNAL_NOTE]
     hint = search_core.quality_hint(q_info)
     if hint:
         parts.append("\n\n" + hint)

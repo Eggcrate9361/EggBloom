@@ -298,6 +298,40 @@ button.sm{padding:5px 10px;font-size:var(--pv-fs-xs)}
   </div>
 
   <div class="pv-panel">
+    <div class="pv-panel-h"><h2>结果层策略</h2><i class="pv-rule"></i>
+      <span class="pv-count">合并与过滤</span></div>
+    <table class="pv-table">
+      <tbody>
+        <tr><td class="k" style="width:180px">域名多样性</td>
+          <td style="width:100px"><span class="pv-tag" id="tag-div">—</span></td>
+          <td class="pv-hint" style="margin:0">合并后按域名轮转交错，前几条尽量来自不同站点；关掉就是纯按分数排</td></tr>
+      </tbody>
+    </table>
+    <div class="pv-field">
+      <label class="pv-label">域名黑名单</label>
+      <textarea class="pv-textarea" id="f-blocked" style="min-height:80px"></textarea>
+      <div class="pv-hint">一行一个，子域自动命中（填 <span class="pv-inline-code">csdn.net</span> 会挡住 blog.csdn.net）。命中的结果不进任何一条搜索路，后面的候选自动补位。</div>
+    </div>
+    <div class="pv-flex">
+      <button class="primary" id="save-result">保存结果层设置</button>
+      <button id="toggle-div">切换域名多样性</button>
+    </div>
+  </div>
+
+  <div class="pv-panel">
+    <div class="pv-panel-h"><h2>引擎健康</h2><i class="pv-rule"></i>
+      <span class="pv-count" id="eng-note">失败分类与冷却</span></div>
+    <table class="pv-table">
+      <thead><tr><th style="width:80px">引擎</th><th style="width:96px">状态</th>
+        <th style="width:64px">失败</th><th>最近错误</th></tr></thead>
+      <tbody id="engines"></tbody>
+    </table>
+    <div class="pv-flex">
+      <button id="reset-eng">解除全部冷却</button>
+    </div>
+  </div>
+
+  <div class="pv-panel">
     <div class="pv-panel-h"><h2>触发与放行词表</h2><i class="pv-rule"></i>
       <span class="pv-count">一行一个</span></div>
     <div class="pv-field">
@@ -348,6 +382,9 @@ function paint(){
   $('tag-model').className='pv-tag '+(pm?'ok':'bad');
   $('tag-block').textContent=bl?'开启':'关闭';
   $('tag-block').className='pv-tag '+(bl?'ok':'bad');
+  const dv=CFG.diversity!==false;
+  $('tag-div').textContent=dv?'开启':'关闭';
+  $('tag-div').className='pv-tag '+(dv?'ok':'bad');
 }
 async function load(){
   const r=await call('get_config');
@@ -356,6 +393,7 @@ async function load(){
   $('f-need').value=lines(CFG.need_search_keywords);
   $('f-skip').value=lines(CFG.skip_patterns);
   $('f-hall').value=lines(CFG.hallucination_patterns);
+  $('f-blocked').value=lines(CFG.blocked_domains);
   const st=await call('stats');
   const s=(st&&st.stats)||{};
   $('s-total').textContent=s.total||0;
@@ -364,6 +402,23 @@ async function load(){
   $('s-fail').textContent=s.fail||0;
   $('s-avg').textContent=(st&&st.avg_ms?st.avg_ms:'0')+'ms';
   await loadRecent();
+  await loadEngines();
+}
+async function loadEngines(){
+  const r=await call('engines');
+  const list=(r&&r.engines)||[];
+  if(!r||r.ok===false){ $('engines').innerHTML='<tr><td colspan="4" class="pv-empty">读取失败</td></tr>'; return; }
+  if(!list.length){ $('engines').innerHTML='<tr><td colspan="4" class="pv-empty">还没有失败记录</td></tr>'; return; }
+  const cls=x=>x==='dead'?'停用':(x==='backoff'?'退避':(x==='transient'?'瞬时':'未知'));
+  $('engines').innerHTML=list.map(x=>{
+    const st=x.cooling?(x.retry_in<0?'<span class="pv-tag bad">本会话停用</span>'
+      :'<span class="pv-tag bad">冷却 '+x.retry_in+'s</span>')
+      :'<span class="pv-tag ok">可用</span>';
+    return '<tr><td class="mono">'+String(x.name||'').replace(/</g,'&lt;')+'</td>'
+      +'<td>'+st+'</td><td class="mono">'+(x.fails||0)+' '+(cls(x.kind)||'')+'</td>'
+      +'<td class="pv-truncate" title="'+String(x.last_error||'').replace(/"/g,'&quot;')+'">'
+      +String(x.last_error||'—').replace(/</g,'&lt;')+'</td></tr>';
+  }).join('');
 }
 async function loadRecent(){
   const r=await call('recent');
@@ -393,6 +448,19 @@ $('save-words').onclick=async()=>{
     hallucination_patterns:toLines($('f-hall').value)
   });
   if(r&&r.ok!==false){ setMsg('词表已保存',true); await load(); } else setMsg('保存失败：'+JSON.stringify(r),false);
+};
+$('toggle-div').onclick=async()=>{
+  const r=await call('set_config',{diversity:!(CFG.diversity!==false)});
+  if(r&&r.ok!==false){ setMsg('已切换',true); await load(); } else setMsg('失败：'+JSON.stringify(r),false);
+};
+$('save-result').onclick=async()=>{
+  const toLines=v=>v.split(/\r?\n/).map(s=>s.trim()).filter(Boolean);
+  const r=await call('set_config',{blocked_domains:toLines($('f-blocked').value)});
+  if(r&&r.ok!==false){ setMsg('结果层设置已保存',true); await load(); } else setMsg('保存失败：'+JSON.stringify(r),false);
+};
+$('reset-eng').onclick=async()=>{
+  const r=await call('reset_engines');
+  if(r&&r.ok!==false){ setMsg('冷却已解除',true); await loadEngines(); } else setMsg('失败：'+JSON.stringify(r),false);
 };
 $('refresh').onclick=load;
 load();

@@ -10,6 +10,7 @@ web_access.py — 统一联网搜索/抓取模块
 
 import html
 import re
+import threading
 import time
 import urllib.request
 import urllib.parse
@@ -21,6 +22,10 @@ import search_core
 # 简单内存缓存，避免同一查询 30 秒内重复请求
 _QUERY_CACHE: dict[str, tuple[float, str]] = {}
 _CACHE_TTL = 30.0
+
+#: 最近一次 `_fetch_html` 的失败原因（空串 = 没失败）。只给 SERP 引擎的失败分类用，
+#: 不参与任何结果判断 —— 它是观测值，不是信号。
+_LAST_FETCH_ERROR = ""
 
 
 def _now() -> float:
@@ -104,7 +109,14 @@ def _decode_html(raw: bytes, resp=None) -> str:
 
 
 def _fetch_html(url: str, timeout: int = 15, headers: Optional[dict] = None) -> Optional[str]:
-    """带 UA 的网页抓取，失败返回 None。"""
+    """带 UA 的网页抓取，失败返回 None。
+
+    ★ 2026-10-30：失败原因写进模块级 `_LAST_FETCH_ERROR`。原来是纯静默的 ——
+      SERP 引擎只能看见 None，分不出"被反爬"还是"超时"，
+      于是失败分类与冷却没有判据可用。
+      这里不改成抛异常：正文抓取走线程池，抛异常会把并发那层搞复杂。
+    """
+    global _LAST_FETCH_ERROR
     req_headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -115,8 +127,11 @@ def _fetch_html(url: str, timeout: int = 15, headers: Optional[dict] = None) -> 
     req = urllib.request.Request(url, headers=req_headers)
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return _decode_html(resp.read(), resp)
-    except Exception:
+            got = _decode_html(resp.read(), resp)
+        _LAST_FETCH_ERROR = "" if got else "empty response"
+        return got
+    except Exception as e:
+        _LAST_FETCH_ERROR = "%s: %s" % (type(e).__name__, e)
         return None
 
 
@@ -343,11 +358,41 @@ def _parse_bing(html: str, limit: int = 8):
     return out
 
 
+def _fetch_serp(url: str, timeout: int = 15, attempts: int = 2) -> str:
+    """抓搜索页：瞬时失败（超时/5xx/网络）重试一次，仍失败返回空串。
+
+    只重试**瞬时**类：反爬/限流类重试只会更快撞墙 —— 实测请求数翻倍之后
+    Bing 的空 SERP 来得更快。失败原因留在 `_LAST_FETCH_ERROR`，由调用方分类。
+    """
+    for i in range(max(1, attempts)):
+        got = _fetch_html(url, timeout=timeout)
+        if got:
+            return got
+        if classify_failure(_LAST_FETCH_ERROR) != TRANSIENT:
+            break
+        if i + 1 >= attempts:
+            break
+        time.sleep(1.5)
+    return ""
+
+
 def _bing_search(query: str, limit: int = 8):
     """抓 Bing SERP 再解析。"""
     q = urllib.parse.quote(query)
     url = f"https://www.bing.com/search?q={q}&setlang=zh-cn&count=20"
-    return _parse_bing(_fetch_html(url), limit)
+    got = _parse_bing(_fetch_serp(url), limit)
+    # ★ 2026-10-30：Bing 在「这个查询没有结果」时会返回一张**别的查询**的缓存页
+    #   —— b_algo 照常存在，内容却是热门页。判据是查询词元与整批毫无交集，
+    #   且这批至少 3 条（单条不判死：低分但沾边的结果也比没有强）。
+    if got and not search_core.looks_relevant(query, got):
+        print(f"[web_access] bing 整批与查询无词面交集（疑似缓存 SERP），按 0 条处理: {query[:40]}")
+        return []
+    if not got and not _LAST_FETCH_ERROR:
+        # 页面抓到了但没有结果块 —— 正常的"没搜到"，不是故障
+        return []
+    if not got and _LAST_FETCH_ERROR:
+        raise RuntimeError(_LAST_FETCH_ERROR)
+    return got
 
 
 def _parse_ddg(html: str, limit: int = 8):
@@ -472,7 +517,10 @@ def _parse_so(html: str, limit: int = 8):
 def _so_search(query: str, limit: int = 8):
     """抓 360 SERP 再解析。"""
     url = f"https://www.so.com/s?q={urllib.parse.quote(query)}"
-    return _parse_so(_fetch_html(url), limit)
+    got = _parse_so(_fetch_serp(url), limit)
+    if not got and _LAST_FETCH_ERROR:
+        raise RuntimeError(_LAST_FETCH_ERROR)
+    return got
 
 
 # ══════════════════════════════════════════════════════════════
@@ -520,16 +568,15 @@ def _is_usable_url(url: str) -> bool:
 
 
 def _url_key(url: str) -> str:
-    """URL 归一化，用于去重：去协议、去 www、去追踪参数、去锚点。"""
-    try:
-        p = urllib.parse.urlparse(str(url or ""))
-        host = (p.netloc or "").lower()
-        if host.startswith("www."):
-            host = host[4:]
-        path = (p.path or "").rstrip("/")
-        return f"{host}{path}"
-    except Exception:
-        return str(url or "")
+    """URL 归一化，用于去重。
+
+    ★ 2026-10-30：实现收进 `search_core.normalize_url`，这里只留一个别名 ——
+      同一件事不能有两份实现。新增的行为只有一条：**剥已知追踪参数**。
+      原来 `utm_*` / `spm` 这类参数让同一页面「带参数」与「不带」拿到两个 key，
+      于是同一个页面在结果里出现两次、白占一个抓正文名额。
+      `?id=123` 这类资源标识参数照旧保留（它标识的是不同页面）。
+    """
+    return search_core.normalize_url(url)
 
 
 #: 站点首页的各种写法。`/main/`、`/home`、`/index.html` 都指同一个页面。
@@ -546,7 +593,27 @@ def _is_home_page(url: str) -> bool:
         return False
 
 
-def _merge_results(batches, limit: int = 8):
+def _absorb(into: dict, it: dict) -> None:
+    """把一条**重复结果**并进已保留的那条，不占第二个名额。
+
+    原来直接丢掉重复条目，于是另一条可能更完整的摘要/日期一起被丢掉 ——
+    两个源抓同一篇文章时，被截断的位置常常不一样，先到的那条不一定更全。
+    这里只补空缺，不覆盖已有字段：先到的仍然代表这条结果。
+    """
+    try:
+        if not into.get("snippet") and it.get("snippet"):
+            into["snippet"] = it["snippet"]
+        if not into.get("title") and it.get("title"):
+            into["title"] = it["title"]
+        if not into.get("date") and it.get("date"):
+            into["date"] = it["date"]
+        if not into.get("summary") and it.get("summary"):
+            into["summary"] = it["summary"]
+    except Exception:
+        pass
+
+
+def _merge_results(batches, limit: int = 8, blocked=None):
     """把多个引擎的结果合并去重 → [SearchResult]。
 
     ★ 2026-10-23：两处重写。
@@ -574,12 +641,18 @@ def _merge_results(batches, limit: int = 8):
       这是同一个页面，占掉两个名额、并且在给模型的文本里出现两遍。
       判据：同域名 **且** 标题相同（或一方是首页）→ 判重。
       URL key 那条路只看路径，天生拦不住这种。
+
+    ★ 2026-10-30：`blocked` 在**截断之前**过滤。被屏蔽的条目让位给后面的候选，
+      所以 maxResults 仍能填满 —— 用户要的是"满员的好结果"，不是"变短的结果"。
     """
     lists = [list(b or ()) for b in (batches or ()) if b]
     if not lists:
         return []
+    if blocked:
+        # 先按批次过滤：顺序不变，循环里就不必再判一次
+        lists = [search_core.filter_blocked_domains(b, blocked) for b in lists]
 
-    seen_url = set()
+    seen_url = {}
     out = []
     depth = max((len(x) for x in lists), default=0)
     for i in range(depth):
@@ -594,24 +667,52 @@ def _merge_results(batches, limit: int = 8):
                 continue
             key = _url_key(u)
             if key in seen_url:
+                _absorb(seen_url[key], it)
                 continue
             text = str(it.get("title") or "") + " " + str(it.get("snippet") or "")
             if len(text.strip()) < 12:
                 continue
-            if _same_page(it, out):
+            same = _find_same_page(it, out)
+            if same is not None:
+                _absorb(same, it)
                 continue
             # 跨源判重：同一篇文章的标题/摘要在不同源会被截成不同长度
             others = [str(x.get("title") or "") + " " + str(x.get("snippet") or "")
                       for x in out if x.get("source") != it.get("source")]
             if _looks_same(text, others):
                 continue
-            seen_url.add(key)
+            if it.get("snippet"):
+                it["snippet"] = search_core.strip_snippet_noise(it["snippet"])
+            seen_url[key] = it
             out.append(it)
             if len(out) >= limit:
                 # 交错会打乱"位置"的含义，所以出队前重排一次原始位置：
                 # 以在本引擎内的真实序号为准，而不是合并后的顺序
                 return out
     return out
+
+
+def _same_page_item(a: dict, b: dict) -> bool:
+    """两条是不是同一个页面（同域 + 同标题，或同域 + 都是首页）。"""
+    try:
+        my_host = search_core.domain_of(a.get("url"))
+        if not my_host or search_core.domain_of(b.get("url")) != my_host:
+            return False
+        ta = re.sub(r"\s+", "", str(a.get("title") or ""))
+        tb = re.sub(r"\s+", "", str(b.get("title") or ""))
+        if ta and ta == tb:
+            return True
+        return _is_home_page(a.get("url")) and _is_home_page(b.get("url"))
+    except Exception:
+        return False
+
+
+def _find_same_page(it, pool):
+    """在池子里找与它同一个页面的那条；找不到返回 None。"""
+    for x in (pool or ()):
+        if _same_page_item(it, x):
+            return x
+    return None
 
 
 def _same_page(it, pool) -> bool:
@@ -623,22 +724,7 @@ def _same_page(it, pool) -> bool:
 
     只比同域名的东西 —— 不同站点的同名标题是不同页面（「公司简介」到处都是）。
     """
-    try:
-        my_host = search_core.domain_of(it.get("url"))
-        my_title = re.sub(r"\s+", "", str(it.get("title") or ""))
-        if not my_host:
-            return False
-        for x in (pool or ()):
-            if search_core.domain_of(x.get("url")) != my_host:
-                continue
-            other_title = re.sub(r"\s+", "", str(x.get("title") or ""))
-            if my_title and my_title == other_title:
-                return True
-            if _is_home_page(it.get("url")) and _is_home_page(x.get("url")):
-                return True
-        return False
-    except Exception:
-        return False
+    return _find_same_page(it, pool) is not None
 
 
 def _summary_key(text: str) -> set:
@@ -966,25 +1052,169 @@ def check_connectivity(timeout: int = 4) -> dict:
 #   质量判定和话术的唯一权威源是 search_core（quality_of / QUALITY_HINT）。
 
 
-def _own_search(query: str, nq: str):
+# ══════════════════════════════════════════════════════════════
+# 引擎健康：失败分类与冷却（2026-10-30）
+# ══════════════════════════════════════════════════════════════
+#  引擎抛错原来就吞掉，下一次查询照样再撞一遍。一个被反爬的 Bing 会让
+#  **每一次**搜索都白等一个超时，而用户是在群里等回复。
+#
+#  按"重试有没有意义"只留三个动作：
+#    dead      额度耗尽 / 鉴权失败 —— 本会话停用（改好配置重载才可能恢复）
+#    backoff   反爬 / 限流 / 403   —— 退避 60 秒（通常过一会儿自己会好）
+#    transient 超时 / 5xx / 网络   —— 不冷却，同一引擎重试一次（_fetch_serp）
+#  解析失败与未知错误归 other：不冷却也不重试 —— 那是我们这边或上游改版。
+
+DEAD = "dead"
+BACKOFF = "backoff"
+TRANSIENT = "transient"
+OTHER = "other"
+
+#: 反爬退避时长（秒）。
+BOT_WALL_COOLDOWN = 60.0
+
+#: 引擎名 → {"fails", "kind", "last_error", "until"}。until 为 None 表示不在冷却。
+_ENGINE_STATE = {}
+_ENGINE_LOCK = threading.Lock()
+
+
+def classify_failure(error):
+    """错误文本 → dead / backoff / transient / other。
+
+    顺序有讲究：先认反爬再认 403 —— 对扒 HTML 的引擎来说 403 是反爬，
+    不是"API key 错了"。反过来会让 Bing 被当成鉴权失败、本会话永久停用。
+    """
+    low = str(error or "").lower()
+    if re.search(r"captcha|anti-bot|robot check|unusual traffic|验证码|反爬|人机验证", low):
+        return BACKOFF
+    if re.search(r"no_more_credits|quota|insufficient (credits|balance|quota)|"
+                 r"payment required|\b402\b", low):
+        return DEAD
+    if re.search(r"api key|unauthorized|\b401\b|not configured|requires .*_api_key", low):
+        return DEAD
+    if re.search(r"\b403\b|forbidden|\b429\b|rate limit|too many requests|slow down", low):
+        return BACKOFF
+    if re.search(r"timeout|timed out|http 5\d\d|\b50[0-4]\b|connection|econn|"
+                 r"socket|network|unreachable|getaddrinfo|reset by peer", low):
+        return TRANSIENT
+    return OTHER
+
+
+def _state_of(name):
+    st = _ENGINE_STATE.get(name)
+    if st is None:
+        st = {"fails": 0, "kind": "", "last_error": "", "until": None}
+        _ENGINE_STATE[name] = st
+    return st
+
+
+def note_success(name):
+    """成功一次 → 清掉失败计数（冷却中的不动，它本来就是时间到了才恢复）。"""
+    with _ENGINE_LOCK:
+        st = _state_of(name)
+        st["fails"] = 0
+        st["kind"] = ""
+        st["last_error"] = ""
+
+
+def note_failure(name, error):
+    """记一次失败并按类别设冷却。返回类别名（调用方拿去打日志）。"""
+    kind = classify_failure(error)
+    with _ENGINE_LOCK:
+        st = _state_of(name)
+        st["fails"] = int(st.get("fails") or 0) + 1
+        st["kind"] = kind
+        st["last_error"] = str(error or "")[:200]
+        now = time.time()
+        if kind == DEAD:
+            st["until"] = float("inf")            # 本会话停用
+        elif kind == BACKOFF:
+            st["until"] = now + BOT_WALL_COOLDOWN
+        # transient / other 不冷却：前者已重试过一次，后者重试也没用
+    return kind
+
+
+def is_cooling_down(name, now=None):
+    """这个引擎现在是否在冷却。过期会自动清掉。"""
+    now = time.time() if now is None else now
+    with _ENGINE_LOCK:
+        st = _ENGINE_STATE.get(name)
+        if not st:
+            return False
+        until = st.get("until")
+        if until is None:
+            return False
+        if until == float("inf"):
+            return True
+        if until > now:
+            return True
+        st["until"] = None
+        return False
+
+
+def engine_status():
+    """引擎健康快照，给插件页看。纯观测，不参与搜索。"""
+    now = time.time()
+    out = []
+    with _ENGINE_LOCK:
+        for name, st in sorted(_ENGINE_STATE.items()):
+            until = st.get("until")
+            if until == float("inf"):
+                cooling, retry_in = True, -1
+            elif until and until > now:
+                cooling, retry_in = True, int(until - now)
+            else:
+                cooling, retry_in = False, 0
+            out.append({
+                "name": name,
+                "fails": int(st.get("fails") or 0),
+                "kind": st.get("kind") or "",
+                "cooling": cooling,
+                "retry_in": retry_in,
+                "last_error": (st.get("last_error") or "")[:120],
+            })
+    return out
+
+
+def reset_engines():
+    """清空所有冷却与失败计数（插件页"恢复引擎"用，测试里也用它隔离状态）。"""
+    with _ENGINE_LOCK:
+        _ENGINE_STATE.clear()
+
+
+#: 自家引擎清单。名字用于冷却状态与日志，顺序就是尝试顺序。
+_ENGINES = (("bing", _bing_search), ("so", _so_search))
+
+
+def _own_search(query: str, nq: str, blocked=None, diversity: bool = True):
     """自己的搜索：Bing + 360 并发 → 合并去重 → 补相关分 → 抓正文。
 
     返回 [SearchResult]，失败返回空列表。**不返回是否「成功」** ——
     空列表就是空列表，由调用方决定要不要兜底。
+
+    ★ 2026-10-30：引擎失败不再一视同仁。额度/鉴权失败本会话停用、反爬退避 60 秒、
+      瞬时失败重试一次（在 `_fetch_serp` 里）。原来的行为是每个查询都去撞一遍
+      已经挂掉的引擎 —— 一个被反爬的 Bing 会让**每一次**搜索都白等一次超时。
     """
     batches = []
-    for engine in (_bing_search, _so_search):
+    for name, engine in _ENGINES:
+        if is_cooling_down(name):
+            print(f"[web_access] {name} 冷却中，本轮跳过")
+            continue
         try:
             got = engine(nq, 8)
         except Exception as e:
-            print(f"[web_access] {engine.__name__} 失败: {str(e)[:80]}")
+            cls = note_failure(name, e)
+            print(f"[web_access] {engine.__name__} 失败[{cls}]: {str(e)[:80]}")
             got = []
+        else:
+            if got:
+                note_success(name)
         if got:
             batches.append(got)
     if not batches:
         return []
 
-    merged = _merge_results(batches, limit=8)
+    merged = _merge_results(batches, limit=8, blocked=blocked)
     if not merged:
         return []
 
@@ -992,8 +1222,12 @@ def _own_search(query: str, nq: str):
     # 精度差一截，但足以把明显不相关的压下去。
     merged = search_core.fill_scores(merged, nq)
 
-    # 只给排在前面的几条抓正文：后面那些本来也进不了给模型的文本
+    # 只给排在前面的几条抓正文：后面那些本来也进不了给模型的文本。
+    # ★ 2026-10-30：抓正文之前先按站交错 —— 否则 3 个抓取名额可能全花在
+    #   同一个站的三篇文章上，而那个站只代表一种口径。
     ranked = search_core.rank(merged, nq)
+    if diversity:
+        ranked = search_core.diversify(ranked)
     head = ranked[:3]
     head = _attach_contents(head, max_pages=3)
     rest = ranked[3:]
@@ -1064,12 +1298,20 @@ def _query_variants(nq):
 
 
 def _render(items, nq, query, via):
-    """统一的输出拼装。via 只用于日志，不进给模型的文本。"""
+    """统一的输出拼装。via 只用于日志，不进给模型的文本。
+
+    ★ 2026-10-30：结果块包进「外部网页内容」边界。
+      搜索结果是外部数据，不是指令 —— 网页正文里写「忽略以上要求」这类话时，
+      模型没有任何理由照做，但它需要被明确告知这一点。边界里自带的同名标记
+      先被剥掉，否则网页可以提前闭合边界、把后面的指令性文字挤到边界外。
+    """
     key_note = "" if nq == query else f"（检索词：{nq}）"
     body = search_core.format_for_model(items, nq)
     if not body:
         return ""
-    parts = [f"【{nq}】搜索结果{key_note}：", body]
+    parts = [f"【{nq}】搜索结果{key_note}：",
+             search_core.wrap_external(body),
+             search_core.EXTERNAL_NOTE]
     # ★ 年份判据用**原始 query**而不是提炼后的 nq：
     #   提炼会砍词（「今年明日方舟周年限定是谁」→「明日方舟 限定」），
     #   年份信息恰恰最容易被砍掉 —— 而砍掉之后就没法判断结果答的是哪一年。
@@ -1080,6 +1322,34 @@ def _render(items, nq, query, via):
     if hint:
         parts.append("\n\n" + hint)
     return "\n".join(parts)
+
+
+def _runtime_prefs():
+    """读一次运行期策略：域名黑名单 + 域名多样性开关。
+
+    唯一权威源在 search_prefs（它读插件配置），这里只取值 ——
+    web_access 不该自己去解析插件目录下的 json，否则主链与插件会各读一份。
+    读不到就当没配置，不阻断搜索。
+    """
+    blocked, diversity = [], True
+    try:
+        import search_prefs
+        blocked = search_prefs.blocked_domains()
+        diversity = search_prefs.diversity_enabled()
+    except Exception:
+        pass
+    return blocked, diversity
+
+
+def _cache_key(query: str, blocked=None) -> str:
+    """缓存键：查询 + 生效中的黑名单。
+
+    黑名单会改变结果集，改了之后 30 秒内仍命中旧结果会让人以为设置没生效。
+    这里只做大小写/空白归一，不做完整域名清洗 —— 键只需要"配置变了就不命中"，
+    真正的规则清洗在 search_core 里做。
+    """
+    rules = sorted({str(x or "").strip().lower() for x in (blocked or ()) if str(x or "").strip()})
+    return str(query or "") + "\u0000" + ",".join(rules)
 
 
 def search_web(query: str, retries: int = 2) -> str:
@@ -1103,7 +1373,9 @@ def search_web(query: str, retries: int = 2) -> str:
     if not query or not query.strip():
         return "搜索关键词为空。"
 
-    cached = _get_cached(query)
+    blocked, diversity = _runtime_prefs()
+    ckey = _cache_key(query, blocked)
+    cached = _get_cached(ckey)
     if cached:
         return cached
 
@@ -1130,7 +1402,7 @@ def search_web(query: str, retries: int = 2) -> str:
     items, nq_used, verdict = [], nq, "empty"
     best = None          # (分数, items, nq) —— 全都不够好时留最好的那份
     for _v in _query_variants(nq):
-        _items = _own_search(query, _v)
+        _items = _own_search(query, _v, blocked=blocked, diversity=diversity)
         if not _items:
             continue
         _vq = search_core.quality_of(_items)
@@ -1158,18 +1430,23 @@ def search_web(query: str, retries: int = 2) -> str:
     if verdict != "good":
         ds_items, handled = _search_via_deepseek(query, nq)
         if handled and ds_items:
-            ds_text = _render(ds_items, nq, query, "ds")
+            # ★ 2026-10-30：黑名单对兜底结果同样生效。只在自家那条路上过滤，
+            #   用户屏蔽的域名会从另一条路原样回来 —— 过滤要落在"结果离开引擎"
+            #   的每一个出口，不是某一个函数里。
+            ds_items = search_core.filter_blocked_domains(ds_items, blocked)
+            ds_text = _render(ds_items, nq, query, "ds") if ds_items else ""
             if ds_text:
-                _set_cache(query, ds_text)
+                _set_cache(ckey, ds_text)
                 return ds_text
 
     if not text:
         result = f"搜索「{nq}」未找到相关结果。"
-        _set_cache(query, result)
+        _set_cache(ckey, result)
         return result
 
-    _set_cache(query, text)
+    _set_cache(ckey, text)
     return text
 
 
-__all__ = ["search_web", "check_connectivity", "normalize_query"]
+__all__ = ["search_web", "check_connectivity", "normalize_query",
+           "classify_failure", "engine_status", "reset_engines"]

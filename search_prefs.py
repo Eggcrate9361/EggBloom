@@ -68,6 +68,47 @@ def prefer_model_search():
     return _DEFAULT_PREFER
 
 
+# ── 结果层策略（2026-10-30）─────────────────────────────────
+#  两个键都只影响**结果层**，不影响搜索走哪条路：
+#    blocked_domains  命中的域名不进结果（硬过滤，与 search_core 的 _LOW_QUALITY 降权不是一回事）
+#    diversity        排序后按站交错（前几条尽量来自不同站点）
+#
+#  为什么放在这里读：web_access 与插件都要用同一份判断。插件页写的是
+#  `plugins/web_search/data/config.json`，两处各读一份迟早分叉（10-23 已经踩过）。
+
+
+def blocked_domains():
+    """生效中的域名黑名单。读不到/格式不对一律当空表 —— 搜索不能因此不可用。"""
+    env = str(os.environ.get("EGGBLOOM_SEARCH_BLOCKED", "")).strip()
+    if env:
+        return [x.strip() for x in re.split(r"[,;\s]+", env) if x.strip()]
+    cfg = _raw_config()
+    raw = cfg.get("blocked_domains")
+    if isinstance(raw, str):
+        raw = re.split(r"[,;\s]+", raw)
+    if not isinstance(raw, (list, tuple)):
+        return []
+    out = []
+    for x in raw:
+        s = str(x or "").strip()
+        if s and s not in out:
+            out.append(s)
+    return out
+
+
+def diversity_enabled():
+    """排序后是否按站交错。默认开：一个站占满前三，等于把一次搜索缩成一个口径。"""
+    env = str(os.environ.get("EGGBLOOM_SEARCH_DIVERSITY", "")).strip().lower()
+    if env in ("0", "false", "no", "off"):
+        return False
+    if env in ("1", "true", "yes", "on"):
+        return True
+    cfg = _raw_config()
+    if "diversity" in cfg:
+        return bool(cfg.get("diversity"))
+    return True
+
+
 def shape_query(text):
     """把一句人话收成检索词：去客套/疑问尾巴、去语气虚词、压空白。
 
@@ -169,10 +210,20 @@ def model_search_text(query, log=None, retry_thin=True):
                      f"合并 {len(items)} 条 (质量 {(q_info or {}).get('verdict')})")
 
     try:
+        # ★ 2026-10-30：黑名单对模型搜索这条路同样生效 —— 否则用户在插件页
+        #   屏蔽的域名会从"优先模型搜索"这条更常用的路原样回来。
+        _blocked = blocked_domains()
+        if _blocked:
+            items = search_core.filter_blocked_domains(items, _blocked)
+            if not items:
+                _log("[搜索] 结果全部命中域名黑名单")
+                return ""
         body = search_core.format_for_model(items, query)
         if not body:
             return ""
-        parts = [f"【{query}】搜索结果：", body]
+        parts = [f"【{query}】搜索结果：",
+                 search_core.wrap_external(body),
+                 search_core.EXTERNAL_NOTE]
         hint = search_core.quality_hint(q_info)
         if hint:
             parts.append("\n\n" + hint)

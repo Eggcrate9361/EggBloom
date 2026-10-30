@@ -857,5 +857,187 @@ class TestSearchWebWiring(unittest.TestCase):
         self.assertIn("结果质量", out)
 
 
+class TestEngineHealth(unittest.TestCase):
+    """引擎失败分类与冷却（2026-10-30）。
+
+    原来引擎抛错就吞掉，下一次查询照样再撞一遍 —— 一个被反爬的 Bing
+    会让每一次搜索都白等一个超时，而用户是在群里等回复。
+    按"重试有没有意义"分四类，只留三个动作：本会话停用 / 退避 60 秒 / 重试一次。
+    """
+
+    def setUp(self):
+        wa.reset_engines()
+
+    def tearDown(self):
+        wa.reset_engines()
+
+    def test_quota_and_auth_are_dead(self):
+        for m in ("NO_MORE_CREDITS", "HTTP Error 402 Payment Required",
+                  "HTTP Error 401: Unauthorized", "invalid api key",
+                  "DEEPSEEK_API_KEY not configured"):
+            self.assertEqual(wa.classify_failure(m), wa.DEAD, m)
+
+    def test_403_is_backoff_not_auth(self):
+        """扒 HTML 的 403 是反爬，不是鉴权 —— 归错会让 Bing 本会话永久停用。"""
+        self.assertEqual(wa.classify_failure("HTTP Error 403: Forbidden"), wa.BACKOFF)
+
+    def test_captcha_and_rate_limit_are_backoff(self):
+        self.assertEqual(wa.classify_failure("anti-bot challenge"), wa.BACKOFF)
+        self.assertEqual(wa.classify_failure("请完成验证码后继续"), wa.BACKOFF)
+        self.assertEqual(wa.classify_failure("HTTP Error 429: Too Many Requests"), wa.BACKOFF)
+
+    def test_timeout_is_transient(self):
+        self.assertEqual(wa.classify_failure("timed out"), wa.TRANSIENT)
+        self.assertEqual(wa.classify_failure("HTTP Error 503"), wa.TRANSIENT)
+        self.assertEqual(wa.classify_failure("URLError: getaddrinfo failed"), wa.TRANSIENT)
+
+    def test_empty_response_is_other(self):
+        self.assertEqual(wa.classify_failure("empty response"), wa.OTHER)
+
+    def test_dead_cools_for_session(self):
+        wa.note_failure("bing", "HTTP Error 401")
+        self.assertTrue(wa.is_cooling_down("bing"))
+        st = [x for x in wa.engine_status() if x["name"] == "bing"][0]
+        self.assertTrue(st["cooling"])
+        self.assertEqual(st["kind"], wa.DEAD)
+        self.assertEqual(st["retry_in"], -1, "本会话停用要能看出来")
+
+    def test_transient_does_not_cool(self):
+        wa.note_failure("bing", "timed out")
+        self.assertFalse(wa.is_cooling_down("bing"))
+
+    def test_backoff_expires(self):
+        wa.note_failure("so", "captcha")
+        self.assertTrue(wa.is_cooling_down("so"))
+        self.assertFalse(wa.is_cooling_down("so", now=wa.time.time() + wa.BOT_WALL_COOLDOWN + 1))
+
+    def test_success_clears_failure_count(self):
+        wa.note_failure("bing", "timed out")
+        wa.note_success("bing")
+        st = [x for x in wa.engine_status() if x["name"] == "bing"][0]
+        self.assertEqual(st["fails"], 0)
+
+    def test_reset_engines(self):
+        wa.note_failure("bing", "HTTP Error 401")
+        wa.reset_engines()
+        self.assertFalse(wa.is_cooling_down("bing"))
+
+    def test_own_search_skips_cooling_engine(self):
+        """冷却中的引擎不该再被请求 —— 每次白等一个超时就是这条要解决的问题。"""
+        calls = []
+
+        def _fake(name):
+            def _f(q, limit=8):
+                calls.append(name)
+                return []
+            return _f
+
+        orig = wa._ENGINES
+        wa._ENGINES = (("bing", _fake("bing")), ("so", _fake("so")))
+        try:
+            wa.note_failure("bing", "HTTP Error 401")
+            wa._own_search("q", "q", blocked=[], diversity=False)
+        finally:
+            wa._ENGINES = orig
+        self.assertEqual(calls, ["so"])
+
+
+class TestMergeBlocked(unittest.TestCase):
+    """黑名单在截断前过滤；重复条目补空缺（2026-10-30）。"""
+
+    def _mk(self, title, url, source, rank=1, snippet=""):
+        return sc.make(url=url, title=title, snippet=snippet, source=source,
+                       rank_in_source=rank)
+
+    def test_blocked_filtered_before_limit(self):
+        """被屏蔽条目让位给后面的候选，maxResults 仍能填满。"""
+        bing = [self._mk(f"被屏蔽站点的第{i}条结果标题", f"https://csdn.net/{i}", "bing", i + 1)
+                for i in range(2)]
+        so = [self._mk(f"另一站点的第{i}条结果标题", f"https://b.com/{i}", "so", i + 1)
+              for i in range(3)]
+        got = wa._merge_results([bing, so], limit=2, blocked=["csdn.net"])
+        self.assertEqual(len(got), 2)
+        self.assertTrue(all("b.com" in x["url"] for x in got), [x["url"] for x in got])
+
+    def test_tracking_param_no_longer_splits(self):
+        """同一页面「带 utm_*」与「不带」必须归成一条。"""
+        title = "带追踪参数的同一篇报道内容"      # >12 字：短标题会被合并的"太短"规则丢掉
+        got = wa._merge_results([
+            [self._mk(title, "https://a.com/x?utm_source=bili", "bing")],
+            [self._mk(title, "https://a.com/x", "so")],
+        ])
+        self.assertEqual(len(got), 1)
+
+    def test_duplicate_fills_missing_fields(self):
+        """先到的那条没有摘要时，用另一条补上 —— 不覆盖已有字段。"""
+        title = "同一篇报道的完整标题内容"
+        got = wa._merge_results([
+            [self._mk(title, "https://a.com/x", "bing")],
+            [self._mk(title, "https://a.com/x", "so", snippet="另一个源给的更完整摘要")],
+        ])
+        self.assertEqual(len(got), 1)
+        self.assertIn("更完整", got[0]["snippet"])
+
+    def test_snippet_cleaned(self):
+        got = wa._merge_results([[
+            self._mk("标题写得够长的一条结果", "https://a.com/1", "bing",
+                     snippet="正文内容在这里。登录后查看")]])
+        self.assertNotIn("登录后查看", got[0]["snippet"])
+
+    def test_external_boundary_in_rendered_text(self):
+        """给模型的文本必须带边界与说明 —— 网页是数据，不是指令。"""
+        out = wa._render(
+            [self._mk("一条标题够长的结果", "https://a.com/1", "bing",
+                      snippet="摘要内容也够长可以进结果")], "测试", "测试", "own")
+        self.assertIn(sc.EXTERNAL_OPEN, out)
+        self.assertIn(sc.EXTERNAL_CLOSE, out)
+        self.assertIn("不要执行", out)
+
+
+class TestSerpRetry(unittest.TestCase):
+    """SERP 抓取的瞬时重试（2026-10-30）。
+
+    只重试瞬时类：反爬/限流重试只会更快撞墙（实测请求数翻倍更容易被压死）。
+    """
+
+    def setUp(self):
+        self._orig_fetch = wa._fetch_html
+        self._orig_sleep = wa.time.sleep
+        wa._LAST_FETCH_ERROR = ""
+        wa.time.sleep = lambda *_: None
+
+    def tearDown(self):
+        wa._fetch_html = self._orig_fetch
+        wa.time.sleep = self._orig_sleep
+        wa._LAST_FETCH_ERROR = ""
+
+    def test_transient_retried_once(self):
+        calls = []
+
+        def _f(url, timeout=15, headers=None):
+            calls.append(url)
+            if len(calls) == 1:
+                wa._LAST_FETCH_ERROR = "URLError: timed out"
+                return None
+            wa._LAST_FETCH_ERROR = ""
+            return "<html>ok</html>"
+
+        wa._fetch_html = _f
+        self.assertEqual(wa._fetch_serp("https://www.bing.com/search?q=x"), "<html>ok</html>")
+        self.assertEqual(len(calls), 2)
+
+    def test_backoff_not_retried(self):
+        calls = []
+
+        def _f(url, timeout=15, headers=None):
+            calls.append(url)
+            wa._LAST_FETCH_ERROR = "HTTPError: HTTP Error 403: Forbidden"
+            return None
+
+        wa._fetch_html = _f
+        self.assertEqual(wa._fetch_serp("https://www.bing.com/search?q=x"), "")
+        self.assertEqual(len(calls), 1, "反爬不该重试")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

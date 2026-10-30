@@ -27,7 +27,7 @@ from web_access import search_web  # noqa: E402
 
 PLUGIN_META = {
     "name": "web_search",
-    "version": "0.2.0",
+    "version": "1.2.0",
     "description": "联网兜底：需要查证时强制联网搜索，减少幻觉。",
     "author": "EggBloom",
     "group_only": False,
@@ -166,6 +166,12 @@ def get_config():
         "prefer_model_search": bool(cfg.get("prefer_model_search", True)),
         # ★ 2026-10-29：幻觉拦截开关。默认开，但只在"本轮真的联网过"时才可能生效。
         "block_uncertain_reply": bool(cfg.get("block_uncertain_reply", True)),
+        # ★ 2026-10-30：结果层两个策略。
+        #   blocked_domains 命中的域名不进结果（硬过滤，让位给后面的候选）；
+        #   diversity 排序后按站交错，前几条尽量来自不同站点。
+        #   两者都由 search_prefs 读同一个 config.json，主链与插件不会分叉。
+        "blocked_domains": list(cfg.get("blocked_domains") or []),
+        "diversity": bool(cfg.get("diversity", True)),
         "need_search_keywords": cfg.get("need_search_keywords") or list(DEFAULT_NEED_SEARCH_KEYWORDS),
         "skip_patterns": cfg.get("skip_patterns") or list(DEFAULT_SKIP_PATTERNS),
         "hallucination_patterns": cfg.get("hallucination_patterns") or list(DEFAULT_HALLUCINATION_PATTERNS),
@@ -452,11 +458,32 @@ def _act_recent(_p=None):
     return {"ok": True, "searches": list(reversed(list(_RECENT_SEARCH)))}
 
 
+def _act_engines(_p=None):
+    """引擎健康快照（失败分类 / 冷却剩余秒数）。纯观测。"""
+    try:
+        from web_access import engine_status
+        return {"ok": True, "engines": engine_status()}
+    except Exception as e:
+        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
+
+def _act_reset_engines(_p=None):
+    """手动解除冷却（"现在就想再试一次"的出口）。"""
+    try:
+        from web_access import reset_engines, engine_status
+        reset_engines()
+        return {"ok": True, "engines": engine_status()}
+    except Exception as e:
+        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
+
 PLUGIN_ACTIONS = {
     "get_config": get_config,
     "set_config": set_config,
     "stats": _act_stats,
     "recent": _act_recent,
+    "engines": _act_engines,
+    "reset_engines": _act_reset_engines,
 }
 
 

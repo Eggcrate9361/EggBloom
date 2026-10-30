@@ -1,7 +1,7 @@
 {
   "id": "web_search",
-  "version": "1.1.0",
-  "description": "联网兜底：只在信息需求时触发搜索，先模型搜索后自家抓取",
+  "version": "1.2.0",
+  "description": "联网兜底：只在信息需求时触发搜索，先模型搜索后自家抓取；结果层含域名黑名单与跨源多样性",
   "provides": [
     "web.search"
   ],
