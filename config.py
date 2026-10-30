@@ -488,6 +488,10 @@ DEFAULT_CONFIG = {
     #   true  = 免费链失败（重试一次）后，交主模型读
     #   false = 只走免费链（纯文本主模型时必须关掉，否则白等一次超时）
     "vision_main_fallback": True,
+    # B 站字幕轨要登录态（2026-10-30）。`harness/bili_transcript.py` 走匿名接口时
+    # 标题/UP/时长都拿得到，但 `data.subtitle.subtitles` 恒为空 —— 填 `SESSDATA=xxx`
+    # 才能读到自带字幕（AI 字幕/CC）。留空 = 只读视频信息，不假装有稿子。
+    "bili_cookie": "",
     # 群聊回复要不要带**引用**（像 qq-bridge 那样指着某条话说）
     #   off=不引用  auto=只在"对象明确"时引用（合并了多条历史/消息本身带引用）  always=每条都引用
     "group_quote_mode": "auto",

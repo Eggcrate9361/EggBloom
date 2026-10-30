@@ -5097,6 +5097,28 @@ def describe_video(path, question: str = "") -> str:
     return _desc
 
 
+def bili_script(url, p=None) -> dict:
+    """B 站链接 → 字幕稿（2026-10-30）。返回 `{ok, data, error}`，绝不抛。
+
+    字幕轨要登录态：配置里填了 `bili_cookie`（`SESSDATA=xxx`）才读得到；
+    没填就只能拿标题/UP/时长，`source` 会是 `none` —— 别把它当"这个视频没内容"。
+    """
+    try:
+        from harness.bili_transcript import BiliTranscript
+        _ck = str(_config.get("bili_cookie") or "").strip()
+        r = BiliTranscript(cookie=_ck).run(str(url or ""), p)
+        if r.get("ok"):
+            _d = r.get("data") or {}
+            log(f"[B站] {str(_d.get('title'))[:30]} 来源={_d.get('source')} "
+                f"条数={len(_d.get('cues') or [])}")
+        else:
+            log(f"[B站] 失败: {r.get('error')}")
+        return r
+    except Exception as e:
+        log(f"[B站] 异常: {type(e).__name__}: {e}")
+        return {"ok": False, "data": None, "error": f"{type(e).__name__}: {e}"}
+
+
 def build_image_context_block(images, scene: str = "群聊") -> str:
     """把若干张图转成可注入 prompt 的【图片内容】块（视觉描述）。
 
