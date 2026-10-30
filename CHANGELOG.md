@@ -63,6 +63,8 @@
 - **能准确调出自己收的表情包**（`harness/tool_meme.py`）：`meme_find` 按标签/画面/文件名找回 id，`meme_send` 发指定那张（只允许图库内文件）；采集账本记下路径，`self_history(kind="collect")` 与 meme_find 互相印证。
 - **QQ 里改成「聊天模型派活」**（`harness/subagent.py` + `harness/tool_task.py`）：agent 不再顶掉回复——聊天模型继续聊，需要干活时 dispatch_task 派给后台子 agent，干完回报、task_status 查进度；固定占位句在后台模式不再发送。运行副本已设 `qq_agent_mode=tools`（默认仍是 inline）；桌面 Agent 页不变。
 - **行为账本**（`self_actions.py`）：它现在知道**自己干过什么**——说过的话（群/私聊）、发了哪张表情包、戳了谁、把群里的图收进了表情库；下一轮注入 `【你刚做过的事】`，问起来不再「我没发图啊」。落 `data/self_actions.jsonl`，只记事实不评价；私聊问「你刚在群里说什么了」能答（只带自己的发言，不带群友的）。账本不再只是每轮塞最近几条：新增 `self_history` 工具/原语，可按关键词、类型、时间窗自己检索（主链 work 组 + agent 原语都可用）。
+- **群聊三处**（18:41–18:43 真机）：① 免费视觉车道超时 90/120 秒 → 20 秒，`describe_image` 每次 15 秒（此前 kilo 两次空响应卡 134 秒，整批被「过时」丢弃）；② 撤回反馈话术是 `[{text,disabled}]`，`random.choice` 选出 dict 导致 `.split` 崩溃，新增 `_recall_texts()` 归一化；③「天王盖地虎→小a炖蘑菇」约定丢失，已按本人原话补回 store。
+- **取消回复超时拦截 + 预设/主模型开关**：`reply_stale_drop_enable`、`group_session_gate_enable` 默认关（agent 跑十分钟也不吞，真机 18:46 暗号就是被会话闸吞的）；撤回反馈不再要求活跃会话；`recall_feedback_use_preset` / `group_idle_exit_use_preset` 开=预设不调模型，关=主模型现说（`_model_oneliner`）。
 - **表情包总是那几个**：去重键不一致（存 basename、比相对路径）导致去重从未生效；全发过时又随机重置。现统一键 + 全发过按 LRU 挑最久没发的，并给无库存情绪（无语/烦躁…）加近义回落，不再掉进全库随机。
 - **自动采集没有出现**：新增 `meme_collect.py` —— 群聊图片自动入库（sha1 去重 / 2KB–3MB / 日上限 30 / 视觉判情绪打标签 / 后台线程），私聊不收。
 - **计价与实际账单对不上**（`pricing.py`）：旧算法固定 `total × 0.5/百万`，DeepSeek 实际是「缓存命中/未命中/输出」三档且工作日高峰翻倍；现在按厂商分档，其他厂商退回平铺价并标「估算」，可用 `pricing_overrides` 覆盖。
