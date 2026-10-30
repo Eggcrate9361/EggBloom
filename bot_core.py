@@ -11242,6 +11242,18 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
     except Exception:
         pass
 
+    # 身份档案（2026-10-30）：「分得清谁是谁」——把"这个人是谁、你还记得他什么"
+    # 喂进来。带 QQ 号，所以同群重名也分得开；私聊才带 scope=private 的事实。
+    try:
+        import people as _people
+        _pc = _people.card(_pl_sender, group_id if is_group else "",
+                           private=not is_group)
+        if _pc:
+            dynamic_parts.append(_pc)
+            log(f"[人物档案] {_pl_sender} 注入 {len(_pc)} 字")
+    except Exception:
+        pass
+
     # 记忆全打通（2026-10-30）：私聊里补一句"他刚在群里说过什么"。
     # 只在私聊注入（群里注入=把别人的私聊贴出去，不做）。
     try:
@@ -14631,6 +14643,16 @@ def main():
             log("[Sandglass] 记忆系统未就绪 —— 记忆不会写入，请检查上面的初始化失败原因")
     except Exception as e:
         log(f"[Sandglass] 初始化异常: {e}")
+
+    # 记忆保险（2026-10-30）：启动时给沙漏/人物档案各打一份快照。
+    # 追加写最怕"写到一半断电"，有快照才有回滚入口（memory_backup.py）。
+    try:
+        import memory_backup as _mb
+        _snaps = _mb.backup_all()
+        _okn = sum(1 for v in _snaps.values() if v)
+        log(f"[记忆备份] 已快照 {_okn}/{len(_snaps)} 个文件 → data/backups/")
+    except Exception as _mb_e:
+        log(f"[记忆备份] 跳过（不影响启动）: {_mb_e}")
 
     # ★ 2026-10-30 修：这句以前是「启动冷却完毕，开始监听消息」，但它打在
     #   `startup_time` 赋值**之前** —— 冷却还没开始就先报"完毕"，
