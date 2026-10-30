@@ -174,7 +174,8 @@ class Bridge:
     # ── 跑一次 ──────────────────────────────────────────────────
     def run(self, text: str, *, has_media: bool = False, is_group: bool = False,
             group_id: str = "", sender: str = "", session_id: str = "",
-            system_prompt: str = "", history: Optional[list] = None) -> Dict[str, Any]:
+            system_prompt: str = "", history: Optional[list] = None,
+            extra_system: str = "") -> Dict[str, Any]:
         """返回 `{used, ok, text, tools, tool_results, elapsed, aborted, error,
         placeholder_sent}`。
 
@@ -221,6 +222,7 @@ class Bridge:
                 system_prompt=system_prompt,
                 history=history,
                 is_group=bool(is_group),
+                extra_system=extra_system,
             )
         except Exception as e:
             # 装配级失败（比如没注入 chat）：当作没接管，别打断主链。

@@ -167,11 +167,15 @@ class QQAgent:
     # ── 跑一轮 ──────────────────────────────────────────────────
     def run(self, message: str, *, session_id: str = "",
             system_prompt: str = "", history: Optional[list] = None,
-            is_group: bool = False) -> Dict[str, Any]:
+            is_group: bool = False, extra_system: str = "") -> Dict[str, Any]:
         """返回 `{used, ok, text, steps, tools, elapsed, aborted, error}`。
 
         `used` 恒为 True —— 调用方只在本层决定要走 agent 时才调这里
         （闸在外面，判断在 `should_use_agent`）。
+
+        `extra_system`（2026-10-30，1.6.0 铺路）：**拼在手册之后**的一轮上下文
+        （记忆/情绪关系/场景）。放在手册后面是为了不动前缀缓存 —— 手册稳定，
+        它每轮变。
         """
         t0 = time.time()
         deadline = t0 + self.timeout
@@ -194,12 +198,16 @@ class QQAgent:
                 results.append([str(data.get("tool") or ""), bool(data.get("ok"))])
 
         try:
+            _sys = build_system_prompt(system_prompt, self.root)
+            _extra = str(extra_system or "").strip()
+            if _extra:
+                _sys = _sys + "\n\n" + _extra
             res = runner(
                 session_id=session_id or "qq_agent",
                 user_input=str(message or ""),
                 chat_fn=self.chat_fn,
                 tool_functions=self.tool_functions(),
-                system_prompt=build_system_prompt(system_prompt, self.root),
+                system_prompt=_sys,
                 history=history,
                 max_steps=steps,
                 should_abort=_abort,

@@ -140,6 +140,24 @@ try:
     check("group:777 → 群聊接管", out == "查到了，手册在", out)
     check("群聊占位打到群里",
           bool(sent) and sent[0][1] is True and sent[0][2] == "777", sent)
+
+    # ── 7. 1.6.0 铺路：本轮上下文进 agent 的 system prompt ──────
+    _reset_cfg(qq_agent_enable=True, qq_agent_allow=["123456"])
+    seen = []
+
+    def chat_capture(messages, tools=None, on_reasoning=None):
+        seen.append(list(messages))
+        return ("办完了", [], {})
+
+    bot_core._qq_agent_chat = chat_capture
+    out = bot_core._qq_agent_reply(
+        Q, [], is_group=False, sender="123456",
+        extra_ctx={"ego": "【情绪】开心", "memory": "【画像】喜欢猫"})
+    sys_text = "\n".join(m.get("content") or "" for m in (seen[0] if seen else [])
+                         if m.get("role") == "system")
+    check("agent 的 system prompt 带 ego", "【情绪】开心" in sys_text, sys_text[-160:])
+    check("agent 的 system prompt 带画像", "【画像】喜欢猫" in sys_text, sys_text[-160:])
+    check("上下文不影响答案", out == "办完了", out)
 finally:
     bot_core.log = _ORIG_LOG
     _reset_cfg()

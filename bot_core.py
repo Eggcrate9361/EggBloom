@@ -11967,8 +11967,14 @@ def _qq_agent_history(entries) -> list:
 
 
 def _qq_agent_reply(text: str, images, *, is_group: bool, group_id: str = "",
-                    sender: str = "", history=None) -> str:
-    """A3 入口。返回非空 = 这一轮交给 agent 了；返回 "" = 调用方走老链路。"""
+                    sender: str = "", history=None,
+                    extra_ctx: Optional[Dict[str, str]] = None) -> str:
+    """A3 入口。返回非空 = 这一轮交给 agent 了；返回 "" = 调用方走老链路。
+
+    `extra_ctx`（2026-10-30，1.6.0 铺路）：把主链这一轮的上下文（ego 情绪/关系、
+    私聊画像、场景）交给 agent —— 以前 agent 只有静态人格 + 手册，等于"另一个人
+    在办事"。拼装走 `harness/life_context.compose`，1.6.0 统一时主链也用同一个函数。
+    """
     try:
         from harness import qq_agent_bridge as _qab
         cfg = _qq_agent_cfg()
@@ -11989,10 +11995,17 @@ def _qq_agent_reply(text: str, images, *, is_group: bool, group_id: str = "",
             "ledger": _qq_agent_ledger,
         }
         br = _qab.Bridge(deps=deps, root=SCRIPT_DIR, cfg=cfg, log=log)
+        # 1.6.0 铺路：本轮上下文走统一拼装（记忆 → ego → 场景 → 称呼 → 另一边）
+        try:
+            from harness import life_context as _lctx
+            _extra = _lctx.compose(extra_ctx)
+        except Exception:
+            _extra = ""
         res = br.run(str(text or ""), has_media=bool(images), is_group=bool(is_group),
                      group_id=str(group_id or ""), sender=str(sender or ""),
                      system_prompt=_build_static_prompt(bool(is_group)),
-                     history=_qq_agent_history(history))
+                     history=_qq_agent_history(history),
+                     extra_system=_extra)
         out = str(res.get("text") or "")
         if not out:
             log(f"[qq_agent] 本轮没拿到答案，回落老链路（{res.get('error') or '空答案'}）")
@@ -13948,7 +13961,8 @@ def _pipeline_step(group_id):
             #  传 merged_text（人说的话），不传 merged_text_for_ai（那是加了
             #  [系统提示] 预算话术的版本，对 agent 是噪音）。
             _qa_text = _qq_agent_reply(merged_text, images, is_group=True,
-                                       group_id=group_id, sender=sender)
+                                       group_id=group_id, sender=sender,
+                                       extra_ctx={"ego": _ego_ctx, "scene": _scene_ctx})
             reply = _qa_text or call_deepseek(merged_text_for_ai, images, group_id=group_id, is_group=True, personality_temperature=_ST.get("personality_temperature"), ego_inject_context=_ego_ctx, scene_context=_scene_ctx, sender=sender)
 
         # 群聊联网搜索循环（共用函数，最多2轮；标记兜底剥离，绝不漏发）
@@ -15913,6 +15927,21 @@ def main():
                                         smart_send(_p_ans, sender)
                                     except Exception:
                                         pass
+                                    # 1.6.0 铺路：派活路径也要留痕。此前这里 `continue`
+                                    # 直接跳过 chat_history / save_chat_log ——
+                                    # 那段对话在记忆里等于没发生过（只留了 instruction）。
+                                    try:
+                                        _pch = chat_history.setdefault(sender, [])
+                                        _pch.append({"role": "user", "content": text,
+                                                     "ts": time.time()})
+                                        _pch.append({"role": "assistant",
+                                                     "content": _p_ans[:500],
+                                                     "ts": time.time()})
+                                        chat_history[sender] = _pch[-24:]
+                                        save_chat_log(sender, _bot_nicknames()[0], text,
+                                                      _p_ans[:500])
+                                    except Exception as _p_hist_e:
+                                        log(f"[Agent] 私聊留痕失败（不影响发送）: {_p_hist_e}")
                                     try:
                                         save_instruction(text, _p_ans)
                                     except Exception:
@@ -16038,7 +16067,8 @@ def main():
                 #  真要看图时（比如问头像）它自己调 vision。
                 _qa_text = _qq_agent_reply(
                     _pm_text_for_ai, images, is_group=False, sender=sender,
-                    history=chat_history.get(sender))
+                    history=chat_history.get(sender),
+                    extra_ctx={"ego": _ego_ctx, "memory": pm_ctx})
                 reply = _qa_text or call_deepseek(_pm_text_for_ai, _pm_call_images, sender, private_memory_context=pm_ctx, personality_temperature=_ego_temp, ego_inject_context=_ego_ctx, on_slow=lambda: _private_slow_ack(sender))
                 # 私聊联网搜索标记循环（与群聊共用函数；旧版私聊吐 [搜索:] 会原样漏发）
                 reply = _apply_search_tag_loop(reply, text, group_id=None,
