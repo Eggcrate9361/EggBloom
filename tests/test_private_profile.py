@@ -60,10 +60,24 @@ class TestPrivateProfileChain(unittest.TestCase):
     def setUp(self):
         self._orig_pm = bot_core.get_plugin_manager
         self._orig_ok = bot_core.PLUGIN_OK
+        # ★ 2026-10-30：这条链测的是「注入有没有被收集」，不是预算。
+        #   今日账本 `data/plugin_budget.json` 会被其它跑 bot_core 的测试刷满
+        #   （实测 ego 594/600），预算一满注入被整段丢掉 → 断言假红。
+        #   这里明确关掉预算，让测试与"今天跑过几次"无关。
+        self._orig_budget = (bot_core._config.get("plugin_inject_budget_enabled", "__MISSING__"),
+                             bot_core._config.get("plugin_inject_daily_chars", "__MISSING__"))
+        bot_core._config["plugin_inject_budget_enabled"] = False
+        bot_core._config["plugin_inject_daily_chars"] = 0
 
     def tearDown(self):
         bot_core.get_plugin_manager = self._orig_pm
         bot_core.PLUGIN_OK = self._orig_ok
+        for k, v in zip(("plugin_inject_budget_enabled", "plugin_inject_daily_chars"),
+                        self._orig_budget):
+            if v == "__MISSING__":
+                bot_core._config.pop(k, None)
+            else:
+                bot_core._config[k] = v
 
     def _install(self, ego_result):
         bot_core.PLUGIN_OK = True
@@ -128,8 +142,11 @@ class TestPrivateProfileChain(unittest.TestCase):
         with open(os.path.join(_ROOT, "bot_core.py"), encoding="utf-8") as f:
             src = f.read()
         # 私聊调用点必须把 ego 注入传进 ego_inject_context（而不是只传空的 pm_ctx）
+        # 2026-10-30：P0-1 之后入参从 text 改成 _pm_text_for_ai（跳过说明只进本轮），
+        # P1-4 又在末尾加了 on_slow=…，所以这里只断言"那次调用带着 ego_inject_context"，
+        # 不再卡死调用尾部的形状。
         self.assertRegex(
-            src, r"call_deepseek\(text[^\n]*ego_inject_context=_ego_ctx\)",
+            src, r"call_deepseek\((?:text|_pm_text_for_ai)[^\n]*ego_inject_context=_ego_ctx",
             "私聊调用点没有把 ego 注入接进 ego_inject_context")
         # pm_ctx="" 的桩注释必须保留说明（画像走 ego 钩子），防止后人误当缺陷"修"回去
         self.assertIn("ego 钩子", src)

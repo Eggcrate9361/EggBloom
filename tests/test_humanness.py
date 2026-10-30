@@ -253,7 +253,9 @@ class TestWiring(unittest.TestCase):
     def test_blocks_injected_before_call(self):
         with open(os.path.join(_ROOT, "bot_core.py"), encoding="utf-8") as f:
             src = f.read()
-        call = src.find("reply = call_deepseek(merged_text_for_ai")
+        # 2026-10-30：A3 接主链后这一行变成 `reply = _qa_text or call_deepseek(...)`。
+        # 断言的对象不变 —— 现场资料必须**在这一次模型调用之前**拼好。
+        call = src.find("call_deepseek(merged_text_for_ai, images")
         self.assertGreater(call, 0)
         checks = (
             "_self_blk = _self_lines_block",

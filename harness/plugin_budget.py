@@ -177,7 +177,16 @@ def config_of(cfg) -> Dict[str, object]:
 
 # ── 账本 ────────────────────────────────────────────────────────────
 def default_path() -> str:
-    """`data/plugin_budget.json`。data 目录拿不到就退回程序目录（仍可用）。"""
+    """`data/plugin_budget.json`。data 目录拿不到就退回程序目录（仍可用）。
+
+    ★ 2026-10-30：先认环境变量 `EGGBLOOM_PLUGIN_BUDGET`。
+      测试会跑大量 `_plan_plugin_inject`，以前直接写生产账本 —— 实测一天下来
+      ego 594/600 被测试刷满，随后 `test_private_profile` 因为"注入被预算丢掉"
+      假红。测试入口 `tests/_sandbox.py` 现在把它指到临时目录。
+    """
+    env = os.environ.get("EGGBLOOM_PLUGIN_BUDGET")
+    if env:
+        return env
     try:
         from data_store import get_data_dir
         return os.path.join(str(get_data_dir()), "plugin_budget.json")

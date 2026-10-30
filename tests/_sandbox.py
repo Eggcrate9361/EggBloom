@@ -48,6 +48,9 @@ def sandbox_neurobase(prefix="eggbloom_test_nb_") -> str:
 
     # 1. 环境变量（沙漏路径解析的最高优先级）
     os.environ["NEXSANDBASE_HOME"] = td
+    # 插件注入预算账本：测试跑 `_plan_plugin_inject` 会真的记账，写生产账本一天
+    # 就能把 ego 刷满（实测 594/600），之后注入被预算丢掉 → 别的测试假红。
+    os.environ["EGGBLOOM_PLUGIN_BUDGET"] = os.path.join(td, "plugin_budget.json")
 
     # 2. 若模块已导入，改写其路径常量
     #    （正常情况下本函数在 import 之前调用，这一步是兜底）
