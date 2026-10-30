@@ -5043,6 +5043,60 @@ def describe_image(image_ref, prompt: str = "") -> str:
     return desc
 
 
+_VIDEO_PROMPT = ("这是一个视频抽的 4 帧拼图（左上→右下按时间先后）。用中文说：这段视频在干什么、"
+                 "画面里有什么、有没有字幕或文字。两三句话说清，别逐帧念流水账，也别编没看见的。")
+
+
+def describe_video(path, question: str = "") -> str:
+    """一段视频/动图 → 一段描述。失败返回 ""，绝不抛。
+
+    做法：抽 4 帧拼成一张 2×2 联系表，**一次请求**让主模型读完（2026-10-30）。
+    按官方计费，一张图最多 1024 token，所以"4 帧 = 1 张图"比逐帧发省 3 次请求。
+
+    多帧图片（GIF/动图 WebP）走 PIL，**不需要 ffmpeg**；真视频（mp4/mov）要 ffmpeg，
+    这台机器上没有 —— 那就如实返回空，由调用方说"视频我这儿解不了"，
+    绝不许拿猜的顶上。
+    """
+    ref = str(path or "").strip()
+    if not ref:
+        return ""
+    if not _vision_main_enabled():
+        log("[视频理解] 主模型兜底未启用（vision_main_fallback=false），跳过")
+        return ""
+    _key = ""
+    try:
+        st = os.stat(ref)
+        _key = f"video|{ref}|{int(st.st_mtime)}|{st.st_size}"
+        if _key in _IMG_DESC_CACHE:
+            return _IMG_DESC_CACHE[_key]
+    except Exception:
+        _key = ""
+    try:
+        from harness import video_frames as _vf
+        _r = _vf.video_sheet(ref)
+    except Exception as e:
+        log(f"[视频理解] 抽帧模块不可用: {type(e).__name__}: {e}")
+        return ""
+    if not _r.get("ok"):
+        log(f"[视频理解] 抽帧失败（{_r.get('source')}）: {_r.get('error')}")
+        return ""
+    # 自定义问题也要带上"这是 4 帧拼图、按时间顺序"这层上下文，
+    # 否则模型会把拼图当成"一张四格图"（真机：它说"四格排列的同一角色头像"）。
+    _q = question.strip() if str(question or "").strip() else ""
+    _ask = (_VIDEO_PROMPT + ("\n\n另外回答：" + _q if _q else ""))
+    _desc = describe_image_via_main(_r["sheet"], _ask)
+    log(f"[视频理解] {os.path.basename(ref)} → {_r['frames']} 帧 / 来源 {_r['source']}"
+        f" / 时长 {_r['duration']}s → {'读到' if _desc else '没读出来'}")
+    if _desc and _key:
+        if len(_IMG_DESC_CACHE) >= _IMG_DESC_CACHE_MAX:
+            try:
+                _IMG_DESC_CACHE.pop(next(iter(_IMG_DESC_CACHE)))
+            except Exception:
+                pass
+        _IMG_DESC_CACHE[_key] = _desc
+    return _desc
+
+
 def build_image_context_block(images, scene: str = "群聊") -> str:
     """把若干张图转成可注入 prompt 的【图片内容】块（视觉描述）。
 
