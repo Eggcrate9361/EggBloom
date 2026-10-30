@@ -139,7 +139,13 @@ class OpenAIProvider(Provider):
             msg = resp["choices"][0]["message"]
             usage = resp.get("usage", {})
             total = usage.get("total_tokens", 0)
-            cost = total * 0.5 / 1_000_000
+            try:
+                import pricing as _pricing
+                cost = float(_pricing.estimate(
+                    _pricing.provider_from_url(self.api_url or ""),
+                    str(getattr(self, "model", "") or ""), usage or {})["cost"])
+            except Exception:
+                cost = total * 0.5 / 1_000_000
             log(f"AI ({total} tokens, {cost:.6f} yuan)")
             # content 可能是 None（纯工具调用响应）：先归一化再 strip，避免 AttributeError
             return (msg.get("content") or "").strip(), msg.get("tool_calls"), usage

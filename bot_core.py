@@ -11826,7 +11826,17 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
                 effective_max_tokens = _doubled
                 continue
             total = usage.get("total_tokens", 0) if isinstance(usage, dict) else 0
-            cost = total * 0.5 / 1_000_000
+            # 2026-10-30：按厂商分档计价。DeepSeek 有「缓存命中/未命中/输出」三档
+            # 且高峰（工作日 9-12、14-18）贵一倍；别家多是平铺价，pricing 会自动分辨，
+            # 认不出的厂商退回 0.5/百万并标 estimated（不冒充账单）。
+            try:
+                import pricing as _pricing
+                cost = float(_pricing.estimate(
+                    str(_config.get("api_provider") or "deepseek"),
+                    _last_model_name(),
+                    usage if isinstance(usage, dict) else {})["cost"])
+            except Exception:
+                cost = total * 0.5 / 1_000_000
             # T5 观测：记录缓存命中明细 + 按场景累计
             try:
                 from token_stats import record as _ts_record
