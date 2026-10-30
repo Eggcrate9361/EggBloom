@@ -4853,6 +4853,10 @@ window.FIELD_META = {
     "meme_collect_classify": {"label": "采集时判情绪", "desc": "收图时让视觉模型判一个情绪标签，匹配时才能用上。关掉仍会入库，但不打标签、不会随机发出（省钱开关）。", "ctl": "bool", "panel": "meme", "unit": "", "id": "sMemeCollectClassify", "default": true, "default_text": "开启"},
     "meme_collect_fill_desc": {"label": "采集后补画面描述", "desc": "入库后后台补一句画面描述（一次视觉约 ¥0.003）。有了描述，才找得回「那个蓝发竖大拇指的图」；关掉就只能按标签找。", "ctl": "bool", "panel": "meme", "unit": "", "id": "sMemeCollectFillDesc", "default": true, "default_text": "开启"},
     "meme_collect_daily_cap": {"label": "每日采集上限（张）", "desc": "每天最多收几张，防刷屏。0 = 不限。", "ctl": "number", "panel": "meme", "unit": "张", "id": "sMemeCollectDailyCap", "default": 30, "default_text": "30"},
+    "recall_feedback_use_preset": {"label": "撤回反馈用预设话术", "desc": "开：从下面的预设里随机挑一句（不调模型、几乎零成本）。关：让主模型按人格现说一句（会花 token，但更活）。", "ctl": "bool", "panel": "recall", "unit": "", "id": "sRecallUsePreset", "default": true, "default_text": "开启"},
+    "group_idle_exit_use_preset": {"label": "空闲退场用预设", "desc": "开：用退场语预设。关：让主模型现写一段退场话（会花 token）。", "ctl": "bool", "panel": "group", "unit": "", "id": "sIdleExitUsePreset", "default": true, "default_text": "开启"},
+    "reply_stale_drop_enable": {"label": "回复超时丢弃（旧行为）", "desc": "开：回复生成太久（超过实测线）就整条不发。关：一律发送——agent 链路可能跑十分钟，宁可晚到也别吞。", "ctl": "bool", "panel": "group", "unit": "", "id": "sReplyStaleDrop", "default": false, "default_text": "关闭"},
+    "group_session_gate_enable": {"label": "群会话配额闸（旧行为）", "desc": "开：群会话配额用完就不再回复非点名消息。关：决策放行/被点名的消息不再被吞（默认关）。", "ctl": "bool", "panel": "group", "unit": "", "id": "sGroupSessionGate", "default": false, "default_text": "关闭"},
   }
 };
 /* ══ FIELD_META_END */

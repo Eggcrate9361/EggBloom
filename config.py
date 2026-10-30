@@ -425,6 +425,11 @@ DEFAULT_CONFIG = {
     # 表情包
     "meme_enable": True,
     # 表情包自动采集（2026-10-30）：群聊里别人发的表情包 → 图库 → 可被找回/重发。
+    # 预设 vs 主模型（2026-10-30）：开=用预设话术、不调模型；关=让主模型现说一句。
+    "recall_feedback_use_preset": True,   # 撤回反馈：预设
+    "group_idle_exit_use_preset": True,   # 空闲退场：预设
+    "reply_stale_drop_enable": False,     # 回复超时丢弃（默认关：agent 可能跑十分钟）
+    "group_session_gate_enable": False,   # 群会话配额闸（默认关：被点名/决策放行不再被吞）
     "meme_collect_enable": True,      # 总开关（关了不下载、不分类、不入库）
     "meme_collect_classify": True,    # 采集时用视觉判一个情绪标签
     "meme_collect_fill_desc": True,   # 采集后后台补一句画面描述（按描述找图靠它）

@@ -1022,6 +1022,10 @@ def _search_year_mismatch(query: str, result_text: str) -> Optional[str]:
 
 def _drop_reason(*, new_msgs=0, age=0.0, turns=2, hard_sec=120.0, text="",
                  addressed=False):
+    # 2026-10-30：用户明确要求不要再做回复超时拦截（agent 可能跑十分钟）。
+    # 默认关闭；留 reply_stale_drop_enable 给想恢复旧行为的人。
+    if not bool(_config.get("reply_stale_drop_enable", False)):
+        return ""
     """这条回复该不该整条丢。返回原因（空串 = 照发）。
 
     ★ 2026-10-27：判据搬到 `reply_drop.py`，这里是薄包装（保留旧签名，
@@ -9517,6 +9521,22 @@ def _handle_poke_event(ev):
         except Exception as e:
             log(f"私聊戳一戳AI回复失败: {e}")
 
+def _model_oneliner(action: str, context: str = "", max_chars: int = 40) -> str:
+    """让主模型按人格说一句（用于"预设关掉"的动作反馈）。失败返回空串。"""
+    try:
+        r = _call_chat_sync([
+            {"role": "system",
+             "content": "你在 QQ 里聊天。只输出一句话，不要解释，不要提系统/预设/动作。"},
+            {"role": "user",
+             "content": f"{context}\n（系统动作：{action}。用你自己的口气说一句。）"},
+        ], max_tokens=80, stream=False, with_tools=False)
+        txt = str((r or {}).get("content") or "").strip()
+        return txt.splitlines()[0][:max_chars] if txt else ""
+    except Exception as e:
+        log(f"[预设+模型] 生成失败: {e}")
+        return ""
+
+
 def _handle_recall_event(ev):
     """notice.group_recall / friend_recall：撤回反馈（仅活跃会话中触发）。"""
     recall_uid = str(ev.get("user_id", ""))
@@ -9542,11 +9562,10 @@ def _handle_recall_event(ev):
                 log(f"[撤回] 群[{recall_gid}] 已取消未处理缓冲区，截断AI回复")
         buffer_cancelled = bool(pending_buf)
 
-        # 检查是否有活跃会话
+        # 2026-10-30：不再要求"活跃会话"——用户撤回了就该有反应。
         gs = GROUP_SESSION.get(str(recall_gid))
         if not gs:
-            log("[调试] 撤回反馈跳过: 无活跃会话")
-            return  # 没有会话，不触发撤回反馈
+            log("[撤回反馈] 无活跃会话，仍按配置反馈")
 
         if not _config.get("recall_feedback_enable", True):
             log("[撤回反馈] 已关闭，跳过")
@@ -9593,7 +9612,13 @@ def _handle_recall_event(ev):
                     "你撤你的 我当无事发生",
                     "撤回成功 已为你拦截一条AI回复",
                 ]
-            recall_msg = random.choice(custom_pre)
+            if custom_pre and bool(_config.get("recall_feedback_use_preset", True)):
+                recall_msg = random.choice(custom_pre)
+            else:
+                recall_msg = _model_oneliner(
+                    "对方刚撤回了一条消息，你要接一句",
+                    context=f"群聊里，{recall_qq} 撤回了消息", max_chars=40) \
+                    or (random.choice(custom_pre) if custom_pre else "")
         else:
             # Bot已回复 → 撤回反馈
             recent = GROUP_RECENT_MSGS.get(str(recall_gid), [])
@@ -9631,7 +9656,13 @@ def _handle_recall_event(ev):
                         "看到了 但我会装作没看到",
                         "太迟了 消息已送达我脑子里",
                     ]
-                recall_msg = random.choice(custom_post)
+                if custom_post and bool(_config.get("recall_feedback_use_preset", True)):
+                    recall_msg = random.choice(custom_post)
+                else:
+                    recall_msg = _model_oneliner(
+                        "对方在你看到之后撤回了消息，你要接一句",
+                        context=f"群聊里，{recall_qq} 撤回了消息", max_chars=40) \
+                        or (random.choice(custom_post) if custom_post else "")
 
         if recall_msg:
             try:
@@ -13783,10 +13814,14 @@ def _pipeline_step(group_id):
         GROUP_OBSERVE.pop(group_id, None)
         log(f"群[{group_id}] [决策放行] 无触发消息，决策插件建议插话: {merged_text[:60]}")
     # 会话模式消息，确保 GROUP_SESSION 存在
-    if in_session and not is_at_bot and not has_xiao_a and not has_bot_nick:
+    # 2026-10-30：这段以前会把"决策放行/被点名"的消息也吞掉（真机暗号没回）。
+    # 现在只在显式开启 group_session_gate_enable 且非点名/非放行时才拦。
+    if (bool(_config.get("group_session_gate_enable", False))
+            and in_session and not forced
+            and not is_at_bot and not has_xiao_a and not has_bot_nick):
         gs = GROUP_SESSION.get(group_id)
         if not gs or gs.get("remaining", 0) <= 0:
-            log(f"群[{group_id}] 会话已过期或无配额")
+            log(f"群[{group_id}] 会话已过期或无配额（拦截，可在配置中心关）")
             return
         # 会话模式：实际处理时才递减配额
         with _session_lock:
@@ -15516,7 +15551,13 @@ def main():
                         if bot_last >= last_any and now - bot_last > _idle_exit_min_silence():
                             last_exit = GROUP_LAST_EXIT.get(gid, 0)
                             if now - last_exit >= _config.get("group_last_exit_cooldown", 3000) and random.random() < _config.get("group_idle_exit_probability", 0.3):
-                                exit_phrase = random.choice(EXIT_PHRASES_IDLE)
+                                if bool(_config.get("group_idle_exit_use_preset", True)):
+                                    exit_phrase = random.choice(EXIT_PHRASES_IDLE)
+                                else:
+                                    exit_phrase = _model_oneliner(
+                                        "群里很久没人说话了，你要退场",
+                                        context="你在一个 QQ 群里，刚发过言没人接",
+                                        max_chars=120) or random.choice(EXIT_PHRASES_IDLE)
                                 try:
                                     smart_send_group(gid, exit_phrase)
                                     _record_bot_group_msg(gid, exit_phrase)
