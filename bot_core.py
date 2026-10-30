@@ -4495,7 +4495,22 @@ def extract_text(msg, _depth=0):
                     # 真正的图片内容交给视觉层（见 build_image_context_block）。
                     parts.append("[图片]")
                 elif seg_type == "video":
-                    parts.append("[视频]")
+                    # ★ 2026-10-30：视频进**主逻辑**（不做插件）。解析到就下载、
+                    #   抽 4 帧拼成联系表、交给多模态主模型读一次，结果直接写进
+                    #   消息文本 —— 这样群聊和私聊两个作用域都自动生效，不用把
+                    #   videos 穿过整条管线。
+                    #   读不出来就**如实写进占位**，模型才知道"没看清"，不会瞎编。
+                    _vd = seg.get("data") or {}
+                    _vu = str(_vd.get("url") or _vd.get("file") or "").strip()
+                    _vp = download_video_url(_vu) if _vu else ""
+                    _vdesc = describe_video(_vp) if _vp else ""
+                    if _vdesc:
+                        parts.append(f"[视频]（抽帧看到：{_vdesc[:220]}）")
+                    elif _vp:
+                        parts.append("[视频]（对方发了视频，我这边没读出来；"
+                                     "别猜里面是什么，直说没看清、让他讲讲）")
+                    else:
+                        parts.append("[视频]（对方发了视频，我这边没取到；别猜内容）")
                 elif seg_type == "file":
                     parts.append("[文件]")
                 elif seg_type == "at" or (isinstance(seg.get("atElement"), dict)):
@@ -4834,6 +4849,97 @@ def _clean_url(url: str) -> str:
     return u
 
 
+def _video_cache_dir() -> str:
+    d = os.path.join(os.path.dirname(IMAGE_CACHE), "video_cache")
+    try:
+        os.makedirs(d, exist_ok=True)
+    except Exception:
+        pass
+    return d
+
+
+def download_video_url(url: str) -> str:
+    """下载一段视频到 video_cache，返回本地路径或 ""。失败不抛。
+
+    视频比图大，所以有 30MB 上限：再大就当"读不了"，别把内存和磁盘吃掉。
+    """
+    u = _clean_url(str(url or ""))
+    if not u or not u.startswith("http"):
+        return ""
+    try:
+        d = _video_cache_dir()
+        ext = os.path.splitext(u.split("?")[0])[1].lower() or ".mp4"
+        if ext not in (".mp4", ".mov", ".mkv", ".webm", ".flv", ".gif", ".m4v"):
+            ext = ".mp4"
+        local = os.path.join(d, f"vid_{hashlib.md5(u.encode()).hexdigest()[:12]}{ext}")
+        if os.path.exists(local) and os.path.getsize(local) > 0:
+            return local
+        if not REQUESTS_OK:
+            return ""
+        r = requests.get(u, timeout=25, stream=True,
+                         headers={"User-Agent": "Mozilla/5.0"})
+        if r.status_code != 200:
+            log(f"[视频] 下载失败 HTTP {r.status_code}")
+            return ""
+        total = 0
+        tmp = local + ".part"
+        with open(tmp, "wb") as f:
+            for chunk in r.iter_content(64 * 1024):
+                if not chunk:
+                    continue
+                total += len(chunk)
+                if total > 30 * 1024 * 1024:
+                    log("[视频] 超过 30MB，放弃下载")
+                    f.close()
+                    try:
+                        os.remove(tmp)
+                    except Exception:
+                        pass
+                    return ""
+                f.write(chunk)
+        # ★ 2026-10-30 真机：这里原来直接 os.replace，在 EggBloom_v3 数据目录上
+        #   报 WinError 17（"无法将文件移到不同的磁盘驱动器"）—— 该目录是 junction
+        #   或跨卷挂载，rename 不被允许。退化成"复制 + 删临时"。
+        try:
+            os.replace(tmp, local)
+        except OSError:
+            import shutil as _sh
+            _sh.copyfile(tmp, local)
+            try:
+                os.remove(tmp)
+            except Exception:
+                pass
+        log(f"[视频] 下载完成 {total // 1024}KB -> {os.path.basename(local)}")
+        return local
+    except Exception as e:
+        log(f"[视频] 下载异常: {type(e).__name__}: {e}")
+        return ""
+
+
+#: 最近收到的视频（路径 + 时间）。与 PENDING_IMAGES 同一套"文本抽取时排队、
+#: 回复时消费"的约定 —— 视频不是每轮都有，值不值得为它改整条管线的签名。
+#: （2026-10-30 备注：最终没用这条队列 —— 视频改在 extract_text 里就地读，
+#:   省掉把 videos 穿过整条管线的改动。这两个函数留给 agent 侧复用。）
+_PENDING_VIDEOS: List[Dict[str, Any]] = []
+_PENDING_VIDEO_TTL = 180
+
+
+def queue_video(path: str) -> None:
+    if not path:
+        return
+    _PENDING_VIDEOS.append({"path": str(path), "ts": time.time()})
+    if len(_PENDING_VIDEOS) > 8:
+        del _PENDING_VIDEOS[:-8]
+
+
+def take_pending_videos(ttl: int = _PENDING_VIDEO_TTL) -> List[str]:
+    """取走并清空队列里还没过期的视频路径。"""
+    now = time.time()
+    out = [v["path"] for v in _PENDING_VIDEOS if now - float(v.get("ts") or 0) <= ttl]
+    _PENDING_VIDEOS.clear()
+    return out
+
+
 def download_image_url(url: str):
     """下载一张图到 IMAGE_CACHE（与 extract_images 同一落盘约定），返回本地路径或 None。"""
     url = _clean_url(url)
@@ -5117,6 +5223,39 @@ def bili_script(url, p=None) -> dict:
     except Exception as e:
         log(f"[B站] 异常: {type(e).__name__}: {e}")
         return {"ok": False, "data": None, "error": f"{type(e).__name__}: {e}"}
+
+
+def build_video_context_block(videos, scene: str = "群聊") -> str:
+    """把若干段视频转成可注入 prompt 的【视频内容】块（2026-10-30）。
+
+    抽 4 帧拼成一张联系表，交给多模态主模型一次读完（见 describe_video）。
+    三种结局都说清楚，**不许静默省略**：
+      · 有描述 → 正常块；
+      · 一段都没成 → 明确写"没读出来 + 不许猜"（旧版这里直接没有，模型只能瞎编）；
+      · 部分成 → 带上成功的那几段，并说明其余失败。
+    """
+    paths = [p for p in list(videos or []) if p][:2]
+    if not paths:
+        return ""
+    lines, failed = [], []
+    for p in paths:
+        try:
+            d = describe_video(p)
+        except Exception:
+            d = ""
+        if d:
+            lines.append(f"- {d}")
+        else:
+            failed.append(os.path.basename(str(p)))
+    if not lines:
+        return (f"【视觉识别 · {scene}视频内容】（没读出来："
+                f"{'/'.join(failed) or '视频'} 抽帧或识别失败。"
+                "**不许猜视频里是什么**，直接说没看出来、让对方说是啥）")
+    head = f"【视觉识别 · {scene}视频内容】（抽帧转述，不是原片）"
+    tail = ""
+    if failed:
+        tail = f"\n（另有 {len(failed)} 段没读出来：{'/'.join(failed)}，别猜）"
+    return head + "\n" + "\n".join(lines) + tail
 
 
 def build_image_context_block(images, scene: str = "群聊") -> str:
