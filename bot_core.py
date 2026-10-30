@@ -5204,15 +5204,20 @@ def describe_video(path, question: str = "") -> str:
 
 
 def bili_script(url, p=None) -> dict:
-    """B 站链接 → 字幕稿（2026-10-30）。返回 `{ok, data, error}`，绝不抛。
+    """B 站链接 → 字幕稿。返回 `{ok, data, error}`，绝不抛。
 
-    字幕轨要登录态：配置里填了 `bili_cookie`（`SESSDATA=xxx`）才读得到；
-    没填就只能拿标题/UP/时长，`source` 会是 `none` —— 别把它当"这个视频没内容"。
+    ★ 2026-10-30 起**登录态归 `plugins/bili_script` 管**（在插件面板里扫码/粘贴，
+    cookie 只存在插件自己的 data/ 里）。这里只是给主链和 agent 留一个稳定的调用口：
+    插件在就用插件（带 cookie、走 24h 缓存），插件不在就退回 harness 匿名读
+    —— 匿名只能拿标题/UP/时长，字幕轨恒空，`source` 会是 `none`。
     """
     try:
-        from harness.bili_transcript import BiliTranscript
-        _ck = str(_config.get("bili_cookie") or "").strip()
-        r = BiliTranscript(cookie=_ck).run(str(url or ""), p)
+        try:
+            from plugins.bili_script import read_link as _plug_read
+            r = _plug_read(str(url or ""))
+        except Exception:
+            from harness.bili_transcript import BiliTranscript
+            r = BiliTranscript().run(str(url or ""), p)
         if r.get("ok"):
             _d = r.get("data") or {}
             log(f"[B站] {str(_d.get('title'))[:30]} 来源={_d.get('source')} "
@@ -5867,7 +5872,12 @@ def _render_ds_search(results, query, _log_prefix="搜索"):
     body = search_core.format_for_model(items, query)
     if not body:
         return ""
-    parts = [f"【{query}】搜索结果：", body]
+    # ★ 2026-10-30（移植自 dsh-free-search）：网页文本包进「不可信数据」边界，
+    #   并剥掉正文里自带的同名标记（防止提前闭合）。这是唯一一处会同时被
+    #   主链和插件读到的排版口，所以放在这里，不放到各个调用方。
+    parts = [f"【{query}】搜索结果：",
+             search_core.wrap_untrusted(body),
+             search_core.UNTRUSTED_NOTE]
     hint = search_core.quality_hint(q_info)
     if hint:
         parts.append("\n\n" + hint)

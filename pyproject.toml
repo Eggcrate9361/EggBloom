@@ -21,6 +21,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+bili = [
+    # B 站插件「扫码登录」用的二维码编码器（纯 Python、零依赖、MIT）。
+    # 不装也能用：插件会退回"粘贴 SESSDATA"那条路，只是不弹二维码窗口。
+    "segno>=1.6.6",
+]
 dev = [
     # ── 测试/开发工具 ──
     "playwright==1.62.0",        # UI 自动化测试

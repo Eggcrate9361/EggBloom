@@ -1,0 +1,17 @@
+{
+  "id": "bili_script",
+  "version": "1.0.0",
+  "description": "B站链接读稿：粘贴 BV/av/b23 链接，读字幕轨并把摘要注入回复（登录在本插件内完成）",
+  "provides": [
+    "bili.transcript"
+  ],
+  "requires": [],
+  "budget": {
+    "max_chars": 200
+  },
+  "permissions": [
+    "network"
+  ],
+  "scope": "global",
+  "title": "B站读稿"
+}
