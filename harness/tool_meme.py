@@ -206,8 +206,9 @@ def register_all() -> Dict[str, Any]:
     fns = {"meme_find": meme_find, "meme_send": meme_send, "meme_save": meme_save}
     for sch in MEME_TOOLS:
         name = sch["function"]["name"]
-        groups = (_tr.GROUP_WORK,) if name == "meme_find" else (
-            (_tr.GROUP_WRITE,) if name == "meme_save" else (_tr.GROUP_PROC,))
+        # 全放 work（只读组，常驻）：真机 20:53 证明 write/proc 组要命中
+        # 特定词才注入，「存」不在词表里 → 模型根本看不到 meme_save。
+        groups = (_tr.GROUP_WORK,)
         _tr.register(name, sch, fn=fns.get(name), groups=groups, source="harness")
     return fns
 

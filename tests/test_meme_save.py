@@ -74,8 +74,8 @@ try:
     fns = tm.register_all()
     check("注册三个函数", set(fns) == {"meme_find", "meme_send", "meme_save"}, fns)
     from harness import tool_registry as tr
-    check("meme_save 归 write 组", "meme_save" in tr.names_in(tr.GROUP_WRITE),
-          tr.names_in(tr.GROUP_WRITE))
+    check("meme_save 归 work 组", "meme_save" in tr.names_in(tr.GROUP_WORK),
+          tr.names_in(tr.GROUP_WORK))
 finally:
     mc.maybe_collect = orig
 

@@ -83,7 +83,7 @@ try:
     check("注册返回三个函数", set(fns) == {"meme_find", "meme_send", "meme_save"}, fns)
     from harness import tool_registry as tr
     check("meme_find 归 work 组", "meme_find" in tr.names_in(tr.GROUP_WORK))
-    check("meme_send 归 proc 组", "meme_send" in tr.names_in(tr.GROUP_PROC))
+    check("meme_send 归 work 组", "meme_send" in tr.names_in(tr.GROUP_WORK))
 finally:
     shutil.rmtree(TMP, ignore_errors=True)
 
