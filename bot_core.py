@@ -13280,6 +13280,22 @@ def _decide(group_id, batch):
     return {"act": "skip", "reason": _reason, "ctx": "", "after": 0}
 
 
+def _cooldown_log_tick(elapsed: int, total: int) -> bool:
+    """启动冷却倒计时该不该打这一行（1、5、10…，最后一行留给主循环的"完毕"）。
+
+    ★ 2026-10-30：抽出来是为了能单测。此前这段逻辑在倒计时线程里用自增计数器
+    实现，与 `startup_time` 无关，线程启动晚就永远比真实冷却晚 —— 日志里
+    出现"冷却完毕 → 又 25s/30s"。现在只有一个时钟，打点规则也只有这一处。
+    """
+    try:
+        e, t = int(elapsed), int(total)
+    except Exception:
+        return False
+    if t <= 0 or e < 1 or e >= t:
+        return False
+    return e == 1 or e % 5 == 0
+
+
 def _pipeline_step(group_id):
     """原 process_buffered_message 的主体：pop、决策、生成、分条发送。"""
     global GROUP_MSG_BUFFER, GROUP_SESSION, group_chat_history, startup_time
@@ -14591,7 +14607,10 @@ def main():
     except Exception as e:
         log(f"[Sandglass] 初始化异常: {e}")
 
-    log("启动冷却完毕，开始监听消息")
+    # ★ 2026-10-30 修：这句以前是「启动冷却完毕，开始监听消息」，但它打在
+    #   `startup_time` 赋值**之前** —— 冷却还没开始就先报"完毕"，
+    #   日志里于是出现「完毕 → 冷却中 1/5/10… → 完毕」的自相矛盾。
+    log(f"初始化完成，进入 {STARTUP_COOLDOWN}s 启动冷却（期间抓消息、不回复）")
 
     # ── 协议层感知 ──
     protocol_enabled = _config.get("protocol_enabled", False)
@@ -14985,9 +15004,19 @@ def main():
     # 启动冷却倒计时（事件服务/startup_time 已上移至"等待 OneBot"之前，见该处说明）
     if STARTUP_COOLDOWN > 0:
         def _countdown():
-            for elapsed in range(1, STARTUP_COOLDOWN + 1):
-                if elapsed % 5 == 0 or elapsed == 1 or elapsed == STARTUP_COOLDOWN:
+            # ★ 2026-10-30 修：此前用自增 1..30 的计数器，与 startup_time **无关**。
+            #   倒计时线程要等初始化全部跑完才启动（实测晚 12 秒），于是它
+            #   永远比真实冷却晚一截 —— 日志里出现"完毕 → 又 25s/30s、30s/30s"，
+            #   看起来像冷却被重置/重启了一次。现在按 startup_time 算，到点就退；
+            #   "完毕"只由主循环打一次，全链路只有一个时钟、一条结论。
+            _last = -1
+            while True:
+                elapsed = int(time.time() - startup_time)
+                if elapsed >= STARTUP_COOLDOWN:
+                    break
+                if elapsed != _last and _cooldown_log_tick(elapsed, STARTUP_COOLDOWN):
                     log(f"启动冷却中… {elapsed}s/{STARTUP_COOLDOWN}s（此期间抓取消息但不回复）")
+                    _last = elapsed
                 time.sleep(1)
         threading.Thread(target=_countdown, daemon=True, name="startup-countdown").start()
 
