@@ -264,7 +264,7 @@ def _call_one(lane, model, messages, max_tokens, timeout):
 # ══════════════════════════════════════════════════════════════════
 # 公开接口
 # ══════════════════════════════════════════════════════════════════
-def chat(messages, models=None, max_tokens=400, timeout=90) -> dict:
+def chat(messages, models=None, max_tokens=400, timeout=20) -> dict:
     """按模型链逐个尝试。返回 {ok, text, lane, model, error, elapsed, tried}。"""
     chain = list(models or text_models())
     started = time.time()
@@ -300,7 +300,7 @@ def _image_uri(image_ref):
     return f"data:{mime};base64,{base64.b64encode(p.read_bytes()).decode('ascii')}"
 
 
-def chat_vision(image_ref, prompt, models=None, max_tokens=400, timeout=120) -> dict:
+def chat_vision(image_ref, prompt, models=None, max_tokens=400, timeout=20) -> dict:
     """图片 → 文字描述。返回 {ok, summary, lane, model, error, elapsed}。"""
     try:
         uri = _image_uri(image_ref)

@@ -459,6 +459,28 @@ MEME_COOLDOWN = _config.get("meme_cooldown", 10)  # 秒，同一会话两次表�
 MEME_LAST_SENT = {}  # { "group_xxx": timestamp, "private_xxx": timestamp }
 PENDING_IMAGES = {}  # { sender: {"paths": [...], "time": timestamp} } - 缓存最近图片供文字关联
 RECALL_FEEDBACK_TIME = {}  # { "group_xxx" or "private_xxx": timestamp } 撤回反馈冷却
+
+
+def _recall_texts(items) -> list:
+    """配置里的撤回话术 → 纯文本列表。
+
+    ★ 2026-10-30 修：配置页存的是 `[{"text": "...", "disabled": false}]`，
+      旧代码直接 random.choice 会选出 dict → smart_send_group 里 `.split` 爆炸
+      （真机 18:43「撤回反馈发送失败: dict object has no attribute split」）。
+    """
+    out = []
+    for it in (items or []):
+        if isinstance(it, str):
+            s = it.strip()
+        elif isinstance(it, dict):
+            if it.get("disabled"):
+                continue
+            s = str(it.get("text") or "").strip()
+        else:
+            s = ""
+        if s:
+            out.append(s)
+    return out
 PRIVATE_REPLY_COOLDOWN = {}  # { "private_xxx": timestamp } 私聊回复冷却
 PRIVATE_REPLY_INTERVAL = _config.get("private_reply_interval", 3)  # 秒，同一用户私聊回复最小间隔
 
@@ -5360,7 +5382,10 @@ def describe_image(image_ref, prompt: str = "") -> str:
             log("[图片理解] 免费链熔断中，直接走主模型")
         else:
             for _attempt in (1, 2):
-                r = free_llm.chat_vision(ref, prompt or _IMG_DESC_PROMPT) or {}
+                # 单次 15 秒：真机出现过 kilo 空响应两次、各卡 60+ 秒，
+                # 整批 134 秒后被"过时"丢掉，用户看到的是没回复。
+                r = free_llm.chat_vision(ref, prompt or _IMG_DESC_PROMPT,
+                                         timeout=15) or {}
                 if r.get("ok"):
                     desc = str(r.get("summary") or "").strip()
                     if desc:
@@ -9542,7 +9567,7 @@ def _handle_recall_event(ev):
         # 判断反馈类型：缓冲区被取消 → 截断反馈；Bot已回复 → 撤回反馈
         recall_msg = None
         if buffer_cancelled:
-            custom_pre = _config.get("recall_feedback_pre_messages", [])
+            custom_pre = _recall_texts(_config.get("recall_feedback_pre_messages", []))
             if not custom_pre:
                 custom_pre = [
                     "？",
@@ -9582,7 +9607,7 @@ def _handle_recall_event(ev):
                         break
 
             if user_recent_msg_time > 0:
-                custom_post = _config.get("recall_feedback_post_messages", [])
+                custom_post = _recall_texts(_config.get("recall_feedback_post_messages", []))
                 if not custom_post:
                     custom_post = [
                         "看到了 晚了",
