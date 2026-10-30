@@ -96,9 +96,9 @@ def register_all() -> Dict[str, Any]:
     fns = {"dispatch_task": dispatch_task, "task_status": task_status}
     for sch in TASK_TOOLS:
         name = sch["function"]["name"]
-        _tr.register(name, sch, fn=fns.get(name), groups=(_tr.GROUP_WORK,),
+        _tr.register(name, sch, fn=_tr.adapt_kwargs(fns[name]), groups=(_tr.GROUP_WORK,),
                      source="harness")
-    return fns
+    return {k: _tr.adapt_kwargs(v) for k, v in fns.items()}
 
 
 __all__ = ["TASK_TOOLS", "set_dispatcher", "set_context", "dispatch_task",

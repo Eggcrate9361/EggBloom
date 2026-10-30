@@ -179,7 +179,8 @@ def meme_send(meme_id: str) -> Dict[str, Any]:
 
 def meme_save(path: str = "") -> Dict[str, Any]:
     """存这一轮（或指定）的图到表情库。返回每张的结果。"""
-    paths = [str(path)] if str(path or "").strip() else list(_TURN.get("images") or [])
+    _p = path if isinstance(path, str) else ""
+    paths = [_p] if _p.strip() else list(_TURN.get("images") or [])
     if not paths:
         return {"ok": False, "error": "这一轮没有可存的图片"}
     scene_group = bool(_TURN.get("is_group") and _TURN.get("group_id"))
@@ -209,8 +210,8 @@ def register_all() -> Dict[str, Any]:
         # 全放 work（只读组，常驻）：真机 20:53 证明 write/proc 组要命中
         # 特定词才注入，「存」不在词表里 → 模型根本看不到 meme_save。
         groups = (_tr.GROUP_WORK,)
-        _tr.register(name, sch, fn=fns.get(name), groups=groups, source="harness")
-    return fns
+        _tr.register(name, sch, fn=_tr.adapt_kwargs(fns[name]), groups=groups, source="harness")
+    return {k: _tr.adapt_kwargs(v) for k, v in fns.items()}
 
 
 __all__ = ["MEME_TOOLS", "set_sender", "meme_find", "meme_send", "register_all"]

@@ -50,9 +50,9 @@ def register_all() -> Dict[str, Any]:
     fns = {"self_history": self_history}
     for sch in SELF_TOOLS:
         name = sch["function"]["name"]
-        _tr.register(name, sch, fn=fns.get(name), groups=(_tr.GROUP_WORK,),
+        _tr.register(name, sch, fn=_tr.adapt_kwargs(fns[name]), groups=(_tr.GROUP_WORK,),
                      source="harness")
-    return fns
+    return {k: _tr.adapt_kwargs(v) for k, v in fns.items()}
 
 
 __all__ = ["SELF_TOOLS", "self_history", "register_all"]

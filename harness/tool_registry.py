@@ -80,6 +80,36 @@ def _norm_schema(schema):
     return schema
 
 
+def adapt_kwargs(fn):
+    """把 `fn(query=..., limit=...)` 适配成 runner 要的 `fn(args_dict)`。
+
+    ★ 2026-10-30 真机：tool_runner 是 `raw = func(args)`（一个 dict），
+      而我们新写的 meme_save/meme_find/self_history/dispatch_task 都是
+      kwargs 签名 → 收到的 path/query 变成 `{'target_qq': '...'}` 整个 dict，
+      于是「存」永远失败、meme_find 永远查不到。
+      适配器只保留签名里认识的键，runner 自动补的 target_qq/group_id 会被丢掉。
+    """
+    import inspect
+    try:
+        sig = inspect.signature(fn)
+    except Exception:
+        return fn
+
+    def _call(args=None, **kw):
+        d = {}
+        if isinstance(args, dict):
+            d.update(args)
+        elif args is not None:
+            d["_pos"] = args
+        d.update(kw)
+        allowed = {k: v for k, v in d.items() if k in sig.parameters}
+        return fn(**allowed)
+
+    _call.__name__ = getattr(fn, "__name__", "tool")
+    _call.__doc__ = getattr(fn, "__doc__", None)
+    return _call
+
+
 def register(name, schema, *, fn=None, loader=None, groups=(), source="builtin"):
     """注册（或覆盖）一个工具。
 
