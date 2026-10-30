@@ -70,6 +70,19 @@ _SECRET_RE = re.compile(
     r"暗号\s*(?:是|就是|：|:)\s*[「\"“'『]?\s*"
     r"([^\s，。,.!?！？、；;：「」\"“”'『』]{1,16})"
 )
+#: 「说一句，A，你再回答我 B」—— 真机说法（2026-10-30 14:35）：
+#:   「然后艾特你说一句，天王盖地虎，你再回答我小a炖蘑菇」
+#:   旧 _PAIR_RE 要求"说 A 你答 B"紧挨着，中间夹个逗号就漏了。
+_PAIR_RE2 = re.compile(
+    r"(?:说|讲|喊)[^，。,.!?！？\n]{0,10}[，,]\s*"
+    r"[「\"“'『]?([^「」\"“”'『』\s，。,.!?！？]{2,16})[」\"”'』]?\s*[，,]\s*"
+    r"你\s*(?:再|就)?\s*(?:回答|答|回复|回|说)\s*(?:我)?\s*"
+    r"[「\"“'『]?([^「」\"“”'『』\s，。,.!?！？]{1,16})[」\"”'』]?"
+)
+
+#: 这些"触发词/回答"其实是口语碎片，不是约定 —— 宁可不存。
+_STOP_AGREE = {"你要", "一句", "什么", "的话", "这个", "那个", "然后",
+               "现在", "时候", "暗号", "意思", "事情", "东西"}
 
 _STOP_ALIAS = {"我", "你", "他", "她", "它", "什么", "啥", "个", "嘛", "吧"}
 
@@ -96,6 +109,17 @@ def parse_alias(text: str) -> str:
     return name
 
 
+def _ok_pair(trig: str, reply: str) -> bool:
+    """一对「触发词 → 回答」是否像真的约定（不是口语碎片）。"""
+    if not trig or not reply or trig == reply:
+        return False
+    if trig in _STOP_AGREE or reply in _STOP_AGREE:
+        return False
+    if len(trig) > MAX_TRIGGER_LEN or len(reply) > MAX_TRIGGER_LEN:
+        return False
+    return True
+
+
 def parse_agreement(text: str) -> Tuple[str, str]:
     """认出「说 A 就答 B」或「暗号是 X」。返回 (触发词, 回答)；没有返回 ("","")."""
     t = str(text or "").strip()
@@ -105,12 +129,18 @@ def parse_agreement(text: str) -> Tuple[str, str]:
     if m:
         trig = m.group(1).strip().strip("「」\"“”'『』")
         reply = m.group(2).strip().strip("「」\"“”'『』")
-        if trig and reply and trig != reply and len(trig) <= MAX_TRIGGER_LEN:
+        if _ok_pair(trig, reply):
+            return trig, reply
+    m2 = _PAIR_RE2.search(t)
+    if m2:
+        trig = m2.group(1).strip().strip("「」\"“”'『』")
+        reply = m2.group(2).strip().strip("「」\"“”'『』")
+        if _ok_pair(trig, reply):
             return trig, reply
     m = _SECRET_RE.search(t)
     if m:
         trig = m.group(1).strip().strip("「」\"“”'『』")
-        if trig and len(trig) <= MAX_TRIGGER_LEN:
+        if trig and trig not in _STOP_AGREE and len(trig) <= MAX_TRIGGER_LEN:
             return trig, ""
     return "", ""
 

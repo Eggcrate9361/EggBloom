@@ -53,6 +53,13 @@ check("自我介绍不算", pa.parse_alias("我叫小明") == "", pa.parse_alias
 check("成对约定", pa.parse_agreement('艾特你说"天王盖地虎"，你答"小a炖蘑菇"')
       == ("天王盖地虎", "小a炖蘑菇"),
       pa.parse_agreement('艾特你说"天王盖地虎"，你答"小a炖蘑菇"'))
+# ★ 2026-10-30 真机说法（14:35）：中间隔着逗号，旧正则漏了
+_m_real = "那我等一下在另一个群戳你一下，然后艾特你说一句，天王盖地虎，你再回答我小a炖蘑菇"
+check("真机说法：说一句，A，你再回答我 B",
+      pa.parse_agreement(_m_real) == ("天王盖地虎", "小a炖蘑菇"),
+      pa.parse_agreement(_m_real))
+check("口语碎片不成约定", pa.parse_agreement("你要是这样的话") == ("", ""),
+      pa.parse_agreement("你要是这样的话"))
 check("只说暗号", pa.parse_agreement("暗号是青龙偃月") == ("青龙偃月", ""),
       pa.parse_agreement("暗号是青龙偃月"))
 check("没有约定", pa.parse_agreement("今天好累") == ("", ""),

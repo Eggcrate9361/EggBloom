@@ -93,9 +93,12 @@ try:
         blk = bot_core._cross_scene_block("10001")
         check("私聊注入块带标题", "【另一边】" in blk, blk)
         check("私聊注入块带群里的原话", "群里说的那句" in blk, blk)
-        check("群聊不注入（防泄露）",
-              bot_core._cross_scene_block("10001", "777") == "",
-              bot_core._cross_scene_block("10001", "777"))
+        # 2026-10-30 晚：群聊侧也开 —— 但只取**说话这个人自己**的私聊行，
+        # 别人的私聊一个字都不能进群（防泄露仍是硬约束）。
+        blk_g = bot_core._cross_scene_block("10001", "777")
+        check("群聊注入他自己私聊说过的话", "我在群里说的这句" in blk_g, blk_g)
+        check("群聊不注入别人的私聊", "别人的话" not in blk_g, blk_g)
+        check("群聊不注入群里的行（防重复）", "群里说的那句" not in blk_g, blk_g)
 
         bot_core._config["memory_scope_share"] = False
         check("开关关了就不注入", bot_core._cross_scene_block("10001") == "")

@@ -3295,23 +3295,33 @@ def _people_alias_prompt(sender) -> str:
 def _cross_scene_block(sender, group_id="") -> str:
     """「他最近在另一边说过」块（记忆全打通，2026-10-30）。
 
-    只注入**私聊**：那边只有他自己看，不存在把谁的私聊搬到群里。
-    群聊侧仍走 `memory_scope_share` 的关键词召回 —— 不主动整段搬运，
-    否则群友的私聊内容会被贴进群里（那是泄露，不是记忆）。
+    ★ 2026-10-30 晚：两个方向都开，但**各自有边界**：
+      - 私聊：取他最近在群里说的（他自己看，无泄露）；
+      - 群聊：只取**说话这个人自己**私下说过的（`exclude_group=gid` 已经
+        只保留 `(uid)` 归属的行），别人的私聊一个字都不进群。
+        措辞上明确"他本人在场时才提、别念原文"，防止把私聊截图式复述。
     """
-    if group_id:
-        return ""
     try:
         if not bool(_config.get("memory_scope_share", True)):
             return ""
         from sandglass_bridge import cross_scene_recent
-        rows = cross_scene_recent(sender, exclude_group="", hours=6.0, limit=3)
+        if group_id:
+            rows = cross_scene_recent(sender, exclude_group=str(group_id),
+                                      hours=6.0, limit=2)
+            lead = ("【另一边】他私下跟你说过的话（只有他在场；"
+                    "能接就接一句，别把原文念给群里）：\n")
+        else:
+            rows = cross_scene_recent(sender, exclude_group="", hours=6.0, limit=3)
+            lead = "【另一边】他最近在群里说过的话（要接得上就接，不确定就别提）：\n"
     except Exception:
         return ""
     if not rows:
         return ""
-    return ("【另一边】他最近在群里说过的话（要接得上就接，不确定就别提）：\n"
-            + "\n".join("- " + r for r in rows))
+    try:
+        log(f"[跨场景] {sender} → {'群' if group_id else '私聊'} 注入 {len(rows)} 条")
+    except Exception:
+        pass
+    return lead + "\n".join("- " + r for r in rows)
 
 
 #: 表情包画面描述（后台补，用户看不见）。只描述，不评价。
@@ -5428,7 +5438,10 @@ def build_video_context_block(videos, scene: str = "群聊") -> str:
         return (f"【视觉识别 · {scene}视频内容】（没读出来："
                 f"{'/'.join(failed) or '视频'} 抽帧或识别失败。"
                 "**不许猜视频里是什么**，直接说没看出来、让对方说是啥）")
-    head = f"【视觉识别 · {scene}视频内容】（抽帧转述，不是原片）"
+    # ★ 2026-10-30 晚：标题里不再写「转述 / 不是原图」。那句话会被模型
+    #   原样抖给用户 —— 真机 14:31「不过你传的是转述版，细节全靠转述」，
+    #   等于把后台管线说出来了。模型只需把这些当成自己看到的。
+    head = f"【视觉识别 · {scene}视频内容】"
     tail = ""
     if failed:
         tail = f"\n（另有 {len(failed)} 段没读出来：{'/'.join(failed)}，别猜）"
@@ -5463,7 +5476,10 @@ def build_image_context_block(images, scene: str = "群聊") -> str:
     # ★ 标语措辞刻意避开"的图片"等易被意图正则命中的串：画图意图正则里就有
     #   `的图片`，注入块若写成"【群聊里的图片内容】"会把普通消息误判成"帮我画图"
     #   并劫持去 ComfyUI（tests/test_image_understanding.py 实测抓到过）。
-    head = f"【视觉识别 · {scene}图片内容】（不是原图，由视觉模型转述）"
+    # ★ 2026-10-30 晚：标题不再带「不是原图，由视觉模型转述」。
+    #   真机里模型把这句话复述给用户（「你传的是转述版」），暴露了后台；
+    #   注入块只该给"看到了什么"，不该给"这是怎么来的"。
+    head = f"【视觉识别 · {scene}图片内容】"
     if lines and not failed:
         return head + "\n" + "\n".join(lines)
     if lines:
