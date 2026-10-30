@@ -58,9 +58,9 @@ API Key 存进 Windows 凭据管理器，不落盘。QQ 号和协议地址在「
 
 | 包 | 体积 | 内容 |
 | --- | --- | --- |
-| Lite | 5.8 MB | 本体，没素材 |
-| Standard | 215.5 MB | 带 20 个梗 |
-| Full | 706 MB | 全量素材（暂不发布） |
+| Lite | 6.2 MB | 本体，没素材 |
+| Standard | 215.8 MB | 带 20 个梗 |
+| Full | 706.9 MB | 全量素材（暂不发布） |
 
 下载：[GitHub Releases](https://github.com/Eggcrate9361/EggBloom/releases)
 
