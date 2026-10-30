@@ -132,7 +132,44 @@ try:
     check("没稿子 → 摘要失败且说明原因", r.get("ok") is False and "字幕" in r.get("error", ""), r)
     check("既没 data 也没链接 → 报错", bs.summary({}).get("ok") is False)
 
-    # ── 9. 统计 ─────────────────────────────────────────────────
+    # ── 9. agent 链路契约（A3 要读这个，不是装饰）──────────────
+    ag = bs.PLUGIN_AGENT
+    check("角色声明为能力供给", ag.get("role") == "capability", ag.get("role"))
+    check("覆盖私聊+群聊", set(ag.get("channel") or []) == {"private", "group"},
+          ag.get("channel"))
+    check("有降级链声明", len(ag.get("degrade") or []) >= 3, ag.get("degrade"))
+    check("有成本画像", "est_seconds" in (ag.get("cost") or {}), ag.get("cost"))
+    tools = bs.agent_tools()
+    check("工具数 >= 6", len(tools) >= 6, len(tools))
+    check("声明里的工具名与实际一致",
+          set(ag.get("tools") or []) == {t["name"] for t in tools},
+          (set(ag.get("tools") or []), {t["name"] for t in tools}))
+    check("工具定义是 function 形状",
+          all(t.get("name") and t.get("desc") and
+              (t.get("params") or {}).get("type") == "object" for t in tools),
+          [t.get("name") for t in tools])
+    check("每个工具都要 url 参数",
+          all("url" in ((t.get("params") or {}).get("required") or []) for t in tools))
+
+    r = bs.agent_call("bili_nope", {})
+    check("未知工具 → ok=False 且不抛",
+          r.get("ok") is False and "没有这个工具" in r.get("error", ""), r)
+    bs.read = lambda url, fresh=False: {"ok": True, "data": {
+        "info": {"title": "T"}, "transcript": {"cues": [{"text": "x"}]},
+        "danmaku": {"total": 7, "hot": []}, "comments": [{"text": "c"}]}}
+    r = bs.agent_call("bili_danmaku", {"url": "BV1dL8K6HEm3"})
+    check("agent_call 取弹幕", r.get("ok") is True and r["data"].get("total") == 7, r)
+    r = bs.agent_call("bili_comments", {"url": "BV1dL8K6HEm3"})
+    check("agent_call 取热评", r.get("ok") is True and len(r["data"]) == 1, r)
+    r = bs.agent_call("bili_transcript", {"url": "BV1dL8K6HEm3"})
+    check("agent_call 取文稿", r.get("ok") is True and r["data"].get("cues"), r)
+    bs.read = lambda url, fresh=False: {"ok": True, "data": {"transcript": {"cues": []}}}
+    r = bs.agent_call("bili_transcript", {"url": "BV1dL8K6HEm3"})
+    check("没字幕时带 note 说明原因（不许让模型猜）",
+          "需要登录" in (r.get("note") or ""), r)
+    bs.read = _orig_read
+
+    # ── 10. 统计 ────────────────────────────────────────────────
     st = bs.get_stats()
     check("统计带缓存条数", "cache_size" in st, st)
     check("统计带登录态", "logged_in" in st, st)

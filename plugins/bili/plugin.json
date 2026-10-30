@@ -1,0 +1,20 @@
+{
+  "id": "bili",
+  "version": "2.0.0",
+  "description": "B站：解析链接读四路内容（信息/字幕稿/弹幕/热评）+ AI 摘要，登录在插件内完成",
+  "provides": [
+    "bili.video",
+    "bili.transcript",
+    "bili.danmaku",
+    "bili.comments"
+  ],
+  "requires": [],
+  "budget": {
+    "max_chars": 240
+  },
+  "permissions": [
+    "network"
+  ],
+  "scope": "global",
+  "title": "B站"
+}
