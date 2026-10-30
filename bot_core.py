@@ -14,6 +14,7 @@ from socketserver import ThreadingMixIn
 
 import capabilities_view
 import inbound
+import meme_desc
 import reply_budget
 import reply_drop
 import speech_pace
@@ -169,8 +170,17 @@ def _plugin_send_text(text, target=None, group_id=None) -> bool:
         return False
     try:
         if group_id:
-            return bool(globals()["smart_send_group"](str(group_id), text))
-        return bool(globals()["smart_send"](text, str(target) if target else None))
+            _ok = bool(globals()["smart_send_group"](str(group_id), text))
+        else:
+            _ok = bool(globals()["smart_send"](text, str(target) if target else None))
+        # P2-1（2026-10-30）：插件发出的消息（多数是主动消息）此前只进 stdout。
+        # 不落盘 → 复盘时"稀客"那句话是哪儿来的查不到。这里补上 chat_logs。
+        try:
+            globals()["save_event_log"](str(group_id or target or ""), "插件发送",
+                                        text, is_group=bool(group_id))
+        except Exception:
+            pass
+        return _ok
     except Exception as e:
         try:
             globals()["log"](f"[插件出口] 发送失败: {e}")
@@ -3249,6 +3259,36 @@ def _record_bot_group_msg(group_id, text):
         pass
 
 
+#: 表情包画面描述（后台补，用户看不见）。只描述，不评价。
+_MEME_DESC_PROMPT = ("这是一张 QQ 聊天表情包。20 字以内说清：画面里是什么/谁、"
+                     "什么表情或动作。只描述，别评价、别猜梗。")
+
+
+def _note_sent_meme(meme_path, *, target_qq: str = "", group_id: str = "") -> None:
+    """把「我刚发了哪张表情包」写进 history（P1-3，2026-10-30）。
+
+    为什么要记在**发送侧**：模型看不见自己发出去的图。于是它说出
+    「图是系统自己配的」，还让用户来认自己发的图（闭环反了）。
+    记一行 `【表情包】路径｜标签｜画面`，下一轮它就知道刚才那张是什么。
+
+    描述没有就先只记标签，后台补一次；补不到也不编（`meme_desc.warm`）。
+    这一整段失败只记日志 —— 台账坏了不能影响消息本身发没发出去。
+    """
+    try:
+        line = meme_desc.note_line(MEME_DIR, meme_path)
+        if group_id:
+            _record_bot_group_msg(group_id, line)
+        elif target_qq:
+            ch = chat_history.setdefault(str(target_qq), [])
+            ch.append({"role": "assistant", "content": line, "ts": time.time()})
+            chat_history[str(target_qq)] = ch[-24:]
+        # 后台补画面：同一张图只打一次视觉，已有缓存直接跳过
+        meme_desc.warm(MEME_DIR, meme_path,
+                       lambda p: describe_image(p, _MEME_DESC_PROMPT))
+    except Exception as e:
+        log(f"[表情台账] 记录失败（不影响发送）: {e}")
+
+
 # 协议层 HTTP 接口的请求体上限（SnowLuma 为 2MB，超限直接断连），
 # base64 膨胀约 4/3，再留 JSON 字段开销余量 → 原图安全上限取 1.4MB。
 SEND_IMAGE_MAX_BYTES = 1_400_000
@@ -3521,6 +3561,8 @@ def try_send_meme(group_id, reply_text, prob_bonus=0.0):
     log(f"[表情] 匹配路径: {meme_path}")
     if meme_path and send_group_image(group_id, meme_path):
         MEME_LAST_SENT[key] = now
+        # P1-3：记进群 history，模型下一轮才知道自己发了哪张图
+        _note_sent_meme(meme_path, group_id=group_id)
         log(f"[表情] 发送成功: {os.path.basename(meme_path)}")
         return os.path.basename(meme_path)
     log("[表情] 发送失败或无路径")
@@ -3611,6 +3653,11 @@ def _meme_back_send(target, is_group: bool, images=None):
         ok = send_group_image(target, path) if is_group else send_image(path, target)
         if ok:
             MEME_LAST_SENT[key] = now
+            # P1-3：回敬的表情包同样要记（否则下一轮它认不出自己发的图）
+            if is_group:
+                _note_sent_meme(path, group_id=str(target))
+            else:
+                _note_sent_meme(path, target_qq=str(target))
             return os.path.basename(path)
     except Exception as e:
         log(f"[表情包回敬] 异常: {e}")
@@ -3643,7 +3690,33 @@ def _all_memes(paths) -> bool:
     return True
 
 
-# ── 群消息合并的等待时长（2026-10-23）────────────────────────────────
+def _private_img_policy(text: str, images, *, all_memes=None):
+    """私聊该不该读这批图（P0-1，2026-10-30）。
+
+    返回 `(need_read, skip_note)`。
+
+    为什么一对一要特殊：群里「别次次读表情包」是对的（斗图读它没意义、
+    还拖慢所有人），但私聊是**针对你一个人**发的图，默认就该看。
+    旧口径把群聊那套 memes_only 直接搬过来，实测 4 张图里 2 张根本没进视觉，
+    模型只看到 `[图片]` 占位，于是编"我这儿还是糊的"。
+
+    现在只有一种情况跳过：**多张 + 全是表情包 + 除了图一个字都没说**（连发斗图）。
+    跳过也要给一句说明 —— 让模型知道自己没看，而不是图糊。
+    """
+    imgs = [p for p in (images or []) if p]
+    if not imgs:
+        return True, ""
+    _am = all_memes or _all_memes
+    try:
+        if not _am(imgs):
+            return True, ""          # 照片/截图：一律读（原行为）
+    except Exception:
+        return True, ""
+    if len(imgs) >= 2 and _is_pure_image_text(text):
+        return False, (
+            f"\n【图片】这轮收到 {len(imgs)} 张表情包连发，你没去看它们，"
+            "不知道里面是什么——别猜、别说糊了，正常接话就行。")
+    return True, ""
 #  为什么要有这个函数：这段逻辑原来写在**两个地方**，各算各的 ——
 #    ① 合并到已有批次时
 #    ② 新建批次时
@@ -3963,6 +4036,37 @@ def save_chat_log(target_qq, speaker, text, reply=""):
                 f.write(f"**{speaker}** `{ts}`\n\n{text}\n\n---\n\n")
     except Exception as e:
         log(f"转存日志失败: {e}")
+
+
+def save_event_log(target_id, kind: str, text: str, *, is_group: bool = False) -> None:
+    """系统事件落 `chat_logs`（P2-1，2026-10-30）。
+
+    主动消息、戳一戳这类事件此前只 `print` 到 stdout（`chat_log` 是给 GUI 看的），
+    **chat_logs 文件里一个字都没有**。10-29 复盘"我这边没谁戳我"那天，
+    日志里查不到任何"戳"的痕迹，只能靠用户口述反推。
+
+    做法：和正常对话写**同一个日文件** —— 时间顺序才读得出来。
+    说话人用 `[事件]` / `[主动消息]` 标记，不与真人发言混淆。
+    """
+    try:
+        today = datetime.datetime.now().strftime("%Y-%m-%d")
+        tid = str(target_id or "unknown")
+        name = f"GROUP_{tid}" if is_group else f"QQ_{tid}"
+        log_dir = os.path.join(CHAT_LOG_DIR, name)
+        os.makedirs(log_dir, exist_ok=True)
+        log_file = os.path.join(log_dir, f"chat_{today}.md")
+        ts = datetime.datetime.now().strftime("%H:%M:%S")
+        exists = os.path.exists(log_file)
+        with open(log_file, "a", encoding="utf-8") as f:
+            if not exists:
+                f.write(f"# {'群' if is_group else 'QQ'} 聊天记录 - {tid}\n")
+                f.write(f"## {today}\n\n")
+            f.write(f"**[{kind}]** `{ts}`\n\n{str(text or '')[:600]}\n\n---\n\n")
+    except Exception as e:
+        try:
+            log(f"事件日志写入失败（不影响主流程）: {e}")
+        except Exception:
+            pass
 
 
 _personality_cache = {"text": None, "mtime": 0, "path": None}
@@ -9116,6 +9220,15 @@ def _handle_poke_event(ev):
             log(f"[事件] 戳一戳忽略: 目标非 Bot (target={_poke_target}) user={poke_uid}")
             return
     log(f"[事件] 戳一戳: user_id={poke_uid} group_id={poke_gid or '私聊'}")
+    # P2-1（2026-10-30）：戳事件落 chat_logs —— 此前只有 stdout，
+    # "我这边没谁戳我"那种复盘的原始事实就断了。
+    try:
+        _poke_nick = resolve_qq_nick(poke_uid) or poke_uid
+        save_event_log(poke_gid or poke_uid, "戳一戳",
+                       f"{_poke_nick}（{poke_uid}）戳了你",
+                       is_group=bool(poke_gid))
+    except Exception as _pe:
+        log(f"[事件] 戳一戳落盘失败（不影响处理）: {_pe}")
     if poke_gid:
         # 群戳一戳 → 进群回复流水线（2026-10-25）。
         # 旧版这里自己拼 prompt、同步调模型、发送、再发一张表情包，全程不碰
@@ -9986,7 +10099,8 @@ def _submit_ai_task(params: Dict) -> int:
 
 
 def _wait_ai_result(task_id: int, timeout: float = 60.0,
-                    idle_timeout: float = None, max_total: float = None) -> Optional[str]:
+                    idle_timeout: float = None, max_total: float = None,
+                    *, on_slow=None, slow_after: float = 0.0) -> Optional[str]:
     """等待指定 AI 任务的结果，超时返回 None。超时不移除 entry，后台任务完成后仍可被后续轮询/读取。
 
     ★ 2026-10-27 改判据：从「总共等 timeout 秒」改成「多久没进展」。
@@ -10015,10 +10129,15 @@ def _wait_ai_result(task_id: int, timeout: float = 60.0,
     started = time.time()
     hard_deadline = started + _hard
     deadline = started + timeout
+    _slow_fired = False
     while True:
         # 等待粒度跟着 deadline 走：固定等 2s 会把 0.5s 这种短预算拖成 2s，
         # 也让"到点就停"失真（真机排查时会被误读成"根本没超时"）。
         _left = max(0.05, min(2.0, deadline - time.time()))
+        # P1-4：还没到填充点时，把这一轮等待切到"填充点"，否则 2 秒的等待
+        # 粒度会把 3 秒的阈值拖成 4 秒，甚至整轮都等不到（结果刚好在 3.5 秒回来）。
+        if on_slow is not None and slow_after > 0 and not _slow_fired:
+            _left = max(0.05, min(_left, started + slow_after - time.time() + 0.01))
         if entry["event"].wait(timeout=_left):
             with _ai_results_lock:
                 entry = _ai_results.pop(task_id, None)
@@ -10028,6 +10147,15 @@ def _wait_ai_result(task_id: int, timeout: float = 60.0,
             _mark_ai_error((entry or {}).get("error") or "")
             return entry["result"] if entry else None
         now = time.time()
+        # P1-4（2026-10-30）：慢回填充 —— 超过 slow_after 还没结果，先发一条
+        # "接住"（嗯/在/等下），把等待压在 LLM 之前。只发一次，失败不影响等待。
+        if (on_slow is not None and slow_after > 0 and not _slow_fired
+                and now - started >= slow_after):
+            _slow_fired = True
+            try:
+                on_slow()
+            except Exception as e:
+                log(f"[慢回填充] 失败（不影响等待）: {e}")
         if now >= hard_deadline:
             break
         # 最近 idle_timeout 内有过进展 → 续期（本次生成还没卡）
@@ -10392,7 +10520,10 @@ def _hist_time_prefix(entry) -> str:
         ts = 0.0
     if ts <= 0:
         return ""
-    return datetime.datetime.fromtimestamp(ts).strftime("[%m-%d %H:%M] ")
+    # ★ 2026-10-30（P2-2）：不带方括号。方括号看起来像"回复该有的格式"，
+    #   实测 33/70 条回复行首抄了 `[10-29 16:05]`；换成 `10-29 16:05｜`
+    #   之后它读起来只是分隔符，抄的必要性没了（事后剥离仍保留兜底）。
+    return datetime.datetime.fromtimestamp(ts).strftime("%m-%d %H:%M") + "｜"
 
 
 def _build_cached_messages(history: List[Dict], cache_key: str,
@@ -11048,6 +11179,12 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
                     "【当前时间】" + _now_ts.strftime("%Y年%m月%d日 %H:%M") + "，星期" + ["一","二","三","四","五","六","日"][_now_ts.weekday()]
                 )
                 _GROUP_TIME_INJECT_AT[group_id] = time.time()
+
+    # P2-2（2026-10-30）：时间锚已改成不带方括号的写法，但模型仍可能照抄 ——
+    # 明确说一次。放 stable_parts：内容不变，不破坏前缀缓存。
+    stable_parts.append(
+        "【时间标记】历史消息行首的「10-30 11:40｜」只用来对时，"
+        "不是回复格式，不要抄进回复。")
 
     # 群聊动态信息（群成员/时间线）→ 放到 dynamic_parts
     if is_group and group_id:
@@ -11788,12 +11925,30 @@ def _qq_agent_reply(text: str, images, *, is_group: bool, group_id: str = "",
         return ""
 
 
+# ── P1-4：私聊慢回填充（2026-10-30）────────────────────────────────
+#: 超过多少秒还没结果就先发一句"接住"。3 秒是人等消息的舒适线；
+#: 实测私聊中位 21 秒、两次百秒级，用户的感受就是"它不理我"。
+_PRIVATE_SLOW_ACK_AFTER = 3.0
+#: 只发一次，且必须短 —— 这条不是回复，是"我收到了、在想"。
+_PRIVATE_SLOW_ACKS = ("嗯", "在", "等下", "我看下")
+
+
+def _private_slow_ack(sender: str) -> None:
+    """慢回时先发一句"接住"（P1-4）。失败只记日志，正文照常等。"""
+    try:
+        t = _PRIVATE_SLOW_ACKS[int(time.time()) % len(_PRIVATE_SLOW_ACKS)]
+        if send_message(t, sender):
+            log(f"私聊[{sender}] [慢回填充] {t}")
+    except Exception as e:
+        log(f"私聊[{sender}] [慢回填充] 失败（不影响正文）: {e}")
+
+
 def call_deepseek(user_msg: str, images: Optional[List[str]] = None,
                   target_qq: Optional[str] = None, group_id: Optional[str] = None,
                   is_group: bool = False, private_memory_context: str = '',
                   personality_temperature: Optional[float] = None,
                   ego_inject_context: str = '', sender: str = '',
-                  scene_context: str = '') -> Optional[str]:
+                  scene_context: str = '', on_slow=None) -> Optional[str]:
     """非阻塞调用 DeepSeek API：将任务提交到后台队列，等待结果返回。"""
     task_id = _submit_ai_task({
         "user_msg": user_msg,
@@ -11815,9 +11970,12 @@ def call_deepseek(user_msg: str, images: Optional[List[str]] = None,
     #   最多到 hard 上限。网页任务仍然是宽预算（它本来就是多步工具链）。
     _q = user_msg or ""
     _is_web_task = bool(re.search(r'https?://\S+', _q)) or bool(re.search(r'(问卷|填表|填表单|答题|做.*?(问卷|题)|填写|表单|网页.*?(任务|操作)|帮我.*?(打开|填))', _q))
+    _slow_after = _PRIVATE_SLOW_ACK_AFTER if on_slow is not None else 0.0
     if _is_web_task:
-        return _wait_ai_result(task_id, timeout=600.0, idle_timeout=180.0, max_total=600.0)
-    return _wait_ai_result(task_id, timeout=30.0, idle_timeout=45.0, max_total=150.0)
+        return _wait_ai_result(task_id, timeout=600.0, idle_timeout=180.0, max_total=600.0,
+                               on_slow=on_slow, slow_after=_slow_after)
+    return _wait_ai_result(task_id, timeout=30.0, idle_timeout=45.0, max_total=150.0,
+                           on_slow=on_slow, slow_after=_slow_after)
 
 
 def save_instruction(text, reply):
@@ -15740,11 +15898,20 @@ def main():
                 # ★ 2026-10-22 收紧：私聊原先是"只要全是 GIF 就跳过"，照片/截图一律读，
 #   而且私聊**没有** @/引用 这两个宽松条件（群聊有）。改成与群聊同一口径：
 #   表情包 → memes_only=True（要强信号才读）；照片/截图 → 也要过一遍判定。
+                # ── 私聊读图策略（P0-1，2026-10-30 改）──
+                # 旧：表情包一律 memes_only=True（要强信号才读）→ 实测 4 张图里
+                #     2 张根本没进视觉，模型只看到 `[图片]` 占位，于是自己发挥
+                #     "我这儿还是糊的"——用户和日志都分不清"没读"和"读了没读懂"。
+                # 新：一对一**不设**"强信号"门禁，默认就读。只有「多张 + 全是
+                #     表情包 + 除了图一个字都没说」这种连发斗图才跳过；
+                #     跳了也必须告诉模型"这批没读"，让它知道自己瞎，而不是图糊。
                 _pm_need_img = True
-                if images and _all_memes(images):
-                    _pm_need_img = _image_understanding_needed(text, memes_only=True)
+                _pm_skip_note = ""
+                if images:
+                    _pm_need_img, _pm_skip_note = _private_img_policy(text, images)
                     if not _pm_need_img:
-                        log("私聊[%s] [图片理解] 跳过（表情包，消息没在说它）" % sender)
+                        log("私聊[%s] [图片理解] 跳过（%d 张连发斗图、无文字）"
+                            % (sender, len(images)))
                 # 照片/截图不设门禁（与群聊同口径，见群聊分支注释）
                 _pm_call_images = (images if _pm_need_img else None) \
                     if (images and image_reply_mode() == "native") else None
@@ -15753,6 +15920,9 @@ def main():
                     if _pm_blk:
                         text = text + "\n" + _pm_blk
                         log(f"私聊[{sender}] [图片理解] {min(len(images), 3)} 张 · {len(_pm_blk)} 字")
+                # 跳过说明只进这一轮的模型输入，**不进 history**（否则下一轮
+                # 模型会以为自己上轮"拒绝看图"，越聊越歪）。
+                _pm_text_for_ai = text + _pm_skip_note
 
                 # ── 反应延迟（2026-10-22，与群聊同款）──
                 #    私聊原来也是"收到 → 生成 → 发出"，中间 0 等待。
@@ -15766,9 +15936,9 @@ def main():
                 #  传的是**已追加图片描述**的 text：describe 模式下 agent 不必再读一遍图；
                 #  真要看图时（比如问头像）它自己调 vision。
                 _qa_text = _qq_agent_reply(
-                    text, images, is_group=False, sender=sender,
+                    _pm_text_for_ai, images, is_group=False, sender=sender,
                     history=chat_history.get(sender))
-                reply = _qa_text or call_deepseek(text, _pm_call_images, sender, private_memory_context=pm_ctx, personality_temperature=_ego_temp, ego_inject_context=_ego_ctx)
+                reply = _qa_text or call_deepseek(_pm_text_for_ai, _pm_call_images, sender, private_memory_context=pm_ctx, personality_temperature=_ego_temp, ego_inject_context=_ego_ctx, on_slow=lambda: _private_slow_ack(sender))
                 # 私聊联网搜索标记循环（与群聊共用函数；旧版私聊吐 [搜索:] 会原样漏发）
                 reply = _apply_search_tag_loop(reply, text, group_id=None,
                                                is_group=False, temperature=_ego_temp,
@@ -15876,6 +16046,7 @@ def main():
                         log("私聊 仅表情标记，跳过文本发送")
                     
                     # 表情包附着
+                    _pm_meme_path = None
                     if MEME_OK:
                         key = f"private_{sender}"
                         now = time.time()
@@ -15892,6 +16063,7 @@ def main():
                                 if meme_path:
                                     send_image(meme_path, sender)
                                     MEME_LAST_SENT[key] = now
+                                    _pm_meme_path = meme_path
                                     log(f"[私聊表情] 发送: {os.path.basename(meme_path)}")
                     else:
                         log("[私聊表情] 引擎未加载")
@@ -15902,6 +16074,10 @@ def main():
                                "ts": time.time()})
                     # C2 存储对齐：私聊截断 60→24 轮（组装只取最近10轮，储存更多纯占内存+IO）
                     chat_history[sender] = ch[-24:]
+                    # P1-3：把刚发的表情包也记进 history —— 模型下一轮才知道
+                    # 自己发了哪张（否则它只会说"图是系统配的"）。
+                    if _pm_meme_path:
+                        _note_sent_meme(_pm_meme_path, target_qq=sender)
                     # 转存 AI 回复
                     save_chat_log(sender, _bot_nicknames()[0], text, reply[:500])
                     save_instruction(text, reply)

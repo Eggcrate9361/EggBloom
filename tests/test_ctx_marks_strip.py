@@ -58,6 +58,27 @@ def test_strip_marks():
     check("多行各自处理",
           rb.strip_ctx_marks("[18:46] a\n[18:47] b") == "a\nb",
           rb.strip_ctx_marks("[18:46] a\n[18:47] b"))
+    # 2026-10-30（P2-2）：时间锚换成 `10-30 11:40｜`，仍要能剥（兜照抄）
+    check("新时间锚 10-30 11:40｜",
+          rb.strip_ctx_marks("10-30 11:40｜ 别戳") == "别戳",
+          rb.strip_ctx_marks("10-30 11:40｜ 别戳"))
+    check("新时间锚带秒",
+          rb.strip_ctx_marks("10-30 11:40:05｜ 别戳") == "别戳",
+          rb.strip_ctx_marks("10-30 11:40:05｜ 别戳"))
+    check("新锚不误伤行首正文",
+          rb.strip_ctx_marks("现在10-30 11:40｜开会") == "现在10-30 11:40｜开会",
+          rb.strip_ctx_marks("现在10-30 11:40｜开会"))
+
+
+def test_hist_prefix_format():
+    """历史时间锚本身不再用方括号（P2-2 的根因修复）。"""
+    import time as _t
+    import bot_core
+    s = bot_core._hist_time_prefix({"ts": _t.time()})
+    check("时间锚不以 [ 开头", not s.startswith("["), s)
+    check("时间锚带 ｜ 分隔符", "｜" in s, s)
+    check("没有 ts 时给空串", bot_core._hist_time_prefix({}) == "",
+          bot_core._hist_time_prefix({}))
 
 
 def test_visible_excludes_marks():
@@ -85,6 +106,7 @@ def main():
     print("=" * 58)
     for fn in (test_strip_marks,
                test_visible_excludes_marks,
+               test_hist_prefix_format,
                test_bot_core_forwards):
         print(f"\n[{fn.__name__}]")
         fn()

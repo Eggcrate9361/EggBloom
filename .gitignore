@@ -53,6 +53,8 @@ memes/vrchat/
 memes/memes/kagura/
 memes/memes/vrchat/
 memes/memes/zhenxun/
+# 表情包台账：tags.json 是运行态数据；descriptions.json 是发送侧后台补的画面描述
+memes/memes/*.json
 
 # 开发过程产物
 _fw7/
