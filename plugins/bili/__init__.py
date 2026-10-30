@@ -68,7 +68,7 @@ if ROOT_DIR not in sys.path:
 
 PLUGIN_META = {
     "name": "bili",
-    "version": "1.6.0",
+    "version": "1.6.1",
     "description": "B站：读信息/字幕稿/弹幕/热评，可生成 AI 摘要；登录在本插件内。",
     "author": "EggBloom",
     "group_only": False,
@@ -543,26 +543,81 @@ def summary(params: dict = None) -> dict:
         "用 3–5 句中文说清：这视频讲了什么、重点在哪、有什么值得注意的观点或笑点。"
         "只依据上面的材料，别编。不要用列表，不要客套。")
     try:
+        text = _llm(prompt, "你是读稿助手，只依据材料说话。", 700)
+    except Exception as e:
+        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+    if not text:
+        return {"ok": False, "error": "模型返回空"}
+    _bump("summary")
+    return {"ok": True, "summary": text}
+
+
+def _llm(prompt: str, system: str = "", max_tokens: int = 600,
+         temperature: float = 0.3) -> str:
+    """一次性调用主模型（关思考）。失败返回 ""，绝不抛。"""
+    try:
         from config import load_config, get_provider_api_key
         from ai_client import AIClient
         cfg = load_config()
         pid = str(cfg.get("api_provider") or "openai")
         key = get_provider_api_key(pid) or cfg.get("api_key") or cfg.get("deepseek_api_key", "")
         if not key:
-            return {"ok": False, "error": "没有可用的 api key"}
+            return ""
+        msgs = ([{"role": "system", "content": system}] if system else []) + \
+               [{"role": "user", "content": prompt}]
         client = AIClient(cfg.get("api_url"), key, cfg.get("model_name", "deepseek-flash"),
-                          provider=pid, temperature=0.3,
+                          provider=pid, temperature=temperature,
                           extra_body={"thinking": {"type": "disabled"}})
-        r = client.call([{"role": "system", "content": "你是读稿助手，只依据材料说话。"},
-                         {"role": "user", "content": prompt}], max_tokens=700)
+        r = client.call(msgs, max_tokens=max_tokens)
         text = r[0] if isinstance(r, (tuple, list)) else (r or "")
-        text = str(text or "").strip()
-        if not text:
-            return {"ok": False, "error": "模型返回空"}
-        _bump("summary")
-        return {"ok": True, "summary": text}
-    except Exception as e:
-        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+        return str(text or "").strip()
+    except Exception:
+        return ""
+
+
+def draft_comment(params: dict = None) -> dict:
+    """按视频内容生成一条**能发的**评论草稿。不发送，只起草。
+
+    素材：标题 / UP / 前几条热评 / 弹幕高频 / 稿子开头。
+    约束：一条、15–40 字、口语、不引战、不复读标题、不空洞。
+    """
+    p = params or {}
+    url = str(p.get("url") or "").strip()
+    if not url:
+        return {"ok": False, "error": "需要一个链接"}
+    r = read(url)
+    if not r.get("ok"):
+        return {"ok": False, "error": r.get("error") or "读取失败"}
+    d = r.get("data") or {}
+    info = d.get("info") or {}
+    cues = (d.get("transcript") or {}).get("cues") or []
+    hot = "、".join(h["word"] for h in ((d.get("danmaku") or {}).get("hot") or [])[:8])
+    cm = " / ".join((c.get("text") or "")[:50] for c in (d.get("comments") or [])[:4])
+    head = " ".join(str(c.get("text") or "") for c in cues[:12])[:600]
+    style = str(p.get("style") or "").strip()
+    prompt = (
+        f"视频标题：{info.get('title', '')}\nUP：{info.get('owner', '')}\n"
+        f"稿子开头：{head or '（没有字幕）'}\n弹幕高频：{hot or '（无）'}\n"
+        f"现有热评：{cm or '（无）'}\n\n"
+        "写一条可以发在这个视频评论区的评论。要求：\n"
+        "- 一条，15–40 字，像真人在弹幕/评论区随口说的，不要书面语；\n"
+        "- 别复读标题，别写\"这视频真不错\"\"UP主辛苦了\"这种空话；\n"
+        "- 不引战、不带节奏、不提政治，不装熟；\n"
+        "- 只输出评论正文本身，不要引号、不要解释、不要开头结尾的客套。"
+        + (f"\n风格偏好：{style}" if style else ""))
+    txt = _llm(prompt, "你在 B 站评论区说话，短、具体、有梗但不油。", 260, 0.8)
+    if not txt:
+        return {"ok": False, "error": "模型没写出东西（检查 api key / 网络）"}
+    # 模型偶尔会带引号或换行，这里收一下，再按写上限截断
+    txt = txt.strip().strip('"“”').splitlines()[0].strip()
+    cfg = _cfg()
+    limit = int(cfg.get("write_text_max") or 180)
+    if len(txt) > limit:
+        txt = txt[:limit]
+    _bump("draft")
+    return {"ok": True, "draft": txt,
+            "note": "草稿而已，没发出去；确认后再点执行",
+            "has_transcript": bool(cues)}
 
 
 def get_stats() -> dict:
@@ -824,7 +879,7 @@ PLUGIN_AGENT = {
     "intents": ["这个视频讲了什么", "帮我读稿", "有没有字幕", "弹幕在刷什么",
                 "热评怎么说", "这链接是啥", "总结一下这个B站视频"],
     "tools": ["bili_read", "bili_info", "bili_transcript",
-              "bili_danmaku", "bili_comments", "bili_summary",
+              "bili_danmaku", "bili_comments", "bili_summary", "bili_draft_comment",
               "bili_comment", "bili_send_danmaku", "bili_like",
               "bili_coin", "bili_follow"],
     # 写能力（1.6.0）：默认关，开了也先干跑。agent 调之前必须先看 write_status。
@@ -876,6 +931,11 @@ def agent_tools() -> list:
          "params": {"type": "object", "properties": {"url": {"type": "string"}},
                     "required": ["url"], "additionalProperties": False}},
         # ── 写（默认关；调之前先看 write_status，被闸门挡住会返回 blocked=true）──
+        {"name": "bili_draft_comment",
+         "desc": "按视频内容起草一条评论（不发送）。适合先给用户看再决定发不发。",
+         "params": {"type": "object", "properties": {"url": {"type": "string"},
+                                                     "style": {"type": "string"}},
+                    "required": ["url"], "additionalProperties": False}},
         {"name": "bili_comment",
          "desc": "在视频下发一条评论。需要登录 + bili_jct；默认干跑。"
                  "成功后会回读校验是否真的可见。",
@@ -940,6 +1000,8 @@ def agent_call(name: str, args: dict = None) -> dict:
             return {"ok": True, "data": d.get("comments") or [], "error": ""}
         if name == "bili_summary":
             return summary({"url": url})
+        if name == "bili_draft_comment":
+            return draft_comment({"url": url, "style": a.get("style", "")})
         if name in ("bili_comment", "bili_send_danmaku", "bili_like",
                     "bili_coin", "bili_follow"):
             fn = {"bili_comment": post_comment, "bili_send_danmaku": send_danmaku,
@@ -973,4 +1035,5 @@ PLUGIN_ACTIONS = {
     "coin_video": coin_video,
     "follow_up": follow_up,
     "write_log": write_log,
+    "draft_comment": draft_comment,
 }

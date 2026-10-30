@@ -577,6 +577,7 @@ label.sw input{accent-color:var(--pv-gold);width:15px;height:15px}
             <option value="coin">投币</option>
             <option value="follow">关注 UP</option>
           </select>
+          <button class="ghost" id="w-draft">草稿</button>
           <button class="btn-go" id="w-send">执行</button>
         </div>
         <div class="sp"></div>
@@ -903,6 +904,15 @@ async function openWriteSettings(){
   toast(st.enabled?'写能力已关闭':'写能力已开启（仍在干跑）');
   loadWrite();
 }
+$('w-draft').onclick=async()=>{
+  if(!D){toast('先解析一个视频');return;}
+  $('w-kind').value='comment';
+  $('w-result').textContent='模型在读这个视频，起草中…';
+  const r=await call('draft_comment',{url:D.info.bvid||('av'+D.info.aid),style:''});
+  if(r.ok){ $('w-text').value=r.draft||''; $('w-result').textContent=(r.note||'草稿已生成')+
+    (r.has_transcript?'':'（这个视频没字幕，只按弹幕和热评写的）'); }
+  else { $('w-result').textContent='草稿失败：'+(r.error||'未知'); }
+};
 $('w-send').onclick=doWrite;
 $('w-settings').onclick=openWriteSettings;
 switchTab = (function(orig){
