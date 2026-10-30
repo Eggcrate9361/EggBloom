@@ -177,6 +177,7 @@ _KIND_WORD = {
     "image": "发了一张图",
     "poke": "戳了对方",
     "collect": "把群里的一张图收进了表情库",
+    "task": "派了个活给子 agent",
     "proactive": "主动开了口",
     "file": "发了一个文件",
 }

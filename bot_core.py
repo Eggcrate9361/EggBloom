@@ -11266,6 +11266,13 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
     # P0-4：先把这句话里可能的「叫我 X」「说 A 答 B」记下来，再注入 ——
     # 同一轮里说改称呼，这一轮就生效（不然等于答应了当轮不认）。
     _pl_sender = str(sender or "") or str(target_qq or "")
+    # 派活工具要知道结果回给谁（2026-10-30）
+    try:
+        from harness import tool_task as _ttask
+        _ttask.set_context(sender=_pl_sender, is_group=bool(is_group),
+                           group_id=str(group_id if is_group else ""))
+    except Exception:
+        pass
     _people_alias_capture(_pl_sender, user_msg)
     # ★ stable_parts（2026-10-13 结构二次重排）：一天变不了几次的块 —— 构建器会
     #   把它们放在"摘要账本之后、滑动近轮之前"，让它们进入可缓存前缀。
@@ -12113,41 +12120,35 @@ def _qq_agent_history(entries) -> list:
     return out
 
 
-def _qq_agent_reply(text: str, images, *, is_group: bool, group_id: str = "",
-                    sender: str = "", history=None,
-                    extra_ctx: Optional[Dict[str, str]] = None) -> str:
-    """A3 入口。返回非空 = 这一轮交给 agent 了；返回 "" = 调用方走老链路。
-
-    `extra_ctx`（2026-10-30，1.6.0 铺路）：把主链这一轮的上下文（ego 情绪/关系、
-    私聊画像、场景）交给 agent —— 以前 agent 只有静态人格 + 手册，等于"另一个人
-    在办事"。拼装走 `harness/life_context.compose`，1.6.0 统一时主链也用同一个函数。
-    """
+def _qq_agent_run(text: str, *, is_group: bool, group_id: str = "",
+                  sender: str = "", history=None,
+                  extra_ctx: Optional[Dict[str, str]] = None,
+                  has_media: bool = False,
+                  use_placeholder: bool = False) -> Dict:
+    """跑一次 agent，返回桥的结果 dict（内联与后台子任务共用）。"""
     try:
         from harness import qq_agent_bridge as _qab
         cfg = _qq_agent_cfg()
-        if not _qab.should_try(cfg, text, has_media=bool(images),
+        if not _qab.should_try(cfg, text, has_media=bool(has_media),
                                is_group=bool(is_group),
                                group_id=str(group_id or ""),
                                sender=str(sender or "")):
-            return ""
-        # 原语/模型/deps 全部注入：桥不 import bot_core，离线可测。
+            return {"used": False, "ok": False, "text": "", "error": "闸门未过"}
         deps = {
             "onebot": lambda action, params=None: api_call(str(action), dict(params or {})),
             "vision": _qq_agent_vision,
             "recall": _qq_agent_recall,
             "fetch": _qq_agent_fetch,
             "chat": _qq_agent_chat,
-            "placeholder": _qq_agent_placeholder,
+            # 后台任务不要占位句（固定句会冲掉人格）；内联模式保留
+            "placeholder": (_qq_agent_placeholder if use_placeholder
+                            else (lambda *a, **k: None)),
             "note_call": _qq_agent_note_call,
             "ledger": _qq_agent_ledger,
         }
         br = _qab.Bridge(deps=deps, root=SCRIPT_DIR, cfg=cfg, log=log)
-        # 1.6.0 铺路：本轮上下文走统一拼装（记忆 → 头像 → ego → 场景 → 称呼 → 另一边）
         try:
             _ctx2 = dict(extra_ctx or {})
-            # ★ 2026-10-30：先把"你在跟谁说话"告诉 agent。没有这一行，它
-            #   调 get_stranger_info 时 user_id 是空的（真机 15:31 连调两次
-            #   都失败），然后只能盲猜目录、最后答"连你是哪个号都没认出来"。
             _uid = str(sender or "").strip()
             if _uid:
                 _where = f"群 {group_id}" if (is_group and group_id) else "私聊"
@@ -12169,18 +12170,90 @@ def _qq_agent_reply(text: str, images, *, is_group: bool, group_id: str = "",
             _extra = _lctx.compose(_ctx2)
         except Exception:
             _extra = ""
-        res = br.run(str(text or ""), has_media=bool(images), is_group=bool(is_group),
-                     group_id=str(group_id or ""), sender=str(sender or ""),
-                     system_prompt=_build_static_prompt(bool(is_group)),
-                     history=_qq_agent_history(history),
-                     extra_system=_extra)
-        out = str(res.get("text") or "")
-        if not out:
-            log(f"[qq_agent] 本轮没拿到答案，回落老链路（{res.get('error') or '空答案'}）")
-        return out
+        return br.run(str(text or ""), has_media=bool(has_media),
+                      is_group=bool(is_group),
+                      group_id=str(group_id or ""), sender=str(sender or ""),
+                      system_prompt=_build_static_prompt(bool(is_group)),
+                      history=_qq_agent_history(history),
+                      extra_system=_extra)
     except Exception as e:
-        log(f"[qq_agent] 桥接异常，回落老链路: {type(e).__name__}: {e}")
+        return {"used": True, "ok": False, "text": "",
+                "error": f"{type(e).__name__}: {e}"}
+
+
+def _qq_agent_reply(text: str, images, *, is_group: bool, group_id: str = "",
+                    sender: str = "", history=None,
+                    extra_ctx: Optional[Dict[str, str]] = None) -> str:
+    """A3 内联入口：只有 `qq_agent_mode=inline` 时才接管回复。
+
+    ★ 2026-10-30 起默认 `tools` 模式：QQ 里**不再**让 agent 顶掉聊天模型。
+    聊天模型继续正常聊，需要干活时自己调 dispatch_task，干完系统回报，
+    用户问进度时调 task_status（见 harness/tool_task.py）。
+    桌面 Agent 页是同步的，不走这条路。
+    """
+    if str(_config.get("qq_agent_mode", "inline")) != "inline":
         return ""
+    if images:
+        return ""
+    res = _qq_agent_run(text, is_group=is_group, group_id=group_id, sender=sender,
+                        history=history, extra_ctx=extra_ctx,
+                        has_media=False, use_placeholder=True)
+    out = str((res or {}).get("text") or "")
+    if not out:
+        log(f"[qq_agent] 本轮没拿到答案（{(res or {}).get('error') or '空答案'}）")
+    return out
+
+
+def _qq_task_dispatch(goal: str, ctx: Optional[dict] = None) -> str:
+    """把活派给后台子 agent；完成后把结果发回对话。返回 task_id。
+
+    为什么不在主链里同步跑：agent 跑 10~40 秒，占位句固定、汇报腔又冲掉人格。
+    派活之后聊天模型可以继续正常聊，结果到了再补一条。
+    """
+    g = str(goal or "").strip()
+    if not g:
+        return ""
+    ctx = dict(ctx or {})
+    sender = str(ctx.get("sender") or "")
+    is_group = bool(ctx.get("is_group"))
+    gid = str(ctx.get("group_id") or "")
+    if not sender and not gid:
+        log("[子agent] 没有对话上下文，拒绝派活（桌面 Agent 页请用同步链路）")
+        return ""
+    from harness import subagent as _sub
+
+    def _run(goal_text):
+        res = _qq_agent_run(
+            goal_text, is_group=is_group, group_id=gid, sender=sender,
+            history=(None if is_group else chat_history.get(sender)),
+            use_placeholder=False)
+        return str((res or {}).get("text") or "")
+
+    def _done(task):
+        txt = str((task or {}).get("result") or "").strip()
+        tid = str((task or {}).get("task_id") or "")
+        if not txt:
+            log(f"[子agent] {tid} 结束但没结果（{task.get('error') or task.get('state')}）")
+            return
+        try:
+            import self_actions as _acts
+            _acts.record("task", scene=("group" if is_group else "private"),
+                         target=(gid or sender), detail=g[:40])
+        except Exception:
+            pass
+        try:
+            if is_group and gid:
+                send_group_message(gid, txt)
+            elif sender:
+                send_message(txt, sender)
+            log(f"[子agent] {tid} 已回报（{len(txt)} 字）")
+        except Exception as e:
+            log(f"[子agent] 回报失败: {e}")
+
+    tid = _sub.submit(g, run_fn=_run, on_done=_done,
+                      meta={"sender": sender, "is_group": is_group, "group_id": gid})
+    log(f"[子agent] 派活 {tid} → {g[:50]}")
+    return tid
 
 
 # ── P1-4：私聊慢回填充（2026-10-30）────────────────────────────────
@@ -14923,6 +14996,14 @@ def main():
                 log(f"[harness] 自我检索工具已接入: {sorted(_self_fns)}")
             except Exception as _se:
                 log(f"[harness] 自我检索工具接入失败: {_se}")
+            try:
+                from harness import tool_task as _ttask
+                _task_fns = _ttask.register_all()
+                _work_fns.update(_task_fns)
+                _ttask.set_dispatcher(_qq_task_dispatch)
+                log(f"[harness] 派活工具已接入: {sorted(_task_fns)}")
+            except Exception as _te:
+                log(f"[harness] 派活工具接入失败: {_te}")
             TOOL_FUNCTIONS.update(_work_fns)
             log(f"[harness] 工作型工具已接入: {sorted(_work_fns)}（工作区根 {_WORKSPACE_ROOT}）")
         except Exception as _we:
