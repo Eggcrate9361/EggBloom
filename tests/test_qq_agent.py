@@ -95,7 +95,7 @@ check("tool_results 带 ok 标记（第三类断言要吃它）",
 
 # 工具定义形状
 schemas = agent.tool_schemas()
-check("工具定义 8 个", len(schemas) == 8, len(schemas))
+check("工具定义 9 个", len(schemas) == 9, len(schemas))
 check("工具定义是 function 形状",
       all(s["type"] == "function" and s["function"]["name"] for s in schemas))
 check("tool_functions 覆盖全部原语",

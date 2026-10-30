@@ -118,6 +118,59 @@ def recent(*, scene: str = "", target: str = "", minutes: float = 15.0,
     return rows[-max(1, int(limit)):]
 
 
+def _all_records(max_lines: int = 5000) -> List[dict]:
+    """读整本账（文件比内存 deque 长时，检索要能看到更早的）。"""
+    rows = []
+    try:
+        if os.path.isfile(LOG_FILE):
+            with open(LOG_FILE, "r", encoding="utf-8", errors="ignore") as f:
+                lines = f.readlines()[-max_lines:]
+            for ln in lines:
+                try:
+                    rec = json.loads(ln)
+                    if isinstance(rec, dict):
+                        rows.append(rec)
+                except Exception:
+                    continue
+    except Exception:
+        pass
+    if not rows:
+        with _LOCK:
+            rows = list(_load())
+    return rows
+
+
+def search(*, query: str = "", kind: str = "", scene: str = "",
+           target: str = "", hours: Optional[float] = None,
+           limit: int = 10, now: Optional[float] = None) -> List[dict]:
+    """检索行为账本。`hours=None` = 不限时间；不传 query = 全量按时间倒序。"""
+    q = str(query or "").strip().lower()
+    cutoff = None
+    if hours is not None:
+        cutoff = (now if now is not None else time.time()) - max(0.1, float(hours)) * 3600.0
+    rows = []
+    for rec in _all_records():
+        try:
+            ts = float(rec.get("ts") or 0)
+        except Exception:
+            continue
+        if cutoff is not None and ts < cutoff:
+            continue
+        if kind and str(rec.get("kind") or "") != kind:
+            continue
+        if scene and str(rec.get("scene") or "") != scene:
+            continue
+        if target and str(rec.get("target") or "") != target:
+            continue
+        if q:
+            hay = (str(rec.get("detail") or "") + " " + str(rec.get("kind") or "")).lower()
+            if q not in hay:
+                continue
+        rows.append(rec)
+    rows.sort(key=lambda r: float(r.get("ts") or 0), reverse=True)
+    return rows[:max(1, int(limit))]
+
+
 _KIND_WORD = {
     "say": "说了一句",
     "meme": "发了一张表情包",
@@ -158,8 +211,8 @@ def render(*, scene: str = "", target: str = "", minutes: float = 15.0,
         if detail:
             line += f"（{detail}）"
         lines.append(line)
-    return ("【你刚做过的事】（都是你自己干的，别装不知道）\n"
+    return ("【你刚做过的事】（都是你自己干的；要查更早/更多的，用 self_history）\n"
             + "\n".join(lines))
 
 
-__all__ = ["record", "recent", "render", "set_logger", "LOG_FILE"]
+__all__ = ["record", "recent", "search", "render", "set_logger", "LOG_FILE"]

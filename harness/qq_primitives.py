@@ -328,6 +328,9 @@ class PrimitiveSet:
             {"name": "fs_read", "signature": "(path, max_chars) -> Envelope",
              "side_effects": "read", "permission": "L0",
              "desc": "读沙箱内的文本文件。"},
+            {"name": "self_history", "signature": "(query, kind, hours, limit) -> Envelope",
+             "side_effects": "read", "permission": "L0",
+             "desc": "查你自己做过的事（说过的话/发的表情包/戳人/采集）。"},
             {"name": "recall", "signature": "(query) -> Envelope",
              "side_effects": "read", "permission": "L0",
              "desc": "查记忆（沙漏）。"},
@@ -335,6 +338,16 @@ class PrimitiveSet:
              "side_effects": "write", "permission": "L1",
              "desc": "往记忆里写一条。"},
         ]
+
+    def self_history(self, query: str = "", kind: str = "",
+                     hours: float = 24, limit: int = 8) -> Dict[str, Any]:
+        """查自己的行为账本（只读）。"""
+        try:
+            import self_actions as _sa
+            rows = _sa.search(query=query, kind=kind, hours=hours, limit=limit)
+            return envelope(True, data={"count": len(rows), "rows": rows})
+        except Exception as e:
+            return envelope(False, error=f"{type(e).__name__}: {e}")
 
     def call(self, name: str, **kwargs) -> Dict[str, Any]:
         """按名字调原语（agent 侧统一入口）。未知名字返回失败 Envelope。"""

@@ -38,7 +38,7 @@ check("注册表里的原语手册都写了", not missing_in_manual, missing_in_
 # 手册里表格第一列的原语名（`| \`onebot\` |`）
 mentioned = set(re.findall(r"^\|\s*`([a-z_]+)`\s*\|", text, re.M))
 check("手册提到的原语注册表都有", mentioned <= specs, sorted(mentioned - specs))
-check("原语数量对得上（8 个）", len(specs) == 8, len(specs))
+check("原语数量对得上（9 个）", len(specs) == 9, len(specs))
 
 # 每个原语都写了签名（回答"怎么调"而不是"能不能"）
 for n in specs:

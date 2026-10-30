@@ -14916,6 +14916,13 @@ def main():
             _work_fns = {}
             _work_fns.update(_tfs.register_all(root=_WORKSPACE_ROOT))
             _work_fns.update(_tproc.register_all())
+            try:
+                from harness import tool_self as _tself
+                _self_fns = _tself.register_all()
+                _work_fns.update(_self_fns)
+                log(f"[harness] 自我检索工具已接入: {sorted(_self_fns)}")
+            except Exception as _se:
+                log(f"[harness] 自我检索工具接入失败: {_se}")
             TOOL_FUNCTIONS.update(_work_fns)
             log(f"[harness] 工作型工具已接入: {sorted(_work_fns)}（工作区根 {_WORKSPACE_ROOT}）")
         except Exception as _we:
