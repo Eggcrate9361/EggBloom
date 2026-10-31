@@ -16723,6 +16723,22 @@ def main():
                                     sent_text = _bc
                         except Exception as e:
                             log(f"[capability_audit] 校验跳过: {e}")
+                        # ── 认账闸（2026-10-31）─────────────────────────
+                        #  prompt 层的「别改口」是概率的；这里做确定性兜底：
+                        #  用户在主张我说过某话 + 我在否认 + 我确实说过
+                        #  → 不发否认，改成认账句。判据见 harness/consistency.py。
+                        try:
+                            from harness import consistency as _cons
+                            _own = [h.get("content") or ""
+                                    for h in (chat_history.get(sender) or [])
+                                    if h.get("role") == "assistant"][-4:]
+                            _v = _cons.verdict(text, sent_text, _own)
+                            if _v.get("conflict"):
+                                _old = sent_text
+                                sent_text = _cons.safe_ack(_v["witness"])
+                                log(f"私聊[{sender}] [认账闸] 拦下否认：{_old[:36]} → {sent_text[:36]}")
+                        except Exception as e:
+                            log(f"[consistency] 校验跳过: {e}")
                         ok = smart_send(sent_text, sender)
                     else:
                         log("私聊 仅表情标记，跳过文本发送")
