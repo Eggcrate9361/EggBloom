@@ -69,7 +69,7 @@ def main():
         check("能读到 git log", False, r.stderr)
         return 1
     subjects = [x for x in r.stdout.splitlines() if x.strip()]
-    pat = re.compile(r"^[a-z]+(\([a-z0-9_-]+\))?: \d{2}-\d{2} .+")
+    pat = re.compile(r"^[a-z]+(\([a-z0-9_,-]+\))?: \d{2}-\d{2} .+")
     # 已知例外：已推送到 origin/main 的提交不重写（提交规范 §6.3）。
     # `1fedafc`（10-26 打包修复）标题漏了日期前缀；它已经在远端，
     # 改它会让所有已克隆的仓库分叉。留作反例，不修。

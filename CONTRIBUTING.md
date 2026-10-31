@@ -120,6 +120,9 @@ def calculate_tokens(messages: list[dict], model: str = "deepseek-chat") -> int:
 `<MM-DD>` 是改动发生日期（月-日），放在 subject 最前面。
 例：`fix(group): 10-24 静默时段只管得住主动开口，管不住群里被 @`
 
+跨多个模块的改动可以并列写 scope（逗号分隔，不加空格）：
+`fix(meme,reply): 10-31 群表情包采集只认 message_type → 收不进来`
+
 **Type**：
 - `feat`：新功能
 - `fix`：修复 Bug
