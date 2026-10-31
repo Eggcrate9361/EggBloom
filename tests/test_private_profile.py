@@ -130,7 +130,9 @@ class TestPrivateProfileChain(unittest.TestCase):
         self.assertEqual(len(parts), 1)
         self.assertIn("【EGO上下文】", parts[0])
         self.assertIn(PROFILE_BLOCK, parts[0])
-        self.assertIn("不要生硬复述", parts[0])
+        # 2026-10-31（P0-2）：包装语里的「回复时自然地融会贯通，不要生硬复述」是话术，
+        # 已归人格文件；这里只要求带上**事实标签**（这是谁的状态、不是对方说的话）。
+        self.assertIn("不是对方说的话", parts[0])
 
     def test_inject_ego_context_empty_noop(self):
         parts = []

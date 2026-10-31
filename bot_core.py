@@ -403,7 +403,7 @@ def _inject_ego_context(dynamic_parts, inject_text: str, tag: str = "EGO"):
     """把 EGO 注入内容作为 system 级指令追加进 dynamic_parts（而非用户消息尾部）。"""
     if not inject_text or dynamic_parts is None:
         return
-    dynamic_parts.append(f"【{tag}上下文】以下是关于当前对话对象的长期状态提示，回复时自然地融会贯通，不要生硬复述：\n{inject_text}")
+    dynamic_parts.append(f"【{tag}上下文】以下是关于当前对话对象的长期状态，不是对方说的话：\n{inject_text}")
 
 
 def _inject_sleep_state(dynamic_parts, is_group: bool = True):
@@ -423,11 +423,11 @@ def _inject_sleep_state(dynamic_parts, is_group: bool = True):
         return
     if dynamic_parts is None:
         return
-    dynamic_parts.append(
-        "【你正在睡觉】这个点你已经睡了，是被叫醒的。"
-        "回复要短，一两句就够，语气带着困意、有点迟钝。"
-        "可以顺口嫌对方这么晚还不睡，但不要长篇大论，"
-        "也不要装作刚从别的事情里回来的样子。")
+    # 2026-10-31（P0-2 人格收口）：怎么说 —— 短、带困意、反应慢半拍 —— 是话术，
+    # 写在人格文件 `### 睡觉` 块里；这里只报**这一轮的事实**（你在睡觉、被叫醒），
+    # 再把人格式的那段取出来拼上（缺块时 `_persona_rule_segment` 自己会记日志）。
+    _sleep_rule = _persona_rule_segment("睡觉")
+    dynamic_parts.append("【你正在睡觉】这个点你已经睡了，这条消息把你叫醒的。" + _sleep_rule)
 # ── frozen 模式（PyInstaller 打包）检测 —— 必须在任何路径计算之前 ──
 if getattr(sys, 'frozen', False):
     SCRIPT_DIR = os.path.dirname(sys.executable)
@@ -4510,16 +4510,19 @@ def _build_static_prompt(is_group: bool) -> str:
         _self_nick = BOT_GROUP_NICK or _nicks[0]
         _web_nick = _nicks[0]
         _self_qq = str(BOT_QQ or "")
+        # ★ 2026-10-31：`_nick_line` 此前**从未定义**（历史改名漏的），
+        #   而整个身份块包在 try/except: pass 里 —— NameError 被静默吞掉，
+        #   身份块一直没进过 prompt（真机验过："你是谁（事实" 不在 static prompt）。
+        #   这里补上：别名清单用于"@你/叫你/提到 X 都是在叫你"。
+        _nick_line = "、".join(f"「{n}」" for n in _nicks[:3] if n)
         # ★ 2026-10-30 修：旧写法「被问你是谁时，回答自己的名字…」会让模型
-        #   **背书式自我介绍**（真机 15:01 熟人问「你是谁」，回「我是小a / 群里那个
+        #   照稿念自我简介（真机 15:01 熟人问「你是谁」，回「我是小a / 群里那个
         #   AAA无理由退货 就是我」——像客服，人格被压平）。
-        #   现在只给事实，怎么答交给【怎么说话】那几段；熟人明知故问要先贫一句。
+        # ★ 2026-10-31（P0-2 收口）：怎么答（先贫一句 / 随便报个名 / 不背简历）
+        #   是话术，已搬进人格文件【我是谁】；这里**只留事实**，不许再塞指令。
         _id_block = (f"【你是谁（事实，仅供你自己知道）】你的网名是「{_web_nick}」，"
                      f"在群里的昵称是「{_self_nick}」，QQ 号是 {_self_qq}。"
-                     f"别人在群里 @你、叫你或提到 {_nick_line} 都是在叫你。"
-                     "被问身份时**用你自己的口气**接：熟人明知故问就先贫一句再随口带过，"
-                     "陌生人问就随便报个名；别一本正经自我介绍，别背简历、别报网名和 QQ 号，"
-                     "不要说自己是 AI 助手。")
+                     f"别人在群里 @你、叫你或提到 {_nick_line} 都是在叫你。")
         system_prompt = _id_block + "\n\n" + system_prompt
     except Exception:
         pass
@@ -11475,8 +11478,7 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
     try:
         _avd = _avatar_desc(_pl_sender, user_msg)
         if _avd:
-            dynamic_parts.append("【他的头像】" + _avd
-                                 + "（问起就照这个说，别说看不到/没到你手上）")
+            dynamic_parts.append("【他的头像】" + _avd)
     except Exception:
         pass
 
@@ -11613,10 +11615,10 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
     # 放进用户消息时模型会把它当成"对方发来的简报"逐条回应，实测出现
     # 「我这边收到的原文长这样」「我账上…」这种后台汇报腔（2026-10-25）。
     if scene_context:
-        dynamic_parts.append(
-            "【现场资料·不是对方说的话】以下是程序给你的背景信息，只用于理解语境；"
-            "按人格自然接话，不要复述、不要逐条回答，也不要提到这些标题。\n"
-            + scene_context)
+        # 2026-10-31（P0-2）：只留"这是程序给的背景、不是对方说的话"这个事实标签；
+        # 「按人格自然接话、不要复述、不要提到标题」是话术，已归人格文件。
+        dynamic_parts.append("【现场资料·不是对方说的话】以下是程序给的背景信息：\n"
+                             + scene_context)
     if not group_id:
         try:
             from sandglass_bridge import get_memory_prompt_block
@@ -11627,7 +11629,8 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
         except Exception:
             pass
     if private_memory_context:
-        dynamic_parts.append(f"【用户画像】以下信息仅供你了解对方的性格和偏好，回复时不要提及这些内容，也不要引用具体对话：\n{private_memory_context}")
+        # 2026-10-31（P0-2）：「回复时不要提及这些内容」是话术，已归人格【别露后台】
+        dynamic_parts.append(f"【用户画像】以下是你记得的对方情况：\n{private_memory_context}")
     # ── T7 批一 ★0 → 2.0 阶段C：群聊历史召回换 memory_context builder ──
     # （带阈值 τ + 预算封顶 + 行尾分数标注；builder 挂了降级回旧 recall_history_block，
     #   链路不断。sources 只取沙漏 —— super_memory 群侧已由 EGO 钩子注入【核心记忆】，

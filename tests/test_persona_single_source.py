@@ -70,8 +70,12 @@ def main():
 
     print("\n[3] 版本库里只有一份被跟踪的人格文件")
     try:
+        # 2026-10-31：说明里的"环境型红"就是这里 —— git 输出里有中文文件名，
+        # Windows 版 Python 默认按 gbk 解码，reader 线程抛 UnicodeDecodeError，
+        # stdout 变 None（1.5.10 起一直红）。显式指定 utf-8 + 容错才能真判。
         out = subprocess.run(["git", "ls-files"], capture_output=True, text=True,
-                             cwd=ROOT, timeout=20).stdout
+                             encoding="utf-8", errors="replace",
+                             cwd=ROOT, timeout=20).stdout or ""
         tracked = [x for x in out.splitlines()
                    if os.path.basename(x) in ("personality.txt", "personality.md")]
         check("★ 恰好一份", len(tracked) == 1, tracked)
