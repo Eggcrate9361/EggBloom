@@ -88,16 +88,25 @@ class TestRecallHistoryBlock(unittest.TestCase):
 
     # ── 接入点（源码级断言：必须只在群聊路径接）──
     def test_wired_in_group_path_only(self):
-        with open(os.path.join(_ROOT, "bot_core.py"), encoding="utf-8") as f:
+        # 2026-10-31（P0-3 记忆收口）：读口从 bot_core 搬到 harness/memory_api.py，
+        # 断言跟着搬家；同时在 bot_core 里反向锁"不许再长出第二个读口"。
+        with open(os.path.join(_ROOT, "harness", "memory_api.py"), encoding="utf-8") as f:
             src = f.read()
-        # 2026-10-19：降级调用点必须**带 scope**（否则跨群/私聊记忆会注进本群）
-        self.assertIn('recall_history_block(user_msg, scope=("group", str(group_id)))',
+        with open(os.path.join(_ROOT, "bot_core.py"), encoding="utf-8") as f:
+            bc = f.read()
+        # 降级调用点必须**带 scope**（否则跨群/私聊记忆会注进本群）
+        self.assertIn('recall_history_block(query, scope=("group", str(group_id)))',
                       src, "降级出口未接入 prompt 组装链，或漏了 scope")
-        # 必须在 `if group_id:` 分支里（私聊不接，避免与 super_memory 向量重复注入）
-        seg = src[src.find("T7 批一 ★0"):src.find("T7 批一 ★0") + 420]
-        self.assertIn("if group_id:", seg, "召回未限定在群聊路径")
+        # 必须在群聊分支里（私聊不接，避免与 super_memory 向量重复注入）
+        seg = src[src.find("def _retrieval"):src.find("def _people_block")]
+        self.assertIn('scope="group"', seg, "群聊召回没走群作用域")
+        self.assertIn("if not group_id:", seg, "召回未限定在群聊路径")
         # 私聊 light 模式保留（语义检索归 super_memory）
-        self.assertIn("get_memory_prompt_block(user_msg, light=True)", src)
+        self.assertIn("get_memory_prompt_block(query, light=True)", src)
+        # bot_core 只许通过 recall() 拿记忆，不许再自己 import 这些读口
+        for bad in ("recall_history_block(", "build_people_block(",
+                    "get_memory_prompt_block("):
+            self.assertFalse(bad in bc, f"bot_core 又长出了第二个读口：{bad}")
 
     # ── ★ scope 透传（2026-10-19 修的降级泄漏）──
     def test_scope_passed_through_to_search(self):

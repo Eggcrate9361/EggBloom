@@ -3351,35 +3351,17 @@ def _avatar_desc(sender, user_msg) -> str:
 
 
 def _cross_scene_block(sender, group_id="") -> str:
-    """「他最近在另一边说过」块（记忆全打通，2026-10-30）。
+    """「他最近在另一边说过」块 —— 兼容壳（2026-10-31 P0-3）。
 
-    ★ 2026-10-30 晚：两个方向都开，但**各自有边界**：
-      - 私聊：取他最近在群里说的（他自己看，无泄露）；
-      - 群聊：只取**说话这个人自己**私下说过的（`exclude_group=gid` 已经
-        只保留 `(uid)` 归属的行），别人的私聊一个字都不进群。
-        措辞上明确"他本人在场时才提、别念原文"，防止把私聊截图式复述。
+    实现在 `harness.memory_api.cross_scene_block`，全局只有一份：
+    两个方向都开但各自有边界（私聊取群里的、群聊只取**本人**私聊过的）。
+    保留这个名字是因为 `test_cross_scene` 与历史调用点按它找入口。
     """
     try:
-        if not bool(_config.get("memory_scope_share", True)):
-            return ""
-        from sandglass_bridge import cross_scene_recent
-        if group_id:
-            rows = cross_scene_recent(sender, exclude_group=str(group_id),
-                                      hours=6.0, limit=2)
-            lead = ("【另一边】他私下跟你说过的话（只有他在场；"
-                    "能接就接一句，别把原文念给群里）：\n")
-        else:
-            rows = cross_scene_recent(sender, exclude_group="", hours=6.0, limit=3)
-            lead = "【另一边】他最近在群里说过的话（要接得上就接，不确定就别提）：\n"
+        from harness import memory_api as _mem_api
+        return _mem_api.cross_scene_block(sender, group_id, cfg=_config)
     except Exception:
         return ""
-    if not rows:
-        return ""
-    try:
-        log(f"[跨场景] {sender} → {'群' if group_id else '私聊'} 注入 {len(rows)} 条")
-    except Exception:
-        pass
-    return lead + "\n".join("- " + r for r in rows)
 
 
 #: 表情包画面描述（后台补，用户看不见）。只描述，不评价。
@@ -11457,38 +11439,32 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
     except Exception:
         pass
 
-    # P0-4：称呼与约定。同一份数据私聊/群聊共用 —— 这是"跨场景"的最小实现：
-    # 人只有一个档案，场景只是场景。
+    # ── 记忆：唯一读口（2026-10-31 P0-3）────────────────────────────
+    # 身份卡 / 称呼 / 跨场景 / 检索 / 群画像 全由 harness.memory_api.recall 一次给出：
+    # 顺序与预算在那里算，按段打 [记忆] 日志 —— "这轮为什么只注入这些"可解释。
+    # 以前这里是三段各自 try/except 的注入（people.card / people_alias / 跨场景…），
+    # 谁也说不清总预算，也没法回答"为什么这条记忆没进来"。
     try:
-        _pa = _people_alias_prompt(_pl_sender)
-        if _pa:
-            dynamic_parts.append(_pa)
-    except Exception:
-        pass
-
-    # 身份档案（2026-10-30）：「分得清谁是谁」——把"这个人是谁、你还记得他什么"
-    # 喂进来。带 QQ 号，所以同群重名也分得开；私聊才带 scope=private 的事实。
-    try:
-        import people as _people
-        _pc = _people.card(_pl_sender, group_id if is_group else "",
-                           private=not is_group)
-        if _pc:
-            dynamic_parts.append(_pc)
-            log(f"[人物档案] {_pl_sender} 注入 {len(_pc)} 字")
-    except Exception:
-        pass
+        from harness import memory_api as _mem
+        _mem_block = _mem.recall(
+            _pl_sender,
+            scene=("private" if not is_group else "group"),
+            group_id=str(group_id or ""),
+            query=user_msg,
+            private=not is_group,
+        )
+        if _mem_block:
+            dynamic_parts.append(_mem_block)
+    except Exception as _mem_err:
+        log(f"[记忆] recall 异常，本轮不注入: {_mem_err}")
 
     # 对话对象锚（2026-10-30）：私聊里模型拿不到发送者名字，容易"不知道在跟谁说话"。
+    # 2026-10-31（P0-3）：顺手删掉这里一次「取群画像」的死调用 ——
+    # 结果赋给 `_rel` 后没人用，还多了一个记忆读口。
     if not is_group and _pl_sender:
         try:
             import people as _pp
             _nm = _pp.display(_pl_sender) or ""
-            _rel = ""
-            try:
-                import sandglass_bridge as _sb
-                _rel = (_sb.build_people_block("") or "")
-            except Exception:
-                _rel = ""
             _line = f"【对话对象】你现在私聊的是{('「' + _nm + '」') if _nm else ''}（QQ {_pl_sender}）。"
             dynamic_parts.append(_line)
         except Exception:
@@ -11531,14 +11507,8 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
     except Exception:
         pass
 
-    # 记忆全打通（2026-10-30）：私聊里补一句"他刚在群里说过什么"。
-    # 只在私聊注入（群里注入=把别人的私聊贴出去，不做）。
-    try:
-        _xs = _cross_scene_block(_pl_sender, group_id if is_group else "")
-        if _xs:
-            dynamic_parts.append(_xs)
-    except Exception:
-        pass
+    # 记忆全打通（2026-10-30）：私聊补"他刚在群里说过什么"、群聊补"他私下说过的"，
+    # 两个方向都已收进 memory_api.recall()（见上面的唯一读口），这里不再单独注入。
 
     # ── 时间注入（群聊 + 私聊**都要**）────────────────────────────────
     # ★ 2026-10-22 修：此前时间分级注入只写在 `if is_group and group_id:` 里面，
@@ -11640,55 +11610,14 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
         # 「按人格自然接话、不要复述、不要提到标题」是话术，已归人格文件。
         dynamic_parts.append("【现场资料·不是对方说的话】以下是程序给的背景信息：\n"
                              + scene_context)
-    if not group_id:
-        try:
-            from sandglass_bridge import get_memory_prompt_block
-            # T4: 私聊用 light 模式（跳过 sandglass 关键词全文搜索，省 token；语义检索由 super_memory 向量 top-K 承担）
-            sg_block = get_memory_prompt_block(user_msg, light=True)
-            if sg_block:
-                dynamic_parts.append(sg_block)
-        except Exception:
-            pass
+    # 私聊的沙漏检索已并入 memory_api.recall()（唯一读口），这里不再单取。
     if private_memory_context:
         # 2026-10-31（P0-2）：「回复时不要提及这些内容」是话术，已归人格【别露后台】
         dynamic_parts.append(f"【用户画像】以下是你记得的对方情况：\n{private_memory_context}")
-    # ── T7 批一 ★0 → 2.0 阶段C：群聊历史召回换 memory_context builder ──
-    # （带阈值 τ + 预算封顶 + 行尾分数标注；builder 挂了降级回旧 recall_history_block，
-    #   链路不断。sources 只取沙漏 —— super_memory 群侧已由 EGO 钩子注入【核心记忆】，
-    #   再取同源=双注，是 2.0 设计稿点名要消灭的旧账。）
-    # 私聊不走这里：私聊已有 super_memory 向量 top-K（语义），再有界召回同一份历史
-    # 会变成两处重复注入（同 2.2 的教训）。
-    if group_id:
-        # ── 群内人物画像（2026-10-19 新增）──
-        #   此前**群聊完全没有画像注入**（只有私聊走 get_memory_prompt_block），
-        #   于是 Bot 在群里不知道谁是谁，更不知道本群有没有重名的人。
-        #   只用 build_people_block()：画像是准静态信息，不含检索层与元信息噪音。
-        try:
-            from sandglass_bridge import build_people_block as _bpb
-            _ppl = _bpb(str(group_id)) or ""
-            if _ppl.strip():
-                dynamic_parts.append(_ppl.strip())
-        except Exception:
-            pass
-        try:
-            from harness import memory_context as _mc
-            # 注意区分不了"过阈零条"（正常，什么都不注）与"源挂了"——旧函数没有
-            # 阈值闸，拿旧路径兜"零命中"会把本该被 τ 滤掉的低相关旧账又灌回来，
-            # 所以 builder 空返回就是空返回（旧路径仅在 builder 本身异常时才救场）。
-            _recall = _mc.build_block(user_msg, scope="group",
-                                      scope_id=str(group_id), sources=("sand",))
-            if _recall:
-                dynamic_parts.append(_recall)
-        except Exception:
-            try:
-                from sandglass_bridge import recall_history_block
-                # ★ scope 必须传（2026-10-19 修）：降级出口此前不过滤作用域，
-                #   主路径一旦抛异常就会把跨群/私聊记忆注进本群 prompt。
-                _recall = recall_history_block(user_msg, scope=("group", str(group_id)))
-                if _recall:
-                    dynamic_parts.append(_recall)
-            except Exception:
-                pass
+    # ── T7 批一 ★0 → 2.0 阶段C：群聊历史召回 ──
+    # 已收进 memory_api.recall()（唯一读口）：群内人物画像 + 带 τ 阈值的 santglass
+    # 检索都在那边，sources 只取沙漏（super_memory 群侧由 EGO 钩子注入，同源双注是
+    # 2.0 设计稿点名要消灭的旧账）。这里保留注释以免后人重新长出第二个读口。
     # ── 静默时段（私聊）：一对一没有"点名"这个动作，来了就是叫醒 ──
     # 群聊那侧在 `if is_group` 分支里调同一个函数；这里补上私聊，
     # 之前它只判断了群聊，私聊凌晨会被当成白天一样长篇大论地回。
