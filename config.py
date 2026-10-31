@@ -443,6 +443,8 @@ DEFAULT_CONFIG = {
     "meme_collect_classify": True,    # 采集时用视觉判一个情绪标签
     "meme_collect_fill_desc": True,   # 采集后后台补一句画面描述（按描述找图靠它）
     "meme_collect_daily_cap": 30,     # 每天最多收几张（防刷）
+    "meme_collect_phash_dedupe": True,  # 视觉去重：同图不同编码（转发/重压）不再收第二份
+    "meme_collect_phash_dist": 4,       # dHash 汉明距离阈值（0=关，越大越容易判重）
     "meme_idle_exit_enable": True,
     "meme_auto_detect_emotion": True,
 
@@ -590,8 +592,7 @@ DEFAULT_CONFIG = {
 
     # 运行时阈值（2026-10-31，用户原话「都是硬编码」）：
     # 配置中心 → 功能 → 阈值。全部即时生效，0 一般表示"关"。
-    "meme_save_lookback_sec": 300,     # 说「存表情包」时往前找多久内的上一轮图片
-    "meme_collect_min_kb": 2,          # 表情库单张下限
+    "meme_save_lookback_sec": 300,     # 说「存表情包」时往前找多久内的上一轮图片    "meme_collect_min_kb": 2,          # 表情库单张下限
     "meme_collect_max_mb": 3,          # 表情库单张上限
     "consistency_min_overlap": 0.3,    # 认账闸：证据句重合阈值
     "consistency_own_window_min": 30,  # 认账闸：「你上一条说的」块有效时长（分钟）

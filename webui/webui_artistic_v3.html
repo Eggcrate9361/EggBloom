@@ -1935,6 +1935,9 @@ function renderMemePanel(root){
     <div class="field"><div class="field-label">冷却（秒）</div>
       <input class="input" id="sMemeCooldown" type="number" min="0"></div>
     <div class="field" style="display:flex;align-items:center;gap:16px">
+      <input type="checkbox" class="toggle-input" id="sMemePhashDedupe">
+      <div class="field-label" style="margin:0">采集视觉去重（同图换编码不再收第二份）</div></div>
+    <div class="field" style="display:flex;align-items:center;gap:16px">
       <input type="checkbox" class="toggle-input" id="sMemeIdleExitEnable">
       <div class="field-label" style="margin:0">启用空闲退出</div></div>
     <div class="field" style="display:flex;align-items:center;gap:16px">
@@ -2076,6 +2079,9 @@ function renderTuningPanel(root){
     <div class="field"><div class="field-label">表情包上限（MB）</div>
       <input class="input" id="sMemeMaxMb" type="number" min="1">
       <div class="field-desc">大于这个大小的图不收</div></div>
+    <div class="field"><div class="field-label">视觉去重距离</div>
+      <input class="input" id="sMemePhashDist" type="number" min="0" max="16">
+      <div class="field-desc">dHash 汉明距离：0 = 完全一样才算重复；默认 4（同图换编码/轻微压缩仍判重）</div></div>
     <div class="field"><div class="field-label">认账闸重合阈值</div>
       <input class="input" id="sConsMinOverlap" type="number" min="0" max="1" step="0.05">
       <div class="field-desc">用户在主张我说过某话、我在否认时，证据句要有多少重合才算「确实说过」；越低越容易拦（也越容易误伤）</div></div>
@@ -2472,6 +2478,7 @@ async function loadSettingsData(){
       const allowListEl = $('sGroupToolList');
       if (allowListEl) allowListEl.style.opacity = hasAllow ? '' : '0.5';
     t('sMemeEnable', c.meme_enable); s('sMemeCooldown', c.meme_cooldown);
+    t('sMemePhashDedupe', c.meme_collect_phash_dedupe);
     t('sMemeIdleExitEnable', c.meme_idle_exit_enable); t('sMemeAutoEmotion', c.meme_auto_detect_emotion);
     t('sRecallEnable', c.recall_feedback_enable); s('sRecallCooldown', c.recall_feedback_cooldown);
     t('sRecallPrivateEnable', c.recall_private_enable); s('sRecallPrivateCooldown', c.recall_private_cooldown);
@@ -2484,6 +2491,7 @@ async function loadSettingsData(){
     s('sEvalExtraBanned', c.eval_extra_banned);
     s('sSlowAckAfter', c.private_slow_ack_after); s('sMemeSaveLookback', c.meme_save_lookback_sec);
     s('sMemeMinKb', c.meme_collect_min_kb); s('sMemeMaxMb', c.meme_collect_max_mb);
+    s('sMemePhashDist', c.meme_collect_phash_dist);
     s('sConsMinOverlap', c.consistency_min_overlap); s('sConsOwnWindow', c.consistency_own_window_min); s('sConsOwnMsgs', c.consistency_own_msgs);
     t('sDeAiEnable', (c.de_ai&&c.de_ai.enabled)!==false); t('sDeAiPromptInject', (c.de_ai&&c.de_ai.prompt_inject)!==false); t('sDeAiPostProcess', (c.de_ai&&c.de_ai.post_process)!==false);
     t('sDeAiBanWords', (c.de_ai&&c.de_ai.ban_words)!==false); t('sDeAiBanDashes', (c.de_ai&&c.de_ai.ban_dashes)!==false); t('sDeAiBanTriple', (c.de_ai&&c.de_ai.ban_rule_of_three)!==false);
@@ -2613,6 +2621,7 @@ function collectSettings(){
     group_msg_buffer_window_trigger: (()=>{ const v=parseFloat(val('sGroupMsgBufferTrigger')); return isNaN(v)||v<0 ? undefined : v; })(),
     group_tool_allowlist: chk('sGroupToolAllowEnable') ? (window.__groupToolSelected ? window.__groupToolSelected() : []) : [],
     meme_enable: chk('sMemeEnable'), meme_cooldown: num('sMemeCooldown'),
+    meme_collect_phash_dedupe: chk('sMemePhashDedupe'),
     meme_idle_exit_enable: chk('sMemeIdleExitEnable'),
     meme_auto_detect_emotion: chk('sMemeAutoEmotion'),
     recall_feedback_enable: chk('sRecallEnable'), recall_feedback_cooldown: num('sRecallCooldown'),
@@ -2629,6 +2638,7 @@ function collectSettings(){
     eval_extra_banned: val('sEvalExtraBanned'),
     private_slow_ack_after: num('sSlowAckAfter'), meme_save_lookback_sec: num('sMemeSaveLookback'),
     meme_collect_min_kb: num('sMemeMinKb'), meme_collect_max_mb: num('sMemeMaxMb'),
+    meme_collect_phash_dist: num('sMemePhashDist'),
     consistency_min_overlap: num('sConsMinOverlap'), consistency_own_window_min: num('sConsOwnWindow'), consistency_own_msgs: num('sConsOwnMsgs'),
     self_heal_enable: chk('sSelfHealEnable'),
     de_ai: { enabled: chk('sDeAiEnable'), prompt_inject: chk('sDeAiPromptInject'), post_process: chk('sDeAiPostProcess'),

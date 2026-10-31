@@ -173,6 +173,8 @@
   "meme_collect_classify": true,
   "meme_collect_fill_desc": true,
   "meme_collect_daily_cap": 30,
+  "meme_collect_phash_dedupe": true,
+  "meme_collect_phash_dist": 4,
   "recall_feedback_enable": true,
   "recall_feedback_pre_messages": [
     "？",

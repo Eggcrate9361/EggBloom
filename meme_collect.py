@@ -205,6 +205,50 @@ def skip_reason(path: str, *, cfg=None) -> str:
     return ""
 
 
+def _dhash(path: str, size: int = 8):
+    """64 位感知哈希（dHash）。同图不同编码/压缩也能对上。失败返回 None。"""
+    try:
+        from PIL import Image
+        with Image.open(path) as im:
+            im = im.convert("L").resize((size + 1, size), Image.LANCZOS)
+            px = list(im.getdata())
+        bits = 0
+        for r in range(size):
+            base = r * (size + 1)
+            for c in range(size):
+                bits = (bits << 1) | (1 if px[base + c] > px[base + c + 1] else 0)
+        return bits
+    except Exception:
+        return None
+
+
+def _hamming(a, b) -> int:
+    return bin(int(a) ^ int(b)).count("1")
+
+
+def visual_dup_of(path: str, idx: dict, max_dist: int = 4):
+    """在索引里找"视觉上同一张"的条目。返回 (sha, 条目) 或 (None, None)。
+
+    为什么需要：sha1 只认字节。同一张表情包经 QQ 转发/重新编码后字节变了，
+    又会被当成新图收一份 —— 用户库里看的是一堆重复。
+    """
+    ph = _dhash(path)
+    if ph is None or not isinstance(idx, dict):
+        return None, None
+    for k, v in idx.items():
+        if not isinstance(v, dict):
+            continue
+        ph2 = v.get("phash")
+        if ph2 is None:
+            continue
+        try:
+            if _hamming(ph, int(ph2)) <= max_dist:
+                return k, v
+        except (TypeError, ValueError):
+            continue
+    return None, None
+
+
 def maybe_collect(path: str, *, tags=None, source: str = "auto",
                   from_group: str = "") -> str:
     """把一张图收进图库。返回相对路径；跳过返回空串。"""
@@ -235,6 +279,15 @@ def maybe_collect(path: str, *, tags=None, source: str = "auto",
         idx = _index()
         if sha in idx:
             return ""
+        # 视觉去重（2026-11-01）：同图不同编码（QQ 重新压缩/转格式）sha 不同，
+        # 但看起来一模一样。默认开，阈值 4/64 位（很保守，宁漏不误杀）。
+        _ph = None
+        if bool(cfg.get("meme_collect_phash_dedupe", True)):
+            _maxd = int(cfg.get("meme_collect_phash_dist", 4) or 0)
+            _ds, _dv = visual_dup_of(src, idx, max_dist=_maxd)
+            if _ds:
+                _LOG(f"[表情采集] 跳过：与已收的 {str(_dv.get('path'))} 视觉重复")
+                return ""
         cap = int(cfg.get("meme_collect_daily_cap", DEFAULT_DAILY_CAP) or 0)
         if cap > 0 and _today_count(idx) >= cap:
             return ""
@@ -262,7 +315,8 @@ def maybe_collect(path: str, *, tags=None, source: str = "auto",
                 pass
         idx[sha] = {"path": rel, "tags": [str(t) for t in (tags or [])],
                     "ts": time.time(), "src": str(source or "")[:40],
-                    "from_group": str(from_group or "")[:24]}
+                    "from_group": str(from_group or "")[:24],
+                    "phash": _ph if _ph is not None else _dhash(dst)}
         _save_index(idx)
 
     try:

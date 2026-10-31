@@ -645,6 +645,16 @@
    "default": 60,
    "default_text": "60"
   },
+  "meme_collect_phash_dedupe": {
+   "label": "采集视觉去重（同图换编码不再收第二份）",
+   "desc": "",
+   "ctl": "bool",
+   "panel": "meme",
+   "unit": "",
+   "id": "sMemePhashDedupe",
+   "default": true,
+   "default_text": "开启"
+  },
   "meme_idle_exit_enable": {
    "label": "启用空闲退出",
    "desc": "",
@@ -901,9 +911,7 @@
    "ctl": "number",
    "panel": "tuning",
    "unit": "",
-   "id": "sMemeMinKb",
-   "default": 2,
-   "default_text": "2"
+   "id": "sMemeMinKb"
   },
   "meme_collect_max_mb": {
    "label": "表情包上限（MB）",
@@ -914,6 +922,16 @@
    "id": "sMemeMaxMb",
    "default": 3,
    "default_text": "3"
+  },
+  "meme_collect_phash_dist": {
+   "label": "视觉去重距离",
+   "desc": "dHash 汉明距离：0 = 完全一样才算重复；默认 4（同图换编码/轻微压缩仍判重）",
+   "ctl": "number",
+   "panel": "tuning",
+   "unit": "",
+   "id": "sMemePhashDist",
+   "default": 4,
+   "default_text": "4"
   },
   "consistency_min_overlap": {
    "label": "认账闸重合阈值",
