@@ -15049,6 +15049,10 @@ def main():
         import meme_collect as _mc
         _mc.set_classifier(_classify_meme_emotion)
         _mc.set_describer(lambda p: describe_image(p, _MEME_DESC_PROMPT))
+        # ★ 2026-10-31：采集侧默认 `_LOG = print`，入库日志只进 stdout（浏览器控制台），
+        #   qq_bot.log / 日志页都查不到 ——「表情包到底收进来没有」无从判断。
+        #   接到主 log()，与其它子系统同一条流。
+        _mc.set_logger(log)
         log("[表情采集] 分类器/描述器已注入")
     except Exception as _mc_e:
         log(f"[表情采集] 注入失败（采集仍可用，只是没标签/描述）: {_mc_e}")
