@@ -14761,6 +14761,21 @@ def _pipeline_step(group_id):
                             f"新消息={_new_msgs} 在等={'是' if _addressed else '否'} "
                             f"| 样本 n={_st.get('n', 0)} p90={_st.get('p90', '-')} "
                             f"p99={_st.get('p99', '-')}")
+                # ── 认账闸（2026-10-31，与私聊同一判据）────────────────
+                #  群聊同样会"被追问就改口"；判据在 harness/consistency.py，
+                #  这里只负责在发送前替换。放在所有文本改写之后。
+                try:
+                    from harness import consistency as _cons
+                    _own = [h.get("content") or ""
+                            for h in (group_chat_history.get(group_id) or [])
+                            if h.get("role") == "assistant"][-4:]
+                    _v = _cons.verdict(merged_text, sent_text, _own)
+                    if _v.get("conflict"):
+                        _old = sent_text
+                        sent_text = _cons.safe_ack(_v["witness"])
+                        log(f"群[{group_id}] [认账闸] 拦下否认：{_old[:36]} → {sent_text[:36]}")
+                except Exception as e:
+                    log(f"[consistency] 校验跳过: {e}")
                 # ── 回复预算（1.5.9 §B3）──
                 # 240 字截断会产出半句，比长更假，所以超配额时取最短一条。
                 if sent_text and _budget and not _dropped:
