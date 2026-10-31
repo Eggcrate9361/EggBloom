@@ -116,6 +116,43 @@ def main():
     check("只装白名单里的", rep2["applied"] == ["harness/b.py"], rep2)
     check("data/new.json 不存在", not os.path.exists(os.path.join(root, "data", "new.json")))
 
+    print("\n[G] 用户自己的东西：永远不覆盖")
+    for name in ("plugins/personality.txt",
+                 "plugins/personality_versions/v2.txt",
+                 "plugins/user_funny/__init__.py",
+                 "plugins/custom/anything.py",
+                 "skills/user_xxx/SKILL.md"):
+        check(f"{name} 被保护", U.is_allowed(name) is False and U.is_protected(name) is True)
+
+    print("\n[H] 本地改过的官方文件：保留（基线哈希）")
+    # 场景：官方 plugins/ego/x.py 上一版内容 = BASE；用户改成了 MYEDIT；
+    # 补丁里带的是新版 NEW。base 记录的 sha 是 BASE → 本地 != BASE → 保留
+    pdir = os.path.join(root, "plugins", "ego")
+    os.makedirs(pdir, exist_ok=True)
+    target = os.path.join(pdir, "x.py")
+    with open(target, "w", encoding="utf-8") as f:
+        f.write("MYEDIT")
+    z3 = os.path.join(td, "p3.zip")
+    make_zip(z3, {"plugins/ego/x.py": "NEW", "plugins/ego/y.py": "NEWY"})
+    with open(os.path.join(td, "base.txt"), "w", encoding="utf-8") as f:
+        f.write("BASE")
+    fb = os.path.join(td, "base.txt")
+    rep3 = U.apply(z3, {"sha256": sha(z3),
+                        "base": {"plugins/ego/x.py": sha(fb)}}, root=root)
+    check("本地改过的没被覆盖", open(target, encoding="utf-8").read() == "MYEDIT")
+    check("记进 kept", "plugins/ego/x.py" in rep3["kept"], rep3)
+    check("没改过的照常更新", os.path.exists(os.path.join(pdir, "y.py")))
+
+    print("\n[I] 基线一致时才覆盖")
+    with open(target, "w", encoding="utf-8") as f:
+        f.write("BASE")
+    fb2 = os.path.join(td, "base2.txt")
+    with open(fb2, "w", encoding="utf-8") as f:
+        f.write("BASE")
+    rep4 = U.apply(z3, {"sha256": sha(z3),
+                        "base": {"plugins/ego/x.py": sha(fb2)}}, root=root)
+    check("更新成功", open(target, encoding="utf-8").read() == "NEW", rep4)
+
     print("\n" + "=" * 56)
     print(f"通过 {PASS} / 失败 {FAIL}")
     if FAILURES:

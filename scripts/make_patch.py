@@ -50,23 +50,43 @@ def changed_files(since: str) -> list:
 
 
 def all_allowed_files() -> list:
-    files = []
-    for dirpath, dirs, names in os.walk(ROOT):
-        rel_dir = os.path.relpath(dirpath, ROOT).replace("\\", "/")
-        if rel_dir == ".":
-            rel_dir = ""
-        dirs[:] = [d for d in dirs if not d.startswith(".") and d not in
-                   ("data", "logs", "chat_logs", "memes", "image_cache",
-                    "private_memory", "self_learning_db", "personality_versions",
-                    "node_modules", "__pycache__", "tests", "dist", "docs")]
-        for n in names:
-            rel = f"{rel_dir}/{n}" if rel_dir else n
-            if is_allowed(rel):
-                files.append(rel)
-    return files
+    """全量白名单文件 —— **只取 git 跟踪的文件**。
+
+    2026-11-01：原来遍历文件系统，会把开发机上的**用户自建插件**（未跟踪）
+    一起打进补丁发给所有用户。用户的数据/自制插件绝不能出开发机。
+    """
+    out = _git("ls-files", "-z")
+    tracked = [p for p in out.split("\0") if p]
+    if not tracked:
+        return []
+    return [p for p in tracked if is_allowed(p) and os.path.isfile(os.path.join(ROOT, p))]
 
 
-def build(files, out_dir, version, url, notes, dry_run=False) -> dict:
+def base_hashes(files, since: str) -> dict:
+    """上一版（`since` 那个 commit）里这些文件的 sha256。
+
+    用户端拿它判断"本地这个官方文件有没有被自己改过"：
+    本地 sha != base → 用户改的 → 更新时保留、不覆盖。
+    """
+    out = {}
+    if not since:
+        return out
+    rev = _git("rev-parse", "--verify", since)
+    if not rev:
+        return out
+    for rel in files:
+        try:
+            blob = subprocess.run(["git", "show", f"{since}:{rel}"], cwd=ROOT,
+                                  capture_output=True)
+        except Exception:
+            continue
+        if blob.returncode != 0:
+            continue
+        out[rel] = hashlib.sha256(blob.stdout).hexdigest()
+    return out
+
+
+def build(files, out_dir, version, url, notes, dry_run=False, since="") -> dict:
     files = sorted(set(f for f in files if is_allowed(f) and os.path.isfile(os.path.join(ROOT, f))))
     os.makedirs(out_dir, exist_ok=True)
     zip_path = os.path.join(out_dir, f"patch-{version}.zip")
@@ -93,6 +113,7 @@ def build(files, out_dir, version, url, notes, dry_run=False) -> dict:
         "url": url,
         "notes": notes,
         "files": files,
+        "base": base_hashes(files, since),
         "built_at": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
     with open(os.path.join(out_dir, "latest.json"), "w", encoding="utf-8") as f:
@@ -130,7 +151,7 @@ def main(argv=None) -> int:
         if not files:
             print(f"自 {since or '(无 tag)'} 起没有改动；用 --all 生成全量白名单补丁")
             return 1
-    r = build(files, a.out, version, a.url, a.notes, dry_run=a.dry_run)
+    r = build(files, a.out, version, a.url, a.notes, dry_run=a.dry_run, since=(a.since or _last_tag()))
     print(json.dumps(r, ensure_ascii=False, indent=2))
     return 0
 

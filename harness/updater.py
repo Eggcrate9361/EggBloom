@@ -56,6 +56,24 @@ DENY_NAMES = ("bot_config.json", ".env", "bot_config.json.example",
               "providers.json", "plugin_state.json", "last_port.txt", "VERSION")
 #: webui 下这些是用户数据/构建产物，不进补丁
 DENY_WEBUI = ("webui/providers.json",)
+#: ★ 用户自己的东西：人格（用户培养的）、自建插件目录、本地技能。
+#:   2026-11-01 用户原话：「用户可能自己做了插件，用户自己培养了人格」。
+#:   这些路径**永久排除**，补丁里带进来也一律不落地。
+PROTECTED_EXACT = (
+    "plugins/personality.txt",
+    "plugins/personality.txt.old",
+    "plugins/personality_versions",
+)
+PROTECTED_PREFIXES = (
+    "plugins/personality.txt",
+    "plugins/personality_versions/",
+    "plugins/user_",          # 用户自建插件的约定前缀
+    "plugins/custom/",
+    "skills/user_",
+    "skills/custom/",
+)
+#: 这些目录下的文件按"基线哈希"判断本地是否被改过（改过 = 用户改的，不覆盖）
+GUARDED_PREFIXES = ("plugins/", "skills/", "protocols/", "webui/")
 
 MAX_ENTRY_BYTES = 8 * 1024 * 1024      # 单文件 8MB
 MAX_TOTAL_BYTES = 60 * 1024 * 1024     # 整包 60MB
@@ -99,10 +117,20 @@ def _norm(name: str) -> str:
     return str(name or "").replace("\\", "/").strip()
 
 
+def is_protected(name: str) -> bool:
+    """用户自己的东西（人格/自建插件/本地技能）—— 永远不覆盖。"""
+    p = _norm(name)
+    if p in PROTECTED_EXACT:
+        return True
+    return any(p.startswith(pre) for pre in PROTECTED_PREFIXES)
+
+
 def is_allowed(name: str) -> bool:
     """这个 zip 条目允许落到 `resources\\app` 吗（纯函数，便于单测）。"""
     p = _norm(name)
     if not p or p.endswith("/"):
+        return False
+    if is_protected(p):
         return False
     if p.startswith("/") or ":" in p.split("/")[0]:
         return False
@@ -169,7 +197,7 @@ def apply(zip_path: str, manifest: dict, root: str = "",
     """把补丁覆盖进 app 目录。返回报告；任何校验失败都不写盘。"""
     root = root or app_root()
     rep = {"ok": False, "applied": [], "backed_up": [], "skipped": [],
-           "backup_dir": "", "error": ""}
+           "kept": [], "backup_dir": "", "error": ""}
     want = str((manifest or {}).get("sha256") or "").lower()
     if not want:
         rep["error"] = "manifest 没有 sha256，拒绝安装"
@@ -211,9 +239,21 @@ def apply(zip_path: str, manifest: dict, root: str = "",
 
         bdir = _backup_dir(root) if backup else ""
         rep["backup_dir"] = bdir
+        base = (manifest or {}).get("base") or {}
         for i in allowed:
             rel = _norm(i.filename)
             dst = os.path.join(root, rel.replace("/", os.sep))
+            # ★ 本地被用户改过的官方文件：不覆盖（2026-11-01）。
+            #   manifest 里带 `base`（上一版该文件的 sha256）时才能判断；
+            #   本地 sha 与 base 不同 = 用户改过 → 保留，记进 kept。
+            if os.path.isfile(dst) and rel in base:
+                try:
+                    if sha256_file(dst) != str(base[rel]).lower():
+                        rep["kept"].append(rel)
+                        continue
+                except OSError:
+                    rep["kept"].append(rel)
+                    continue
             if backup and os.path.isfile(dst):
                 bdst = os.path.join(bdir, rel.replace("/", os.sep))
                 os.makedirs(os.path.dirname(bdst), exist_ok=True)

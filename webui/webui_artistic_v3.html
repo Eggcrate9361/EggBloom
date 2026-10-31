@@ -1570,6 +1570,7 @@ function mountConsole(root){  root.innerHTML = `    <div class="panel" style="ma
     {id:'switches',title:'功能开关',render:renderSwitchesPanel},
     {id:'evals',title:'评测台',render:renderEvalPanel},
     {id:'tuning',title:'阈值',render:renderTuningPanel},
+    {id:'update',title:'更新',render:renderUpdatePanel},
     {id:'deai',title:'去AI味',render:renderDeAiPanel},
     {id:'length',title:'消息长度',render:renderLengthPanel},
     {id:'exit',title:'退场语',render:renderExitPanel},
@@ -2093,6 +2094,57 @@ function renderTuningPanel(root){
       <div class="field-desc">查证时往前看我最近几条回复</div></div>
   `;
 }
+function renderUpdatePanel(root){
+  /* 程序内更新（2026-11-01）。用户要求：更新不能覆盖用户数据/自建插件/培养的人格。
+     后端 harness/updater.py 的白名单 + 基线哈希保证这一点；这里只做入口。 */
+  root.innerHTML += `
+    <div class="settings-panel-desc" style="font-size:12px;color:#8a8f9a;margin:0 0 10px;line-height:1.6">
+      更新只替换程序文件（代码/页面/评测）。<b>人格、自建插件、你的数据、表情库、配置一律不动</b>；
+      本地改过的官方文件也会保留。
+    </div>
+    <div class="field"><div class="field-label">更新地址（latest.json）</div>
+      <input class="input" id="sUpdateManifestUrl" placeholder="https://…/latest.json（留空=关闭检查）">
+      <div class="field-desc">发布页直接填 GitHub Release 里的 latest.json 地址；也可指向自己的镜像</div></div>
+    <div class="field" style="display:flex;gap:10px;align-items:center">
+      <button class="btn" id="sUpdateCheckBtn" type="button">检查更新</button>
+      <button class="btn" id="sUpdateApplyBtn" type="button" style="display:none">安装并重启</button>
+    </div>
+    <div class="field"><div class="field-desc" id="sUpdateResult">还没检查</div></div>
+  `;
+  const $ = (id) => document.getElementById(id);
+  const setMsg = (t) => { const el = $('sUpdateResult'); if (el) el.textContent = t; };
+  $('sUpdateCheckBtn').addEventListener('click', async () => {
+    const url = ($('sUpdateManifestUrl') || {}).value || '';
+    setMsg('检查中…');
+    try {
+      const res = await fetch('/api/update/check?url=' + encodeURIComponent(url));
+      const j = await res.json();
+      if (!j.ok) { setMsg('检查失败：' + (j.error || '未知错误')); return; }
+      if (j.newer) {
+        setMsg('发现新版本 ' + j.remote + '（当前 ' + (j.local || '未知') + '）');
+        $('sUpdateApplyBtn').style.display = '';
+      } else {
+        setMsg('已是最新版本（' + (j.local || '未知') + '）');
+        $('sUpdateApplyBtn').style.display = 'none';
+      }
+    } catch (e) { setMsg('检查失败：' + e); }
+  });
+  $('sUpdateApplyBtn').addEventListener('click', async () => {
+    const url = ($('sUpdateManifestUrl') || {}).value || '';
+    if (!confirm('安装更新并重启？程序文件会被替换，用户数据和人格不会动。')) return;
+    setMsg('下载并安装中…（完成后会自动重启）');
+    try {
+      const res = await fetch('/api/update/apply', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({url: url, restart: true})
+      });
+      const j = await res.json();
+      if (!j.ok) { setMsg('安装失败：' + (j.error || '未知错误')); return; }
+      setMsg('已更新 ' + (j.applied || []).length + ' 个文件，正在重启…'
+             + ((j.kept || []).length ? '（保留本地改过的 ' + j.kept.length + ' 个）' : ''));
+    } catch (e) { setMsg('安装失败：' + e); }
+  });
+}
 function renderDeAiPanel(root){
   const da = (cfg)=>(cfg&&cfg.de_ai)||{};
   root.innerHTML += `
@@ -2492,6 +2544,7 @@ async function loadSettingsData(){
     s('sSlowAckAfter', c.private_slow_ack_after); s('sMemeSaveLookback', c.meme_save_lookback_sec);
     s('sMemeMinKb', c.meme_collect_min_kb); s('sMemeMaxMb', c.meme_collect_max_mb);
     s('sMemePhashDist', c.meme_collect_phash_dist);
+    s('sUpdateManifestUrl', c.update_manifest_url || '');
     s('sConsMinOverlap', c.consistency_min_overlap); s('sConsOwnWindow', c.consistency_own_window_min); s('sConsOwnMsgs', c.consistency_own_msgs);
     t('sDeAiEnable', (c.de_ai&&c.de_ai.enabled)!==false); t('sDeAiPromptInject', (c.de_ai&&c.de_ai.prompt_inject)!==false); t('sDeAiPostProcess', (c.de_ai&&c.de_ai.post_process)!==false);
     t('sDeAiBanWords', (c.de_ai&&c.de_ai.ban_words)!==false); t('sDeAiBanDashes', (c.de_ai&&c.de_ai.ban_dashes)!==false); t('sDeAiBanTriple', (c.de_ai&&c.de_ai.ban_rule_of_three)!==false);
@@ -2640,6 +2693,7 @@ function collectSettings(){
     meme_collect_min_kb: num('sMemeMinKb'), meme_collect_max_mb: num('sMemeMaxMb'),
     meme_collect_phash_dist: num('sMemePhashDist'),
     consistency_min_overlap: num('sConsMinOverlap'), consistency_own_window_min: num('sConsOwnWindow'), consistency_own_msgs: num('sConsOwnMsgs'),
+    update_manifest_url: val('sUpdateManifestUrl'),
     self_heal_enable: chk('sSelfHealEnable'),
     de_ai: { enabled: chk('sDeAiEnable'), prompt_inject: chk('sDeAiPromptInject'), post_process: chk('sDeAiPostProcess'),
       ban_words: chk('sDeAiBanWords'), ban_dashes: chk('sDeAiBanDashes'), ban_rule_of_three: chk('sDeAiBanTriple'),

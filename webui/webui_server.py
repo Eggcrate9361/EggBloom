@@ -8,7 +8,7 @@ Tech: ThreadedHTTP + Single-file SPA (Chart.js + CSS Glassmorphism + Vanilla JS)
 Start: python webui_server.py
 Visit: http://localhost:8080
 """
-import json, os, sys, time, threading, sqlite3, subprocess, socket, zlib
+import json, os, sys, time, threading, sqlite3, subprocess, socket, zlib, shutil
 import datetime, re
 from pathlib import Path
 from collections import deque
@@ -672,6 +672,48 @@ def fetch_from_bot_core(path, timeout=0.5):
             return json.loads(r.read().decode("utf-8"))
     except Exception:
         return None
+
+
+def _update_apply_from_manifest(upd, man_url: str) -> dict:
+    """下载 manifest 指向的补丁 → 校验 → 覆盖。不重启（调用方决定）。"""
+    import tempfile
+    if not man_url:
+        return {"ok": False, "error": "没有配置更新地址"}
+    try:
+        req = urllib.request.Request(man_url, headers={"User-Agent": "EggBloom-Updater"})
+        with urllib.request.urlopen(req, timeout=15) as r:
+            man = json.loads(r.read().decode("utf-8"))
+    except Exception as e:
+        return {"ok": False, "error": f"拉 manifest 失败: {type(e).__name__}: {e}"}
+    zip_url = str(man.get("url") or "")
+    if not zip_url:
+        return {"ok": False, "error": "manifest 里没有补丁地址"}
+    tmp = os.path.join(tempfile.gettempdir(), f"eggbloom-patch-{int(time.time())}.zip")
+    try:
+        req = urllib.request.Request(zip_url, headers={"User-Agent": "EggBloom-Updater"})
+        with urllib.request.urlopen(req, timeout=120) as r, open(tmp, "wb") as f:
+            shutil.copyfileobj(r, f)
+    except Exception as e:
+        return {"ok": False, "error": f"下载补丁失败: {type(e).__name__}: {e}"}
+    try:
+        rep = upd.apply(tmp, man)
+    finally:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+    rep["version"] = str(man.get("version") or "")
+    return rep
+
+
+def _restart_after_update():
+    """更新后重启服务：先停 bot，再退出进程让 Electron 守护拉起新代码。"""
+    try:
+        stop_bot()
+    except Exception:
+        pass
+    time.sleep(1.2)
+    os._exit(0)
 
 
 def push_bot_reload():
@@ -2561,6 +2603,19 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(200, bc)
             return
 
+        # ── 热补丁更新（2026-11-01）：只读检查放 GET ──
+        if path == "/api/update/check":
+            try:
+                sys.path.insert(0, str(PROJECT))
+                from harness import updater as _upd
+                url = urlparse(self.path).query
+                qs = {k: (v or [""])[0] for k, v in parse_qs(url).items()}
+                man_url = qs.get("url") or load_config().get("update_manifest_url") or ""
+                self._send_json(200, _upd.check(str(man_url)))
+            except Exception as e:
+                self._send_json(200, {"ok": False, "error": f"{type(e).__name__}: {e}"})
+            return
+
         if path == "/" or path == "/index.html":
             try:
                 mtime = _get_html_mtime()
@@ -3265,6 +3320,21 @@ class Handler(BaseHTTPRequestHandler):
                 data = json.loads(body)
         except Exception:
             pass
+
+        # ── 热补丁更新（2026-11-01）：安装 + 可选重启 ──
+        if path == "/api/update/apply":
+            try:
+                sys.path.insert(0, str(PROJECT))
+                from harness import updater as _upd
+                man_url = str(data.get("url") or load_config().get("update_manifest_url") or "")
+                rep = _update_apply_from_manifest(_upd, man_url)
+                rep["need_restart"] = bool(rep.get("ok"))
+                self._send_json(200, rep)
+                if rep.get("ok") and data.get("restart"):
+                    threading.Thread(target=_restart_after_update, daemon=True).start()
+            except Exception as e:
+                self._send_json(200, {"ok": False, "error": f"{type(e).__name__}: {e}"})
+            return
 
         # ── Agent 端点转发（前端只跟 webui_server 说话，agent 逻辑在 bot_core）──
         #  设计文档 §3 明确：「不新增独立进程/端口（复用 webui_server 转发）」。

@@ -41,6 +41,10 @@
    "阈值"
   ],
   [
+   "update",
+   "更新"
+  ],
+  [
    "deai",
    "去 AI 味"
   ],
@@ -963,6 +967,16 @@
    "default": 4,
    "default_text": "4"
   },
+  "update_manifest_url": {
+   "label": "更新地址（latest.json）",
+   "desc": "发布页直接填 GitHub Release 里的 latest.json 地址；也可指向自己的镜像",
+   "ctl": "text",
+   "panel": "update",
+   "unit": "",
+   "id": "sUpdateManifestUrl",
+   "default": "",
+   "default_text": "空"
+  },
   "private_reply_max_length": {
    "label": "私聊回复最大长度（字）",
    "desc": "私聊单条回复的最大字数，超出会按句子拆分多条发送",
@@ -1672,6 +1686,14 @@
   "recallPrivatePreview": {
    "label": "预览私聊反馈",
    "panel": "recall"
+  },
+  "sUpdateCheckBtn": {
+   "label": "检查更新",
+   "panel": "update"
+  },
+  "sUpdateApplyBtn": {
+   "label": "安装并重启",
+   "panel": "update"
   },
   "exitPreview": {
    "label": "模拟空闲退场预览",
