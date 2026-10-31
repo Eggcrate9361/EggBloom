@@ -42,6 +42,20 @@ TAGS_FILE = os.path.join(MEME_DIR, "tags.json")
 ALLOWED_EXT = {".gif", ".jpg", ".jpeg", ".png", ".webp"}
 MIN_BYTES = 2 * 1024
 MAX_BYTES = 3 * 1024 * 1024
+
+
+def _limits(cfg=None) -> tuple:
+    """单张大小的上下限（字节）。可配：`meme_collect_min_kb` / `meme_collect_max_mb`。"""
+    c = cfg if isinstance(cfg, dict) else _cfg()
+    try:
+        lo = int(float(c.get("meme_collect_min_kb", MIN_BYTES / 1024)) * 1024)
+    except (TypeError, ValueError):
+        lo = MIN_BYTES
+    try:
+        hi = int(float(c.get("meme_collect_max_mb", MAX_BYTES / 1024 / 1024)) * 1024 * 1024)
+    except (TypeError, ValueError):
+        hi = MAX_BYTES
+    return max(0, lo), max(lo + 1, hi)
 DEFAULT_DAILY_CAP = 30
 
 _CLASSIFIER = None
@@ -169,13 +183,14 @@ def skip_reason(path: str, *, cfg=None) -> str:
         sz = os.path.getsize(src)
     except OSError:
         return "读不了这个文件"
-    if sz < MIN_BYTES:
+    _lo, _hi = _limits(c)
+    if sz < _lo:
         return f"图太小（{sz}B）"
-    if sz > MAX_BYTES:
-        return f"图太大（{sz / 1024 / 1024:.1f}MB，上限 {MAX_BYTES // 1024 // 1024}MB）"
+    if sz > _hi:
+        return f"图太大（{sz / 1024 / 1024:.1f}MB，上限 {_hi // 1024 // 1024}MB）"
     try:
         with open(src, "rb") as f:
-            sha = hashlib.sha1(f.read(MAX_BYTES + 1)).hexdigest()
+            sha = hashlib.sha1(f.read(_hi + 1)).hexdigest()
     except OSError:
         return "读不了这个文件"
     try:
@@ -206,11 +221,12 @@ def maybe_collect(path: str, *, tags=None, source: str = "auto",
         sz = os.path.getsize(src)
     except Exception:
         return ""
-    if sz < MIN_BYTES or sz > MAX_BYTES:
+    _lo, _hi = _limits(cfg)
+    if sz < _lo or sz > _hi:
         return ""
     try:
         with open(src, "rb") as f:
-            raw = f.read(MAX_BYTES + 1)
+            raw = f.read(_hi + 1)
         sha = hashlib.sha1(raw).hexdigest()
     except Exception:
         return ""

@@ -11003,10 +11003,15 @@ def _build_cached_messages(history: List[Dict], cache_key: str,
             _own_ts = float(_last_own.get("ts") or 0)
         except (TypeError, ValueError):
             _own_ts = 0.0
-        if _own_txt and (not _own_ts or time.time() - _own_ts < 1800):
-            messages.append({"role": "system", "content":
-                             "【你上一条说的（原文，被追问时以这个为准，别改口）】\n"
-                             + _clip_for_history(_own_txt, 160)})
+        if _own_txt:
+            try:
+                _win = float(_config.get("consistency_own_window_min", 30) or 0.0) * 60.0
+            except (TypeError, ValueError):
+                _win = 1800.0
+            if not _own_ts or _win <= 0 or time.time() - _own_ts < _win:
+                messages.append({"role": "system", "content":
+                                 "【你上一条说的（原文，被追问时以这个为准，别改口）】\n"
+                                 + _clip_for_history(_own_txt, 160)})
 
     # 动态上下文（时间/记忆等，放最后面——不影响前面的缓存）
     for part in dynamic_parts:
@@ -14789,10 +14794,16 @@ def _pipeline_step(group_id):
                 #  这里只负责在发送前替换。放在所有文本改写之后。
                 try:
                     from harness import consistency as _cons
+                    try:
+                        _n_own = int(_config.get("consistency_own_msgs", 4) or 4)
+                    except (TypeError, ValueError):
+                        _n_own = 4
                     _own = [h.get("content") or ""
                             for h in (group_chat_history.get(group_id) or [])
-                            if h.get("role") == "assistant"][-4:]
-                    _v = _cons.verdict(merged_text, sent_text, _own)
+                            if h.get("role") == "assistant"][-_n_own:]
+                    _v = _cons.verdict(
+                        merged_text, sent_text, _own,
+                        min_overlap=float(_config.get("consistency_min_overlap", 0.3) or 0.3))
                     if _v.get("conflict"):
                         _old = sent_text
                         sent_text = _cons.safe_ack(_v["witness"])
@@ -16767,10 +16778,16 @@ def main():
                         #  → 不发否认，改成认账句。判据见 harness/consistency.py。
                         try:
                             from harness import consistency as _cons
+                            try:
+                                _n_own = int(_config.get("consistency_own_msgs", 4) or 4)
+                            except (TypeError, ValueError):
+                                _n_own = 4
                             _own = [h.get("content") or ""
                                     for h in (chat_history.get(sender) or [])
-                                    if h.get("role") == "assistant"][-4:]
-                            _v = _cons.verdict(text, sent_text, _own)
+                                    if h.get("role") == "assistant"][-_n_own:]
+                            _v = _cons.verdict(
+                                text, sent_text, _own,
+                                min_overlap=float(_config.get("consistency_min_overlap", 0.3) or 0.3))
                             if _v.get("conflict"):
                                 _old = sent_text
                                 sent_text = _cons.safe_ack(_v["witness"])

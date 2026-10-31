@@ -37,6 +37,10 @@
    "评测台"
   ],
   [
+   "tuning",
+   "阈值"
+  ],
+  [
    "deai",
    "去 AI 味"
   ],
@@ -870,6 +874,76 @@
    "id": "sEvalExtraBanned",
    "default": "",
    "default_text": "空"
+  },
+  "private_slow_ack_after": {
+   "label": "慢回填充（秒）",
+   "desc": "私聊生成超过这么多秒还没结果，先发一条「在/等下」接住；0 = 关。默认 12（原来硬编码 3，普通一轮 6 秒就出正文，3 秒的填充像多回了一次）",
+   "ctl": "number",
+   "panel": "tuning",
+   "unit": "秒",
+   "id": "sSlowAckAfter",
+   "default": 12.0,
+   "default_text": "12.0"
+  },
+  "meme_save_lookback_sec": {
+   "label": "存图回看窗口（秒）",
+   "desc": "发完图隔一会儿才说「存表情包」时，往前找多久内的上一轮图片；0 = 只认本轮",
+   "ctl": "number",
+   "panel": "tuning",
+   "unit": "秒",
+   "id": "sMemeSaveLookback",
+   "default": 300,
+   "default_text": "300"
+  },
+  "meme_collect_min_kb": {
+   "label": "表情包下限（KB）",
+   "desc": "小于这个大小的图不收（防缩略图/坏图）",
+   "ctl": "number",
+   "panel": "tuning",
+   "unit": "",
+   "id": "sMemeMinKb",
+   "default": 2,
+   "default_text": "2"
+  },
+  "meme_collect_max_mb": {
+   "label": "表情包上限（MB）",
+   "desc": "大于这个大小的图不收",
+   "ctl": "number",
+   "panel": "tuning",
+   "unit": "",
+   "id": "sMemeMaxMb",
+   "default": 3,
+   "default_text": "3"
+  },
+  "consistency_min_overlap": {
+   "label": "认账闸重合阈值",
+   "desc": "用户在主张我说过某话、我在否认时，证据句要有多少重合才算「确实说过」；越低越容易拦（也越容易误伤）",
+   "ctl": "number",
+   "panel": "tuning",
+   "unit": "",
+   "id": "sConsMinOverlap",
+   "default": 0.3,
+   "default_text": "0.3"
+  },
+  "consistency_own_window_min": {
+   "label": "认账闸时间窗（分钟）",
+   "desc": "「你上一条说的」原文块多久内有效；0 = 不限",
+   "ctl": "number",
+   "panel": "tuning",
+   "unit": "",
+   "id": "sConsOwnWindow",
+   "default": 30,
+   "default_text": "30"
+  },
+  "consistency_own_msgs": {
+   "label": "认账闸取样条数",
+   "desc": "查证时往前看我最近几条回复",
+   "ctl": "number",
+   "panel": "tuning",
+   "unit": "",
+   "id": "sConsOwnMsgs",
+   "default": 4,
+   "default_text": "4"
   },
   "private_reply_max_length": {
    "label": "私聊回复最大长度（字）",

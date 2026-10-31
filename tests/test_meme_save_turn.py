@@ -71,6 +71,19 @@ def main():
     M.set_turn(images=[], is_group=False, sender="u3")
     check("过期不取", M.turn_images_for_save() == [], M.turn_images_for_save())
 
+    print("\n[6] 窗口可配（0 = 只认本轮）")
+    _orig_cfg = M._cfg
+    try:
+        M._cfg = lambda: {"meme_save_lookback_sec": 0}
+        M.set_turn(images=["p.jpg"], is_group=False, sender="u4")
+        M.set_turn(images=[], is_group=False, sender="u4")
+        check("配 0 → 不回看", M.turn_images_for_save() == [], M.turn_images_for_save())
+        M._cfg = lambda: {"meme_save_lookback_sec": 600}
+        M.set_turn(images=[], is_group=False, sender="u4")
+        check("配 600 → 还看得到", M.turn_images_for_save() == ["p.jpg"], M.turn_images_for_save())
+    finally:
+        M._cfg = _orig_cfg
+
     print("\n" + "=" * 56)
     print(f"通过 {PASS} / 失败 {FAIL}")
     if FAILURES:

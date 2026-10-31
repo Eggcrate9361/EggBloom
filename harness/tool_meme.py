@@ -27,9 +27,25 @@ _TURN = {"images": [], "is_group": False, "sender": "", "group_id": ""}
 
 #: 上一轮"真的带图"的那次（2026-10-31）。用户发完图、隔一条文字再说「存表情包」
 #: 时，本轮 `_TURN["images"]` 是空的 —— 但那句"存"指的显然是刚发的那张。
-#: 只做 5 分钟内的同人会话回看，且只在上轮确有图时成立。
+#: 窗口可配：`meme_save_lookback_sec`（默认 300 秒，0 = 只看本轮）。
 _LAST_IMAGES = {"images": [], "is_group": False, "sender": "", "group_id": "", "ts": 0.0}
 _LAST_IMAGES_TTL = 300.0
+
+
+def _cfg() -> dict:
+    """读主配置（harness 不 import bot_core，失败就退回内置默认）。"""
+    try:
+        import config as _c
+        return _c.load_config() or {}
+    except Exception:
+        return {}
+
+
+def _lookback_sec() -> float:
+    try:
+        return float(_cfg().get("meme_save_lookback_sec", _LAST_IMAGES_TTL) or 0.0)
+    except (TypeError, ValueError):
+        return _LAST_IMAGES_TTL
 
 
 def set_turn(*, images=None, is_group: bool = False, sender: str = "",
@@ -59,7 +75,7 @@ def turn_images_for_save(path: str = "") -> list:
         and _LAST_IMAGES.get("is_group") == _TURN.get("is_group")
     )
     if same_person and _LAST_IMAGES.get("images") \
-            and (time.time() - float(_LAST_IMAGES.get("ts") or 0)) <= _LAST_IMAGES_TTL:
+            and (time.time() - float(_LAST_IMAGES.get("ts") or 0)) <= _lookback_sec():
         return list(_LAST_IMAGES["images"])
     return []
 

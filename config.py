@@ -588,6 +588,15 @@ DEFAULT_CONFIG = {
     # "一次问话回复两次，其中一次只说了个在"。默认改成 12 秒。
     "private_slow_ack_after": 12.0,
 
+    # 运行时阈值（2026-10-31，用户原话「都是硬编码」）：
+    # 配置中心 → 功能 → 阈值。全部即时生效，0 一般表示"关"。
+    "meme_save_lookback_sec": 300,     # 说「存表情包」时往前找多久内的上一轮图片
+    "meme_collect_min_kb": 2,          # 表情库单张下限
+    "meme_collect_max_mb": 3,          # 表情库单张上限
+    "consistency_min_overlap": 0.3,    # 认账闸：证据句重合阈值
+    "consistency_own_window_min": 30,  # 认账闸：「你上一条说的」块有效时长（分钟）
+    "consistency_own_msgs": 4,         # 认账闸：查证时看我最近几条回复
+
     # 自定义内容
     "custom_exit_phrases_short": [],
     "custom_exit_phrases_idle": [],

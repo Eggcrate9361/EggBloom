@@ -1569,6 +1569,7 @@ function mountConsole(root){  root.innerHTML = `    <div class="panel" style="ma
     {id:'recall',title:'撤回反馈',render:renderRecallPanel},
     {id:'switches',title:'功能开关',render:renderSwitchesPanel},
     {id:'evals',title:'评测台',render:renderEvalPanel},
+    {id:'tuning',title:'阈值',render:renderTuningPanel},
     {id:'deai',title:'去AI味',render:renderDeAiPanel},
     {id:'length',title:'消息长度',render:renderLengthPanel},
     {id:'exit',title:'退场语',render:renderExitPanel},
@@ -2058,6 +2059,34 @@ function renderEvalPanel(root){
       <div class="field-desc">临时想拦的词写这里，不用改 rules.json</div></div>
   `;
 }
+function renderTuningPanel(root){
+  /* 运行时阈值（2026-10-31）：以前这些是代码里的魔法数（5 分钟、12 秒、3MB…），
+     用户原话「都是硬编码」。这里把最近几个行为阈值放出来，改完即时生效（热重载）。 */
+  root.innerHTML += `
+    <div class="settings-panel-desc" style="font-size:12px;color:#8a8f9a;margin:0 0 10px;line-height:1.6">运行时阈值：都是代码里原本写死的数，改完保存即生效。0 通常表示「关掉」。</div>
+    <div class="field"><div class="field-label">慢回填充（秒）</div>
+      <input class="input" id="sSlowAckAfter" type="number" min="0" step="0.5">
+      <div class="field-desc">私聊生成超过这么多秒还没结果，先发一条「在/等下」接住；0 = 关。默认 12（原来硬编码 3，普通一轮 6 秒就出正文，3 秒的填充像多回了一次）</div></div>
+    <div class="field"><div class="field-label">存图回看窗口（秒）</div>
+      <input class="input" id="sMemeSaveLookback" type="number" min="0">
+      <div class="field-desc">发完图隔一会儿才说「存表情包」时，往前找多久内的上一轮图片；0 = 只认本轮</div></div>
+    <div class="field"><div class="field-label">表情包下限（KB）</div>
+      <input class="input" id="sMemeMinKb" type="number" min="0">
+      <div class="field-desc">小于这个大小的图不收（防缩略图/坏图）</div></div>
+    <div class="field"><div class="field-label">表情包上限（MB）</div>
+      <input class="input" id="sMemeMaxMb" type="number" min="1">
+      <div class="field-desc">大于这个大小的图不收</div></div>
+    <div class="field"><div class="field-label">认账闸重合阈值</div>
+      <input class="input" id="sConsMinOverlap" type="number" min="0" max="1" step="0.05">
+      <div class="field-desc">用户在主张我说过某话、我在否认时，证据句要有多少重合才算「确实说过」；越低越容易拦（也越容易误伤）</div></div>
+    <div class="field"><div class="field-label">认账闸时间窗（分钟）</div>
+      <input class="input" id="sConsOwnWindow" type="number" min="1">
+      <div class="field-desc">「你上一条说的」原文块多久内有效；0 = 不限</div></div>
+    <div class="field"><div class="field-label">认账闸取样条数</div>
+      <input class="input" id="sConsOwnMsgs" type="number" min="1" max="20">
+      <div class="field-desc">查证时往前看我最近几条回复</div></div>
+  `;
+}
 function renderDeAiPanel(root){
   const da = (cfg)=>(cfg&&cfg.de_ai)||{};
   root.innerHTML += `
@@ -2453,6 +2482,9 @@ async function loadSettingsData(){
     t('sEvalRequireColloquial', c.eval_require_colloquial); t('sEvalStrictBudget', c.eval_strict_budget); t('sEvalLiveEnable', c.eval_live_enable);
     s('sEvalMaxChars', c.eval_max_chars); s('sEvalMaxParts', c.eval_max_parts); s('sEvalMaxTotal', c.eval_max_total);
     s('sEvalExtraBanned', c.eval_extra_banned);
+    s('sSlowAckAfter', c.private_slow_ack_after); s('sMemeSaveLookback', c.meme_save_lookback_sec);
+    s('sMemeMinKb', c.meme_collect_min_kb); s('sMemeMaxMb', c.meme_collect_max_mb);
+    s('sConsMinOverlap', c.consistency_min_overlap); s('sConsOwnWindow', c.consistency_own_window_min); s('sConsOwnMsgs', c.consistency_own_msgs);
     t('sDeAiEnable', (c.de_ai&&c.de_ai.enabled)!==false); t('sDeAiPromptInject', (c.de_ai&&c.de_ai.prompt_inject)!==false); t('sDeAiPostProcess', (c.de_ai&&c.de_ai.post_process)!==false);
     t('sDeAiBanWords', (c.de_ai&&c.de_ai.ban_words)!==false); t('sDeAiBanDashes', (c.de_ai&&c.de_ai.ban_dashes)!==false); t('sDeAiBanTriple', (c.de_ai&&c.de_ai.ban_rule_of_three)!==false);
     t('sDeAiBanFiller', (c.de_ai&&c.de_ai.ban_filler)!==false); t('sDeAiBanSyco', (c.de_ai&&c.de_ai.ban_sycophancy)!==false);
@@ -2595,6 +2627,9 @@ function collectSettings(){
     eval_require_colloquial: chk('sEvalRequireColloquial'), eval_strict_budget: chk('sEvalStrictBudget'), eval_live_enable: chk('sEvalLiveEnable'),
     eval_max_chars: num('sEvalMaxChars'), eval_max_parts: num('sEvalMaxParts'), eval_max_total: num('sEvalMaxTotal'),
     eval_extra_banned: val('sEvalExtraBanned'),
+    private_slow_ack_after: num('sSlowAckAfter'), meme_save_lookback_sec: num('sMemeSaveLookback'),
+    meme_collect_min_kb: num('sMemeMinKb'), meme_collect_max_mb: num('sMemeMaxMb'),
+    consistency_min_overlap: num('sConsMinOverlap'), consistency_own_window_min: num('sConsOwnWindow'), consistency_own_msgs: num('sConsOwnMsgs'),
     self_heal_enable: chk('sSelfHealEnable'),
     de_ai: { enabled: chk('sDeAiEnable'), prompt_inject: chk('sDeAiPromptInject'), post_process: chk('sDeAiPostProcess'),
       ban_words: chk('sDeAiBanWords'), ban_dashes: chk('sDeAiBanDashes'), ban_rule_of_three: chk('sDeAiBanTriple'),
