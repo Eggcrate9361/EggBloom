@@ -2007,6 +2007,10 @@ function renderSwitchesPanel(root){
       <div class="field-label" style="margin:0;flex-shrink:0">俚语注入</div>
       <div class="field-desc" style="margin:0">回复时注入网络热词/黑话，让口气更像真人网友</div></div>
     <div class="field" style="display:flex;align-items:center;gap:20px">
+      <input type="checkbox" class="toggle-input" id="sSelfHealEnable">
+      <div class="field-label" style="margin:0;flex-shrink:0">配置自愈</div>
+      <div class="field-desc" style="margin:0">启动时体检白名单里的开关/预算/记忆共享；类型或范围明显坏了就按上一份好快照（没有则按默认值）改回，并记进 data/repairs.jsonl。只修"明显坏了"的值，不碰 api_key / 目标QQ</div></div>
+    <div class="field" style="display:flex;align-items:center;gap:20px">
       <input type="checkbox" class="toggle-input" id="sNsfwEnable">
       <div class="field-label" style="margin:0;flex-shrink:0">NSFW 内容</div>
       <div class="field-desc" style="margin:0">是否允许 Bot 参与/回复成人向话题，关闭则回避</div></div>
@@ -2444,7 +2448,7 @@ async function loadSettingsData(){
     t('sRecallPrivateEnable', c.recall_private_enable); s('sRecallPrivateCooldown', c.recall_private_cooldown);
     t('sImageCacheEnable', c.image_cache_enable); t('sSelfLearningEnable', c.self_learning_enable);
     t('sPrivateMemoryEnable', c.private_memory_enable); t('sMemoryScopeShare', c.memory_scope_share); t('sSlangInjectorEnable', c.slang_injector_enable);
-    t('sNsfwEnable', c.nsfw_enabled);
+    t('sNsfwEnable', c.nsfw_enabled); t('sSelfHealEnable', c.self_heal_enable);
     t('sEvalEnabled', c.eval_enabled); t('sEvalBanAiSelf', c.eval_ban_ai_self); t('sEvalBanBackstage', c.eval_ban_backstage);
     t('sEvalRequireColloquial', c.eval_require_colloquial); t('sEvalStrictBudget', c.eval_strict_budget); t('sEvalLiveEnable', c.eval_live_enable);
     s('sEvalMaxChars', c.eval_max_chars); s('sEvalMaxParts', c.eval_max_parts); s('sEvalMaxTotal', c.eval_max_total);
@@ -2591,6 +2595,7 @@ function collectSettings(){
     eval_require_colloquial: chk('sEvalRequireColloquial'), eval_strict_budget: chk('sEvalStrictBudget'), eval_live_enable: chk('sEvalLiveEnable'),
     eval_max_chars: num('sEvalMaxChars'), eval_max_parts: num('sEvalMaxParts'), eval_max_total: num('sEvalMaxTotal'),
     eval_extra_banned: val('sEvalExtraBanned'),
+    self_heal_enable: chk('sSelfHealEnable'),
     de_ai: { enabled: chk('sDeAiEnable'), prompt_inject: chk('sDeAiPromptInject'), post_process: chk('sDeAiPostProcess'),
       ban_words: chk('sDeAiBanWords'), ban_dashes: chk('sDeAiBanDashes'), ban_rule_of_three: chk('sDeAiBanTriple'),
       ban_filler: chk('sDeAiBanFiller'), ban_sycophancy: chk('sDeAiBanSyco'), max_sentence_len: num('sDeAiMaxLen') },

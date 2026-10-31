@@ -555,6 +555,10 @@ DEFAULT_CONFIG = {
     "memory_scope_share": True,
     "slang_injector_enable": True,
     "nsfw_enabled": True,
+    # 自愈 R1（1.5.11 §4.5 M2）：启动时体检白名单里的开关/预算/记忆共享，
+    # 类型或范围明显坏了就按上一份好快照（没有则按默认值）改回，并记进
+    # data/repairs.jsonl。只修"明显坏了"的值，不碰 api_key / 目标QQ / 群列表。
+    "self_heal_enable": True,
 
     # ── 评测台（1.5.11 P0-1）────────────────────────────────────────
     # 判据**词表**在 evals/rules.json（改词改文件，不动代码）；

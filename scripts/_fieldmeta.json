@@ -751,6 +751,16 @@
    "default": true,
    "default_text": "开启"
   },
+  "self_heal_enable": {
+   "label": "配置自愈",
+   "desc": "启动时体检白名单里的开关/预算/记忆共享；类型或范围明显坏了就按上一份好快照（没有则按默认值）改回，并记进 data/repairs.jsonl。只修\"明显坏了\"的值，不碰 api_key / 目标QQ",
+   "ctl": "bool",
+   "panel": "switches",
+   "unit": "",
+   "id": "sSelfHealEnable",
+   "default": true,
+   "default_text": "开启"
+  },
   "nsfw_enabled": {
    "label": "NSFW 内容",
    "desc": "是否允许 Bot 参与/回复成人向话题，关闭则回避",

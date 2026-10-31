@@ -4804,6 +4804,7 @@ window.FIELD_META = {
     "private_memory_enable": {"label": "私聊记忆", "desc": "记住私聊中聊过的事，跨会话关联上下文", "ctl": "bool", "panel": "switches", "unit": "", "id": "sPrivateMemoryEnable", "default": true, "default_text": "开启"},
     "memory_scope_share": {"label": "私聊与群共享记忆", "desc": "打开后群聊能召回私聊聊过的内容，私聊也能召回群聊内容；群与群之间仍隔离。代价是群友的发言可能被带到私聊里复述", "ctl": "bool", "panel": "switches", "unit": "", "id": "sMemoryScopeShare", "default": true, "default_text": "开启"},
     "slang_injector_enable": {"label": "俚语注入", "desc": "回复时注入网络热词/黑话，让口气更像真人网友", "ctl": "bool", "panel": "switches", "unit": "", "id": "sSlangInjectorEnable", "default": true, "default_text": "开启"},
+    "self_heal_enable": {"label": "配置自愈", "desc": "启动时体检白名单里的开关/预算/记忆共享；类型或范围明显坏了就按上一份好快照（没有则按默认值）改回，并记进 data/repairs.jsonl。只修\"明显坏了\"的值，不碰 api_key / 目标QQ", "ctl": "bool", "panel": "switches", "unit": "", "id": "sSelfHealEnable", "default": true, "default_text": "开启"},
     "nsfw_enabled": {"label": "NSFW 内容", "desc": "是否允许 Bot 参与/回复成人向话题，关闭则回避", "ctl": "bool", "panel": "switches", "unit": "", "id": "sNsfwEnable", "default": true, "default_text": "开启"},
     "eval_enabled": {"label": "启用评测台", "desc": "总开关；关掉后 python evals/run_eval.py 直接跳过判分并退出 0", "ctl": "bool", "panel": "evals", "unit": "", "id": "sEvalEnabled", "default": true, "default_text": "开启"},
     "eval_ban_ai_self": {"label": "判 AI 自述", "desc": "回复里出现「作为一个人工智能 / 语言模型 / 总的来说」这类就判红", "ctl": "bool", "panel": "evals", "unit": "", "id": "sEvalBanAiSelf", "default": true, "default_text": "开启"},

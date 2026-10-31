@@ -15007,6 +15007,23 @@ def main():
     except Exception as _mb_e:
         log(f"[记忆备份] 跳过（不影响启动）: {_mb_e}")
 
+    # 自愈 R1/R2（2026-10-31，FIXPLAN §4.5 M2）：配置体检 + 快照自愈。
+    # 只动白名单里的开关/预算/记忆共享，且只修"明显坏了"的值（类型/范围）；
+    # 每次自动修复都落 data/repairs.jsonl。关掉 self_heal_enable 就只报告不写。
+    if bool(_config.get("self_heal_enable", True)):
+        try:
+            from harness import self_heal as _heal
+            _hr = _heal.startup(_config)
+            if _hr.get("fixed"):
+                log("[自愈] 修正了 " + "、".join(x["key"] for x in _hr["fixed"]))
+            if _hr.get("unfixable"):
+                log("[自愈] 修不了（需人工）：" + "、".join(
+                    x["key"] for x in _hr["unfixable"]))
+            if (_hr.get("snapshot") or {}).get("rebuilt"):
+                log("[自愈] 配置快照已重建")
+        except Exception as _he:
+            log(f"[自愈] 跳过（不影响启动）: {_he}")
+
     # 表情包采集的两个外部能力（2026-10-30）：判情绪 + 补描述。
     # 注入后采集侧不再 import bot_core，后台线程只回调。
     try:
@@ -15171,6 +15188,16 @@ def main():
                 log(f"[harness] 表情包检索工具已接入: {sorted(_meme_fns)}")
             except Exception as _me:
                 log(f"[harness] 表情包检索工具接入失败: {_me}")
+            # ── 可观测三件套（FIXPLAN 1.5.11 §4.5 M1）──
+            #   failure_top / log_search / trace_get / repairs_list：全是只读，
+            #   让 agent 能回答"今天最常失败的是哪条链路""这次失败的全链路长什么样"。
+            try:
+                from harness import trace_tools as _ttrace
+                _trace_fns = _ttrace.register_all()
+                _work_fns.update(_trace_fns)
+                log(f"[harness] 可观测工具已接入: {sorted(_trace_fns)}")
+            except Exception as _xe:
+                log(f"[harness] 可观测工具接入失败: {_xe}")
             TOOL_FUNCTIONS.update(_work_fns)
             log(f"[harness] 工作型工具已接入: {sorted(_work_fns)}（工作区根 {_WORKSPACE_ROOT}）")
         except Exception as _we:

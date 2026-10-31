@@ -237,6 +237,7 @@
   "memory_scope_share": true,
   "slang_injector_enable": true,
   "nsfw_enabled": true,
+  "self_heal_enable": true,
   "eval_enabled": true,
   "eval_ban_ai_self": true,
   "eval_ban_backstage": true,
