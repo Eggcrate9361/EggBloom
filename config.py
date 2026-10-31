@@ -582,6 +582,12 @@ DEFAULT_CONFIG = {
     "private_reply_max_length": 500,
     "group_reply_max_length": 800,
 
+    # 慢回填充（2026-10-31）：私聊生成超过这么多秒还没结果，先发一条"接住"
+    # （"嗯/在/等下/我看下"）。0 = 关。
+    # 原来硬编码 3 秒 —— 普通一轮 6 秒就出正文，3 秒的填充让用户看到
+    # "一次问话回复两次，其中一次只说了个在"。默认改成 12 秒。
+    "private_slow_ack_after": 12.0,
+
     # 自定义内容
     "custom_exit_phrases_short": [],
     "custom_exit_phrases_idle": [],

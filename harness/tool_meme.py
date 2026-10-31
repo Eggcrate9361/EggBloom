@@ -228,7 +228,13 @@ def meme_save(path: str = "") -> Dict[str, Any]:
         if rel:
             saved.append(rel)
         else:
-            failed.append({"path": p, "error": "这张存不进去"})
+            # 静默跳过会让模型只能说"存不进去"；把同一条判据翻成人话
+            why = ""
+            try:
+                why = _mc.skip_reason(p)
+            except Exception:
+                pass
+            failed.append({"path": p, "error": why or "这张存不进去"})
     # 连续失败冷却（真机 21:11–21:12 连试三回，模型只能反复说同一句）
     global _FAIL_COUNT, _FAIL_UNTIL
     if saved:

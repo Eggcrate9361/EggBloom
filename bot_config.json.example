@@ -249,6 +249,7 @@
   "eval_max_total": 80,
   "eval_extra_banned": "",
   "private_reply_max_length": 500,
+  "private_slow_ack_after": 12.0,
   "group_reply_max_length": 800,
   "custom_exit_phrases_short": [],
   "custom_exit_phrases_idle": [],

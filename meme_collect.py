@@ -149,6 +149,47 @@ def _today_count(idx: dict) -> int:
     return n
 
 
+def skip_reason(path: str, *, cfg=None) -> str:
+    """这张图为什么收不进去（空串 = 可以收）。
+
+    2026-10-31 真机：用户连说三次「存」，模型只能反复说"存不进去"，
+    因为 maybe_collect 是全静默的。这里是同一套判据的**人话版**，
+    给工具层回话用。
+    """
+    c = cfg if isinstance(cfg, dict) else _cfg()
+    if not bool(c.get("meme_collect_enable", True)):
+        return "采集总开关关着"
+    src = str(path or "").strip()
+    if not src or not os.path.isfile(src):
+        return "图没落地（本地找不到这张）"
+    ext = os.path.splitext(src)[1].lower()
+    if ext not in ALLOWED_EXT:
+        return f"这个格式不收（{ext or '没扩展名'}）"
+    try:
+        sz = os.path.getsize(src)
+    except OSError:
+        return "读不了这个文件"
+    if sz < MIN_BYTES:
+        return f"图太小（{sz}B）"
+    if sz > MAX_BYTES:
+        return f"图太大（{sz / 1024 / 1024:.1f}MB，上限 {MAX_BYTES // 1024 // 1024}MB）"
+    try:
+        with open(src, "rb") as f:
+            sha = hashlib.sha1(f.read(MAX_BYTES + 1)).hexdigest()
+    except OSError:
+        return "读不了这个文件"
+    try:
+        idx = _index()
+    except Exception:
+        return ""
+    if sha in idx:
+        return "这张已经存过了"
+    cap = int(c.get("meme_collect_daily_cap", DEFAULT_DAILY_CAP) or 0)
+    if cap > 0 and _today_count(idx) >= cap:
+        return f"今天的采集额度满了（{cap} 张）"
+    return ""
+
+
 def maybe_collect(path: str, *, tags=None, source: str = "auto",
                   from_group: str = "") -> str:
     """把一张图收进图库。返回相对路径；跳过返回空串。"""
