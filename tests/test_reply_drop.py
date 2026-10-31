@@ -54,7 +54,24 @@ def check(name, ok, detail=""):
 
 def _why(**kw):
     import bot_core
-    return bot_core._drop_reason(**kw)
+    # 2026-10-31：10-30 起 `reply_stale_drop_enable` 默认关（用户要求不再按超时
+    # 拦截回复，agent 可能跑十分钟），薄包装会直接返回 ""。本文件测的是
+    # `reply_drop` 的判据本身，不是那个开关 —— 临时打开再测，否则整组假红。
+    _cfg = getattr(bot_core, "_config", None)
+    try:
+        old = _cfg.get("reply_stale_drop_enable") if hasattr(_cfg, "get") else None
+        if hasattr(_cfg, "__setitem__"):
+            _cfg["reply_stale_drop_enable"] = True
+    except Exception:
+        return bot_core._drop_reason(**kw)
+    try:
+        return bot_core._drop_reason(**kw)
+    finally:
+        try:
+            if hasattr(_cfg, "__setitem__"):
+                _cfg["reply_stale_drop_enable"] = old
+        except Exception:
+            pass
 
 
 import reply_drop  # noqa: E402

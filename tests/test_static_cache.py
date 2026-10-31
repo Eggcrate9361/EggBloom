@@ -78,7 +78,11 @@ def main():
     base = f"http://127.0.0.1:{port}"
 
     def get(path, headers=None):
-        req = urllib.request.Request(base + path, headers=headers or {})
+        # 2026-10-31：上一步可能没拿到 ETag/Last-Modified（服务端没给），
+        # 原样把 None 塞进 urllib 会抛 TypeError 把整个文件打断 —— 只保留有值的头，
+        # 让后面的用例正常判红/判绿，而不是死在半路。
+        hdrs = {k: v for k, v in (headers or {}).items() if v is not None}
+        req = urllib.request.Request(base + path, headers=hdrs)
         try:
             with urllib.request.urlopen(req, timeout=15) as r:
                 return r.status, dict(r.headers), r.read()
@@ -86,25 +90,25 @@ def main():
             return e.code, dict(e.headers), e.read()
 
     try:
-        print("[1] 首页的缓存头")
+        print("[1] 首页的缓存头（2026-10-30 起：no-store 是当前决定）")
+        # 2026-10-25 这里改成 no-cache + ETag（省每次 1.2MB 重传）；
+        # 2026-10-30 又改回 `no-store`（用户看到旧页面，主窗口优先保证"改了立刻见"）。
+        # 两次都是拍板过的取舍 —— 本文件锁**当前**决定，将来若再优化性能，
+        # 先解决"内容更新后不刷新"的问题再动这里，别把用例删掉当没事。
         st, hd, body = get("/")
         check("首页 200", st == 200, st)
         cc = (hd.get("Cache-Control") or "").lower()
-        check("没有 no-store（那等于关掉缓存）", "no-store" not in cc, cc)
-        check("含 no-cache（改了能立刻看到）", "no-cache" in cc, cc)
-        check("带 ETag", bool(hd.get("ETag")), hd.get("ETag"))
-        check("带 Last-Modified（顶层导航靠它校验）",
-              bool(hd.get("Last-Modified")), hd.get("Last-Modified"))
+        check("首页 no-store（杜绝旧页面）", "no-store" in cc, cc)
         check("首屏确实是完整文档（不是空壳）", len(body) > 100000, len(body))
 
-        print("\n[2] 带 If-None-Match 应回 304")
-        st2, hd2, body2 = get("/", {"If-None-Match": hd.get("ETag")})
-        check("状态 304", st2 == 304, st2)
-        check("正文为空", len(body2) == 0, len(body2))
+        print("\n[2] 首页不参与协商缓存（no-store → 不回 304）")
+        st2, _hd2, body2 = get("/", {"If-None-Match": "W/\"stale\""})
+        check("带旧 ETag 仍回 200", st2 == 200, st2)
+        check("且带完整正文", len(body2) > 100000, len(body2))
 
-        print("\n[3] 带 If-Modified-Since 也应回 304")
-        st3, hd3, _ = get("/", {"If-Modified-Since": hd.get("Last-Modified")})
-        check("状态 304", st3 == 304, st3)
+        print("\n[3] 首页带 If-Modified-Since 也不回 304")
+        st3, _hd3, _ = get("/", {"If-Modified-Since": "Thu, 01 Jan 1970 00:00:00 GMT"})
+        check("状态 200", st3 == 200, st3)
 
         print("\n[4] 静态资源（字体）")
         fpath = "/fonts/fusion-pixel-12px-sc.woff2"
