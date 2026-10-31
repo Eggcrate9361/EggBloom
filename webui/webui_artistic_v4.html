@@ -5114,6 +5114,52 @@ function cfRenderArea(host, cfg, ctx) {
       ? '<div class="cfg-sec"><div class="cfg-empty">这一组暂时没有可改的项</div></div>'
       : secHtml);
 
+  /* ── 更新面板的动作按钮（2026-11-01）─────────────────────────────
+     字段区是通用渲染，按钮得单独挂。更新只替换程序文件，人格/自建插件/数据不动。 */
+  const _updSec = host.querySelector('[data-sec="update"]');
+  if (_updSec && !_updSec.querySelector('#cfUpdCheck')) {
+    _updSec.insertAdjacentHTML('beforeend',
+      '<div style="display:flex;gap:10px;margin-top:10px;flex-wrap:wrap">'
+      + '<button type="button" class="btn primary" id="cfUpdCheck">检查更新</button>'
+      + '<button type="button" class="btn" id="cfUpdApply" style="display:none">安装并重启</button>'
+      + '</div><div class="cfg-empty" id="cfUpdMsg" style="margin-top:8px">还没检查</div>');
+    const _msg = (t) => { const el = _updSec.querySelector('#cfUpdMsg'); if (el) el.textContent = t; };
+    const _url = () => {
+      const el = _updSec.querySelector('[data-k="update_manifest_url"] input, input#sUpdateManifestUrl')
+        || document.querySelector('input#sUpdateManifestUrl');
+      return el ? el.value : '';
+    };
+    _updSec.querySelector('#cfUpdCheck').addEventListener('click', async () => {
+      _msg('检查中…');
+      try {
+        const r = await fetch('/api/update/check?url=' + encodeURIComponent(_url()));
+        const j = await r.json();
+        if (!j.ok) { _msg('检查失败：' + (j.error || '未知错误')); return; }
+        if (j.newer) {
+          _msg('发现新版本 ' + j.remote + '（当前 ' + (j.local || '未知') + '）');
+          _updSec.querySelector('#cfUpdApply').style.display = '';
+        } else {
+          _msg('已是最新（' + (j.local || '未知') + '）');
+          _updSec.querySelector('#cfUpdApply').style.display = 'none';
+        }
+      } catch (e) { _msg('检查失败：' + e); }
+    });
+    _updSec.querySelector('#cfUpdApply').addEventListener('click', async () => {
+      if (!confirm('安装更新并重启？只替换程序文件，你的数据、人格、自建插件都不动。')) return;
+      _msg('下载并安装中…（完成后自动重启）');
+      try {
+        const r = await fetch('/api/update/apply', {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({url: _url(), restart: true})
+        });
+        const j = await r.json();
+        if (!j.ok) { _msg('安装失败：' + (j.error || '未知错误')); return; }
+        _msg('已更新 ' + (j.applied || []).length + ' 个文件，保留本地改过的 '
+             + (j.kept || []).length + ' 个，正在重启…');
+      } catch (e) { _msg('安装失败：' + e); }
+    });
+  }
+
   const metas = Object.keys(FIELD_META.fields)
     .map(k => [k, FIELD_META.fields[k]]).filter(x => x[1].panel === (ctx.active || ''));
   if (ctx.group === 'look') {
