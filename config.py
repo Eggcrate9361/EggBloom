@@ -597,6 +597,11 @@ DEFAULT_CONFIG = {
     "consistency_own_window_min": 30,  # 认账闸：「你上一条说的」块有效时长（分钟）
     "consistency_own_msgs": 4,         # 认账闸：查证时看我最近几条回复
 
+    # 热补丁更新（2026-11-01）：给终端用户用的更新通道。
+    # 填 latest.json 的公网地址；空 = 关闭检查（开发机默认关）。
+    # 发布侧用 scripts/make_patch.py 生成补丁与 manifest。
+    "update_manifest_url": "",
+
     # 自定义内容
     "custom_exit_phrases_short": [],
     "custom_exit_phrases_idle": [],

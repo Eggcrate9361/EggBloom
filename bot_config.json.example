@@ -256,6 +256,7 @@
   "consistency_min_overlap": 0.3,
   "consistency_own_window_min": 30,
   "consistency_own_msgs": 4,
+  "update_manifest_url": "",
   "group_reply_max_length": 800,
   "custom_exit_phrases_short": [],
   "custom_exit_phrases_idle": [],
