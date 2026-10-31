@@ -302,7 +302,7 @@ def _is_meaningful_fact(content: str) -> bool:
 #: 像「身份」的词尾
 _IDENTITY_SUFFIXES = (
     "生", "员", "师", "家", "士", "工", "长", "商", "医", "警", "兵",
-    "人", "手", "迷", "党", "控", "户", "客", "友",
+    "人", "手", "迷", "党", "控", "户", "客", "友", "主",
 )
 
 #: 玩笑/接话的尾巴 —— 「我是来吃饭的」「我是你爹吧」不是身份
@@ -341,6 +341,58 @@ def _clean_identity(value: str) -> str:
         if v.startswith(prefix) and len(v) > len(prefix) + 1:
             return v[len(prefix):].strip()
     return v
+
+
+#: 纯称谓/玩笑词：作为「身份」没有信息量，而且最容易让模型把**当前对话对象**
+#: 当成「老大」。2026-10-31 真机：三个人私聊里模型都在叫「老大」，用户原话
+#: 「把其他用户当作我（老大）」。
+_IDENTITY_STOPWORDS = frozenset((
+    "老大", "老板", "主人", "爹", "妈", "爸", "哥", "姐", "弟", "妹",
+    "儿子", "女儿", "老公", "老婆", "宝宝", "宝贝", "亲爱的",
+))
+
+#: 问句碎片：`概率：多少` 这种右半边是疑问词的，不是事实
+_QUESTION_WORDS = frozenset(("多少", "啥", "谁", "什么", "哪", "哪里", "几", ""))
+
+
+def _fact_is_usable(category: str, content: str) -> bool:
+    """「这条事实值不值得注入」的形态闸 —— 读写两侧共用。
+
+    为什么要有读侧：2026-10-31 之前的库里有 19 条 facts，能用的不到 3 条
+    （`身份=老大` / `身份=鸡蛋` / `偏好=概率：多少`）。写入侧的闸只能拦新的，
+    存量垃圾得在读的时候也挡一道，否则老库永远脏。
+    """
+    v = str(content or "").strip()
+    if not v or len(v) > 20:
+        return False
+    cat = str(category or "")
+    if cat in ("身份", "identity"):
+        if v in _IDENTITY_STOPWORDS:
+            return False
+        # 5 个字里塞着「老大」的（`你老大修一下`）不是身份，是残句
+        if any(w in v for w in _IDENTITY_STOPWORDS) and not v.endswith(_IDENTITY_SUFFIXES):
+            return False
+        # 带人称代词的 = 句子残片（`谁又来戳我`），身份是名词
+        if any(p in v for p in ("我", "你", "他", "她", "它")):
+            return False
+        # 带 emoji 的（`外莱塔尼亚😡😡`）是玩笑
+        if any(ord(ch) > 0x1F000 for ch in v):
+            return False
+        if v.endswith(_IDENTITY_TAILS):
+            return False
+        # 2~3 字又没有身份词尾：老大 / 小狗 / 鸡蛋 / 张雪峰（真机垃圾的主要形态）
+        if len(v) <= 3 and not v.endswith(_IDENTITY_SUFFIXES):
+            return False
+        return True
+    # 其它类别：右半边是疑问词 = 半截抽取；整个值带疑问词也是
+    m = re.match(r"^([^：:]{1,10})[：:](.*)$", v)
+    if m:
+        right = m.group(2).strip()
+        if right in _QUESTION_WORDS or not m.group(1).strip():
+            return False
+    if any(w in v for w in ("什么", "怎么", "哪儿")):
+        return False
+    return True
 
 
 def _user_scope_filter(scope: str, focus_user: str) -> Tuple[str, tuple]:
@@ -640,6 +692,9 @@ class SuperMemory:
         try:
             conn = sqlite3.connect(DB_PATH)
             for fact in facts:
+                # 写侧质量闸：垃圾进库只会越积越多，且每轮都要注入
+                if not _fact_is_usable(fact.get("category", ""), fact.get("content", "")):
+                    continue
                 self._upsert_fact(conn, scope_id, user_id, fact["category"], fact["content"],
                                   source_msg, float(fact.get("confidence", 0.7)))
             conn.commit()
@@ -799,6 +854,9 @@ class SuperMemory:
             facts = []
             for row, sim in raw_facts:
                 if use_vec and sim < sim_floor:
+                    continue
+                # 读侧质量闸：老库里的垃圾事实不注入（写侧闸只拦新的）
+                if not _fact_is_usable(row[0], row[1]):
                     continue
                 importance = sim if use_vec else row[2]
                 tier = str(row[5] or "long") if len(row) > 5 else "long"
