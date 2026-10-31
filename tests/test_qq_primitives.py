@@ -162,7 +162,13 @@ try:
 
     # ── 7. call() 与注册表 ────────────────────────────────────
     specs = ps.specs()
-    check("注册表 8 个原语", len(specs) == 8, len(specs))
+    names = sorted(s["name"] for s in specs)
+    # 2026-10-31：10-30 加了 self_history（行为账本），8 → 9。这里不再只数字，
+    # 顺手把**必须存在**的原语钉住 —— 少一个就是能力被悄悄摘掉了。
+    check("注册表 9 个原语", len(specs) == 9, names)
+    check("原语清单没少（8 个老的 + self_history）",
+          set(names) == {"onebot", "http_fetch", "vision", "asr", "fs_list",
+                         "fs_read", "recall", "remember", "self_history"}, names)
     check("注册表条目字段齐全",
           all(set(s) >= {"name", "signature", "side_effects", "permission", "desc"} for s in specs))
     check("call 能按名字调到", ps.call("fs_list", path=".")["ok"] is True)

@@ -622,6 +622,9 @@ class TestRecallEvent(_EventHandlersBase):
         bot_core.GROUP_SESSION["10001"] = {"remaining": 5, "last_msg_time": time.time()}
         bot_core.RECALL_FEEDBACK_TIME.pop("group_10001", None)
         bot_core.GROUP_RECENT_MSGS["10001"] = [(time.time(), "111", "你好")]
+        # 2026-10-30 起「不是所有撤回都值得回」：只有截断了回复、或 bot 最近在
+        # 这个群说过话才回。这里模拟"bot 刚说过话"，才能走到要回的分支。
+        bot_core.GROUP_LAST_BOT_MSG["10001"] = time.time()
         try:
             bot_core._handle_recall_event(self._grp_recall())
             self.smart_send_group.assert_called_once()
@@ -631,6 +634,7 @@ class TestRecallEvent(_EventHandlersBase):
             bot_core.GROUP_SESSION.pop("10001", None)
             bot_core.GROUP_RECENT_MSGS.pop("10001", None)
             bot_core.RECALL_FEEDBACK_TIME.pop("group_10001", None)
+            bot_core.GROUP_LAST_BOT_MSG.pop("10001", None)
 
     def test_group_recall_cancels_pending_buffer(self):
         timer = mock.Mock()

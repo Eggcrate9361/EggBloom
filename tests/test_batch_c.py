@@ -17,6 +17,12 @@ sandbox_neurobase()
 
 import bot_core  # noqa: E402
 import reply_drop  # noqa: E402
+
+# 2026-10-31：10-30 起 `reply_stale_drop_enable` 默认关（用户要求不再按超时拦截
+# 回复，agent 可能跑十分钟），薄包装直接返回 ""。本文件测的是丢弃判据本身 ——
+# 不打开这个开关，下面几条全是假红（与 test_reply_drop 同一原因）。
+bot_core._config["reply_stale_drop_enable"] = True
+
 from plugins.ego.personality_engine import _clip_topic  # noqa: E402
 from plugins.ego.mood_engine import MoodEngine  # noqa: E402
 from plugins.web_search import _needs_search  # noqa: E402

@@ -164,7 +164,10 @@ def main():
     print("\n=== ④ 诚实铁律 ===")
     seg = bot_core._build_static_prompt(False)
     check("铁律含'不把失败说成成功'", "不把失败说成成功" in seg)
-    check("铁律点名禁说'发过去了'", "发过去了" in seg)
+    # 2026-10-31：铁律原文改成了「不许说『发你了』」，卡死旧文案会假红 ——
+    # 判据改成"两种说法至少禁掉一种"，仍然锁住"把失败说成成功"。
+    check("铁律点名禁说'发过去了/发你了'",
+          ("发过去了" in seg) or ("发你了" in seg))
 
     print("\n" + "=" * 56)
     print(f"通过 {PASS} / 失败 {FAIL}")

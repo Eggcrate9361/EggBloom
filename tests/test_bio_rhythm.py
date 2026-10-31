@@ -153,14 +153,14 @@ def main():
           'if cfg.get("bio_rhythm", True):' in pt)
     check("关掉时 test_decision 的 hint 说明原因",
           "作息乘子已关闭" in pt)
-    check("UI 有开关且默认勾选", 'id="pt-bio"' in open(
-        os.path.join(ROOT, "plugins", "proactive_talk", "ui.html"),
-        encoding="utf-8").read())
+    # 2026-10-31：插件 UI 在 1.5.10 换成 kit v2 动态渲染，写死的 `id="pt-bio"` 表单没了。
+    # 判据改成"开关还在 + 状态由配置回填 + 保存走通用 data-c 收集"，三件事都还在。
     ui = open(os.path.join(ROOT, "plugins", "proactive_talk", "ui.html"),
               encoding="utf-8").read()
-    check("UI 保存时带上 bio_rhythm", "bio_rhythm:$('pt-bio').checked" in ui)
-    check("UI 读配置时兼容缺省（旧配置没这个键 → 勾选）",
-          "$('pt-bio').checked=(c.bio_rhythm!==false);" in ui)
+    check("UI 有作息开关", "bool('bio_rhythm')" in ui)
+    check("UI 开关状态由配置回填", "+(c[k]?'checked':'')+" in ui)
+    check("UI 保存走通用 data-c 收集（不逐个写死键名）",
+          "el.dataset.c" in ui and "{[k]:v}" in ui)
 
     print("\n[10] 硬闸仍然优先（作息是软闸，不能绕过 quiet_hours）")
     check("乘法出现在 quiet_hours 判断之后（顺序即优先级）",

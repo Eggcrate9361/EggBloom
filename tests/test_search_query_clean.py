@@ -86,8 +86,12 @@ def main():
                encoding="utf-8").read()
     check("before_reply 用清理后的 query 去搜", "search_web(query)" in src)
     check("meta.query 记的是实际检索词", '"query": query' in src)
+    # 2026-10-31：实参名从 `msg` 改成了 `_text_only`（先剥图片块再判定），
+    # 卡死变量名会假红。判据回到语义：**判定不得用检索词 `query`**。
+    import re as _re
     check("判定仍用原文（不因清理改变要不要搜）",
-          "_needs_search(msg)" in src, "判定改成 query 会改变触发行为")
+          bool(_re.search(r"_needs_search\((?!query\b)[^)]+\)", src)),
+          "判定改成 query 会改变触发行为")
 
     print("\n[7] 主链没被改（前缀仍要给主模型看）")
     bc = open(os.path.join(ROOT, "bot_core.py"), encoding="utf-8").read()
