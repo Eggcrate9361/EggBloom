@@ -50,7 +50,10 @@ try:
     mc.maybe_collect = lambda p, **kw: seen.append(p) or "collected/x.jpg"
     tm.set_turn(images=["C:/tmp/a.jpg"], is_group=False, sender="1")
     r = tm.meme_save({"target_qq": "123", "path": ""})
-    check("dict 入参回落本轮图", r.get("ok") is True and r.get("saved") == ["collected/x.jpg"], r)
+    check("dict 入参回落本轮图",
+          r.get("ok") is True
+          and isinstance(r.get("saved"), list) and r["saved"]
+          and r["saved"][0].get("rel") == "collected/x.jpg", r)
     check("传给采集的是本轮路径", seen == ["C:/tmp/a.jpg"], seen)
 finally:
     mc.maybe_collect = orig

@@ -94,7 +94,7 @@ def load_meta():
 SCAN_DIRS = ("bot_core.py", "config.py", "comfyui_client.py", "logger_setup.py",
              "web_access.py", "webui", "protocols", "plugins", "harness",
              "reply_gate.py", "reply_drop.py", "reply_budget.py", "persona_form.py",
-             "speak_gate.py")
+             "speak_gate.py", "meme_collect.py", "meme_engine.py")
 
 #: 配置对象的变量名白名单。**必须限定变量名**，不能只匹配 `.get("key")`：
 #   `free_llm.py` 里有 `r.get("model", "")` —— 那是读 API 响应字段，不是读配置。

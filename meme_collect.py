@@ -46,13 +46,13 @@ MAX_BYTES = 3 * 1024 * 1024
 
 def _limits(cfg=None) -> tuple:
     """单张大小的上下限（字节）。可配：`meme_collect_min_kb` / `meme_collect_max_mb`。"""
-    c = cfg if isinstance(cfg, dict) else _cfg()
+    cfg = cfg if isinstance(cfg, dict) else _cfg()
     try:
-        lo = int(float(c.get("meme_collect_min_kb", MIN_BYTES / 1024)) * 1024)
+        lo = int(float(cfg.get("meme_collect_min_kb", MIN_BYTES / 1024)) * 1024)
     except (TypeError, ValueError):
         lo = MIN_BYTES
     try:
-        hi = int(float(c.get("meme_collect_max_mb", MAX_BYTES / 1024 / 1024)) * 1024 * 1024)
+        hi = int(float(cfg.get("meme_collect_max_mb", MAX_BYTES / 1024 / 1024)) * 1024 * 1024)
     except (TypeError, ValueError):
         hi = MAX_BYTES
     return max(0, lo), max(lo + 1, hi)
