@@ -4905,6 +4905,23 @@ def onebot_fresh_image(file_id: str):
     return "", f"get_image 无可下载字段: keys={list(d.keys())}"
 
 
+def _is_group_msg(msg) -> bool:
+    """这条消息是不是群消息。
+
+    ★ 2026-10-31 真机：轮询路径（`get_group_msg_history`）回来的消息**没有
+      `message_type` 字段**，只认它的话群里发图永远收不进表情库
+      （用户反馈「表情包采集没有」）。三条判据任一成立即算群：
+      `message_type=group` / `_type=group` / 有 `group_id`（轮询路径给 `_group_id`）。
+    """
+    if not isinstance(msg, dict):
+        return False
+    return (
+        str(msg.get("message_type") or "") == "group"
+        or str(msg.get("_type") or "") == "group"
+        or bool(str(msg.get("group_id") or msg.get("_group_id") or ""))
+    )
+
+
 def extract_images(msg):
     """从消息中提取图片 URL/路径，下载到本地，返回本地路径列表"""
     raw = msg.get("message", [])
@@ -4985,10 +5002,12 @@ def extract_images(msg):
                 images.append(local)
     # 群聊表情包自动采集（2026-10-30）：只收群里的（私聊图是对方的照片，
     # 收进表情库越界）；后台线程跑，失败不影响这条消息。
+    # 群/私聊判定见 `_is_group_msg`（轮询路径没有 message_type，别只认它）。
     try:
-        if str((msg or {}).get("message_type") or "") == "group":
+        if _is_group_msg(msg):
             import meme_collect as _mcollect
-            _gid = str((msg or {}).get("group_id") or "")
+            _m = msg or {}
+            _gid = str(_m.get("group_id") or _m.get("_group_id") or "")
             for _p in images:
                 _mcollect.maybe_collect_async(_p, source="group", from_group=_gid)
     except Exception:

@@ -44,6 +44,12 @@ _OP_MARKERS = (
 #: 6 位以上连续数字（QQ 号、群号；手机号 11 位也会被盖住）
 _NUMBER_RE = re.compile(r"[0-9]{6,}")
 
+#: 括号里的号码：`AAA无理由退货(3865661256)` / `（3865661256）`。
+#: ★ 2026-10-31 真机：模型自报身份时几乎总把号写在括号里，而分句只按
+#:   `，、；` 切 —— 整句变成一个片段，连号带名字一起被删，回复直接变空
+#:   （用户反馈「回复内容没有」）。括号里的号是"附注"，摘掉即可，句子留着。
+_PAREN_NUM_RE = re.compile(r"[（(]\s*[0-9]{6,}\s*[)）]")
+
 #: 简历式开头
 _RESUME_STARTS = ("我是", "我今年", "我平时", "我住在", "我来自", "我喜欢", "我不喜欢")
 
@@ -67,10 +73,13 @@ def _drop_leak_sentences(line: str) -> str:
 
 
 def _strip_numbers(line: str) -> str:
-    """删掉含长数字的小句（保留其它小句）。"""
+    """删掉含长数字的小句（保留其它小句）。括号里的号只摘号，不连句子。"""
+    if "(" in line or "（" in line:
+        line = _PAREN_NUM_RE.sub("", line)
+        line = re.sub(r"[（(]\s*[)）]", "", line)      # 摘完留下的空括号
     if not _NUMBER_RE.search(line):
         return line
-    clauses = re.split(r"(?<=[，,、；;\s])", line)
+    clauses = re.split(r"(?<=[，,、；;\s（(])", line)
     kept = [c for c in clauses if not _NUMBER_RE.search(c)]
     out = "".join(kept)
     # 清理删完留下的粘连标点/多余空格
