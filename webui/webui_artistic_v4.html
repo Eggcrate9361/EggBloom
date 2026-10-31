@@ -8173,7 +8173,7 @@ async function pageChatlogs(el) {
   const hit = (r) => {
     if (!kw) return true;
     const s = kw.toLowerCase();
-    return [r.ask, r.reply, r.who, scopeLabel(r.scope),
+    return [r.ask, r.reply, r.who, scopeLabel(r.scope), r.mem,
             (r.tools || []).map(t => t.name + ' ' + (t.q || '') + ' ' + (t.note || '')).join(' ')]
       .join(' ').toLowerCase().includes(s);
   };
@@ -8207,6 +8207,11 @@ async function pageChatlogs(el) {
       const note = t.note ? ' <span class="evt-tag">' + esc(t.note) + '</span>' : '';
       h += '<div class="evt-x" style="color:var(--ai)">工具 ' + esc(t.name) + ' ' + q + note + '</div>';
     });
+    /* 记忆注入（1.5.11 P0-3）：这一轮 recall() 实际给了哪些段、多少字 —— 用户问
+       「它到底记得什么」时，日志页能直接答，不用去翻控制台的原始流。 */
+    if (r.mem) {
+      h += '<div class="evt-x" style="color:var(--ink4)">记忆 ' + esc(r.mem) + '</div>';
+    }
     if (r.reply) {
       h += '<div class="evt-x" style="color:var(--ok);margin-top:4px"><b>回</b> '
         + esc(r.reply).replace(/\n/g, '<br>') + '</div>';

@@ -1351,6 +1351,9 @@ _RND_REPLY_PM = re.compile(r"^(?:私聊|群)\[.*?\]?\s*AI回复\((.+?)\):\s*(.+)
 _RND_REPLY_GRP = re.compile(r"^群回复:\s*(.+)$", re.S)
 _RND_SEND = re.compile(r"^\[发送\]\s*(私聊|群\[([^\]]+)\])\s*→\s*([^:]*):.*?句=(.*)$", re.S)
 _RND_COST = re.compile(r"^AI 回复 \(")
+# `[记忆] uid=… scene=group 注入 4 段/532 字（身份 92 / …）`（1.5.11 P0-3 新增）
+#   日志页要能回答"这一轮它到底记得什么"，所以把它挂到当前轮上，而不是当噪音丢掉。
+_RND_MEM = re.compile(r"^\[记忆\]\s*(.+)$")
 
 # ── notice 事件（2026-10-25）──
 # 日志页原来只认消息与群回复，戳一戳、撤回、成员增减、禁言整类不可见。
@@ -1671,6 +1674,14 @@ def collect_rounds(limit=120):
         sc, who = _rnd_scope_from_event(s)
         if sc:
             last_scope = (sc, _rnd_who_nick(who))
+            continue
+
+        # ── 记忆注入（1.5.11 P0-3）：挂到当前轮，不新开轮 ──
+        m = _RND_MEM.match(s)
+        if m:
+            if cur is not None:
+                _note = m.group(1).strip()
+                cur["mem"] = (cur.get("mem") + "；" + _note) if cur.get("mem") else _note
             continue
 
         # ── 戳一戳：事件行本身就是新一轮的起点 ──

@@ -245,6 +245,30 @@ def test_skip_is_its_own_round():
     check("跳过轮没有回复", not rows[1].get("reply"), rows[1].get("reply"))
 
 
+def test_memory_line_attached():
+    print("\n[9] [记忆] 行挂到当前轮，而不是被丢掉")
+
+    text = (
+        "[21:09:58] [事件] 收到: post_type=message msg_type=group"
+        " uid=(/ω＼)(1234567890) gid=123456789\n"
+        "[21:10:00] 群[123456789] 合并消息: [(/ω＼)] 你还记得我吗\n"
+        "[21:10:01] [记忆] uid=1234567890 scene=group 注入 4 段/532 字"
+        "（身份 92 / 称呼 18 / 跨场景 120 / 检索 302）\n"
+        "[21:10:02] 群回复: 记得，换工作那事\n"
+    )
+    r = _rounds_for(text)
+    check("记忆行不新开轮", r["total"] == 1, r["total"])
+    if not r["rounds"]:
+        return
+    row = r["rounds"][0]
+    check("记忆挂在这一轮上", "注入 4 段" in (row.get("mem") or ""), row.get("mem"))
+    check("问话没被记忆行顶掉", "你还记得我吗" in (row.get("ask") or ""), row.get("ask"))
+    check("回复没被记忆行顶掉", "记得" in (row.get("reply") or ""), row.get("reply"))
+
+    r2 = _rounds_for("[21:10:01] [记忆] uid=1 scene=group 注入 1 段/20 字\n")
+    check("没有当前轮时记忆行不炸", r2["total"] == 0, r2["total"])
+
+
 def main():
     test_poke_round()
     test_poke_ignore_not_a_round()
@@ -254,6 +278,7 @@ def main():
     test_decision_binds_own_batch()
     test_poke_merge_is_one_round()
     test_skip_is_its_own_round()
+    test_memory_line_attached()
 
     print("\n" + "=" * 56)
     print(f"通过 {PASS} / 失败 {FAIL}")
