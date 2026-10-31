@@ -28,7 +28,8 @@ s = io.open(V3, encoding="utf-8").read()
 PANELS = [
     ("provider", "提供商管理"), ("basic", "基础"), ("llm", "对话大脑"),
     ("session", "会话"), ("group", "群聊"), ("meme", "表情包"),
-    ("recall", "撤回反馈"), ("switches", "功能开关"), ("deai", "去 AI 味"),
+    ("recall", "撤回反馈"), ("switches", "功能开关"), ("evals", "评测台"),
+    ("deai", "去 AI 味"),
     ("length", "回复长度"), ("exit", "退场语"), ("trigger", "触发"),
     ("perm", "权限"), ("autoaccept", "自动通过"), ("protoRisk", "协议风险"),
 ]
@@ -36,6 +37,7 @@ FUNC2PANEL = {
     "renderProviderPanel": "provider", "renderBasicPanel": "basic", "renderLLMPanel": "llm",
     "renderSessionPanel": "session", "renderGroupPanel": "group", "renderMemePanel": "meme",
     "renderRecallPanel": "recall", "renderSwitchesPanel": "switches",
+    "renderEvalPanel": "evals",
     "renderDeAiPanel": "deai", "renderLengthPanel": "length", "renderExitPanel": "exit",
     "renderTriggerPanel": "trigger", "renderPermPanel": "perm",
     "renderAutoAcceptPanel": "autoaccept", "renderProtoRiskPanel": "protoRisk",

@@ -4730,7 +4730,7 @@ let cfgOriginal = {};
    `typeof FIELD_META === 'undefined'`（页面无报错，但配置页读不到），
    挂到 window 上这个问题就彻底不存在了。*/
 window.FIELD_META = {
-  panels: [["provider", "提供商管理"], ["basic", "基础"], ["llm", "对话大脑"], ["session", "会话"], ["group", "群聊"], ["meme", "表情包"], ["recall", "撤回反馈"], ["switches", "功能开关"], ["deai", "去 AI 味"], ["length", "回复长度"], ["exit", "退场语"], ["trigger", "触发"], ["perm", "权限"], ["autoaccept", "自动通过"], ["protoRisk", "协议风险"]],
+  panels: [["provider", "提供商管理"], ["basic", "基础"], ["llm", "对话大脑"], ["session", "会话"], ["group", "群聊"], ["meme", "表情包"], ["recall", "撤回反馈"], ["switches", "功能开关"], ["evals", "评测台"], ["deai", "去 AI 味"], ["length", "回复长度"], ["exit", "退场语"], ["trigger", "触发"], ["perm", "权限"], ["autoaccept", "自动通过"], ["protoRisk", "协议风险"]],
   actions: {"llmModeRemote": {"label": "远程 API", "panel": "llm"}, "llmModeLocal": {"label": "本地模型", "panel": "llm"}, "sOpenWizard": {"label": "配置向导", "panel": "llm"}, "sApiKeyEdit": {"label": "修改 Key", "panel": "llm"}, "sApiKeyClear": {"label": "清除当前提供商的 Key", "panel": "llm"}, "sFetchModels": {"label": "获取模型列表", "panel": "llm"}, "sTestLlmForm": {"label": "测试连接", "panel": "llm"}, "sTestLocalLlm": {"label": "测试本地连接", "panel": "llm"}, "sScanLocalLlm": {"label": "自动探测", "panel": "llm"}, "sStartLocalLlm": {"label": "启动 llama-server", "panel": "llm"}, "sStopLocalLlm": {"label": "停止 llama-server", "panel": "llm"}, "sOpenLocalLlm": {"label": "打开 8081", "panel": "llm"}, "sTestImageLlm": {"label": "测试生图模型", "panel": "llm"}, "sStartImageLlm": {"label": "启动生图模型", "panel": "llm"}, "sStopImageLlm": {"label": "停止生图模型", "panel": "llm"}, "sOpenImageLlm": {"label": "打开生图端口", "panel": "llm"}, "recallPrePreview": {"label": "预览撤回前", "panel": "recall"}, "recallPostPreview": {"label": "预览撤回后", "panel": "recall"}, "recallPrivatePreview": {"label": "预览私聊反馈", "panel": "recall"}, "exitPreview": {"label": "模拟空闲退场预览", "panel": "exit"}},
   fields: {
     "de_ai.enabled": {"label": "启用去AI味总开关", "desc": "", "ctl": "bool", "panel": "deai", "unit": "", "id": "sDeAiEnable", "nested": "de_ai", "sub": "enabled"},
@@ -4805,16 +4805,16 @@ window.FIELD_META = {
     "memory_scope_share": {"label": "私聊与群共享记忆", "desc": "打开后群聊能召回私聊聊过的内容，私聊也能召回群聊内容；群与群之间仍隔离。代价是群友的发言可能被带到私聊里复述", "ctl": "bool", "panel": "switches", "unit": "", "id": "sMemoryScopeShare", "default": true, "default_text": "开启"},
     "slang_injector_enable": {"label": "俚语注入", "desc": "回复时注入网络热词/黑话，让口气更像真人网友", "ctl": "bool", "panel": "switches", "unit": "", "id": "sSlangInjectorEnable", "default": true, "default_text": "开启"},
     "nsfw_enabled": {"label": "NSFW 内容", "desc": "是否允许 Bot 参与/回复成人向话题，关闭则回避", "ctl": "bool", "panel": "switches", "unit": "", "id": "sNsfwEnable", "default": true, "default_text": "开启"},
-    "eval_enabled": {"label": "启用评测台", "desc": "总开关；关掉后 python evals/run_eval.py 直接跳过判分并退出 0", "ctl": "bool", "panel": "switches", "unit": "", "id": "sEvalEnabled", "default": true, "default_text": "开启"},
-    "eval_ban_ai_self": {"label": "判 AI 自述", "desc": "回复里出现「作为一个人工智能 / 语言模型 / 总的来说」这类就判红", "ctl": "bool", "panel": "switches", "unit": "", "id": "sEvalBanAiSelf", "default": true, "default_text": "开启"},
-    "eval_ban_backstage": {"label": "判露后台", "desc": "回复里出现「接口 / 模型 / 转述 / 原图」这类就判红", "ctl": "bool", "panel": "switches", "unit": "", "id": "sEvalBanBackstage", "default": true, "default_text": "开启"},
-    "eval_require_colloquial": {"label": "判书面语/客服腔", "desc": "语气类：出现「您 / 建议 / 进行」判红；长回复还得有口语痕迹", "ctl": "bool", "panel": "switches", "unit": "", "id": "sEvalRequireColloquial", "default": true, "default_text": "开启"},
-    "eval_strict_budget": {"label": "判长度与气泡", "desc": "单条字数/气泡数/总字数超了判红（与线上 reply_budget 同一套口径）", "ctl": "bool", "panel": "switches", "unit": "", "id": "sEvalStrictBudget", "default": true, "default_text": "开启"},
-    "eval_live_enable": {"label": "live 判分（占位）", "desc": "真调模型判「像不像它」；prompt 组装收口后才接线，现在打开也只走 offline", "ctl": "bool", "panel": "switches", "unit": "", "id": "sEvalLiveEnable", "default": false, "default_text": "关闭"},
-    "eval_max_chars": {"label": "单条字数上限", "desc": "取「分类预算」与这里的更严值；线上硬上限 16 字", "ctl": "number", "panel": "switches", "unit": "", "id": "sEvalMaxChars", "default": 16, "default_text": "16"},
-    "eval_max_parts": {"label": "气泡数上限", "desc": "一次回复最多几条；线上硬上限 3 条", "ctl": "number", "panel": "switches", "unit": "", "id": "sEvalMaxParts", "default": 3, "default_text": "3"},
-    "eval_max_total": {"label": "总字数上限", "desc": "整条回复合计字数；线上硬上限 80 字", "ctl": "number", "panel": "switches", "unit": "", "id": "sEvalMaxTotal", "default": 80, "default_text": "80"},
-    "eval_extra_banned": {"label": "额外禁用词", "desc": "临时想拦的词写这里，不用改 rules.json", "ctl": "text", "panel": "switches", "unit": "", "id": "sEvalExtraBanned", "default": "", "default_text": "空"},
+    "eval_enabled": {"label": "启用评测台", "desc": "总开关；关掉后 python evals/run_eval.py 直接跳过判分并退出 0", "ctl": "bool", "panel": "evals", "unit": "", "id": "sEvalEnabled", "default": true, "default_text": "开启"},
+    "eval_ban_ai_self": {"label": "判 AI 自述", "desc": "回复里出现「作为一个人工智能 / 语言模型 / 总的来说」这类就判红", "ctl": "bool", "panel": "evals", "unit": "", "id": "sEvalBanAiSelf", "default": true, "default_text": "开启"},
+    "eval_ban_backstage": {"label": "判露后台", "desc": "回复里出现「接口 / 模型 / 转述 / 原图」这类就判红", "ctl": "bool", "panel": "evals", "unit": "", "id": "sEvalBanBackstage", "default": true, "default_text": "开启"},
+    "eval_require_colloquial": {"label": "判书面语/客服腔", "desc": "语气类：出现「您 / 建议 / 进行」判红；长回复还得有口语痕迹", "ctl": "bool", "panel": "evals", "unit": "", "id": "sEvalRequireColloquial", "default": true, "default_text": "开启"},
+    "eval_strict_budget": {"label": "判长度与气泡", "desc": "单条字数/气泡数/总字数超了判红（与线上 reply_budget 同一套口径）", "ctl": "bool", "panel": "evals", "unit": "", "id": "sEvalStrictBudget", "default": true, "default_text": "开启"},
+    "eval_live_enable": {"label": "live 判分（占位）", "desc": "真调模型判「像不像它」；prompt 组装收口后才接线，现在打开也只走 offline", "ctl": "bool", "panel": "evals", "unit": "", "id": "sEvalLiveEnable", "default": false, "default_text": "关闭"},
+    "eval_max_chars": {"label": "单条字数上限", "desc": "取「分类预算」与这里的更严值；线上硬上限 16 字", "ctl": "number", "panel": "evals", "unit": "", "id": "sEvalMaxChars", "default": 16, "default_text": "16"},
+    "eval_max_parts": {"label": "气泡数上限", "desc": "一次回复最多几条；线上硬上限 3 条", "ctl": "number", "panel": "evals", "unit": "", "id": "sEvalMaxParts", "default": 3, "default_text": "3"},
+    "eval_max_total": {"label": "总字数上限", "desc": "整条回复合计字数；线上硬上限 80 字", "ctl": "number", "panel": "evals", "unit": "", "id": "sEvalMaxTotal", "default": 80, "default_text": "80"},
+    "eval_extra_banned": {"label": "额外禁用词", "desc": "临时想拦的词写这里，不用改 rules.json", "ctl": "text", "panel": "evals", "unit": "", "id": "sEvalExtraBanned", "default": "", "default_text": "空"},
     "private_reply_max_length": {"label": "私聊回复最大长度（字）", "desc": "私聊单条回复的最大字数，超出会按句子拆分多条发送", "ctl": "number", "panel": "length", "unit": "字", "id": "sPrivateReplyMaxLen", "default": 500, "default_text": "500"},
     "group_reply_max_length": {"label": "群聊回复最大长度（字）", "desc": "群聊单条回复的最大字数，防止刷屏霸版", "ctl": "number", "panel": "length", "unit": "字", "id": "sGroupReplyMaxLen", "default": 800, "default_text": "800"},
     "msg_split_len": {"label": "超长消息切分阈值（字）", "desc": "Bot 输出的消息超过该字数时按句子拆分多条发送（0 = 不拆分）", "ctl": "number", "panel": "length", "unit": "字", "id": "sMsgSplitLen", "default": 2000, "default_text": "2000"},
@@ -4956,7 +4956,7 @@ const CFG_GROUPS = [
   ['talk',     '说话', ['llm', 'deai', 'length'],        '参数 · 语气 · 长度'],
   ['grouptalk','群聊', ['group', 'trigger', 'exit', 'perm'], '时机 · 触发 · 退场'],
   ['interact', '互动', ['meme', 'recall'],               '表情 · 撤回'],
-  ['feature',  '功能', ['switches', 'autoaccept', 'session'], '开关 · 自动通过'],
+  ['feature',  '功能', ['switches', 'evals', 'autoaccept', 'session'], '开关 · 评测 · 自动通过'],
   ['look',     '界面', ['ui'],                           '版本 · 配色'],
 ];
 function cfGroupOf(panel) {

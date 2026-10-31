@@ -1568,6 +1568,7 @@ function mountConsole(root){  root.innerHTML = `    <div class="panel" style="ma
     {id:'meme',title:'表情包',render:renderMemePanel},
     {id:'recall',title:'撤回反馈',render:renderRecallPanel},
     {id:'switches',title:'功能开关',render:renderSwitchesPanel},
+    {id:'evals',title:'评测台',render:renderEvalPanel},
     {id:'deai',title:'去AI味',render:renderDeAiPanel},
     {id:'length',title:'消息长度',render:renderLengthPanel},
     {id:'exit',title:'退场语',render:renderExitPanel},
@@ -2009,7 +2010,12 @@ function renderSwitchesPanel(root){
       <input type="checkbox" class="toggle-input" id="sNsfwEnable">
       <div class="field-label" style="margin:0;flex-shrink:0">NSFW 内容</div>
       <div class="field-desc" style="margin:0">是否允许 Bot 参与/回复成人向话题，关闭则回避</div></div>
-    <div class="settings-panel-desc" style="font-size:12px;color:#8a8f9a;margin:18px 0 6px;line-height:1.6">评测台（evals/）：40 场机械判分。判据词表在 evals/rules.json，改词改那里；下面这一组只控制「判不判」和长度上限 —— 关掉某项 = 这类不判，不是删词。</div>
+  `;
+}
+function renderEvalPanel(root){
+  /* 评测台（1.5.11 P0-1）：判据词表在 evals/rules.json，这里只放「判不判」和长度上限。 */
+  root.innerHTML += `
+    <div class="settings-panel-desc" style="font-size:12px;color:#8a8f9a;margin:0 0 10px;line-height:1.6">评测台（evals/）：40 场机械判分。判据词表在 evals/rules.json，改词改那里；下面这一组只控制「判不判」和长度上限 —— 关掉某项 = 这类不判，不是删词。跑分命令：python evals/run_eval.py</div>
     <div class="field" style="display:flex;align-items:center;gap:20px">
       <input type="checkbox" class="toggle-input" id="sEvalEnabled">
       <div class="field-label" style="margin:0;flex-shrink:0">启用评测台</div>
