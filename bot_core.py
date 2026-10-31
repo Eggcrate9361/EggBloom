@@ -10986,6 +10986,27 @@ def _build_cached_messages(history: List[Dict], cache_key: str,
     for h in _recent_clipped:
         messages.append({"role": h["role"], "content": h["content"]})
 
+    # ── 最近一次「我说过的话」原文（2026-10-31）────────────────────────
+    #   真机：被追问「你不是说还有一张吗」，它回「哪来的第二张，我瞎说的？」
+    #   历史里明明有那句（账本摘要 100 字口径也在窗口内），但它选择改口。
+    #   把上一条**原文**单独摆出来（最多 160 字、30 分钟内有效），比指望它
+    #   从摘要账本里自己翻出来稳。prompt 层面做不到绝对，但这是最便宜的一档。
+    _last_own = None
+    for _h in reversed(history or []):
+        if isinstance(_h, dict) and _h.get("role") == "assistant":
+            _last_own = _h
+            break
+    if _last_own:
+        _own_txt = str(_last_own.get("content") or "").strip()
+        try:
+            _own_ts = float(_last_own.get("ts") or 0)
+        except (TypeError, ValueError):
+            _own_ts = 0.0
+        if _own_txt and (not _own_ts or time.time() - _own_ts < 1800):
+            messages.append({"role": "system", "content":
+                             "【你上一条说的（原文，被追问时以这个为准，别改口）】\n"
+                             + _clip_for_history(_own_txt, 160)})
+
     # 动态上下文（时间/记忆等，放最后面——不影响前面的缓存）
     for part in dynamic_parts:
         if part:
