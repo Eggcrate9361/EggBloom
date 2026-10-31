@@ -14,7 +14,9 @@ from typing import Any, Dict, List, Optional, Tuple
 
 PLUGIN_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(PLUGIN_DIR, "data")
-DB_PATH = os.path.join(DATA_DIR, "super_memory.db")
+# 测试/运维可用环境变量把库指到别处（先例：tests/_sandbox.py 的 NEXSANDBASE_HOME）。
+# 单测必须打这个，否则 import 时就会对**生产库**跑建表与迁移。
+DB_PATH = os.environ.get("EGGBLOOM_SUPER_MEMORY_DB") or os.path.join(DATA_DIR, "super_memory.db")
 CONFIG_PATH = os.path.join(DATA_DIR, "config.json")
 EXPORT_PATH = os.path.join(DATA_DIR, "persona_export.json")
 
@@ -289,6 +291,77 @@ def _is_meaningful_fact(content: str) -> bool:
     return True
 
 
+# ── 身份事实质量闸（2026-10-31，1.5.11「记忆清洗」）────────────────────
+# 真机遗留：群里随口一句「我是鸡蛋」「我是小狗」被抽成 `身份`，经
+# `_update_persona_kernel` 进【长期人格】，每轮注入给所有人。用户原话
+# 「[身份] 事实质量差（鸡蛋/小狗被抽成身份）」。
+#
+# 这里只做**形态判断**（零成本、不调 LLM）：身份是有词尾规律的
+# （学生 / 程序员 / 老师 / 上海人），玩笑是随口的裸名词（鸡蛋 / 小狗 / 饿）。
+
+#: 像「身份」的词尾
+_IDENTITY_SUFFIXES = (
+    "生", "员", "师", "家", "士", "工", "长", "商", "医", "警", "兵",
+    "人", "手", "迷", "党", "控", "户", "客", "友",
+)
+
+#: 玩笑/接话的尾巴 —— 「我是来吃饭的」「我是你爹吧」不是身份
+_IDENTITY_TAILS = ("的", "了", "吧", "啦", "哦", "嘛", "啊", "呀", "哈",
+                   "呢", "吗", "着", "过", "呗", "咯", "哇", "嘞")
+
+#: 一眼玩笑的信号：同一句里出现，就不当身份
+_IDENTITY_JOKE_MARKERS = ("哈哈", "hhh", "233", "笑死", "草", "😂", "🤣",
+                          "乐死", "绷不住", "乐子")
+
+
+def _identity_fact_confidence(text: str, value: str) -> float:
+    """判断「我是 X」抽出来的 X 像不像身份 → 置信度（0 = 丢弃，不存库）。"""
+    v = (value or "").strip()
+    if not v or len(v) > 12:
+        return 0.0
+    if v.endswith(_IDENTITY_TAILS):
+        return 0.0
+    t = text or ""
+    if any(k in t for k in _IDENTITY_JOKE_MARKERS):
+        return 0.0
+    # 「我叫X」一定是自报名字 —— 名字不会有身份词尾（「小明」「老王」）
+    if "我叫" in t and 2 <= len(v) <= 6:
+        return 0.9
+    if v.endswith(_IDENTITY_SUFFIXES):
+        return 0.9 if len(v) >= 3 else 0.8
+    if "是一名" in t or "是一位" in t or re.search(r"我是[做干].{1,12}的", t):
+        return 0.8
+    return 0.0
+
+
+def _clean_identity(value: str) -> str:
+    """剥掉「我是一名 / 我是一位」里的量词，只留身份本身。"""
+    v = (value or "").strip()
+    for prefix in ("一名", "一位", "一个", "名", "位"):
+        if v.startswith(prefix) and len(v) > len(prefix) + 1:
+            return v[len(prefix):].strip()
+    return v
+
+
+def _user_scope_filter(scope: str, focus_user: str) -> Tuple[str, tuple]:
+    """记忆按人的 SQL 片段（facts / events 共用）。
+
+    2026-10-31：群里「事件：吃饭」会跨人出现 —— events 原本只有 scope_id，
+    没有"这是谁的事"。现在写入带 `user_id`，召回按人过滤：
+      · group  + focus_user → **严格**只取本人的（老库里 user_id 为空的行
+        无法归属，宁可不提也不串话）；
+      · private + focus_user → 本作用域本来就只有一个人，老行（空 user_id）
+        仍然算他的，避免升级后私聊记忆"失忆"；
+      · 无 focus_user → 不过滤（保持旧行为）。
+    """
+    uid = str(focus_user or "")
+    if not uid:
+        return "", ()
+    if str(scope) == "group":
+        return " AND user_id=?", (uid,)
+    return " AND (user_id=? OR user_id='' OR user_id IS NULL)", (uid,)
+
+
 def _affection_level(score: int) -> str:
     """好感度 → 关系档（2026-10-21 调整阈值）。
 
@@ -358,6 +431,7 @@ class SuperMemory:
                 CREATE TABLE IF NOT EXISTS events (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     scope_id TEXT NOT NULL,
+                    user_id TEXT DEFAULT '',
                     event_type TEXT NOT NULL,
                     summary TEXT NOT NULL,
                     participants TEXT DEFAULT '',
@@ -370,6 +444,7 @@ class SuperMemory:
                 CREATE TABLE IF NOT EXISTS persona_kernel (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     scope_id TEXT NOT NULL,
+                    user_id TEXT DEFAULT '',
                     key TEXT NOT NULL,
                     value TEXT NOT NULL,
                     confidence REAL DEFAULT 0.8,
@@ -411,6 +486,26 @@ class SuperMemory:
                 mcols = [r[1] for r in conn.execute('PRAGMA table_info(messages)').fetchall()]
                 if 'tier' not in mcols:
                     conn.execute('ALTER TABLE messages ADD COLUMN tier TEXT DEFAULT "long"')
+                conn.commit()
+            except Exception:
+                pass
+            # 迁移：记忆按人（2026-10-31，1.5.11「记忆清洗」）
+            #   ① events 只有 scope_id，群聊里所有人的事件混在一起 →
+            #      「事件：吃饭」会跨人出现。补 user_id + 索引，召回按人过滤。
+            #   ② persona_kernel 是作用域级、不区分人 → 「我是学生」谁先说就顶谁，
+            #      再注入给全群。改成按人一行，唯一索引跟着换（老行 user_id=''，
+            #      无法归属，group 侧不再注入）。
+            # 两处都是幂等 ALTER，重复启动无副作用。
+            try:
+                ecols = [r[1] for r in conn.execute('PRAGMA table_info(events)').fetchall()]
+                if 'user_id' not in ecols:
+                    conn.execute('ALTER TABLE events ADD COLUMN user_id TEXT DEFAULT ""')
+                conn.execute('CREATE INDEX IF NOT EXISTS idx_events_user ON events(scope_id, user_id, timestamp)')
+                pcols = [r[1] for r in conn.execute('PRAGMA table_info(persona_kernel)').fetchall()]
+                if 'user_id' not in pcols:
+                    conn.execute('ALTER TABLE persona_kernel ADD COLUMN user_id TEXT DEFAULT ""')
+                conn.execute('DROP INDEX IF EXISTS idx_persona_key')
+                conn.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_persona_key ON persona_kernel(scope_id, user_id, key)')
                 conn.commit()
             except Exception:
                 pass
@@ -470,8 +565,8 @@ class SuperMemory:
         seen_content: set = set()      # 同内容去重（多条正则会命中同一句）
 
         patterns = [
-            (r"我是(.+?)(?=[，。！？\s]|$)", "身份", lambda m: m.group(1).strip()),
-            (r"我叫(.+?)(?=[，。！？\s]|$)", "身份", lambda m: m.group(1).strip()),
+            (r"我是(.+?)(?=[，。！？\s]|$)", "身份", lambda m: _clean_identity(m.group(1))),
+            (r"我叫(.+?)(?=[，。！？\s]|$)", "身份", lambda m: _clean_identity(m.group(1))),
             (r"我的([^，。！？\s]{2,10}?)是(.+?)(?=[，。！？\s]|$)",
              "偏好", lambda m: f"{m.group(1)}：{m.group(2)}"),
             # ★ 原 `([^，。！？\s]+?)是(.+?)` 已删除：无主语约束 → 抽取对话碎片。
@@ -490,12 +585,22 @@ class SuperMemory:
             for m in matches:
                 try:
                     content = extractor(m)
-                    if content and len(content) < 50 and _is_meaningful_fact(content):
+                    if not content or len(content) >= 50:
+                        continue
+                    # 身份类走形态闸：裸名词（鸡蛋/小狗）直接丢，不留给
+                    # persona_kernel 每轮注入。
+                    conf = 0.7
+                    if category == "身份":
+                        conf = _identity_fact_confidence(text, content)
+                        if conf <= 0.0:
+                            continue
+                    if content and _is_meaningful_fact(content):
                         # 去重：多条正则会命中同一句（如「我的生日是X」同时命中
                         # 「我的X是Y」与「我的生日是Y」）→ 同内容只留第一条
                         if content not in seen_content:
                             seen_content.add(content)
-                            facts.append({"category": category, "content": content})
+                            facts.append({"category": category, "content": content,
+                                          "confidence": conf})
                 except Exception:
                     continue
 
@@ -535,7 +640,8 @@ class SuperMemory:
         try:
             conn = sqlite3.connect(DB_PATH)
             for fact in facts:
-                self._upsert_fact(conn, scope_id, user_id, fact["category"], fact["content"], source_msg)
+                self._upsert_fact(conn, scope_id, user_id, fact["category"], fact["content"],
+                                  source_msg, float(fact.get("confidence", 0.7)))
             conn.commit()
             conn.close()
         except Exception as e:
@@ -543,7 +649,7 @@ class SuperMemory:
 
     # ── 事件提取 ──
 
-    def extract_events(self, scope_id: str, text: str) -> List[Dict[str, Any]]:
+    def extract_events(self, scope_id: str, text: str, user_id: str = "") -> List[Dict[str, Any]]:
         events: List[Dict[str, Any]] = []
         text = text.strip()
         if not text or len(text) > 300:
@@ -582,12 +688,13 @@ class SuperMemory:
                     "summary": summary,
                     "emotion": emotion,
                     "importance": importance,
+                    "user_id": str(user_id or ""),
                 })
                 break
 
         return events[:1]
 
-    def _store_events(self, scope_id: str, events: List[Dict[str, Any]]):
+    def _store_events(self, scope_id: str, events: List[Dict[str, Any]], user_id: str = ""):
         if not events:
             return
         try:
@@ -601,8 +708,11 @@ class SuperMemory:
                 except Exception:
                     pass
                 conn.execute(
-                    "INSERT INTO events (scope_id, event_type, summary, participants, emotion, timestamp, importance, embedding, tier) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    (str(scope_id), event["event_type"], event["summary"], "", event.get("emotion", ""), now, event.get("importance", 0.5), emb, self._classify_tier(event.get("importance", 0.5), 1)),
+                    "INSERT INTO events (scope_id, user_id, event_type, summary, participants, emotion, timestamp, importance, embedding, tier) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (str(scope_id), str(event.get("user_id") or user_id or ""),
+                     event["event_type"], event["summary"], "", event.get("emotion", ""),
+                     now, event.get("importance", 0.5), emb,
+                     self._classify_tier(event.get("importance", 0.5), 1)),
                 )
             conn.commit()
             conn.close()
@@ -631,6 +741,8 @@ class SuperMemory:
                 if not qvec:
                     use_vec = False
             min_sim = float(self.config.get("embed_min_sim", 0.35))
+            # 按人过滤（facts 与 events 同一口径，见 _user_scope_filter）
+            uf_sql, uf_args = _user_scope_filter(scope, focus_user)
 
             def _sim(emb_text):
                 if not use_vec or not emb_text:
@@ -645,10 +757,10 @@ class SuperMemory:
             raw_facts = []
             cur = conn.execute(
                 "SELECT category, content, confidence, last_used, embedding, tier FROM facts "
-                "WHERE scope_id=? AND confidence > 0.6 AND (? = 0 OR (embedding IS NOT NULL AND embedding != '')) "
-                "AND (? = '' OR user_id=? OR user_id='' OR user_id IS NULL) "
-                "ORDER BY confidence DESC, last_used DESC LIMIT 100",
-                (str(scope_id), 1 if use_vec else 0, str(focus_user or ""), str(focus_user or "")),
+                "WHERE scope_id=? AND confidence > 0.6 AND (? = 0 OR (embedding IS NOT NULL AND embedding != ''))"
+                + uf_sql +
+                " ORDER BY confidence DESC, last_used DESC LIMIT 100",
+                (str(scope_id), 1 if use_vec else 0) + uf_args,
             )
             for row in cur.fetchall():
                 raw_facts.append((row, _sim(row[4])))
@@ -656,8 +768,11 @@ class SuperMemory:
             # 2. 重要事件（向量优先）
             raw_events = []
             cur = conn.execute(
-                "SELECT event_type, summary, emotion, importance, timestamp, embedding, tier FROM events WHERE scope_id=? AND importance > 0.5 AND (? = 0 OR (embedding IS NOT NULL AND embedding != '')) ORDER BY timestamp DESC LIMIT 100",
-                (str(scope_id), 1 if use_vec else 0),
+                "SELECT event_type, summary, emotion, importance, timestamp, embedding, tier FROM events "
+                "WHERE scope_id=? AND importance > 0.5 AND (? = 0 OR (embedding IS NOT NULL AND embedding != ''))"
+                + uf_sql +
+                " ORDER BY timestamp DESC LIMIT 100",
+                (str(scope_id), 1 if use_vec else 0) + uf_args,
             )
             for row in cur.fetchall():
                 age = now - row[4]
@@ -761,7 +876,16 @@ class SuperMemory:
 
     # ── 人格沉淀 ──
 
-    def _update_persona_kernel(self, scope_id: str, facts: List[Dict[str, str]]):
+    def _update_persona_kernel(self, scope_id: str, facts: List[Dict[str, str]], user_id: str = ""):
+        """把事实沉淀成「长期人格」。
+
+        2026-10-31（1.5.11 记忆清洗）两处改动：
+          ① **按人一行**：原本 key 只有 (scope_id, key)，群里谁先说「我是学生」
+             就顶掉谁，再注入给所有人；现在带 user_id，各人的身份各自保存。
+          ② **低置信度不进**：置信度 < 0.6 的事实（玩笑/接话，见
+             `_identity_fact_confidence`）不写 persona_kernel —— 这块是
+             每轮无条件注入的，宁缺毋滥。
+        """
         try:
             conn = sqlite3.connect(DB_PATH)
             now = time.time()
@@ -773,11 +897,14 @@ class SuperMemory:
                 "关系": "relationships",
                 "事件": "key_events",
             }
+            uid = str(user_id or "")
             for fact in facts:
+                if float(fact.get("confidence", 0.7)) < 0.6:
+                    continue
                 key = category_map.get(fact["category"], "misc")
                 cur = conn.execute(
-                    "SELECT id, confidence FROM persona_kernel WHERE scope_id=? AND key=?",
-                    (str(scope_id), key),
+                    "SELECT id, confidence FROM persona_kernel WHERE scope_id=? AND user_id=? AND key=?",
+                    (str(scope_id), uid, key),
                 )
                 row = cur.fetchone()
                 if row:
@@ -787,20 +914,23 @@ class SuperMemory:
                     )
                 else:
                     conn.execute(
-                        "INSERT INTO persona_kernel (scope_id, key, value, confidence, last_updated) VALUES (?, ?, ?, ?, ?)",
-                        (str(scope_id), key, fact["content"], 0.9, now),
+                        "INSERT INTO persona_kernel (scope_id, user_id, key, value, confidence, last_updated) VALUES (?, ?, ?, ?, ?, ?)",
+                        (str(scope_id), uid, key, fact["content"], 0.9, now),
                     )
             conn.commit()
             conn.close()
         except Exception as e:
             print(f"[SuperMemory] 更新人格核心失败: {e}")
 
-    def get_persona_export(self, scope_id: str) -> Dict[str, Any]:
+    def get_persona_export(self, scope_id: str, focus_user: str = "", scope: str = "group") -> Dict[str, Any]:
         try:
+            uf_sql, uf_args = _user_scope_filter(scope, focus_user)
             conn = sqlite3.connect(DB_PATH)
             cur = conn.execute(
-                "SELECT key, value, confidence FROM persona_kernel WHERE scope_id=? ORDER BY confidence DESC, last_updated DESC",
-                (str(scope_id),),
+                "SELECT key, value, confidence FROM persona_kernel WHERE scope_id=?"
+                + uf_sql +
+                " ORDER BY confidence DESC, last_updated DESC",
+                (str(scope_id),) + uf_args,
             )
             rows = cur.fetchall()
             conn.close()
@@ -1105,7 +1235,7 @@ def before_reply(scope: str = "", scope_id: str = "", message: str = "", user_id
         if aff:
             parts.append(aff)
     if _memory.config.get("persona_injection", True):
-        persona = _memory.get_persona_export(scope_id)
+        persona = _memory.get_persona_export(scope_id, focus_user=user_id, scope=scope)
         if persona:
             lines = [f"{k}: {v}" for k, v in persona.items()]
             parts.append("【长期人格】\n" + "\n".join(lines))
@@ -1142,9 +1272,9 @@ def after_reply(scope: str = "", scope_id: str = "", message: str = "", reply: s
         if _memory.config.get("extract_facts", True):
             facts = _memory.extract_facts(scope_id, user_id or "", message)
             _memory._store_facts(scope_id, user_id or "", facts, message)
-            _memory._update_persona_kernel(scope_id, facts)
-            events = _memory.extract_events(scope_id, message)
-            _memory._store_events(scope_id, events)
+            _memory._update_persona_kernel(scope_id, facts, user_id or "")
+            events = _memory.extract_events(scope_id, message, user_id or "")
+            _memory._store_events(scope_id, events, user_id or "")
 
         if user_id and _memory.config.get("affection_enabled", True):
             _memory.update_affection(scope_id, user_id, message)

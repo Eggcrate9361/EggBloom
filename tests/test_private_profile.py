@@ -157,7 +157,10 @@ class TestPrivateProfileChain(unittest.TestCase):
             src = f.read()
         # before_reply 里必须调用 get_prompt_block（facts=画像）与私聊 scope 归一
         seg = src[src.find("def before_reply"):src.find("def after_reply")]
-        self.assertIn("get_prompt_block(scope, scope_id, message)", seg)
+        # 2026-10-31：1.5.10 起这次调用多了 focus_user=user_id（记忆按人），
+        # 之前卡死整串的断言因此假红 —— 只断言"这次调用还在"，不卡参数尾部。
+        self.assertRegex(seg, r"_memory\.get_prompt_block\(\s*scope,\s*scope_id,\s*message",
+                         "before_reply 没有调用 get_prompt_block（画像召回断了）")
         self.assertIn('scope_id = user_id or "private"', seg,
                       "私聊必须以 sender 作为作用域，否则画像召回/写入不同 key")
 
