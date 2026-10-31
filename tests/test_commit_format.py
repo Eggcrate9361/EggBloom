@@ -73,8 +73,14 @@ def main():
     # 已知例外：已推送到 origin/main 的提交不重写（提交规范 §6.3）。
     # `1fedafc`（10-26 打包修复）标题漏了日期前缀；它已经在远端，
     # 改它会让所有已克隆的仓库分叉。留作反例，不修。
+    # 2026-10-31 补：10-30 发布日有 4 个提交（bili 1.6.0/1.6.1 两笔、计划文档移出两笔）
+    # 同样漏了日期前缀且已在 origin/main —— 同一个理由，进例外表，不再重写历史。
     KNOWN_EXCEPTIONS = {
         "fix(pack): Lite 重建改用改名让路，绕开批量删除保护",
+        "docs(contributing): 写明\"计划不进仓库\"这条规矩",
+        "chore(docs): 计划类文档移出仓库，只留桌面归档",
+        "feat(bili): 1.6.1 评论草稿（读完整包起草，人看过后再发）",
+        "feat(bili): 1.6.0 写能力（评论/弹幕/点赞/投币/关注）—— 默认关，功能齐全",
     }
     bad = [s for s in subjects if not pat.match(s) and s not in KNOWN_EXCEPTIONS]
     check(f"{since} 起的 {len(subjects)} 个提交全部带日期前缀",
