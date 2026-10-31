@@ -63,6 +63,9 @@ try:
     check("指定 path 只存一张", len(calls) == 1 and calls[0][0].endswith("only.png"), calls)
 
     tm.set_turn(images=[], is_group=False, sender="10001")
+    # 2026-10-31：meme_save 会回看"上一轮真的带图"的那次（同人 + 窗口内）。
+    # 这一条要测的是"从来没有图"，所以把回看状态一并清掉，否则会拿到上一用例的图。
+    tm._LAST_IMAGES.update(images=[], is_group=False, sender="", group_id="", ts=0.0)
     check("没有图如实失败", tm.meme_save().get("ok") is False)
 
     tm.set_turn(images=["C:/tmp/g.jpg"], is_group=True, sender="", group_id="829854136")
