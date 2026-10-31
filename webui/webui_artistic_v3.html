@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>EggBloom // Desktop</title><link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90' font-family='serif'>⚡</text></svg>"><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Outfit:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet"><style>  :root{    --bg:#0a0a0f; --surface:#111118; --paper:#16161f; --elevated:#1e1e28; --input:#14141b;    --ink:#f0f0f5; --ink2:#b8b8c8; --ink3:#8a8f9a; --ink4:#3a3f48; --ink5:#26262f;    --gold:var(--accent); --gold-dim:var(--accent-dim); --slate:#5a7a8a; --crimson:#8b3a3a; --warm:#7a6a5a;    --font-d:'Outfit','Noto Sans SC','PingFang SC',system-ui,sans-serif;    --font-m:'JetBrains Mono','Consolas',monospace;    --base-mono:13.5px;    --shadow-sm:0 1px 2px rgba(0,0,0,0.35);    --shadow-md:0 4px 14px rgba(0,0,0,0.45);    --shadow-lg:0 10px 34px rgba(0,0,0,0.55);    --shadow-gold:0 0 22px rgba(201,169,110,0.22);    --ease:180ms cubic-bezier(0.4, 0, 0.2, 1);    --ease-spring:280ms cubic-bezier(0.34, 1.56, 0.64, 1);
+<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>EggBloom // Desktop</title><link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90' font-family='serif'>⚡</text></svg>"><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Outfit:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet"><style>  :root{    --bg:#0a0a0f; --surface:#111118; --paper:#16161f; --elevated:#1e1e28; --input:#14141b;    --ink:#f0f0f5; --ink2:#b8b8c8; --ink3:#8a8f9a; --ink4:#3a3f48; --ink5:#26262f;    --gold:var(--accent); --gold-dim:var(--accent-dim); --slate:#5a7a8a; --crimson:#8b3a3a; --warm:#7a6a5a;    --font-d:'Outfit','Noto Sans SC','PingFang SC',system-ui,sans-serif;    --font-m:'JetBrains Mono','Consolas',monospace;    --base-mono:13.5px;    --shadow-sm:0 1px 2px rgba(0,0,0,0.35);    --shadow-md:0 4px 14px rgba(0,0,0,0.45);    --shadow-lg:0 10px 34px rgba(0,0,0,0.55);    --shadow-gold:0 0 22px rgba(201,169,110,0.22);    --ease:180ms cubic-bezier(0.4, 0, 0.2, 1);    --ease-spring:280ms cubic-bezier(0.34, 1.56, 0.64, 1);
 
     /* ═══════ 设计规范 v1.5 令牌（T8 · 8.0「别名层」）═══════
        本层是设计的**唯一真源**。新增令牌**不改变任何现有页面的外观**：
@@ -2009,6 +2009,43 @@ function renderSwitchesPanel(root){
       <input type="checkbox" class="toggle-input" id="sNsfwEnable">
       <div class="field-label" style="margin:0;flex-shrink:0">NSFW 内容</div>
       <div class="field-desc" style="margin:0">是否允许 Bot 参与/回复成人向话题，关闭则回避</div></div>
+    <div class="settings-panel-desc" style="font-size:12px;color:#8a8f9a;margin:18px 0 6px;line-height:1.6">评测台（evals/）：40 场机械判分。判据词表在 evals/rules.json，改词改那里；下面这一组只控制「判不判」和长度上限 —— 关掉某项 = 这类不判，不是删词。</div>
+    <div class="field" style="display:flex;align-items:center;gap:20px">
+      <input type="checkbox" class="toggle-input" id="sEvalEnabled">
+      <div class="field-label" style="margin:0;flex-shrink:0">启用评测台</div>
+      <div class="field-desc" style="margin:0">总开关；关掉后 python evals/run_eval.py 直接跳过判分并退出 0</div></div>
+    <div class="field" style="display:flex;align-items:center;gap:20px">
+      <input type="checkbox" class="toggle-input" id="sEvalBanAiSelf">
+      <div class="field-label" style="margin:0;flex-shrink:0">判 AI 自述</div>
+      <div class="field-desc" style="margin:0">回复里出现「作为一个人工智能 / 语言模型 / 总的来说」这类就判红</div></div>
+    <div class="field" style="display:flex;align-items:center;gap:20px">
+      <input type="checkbox" class="toggle-input" id="sEvalBanBackstage">
+      <div class="field-label" style="margin:0;flex-shrink:0">判露后台</div>
+      <div class="field-desc" style="margin:0">回复里出现「接口 / 模型 / 转述 / 原图」这类就判红</div></div>
+    <div class="field" style="display:flex;align-items:center;gap:20px">
+      <input type="checkbox" class="toggle-input" id="sEvalRequireColloquial">
+      <div class="field-label" style="margin:0;flex-shrink:0">判书面语/客服腔</div>
+      <div class="field-desc" style="margin:0">语气类：出现「您 / 建议 / 进行」判红；长回复还得有口语痕迹</div></div>
+    <div class="field" style="display:flex;align-items:center;gap:20px">
+      <input type="checkbox" class="toggle-input" id="sEvalStrictBudget">
+      <div class="field-label" style="margin:0;flex-shrink:0">判长度与气泡</div>
+      <div class="field-desc" style="margin:0">单条字数/气泡数/总字数超了判红（与线上 reply_budget 同一套口径）</div></div>
+    <div class="field" style="display:flex;align-items:center;gap:20px">
+      <input type="checkbox" class="toggle-input" id="sEvalLiveEnable">
+      <div class="field-label" style="margin:0;flex-shrink:0">live 判分（占位）</div>
+      <div class="field-desc" style="margin:0">真调模型判「像不像它」；prompt 组装收口后才接线，现在打开也只走 offline</div></div>
+    <div class="field"><div class="field-label">单条字数上限</div>
+      <input class="input" id="sEvalMaxChars" type="number" min="1">
+      <div class="field-desc">取「分类预算」与这里的更严值；线上硬上限 16 字</div></div>
+    <div class="field"><div class="field-label">气泡数上限</div>
+      <input class="input" id="sEvalMaxParts" type="number" min="1">
+      <div class="field-desc">一次回复最多几条；线上硬上限 3 条</div></div>
+    <div class="field"><div class="field-label">总字数上限</div>
+      <input class="input" id="sEvalMaxTotal" type="number" min="1">
+      <div class="field-desc">整条回复合计字数；线上硬上限 80 字</div></div>
+    <div class="field"><div class="field-label">额外禁用词</div>
+      <input class="input" id="sEvalExtraBanned" placeholder="逗号分隔，追加到内置词表">
+      <div class="field-desc">临时想拦的词写这里，不用改 rules.json</div></div>
   `;
 }
 function renderDeAiPanel(root){
@@ -2402,6 +2439,10 @@ async function loadSettingsData(){
     t('sImageCacheEnable', c.image_cache_enable); t('sSelfLearningEnable', c.self_learning_enable);
     t('sPrivateMemoryEnable', c.private_memory_enable); t('sMemoryScopeShare', c.memory_scope_share); t('sSlangInjectorEnable', c.slang_injector_enable);
     t('sNsfwEnable', c.nsfw_enabled);
+    t('sEvalEnabled', c.eval_enabled); t('sEvalBanAiSelf', c.eval_ban_ai_self); t('sEvalBanBackstage', c.eval_ban_backstage);
+    t('sEvalRequireColloquial', c.eval_require_colloquial); t('sEvalStrictBudget', c.eval_strict_budget); t('sEvalLiveEnable', c.eval_live_enable);
+    s('sEvalMaxChars', c.eval_max_chars); s('sEvalMaxParts', c.eval_max_parts); s('sEvalMaxTotal', c.eval_max_total);
+    s('sEvalExtraBanned', c.eval_extra_banned);
     t('sDeAiEnable', (c.de_ai&&c.de_ai.enabled)!==false); t('sDeAiPromptInject', (c.de_ai&&c.de_ai.prompt_inject)!==false); t('sDeAiPostProcess', (c.de_ai&&c.de_ai.post_process)!==false);
     t('sDeAiBanWords', (c.de_ai&&c.de_ai.ban_words)!==false); t('sDeAiBanDashes', (c.de_ai&&c.de_ai.ban_dashes)!==false); t('sDeAiBanTriple', (c.de_ai&&c.de_ai.ban_rule_of_three)!==false);
     t('sDeAiBanFiller', (c.de_ai&&c.de_ai.ban_filler)!==false); t('sDeAiBanSyco', (c.de_ai&&c.de_ai.ban_sycophancy)!==false);
@@ -2540,6 +2581,10 @@ function collectSettings(){
     image_cache_enable: chk('sImageCacheEnable'), self_learning_enable: chk('sSelfLearningEnable'),
     private_memory_enable: chk('sPrivateMemoryEnable'), memory_scope_share: chk('sMemoryScopeShare'), slang_injector_enable: chk('sSlangInjectorEnable'),
     nsfw_enabled: chk('sNsfwEnable'),
+    eval_enabled: chk('sEvalEnabled'), eval_ban_ai_self: chk('sEvalBanAiSelf'), eval_ban_backstage: chk('sEvalBanBackstage'),
+    eval_require_colloquial: chk('sEvalRequireColloquial'), eval_strict_budget: chk('sEvalStrictBudget'), eval_live_enable: chk('sEvalLiveEnable'),
+    eval_max_chars: num('sEvalMaxChars'), eval_max_parts: num('sEvalMaxParts'), eval_max_total: num('sEvalMaxTotal'),
+    eval_extra_banned: val('sEvalExtraBanned'),
     de_ai: { enabled: chk('sDeAiEnable'), prompt_inject: chk('sDeAiPromptInject'), post_process: chk('sDeAiPostProcess'),
       ban_words: chk('sDeAiBanWords'), ban_dashes: chk('sDeAiBanDashes'), ban_rule_of_three: chk('sDeAiBanTriple'),
       ban_filler: chk('sDeAiBanFiller'), ban_sycophancy: chk('sDeAiBanSyco'), max_sentence_len: num('sDeAiMaxLen') },

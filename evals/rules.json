@@ -1,0 +1,65 @@
+{
+  "_说明": "评测台的判据全在这里，不许再写回 judge.py 的代码里。改词/改配额改这个文件即可，跑 python evals/run_eval.py 立即生效（按 mtime 缓存）。",
+  "version": 1,
+  "updated": "2026-10-31",
+
+  "groups": {
+    "_说明": "全局禁用词分组。switch=null 表示永远生效；否则由配置中心对应的开关控制（关掉 = 这一组不判）。",
+    "meta": {"switch": null, "words": ["【核心记忆】", "【长期人格】", "【视觉识别", "[系统提示]", "[记忆]", "转述", "原图"]},
+    "dashes": {"switch": null, "words": ["——", "—"]},
+    "ai_self": {"switch": "eval_ban_ai_self", "words": [
+      "作为一个人工智能", "作为一个AI", "作为一个 AI", "人工智能助手", "语言模型", "大语言模型",
+      "AI助手", "AI 助手", "机器人助手", "我是AI", "我是 AI", "我是人工智能",
+      "总的来说", "综上所述", "值得注意的是", "显而易见", "由此可见",
+      "总结一下", "以上是我的看法", "希望对你有所帮助"
+    ]},
+    "backstage": {"switch": "eval_ban_backstage", "words": [
+      "接口", "模型", "系统配的", "这轮只看得到", "识别结果", "工具返回",
+      "调用失败", "error", "Error", "Traceback"
+    ]}
+  },
+
+  "time_anchor": "^\\s*(?:\\[\\d{1,2}:\\d{2}(?::\\d{2})?\\]|\\d{1,2}-\\d{1,2}\\s+\\d{1,2}:\\d{2}\\s*[｜|]|\\d{1,2}:\\d{2}\\s*[｜|])",
+
+  "service_tone": ["有什么可以帮您", "还有什么可以帮", "很高兴为您服务", "请问还有什么", "感谢您的", "请您稍等", "已为您", "为您提供"],
+  "identity_probe": ["你叫什么", "你是谁来着", "请问你是", "怎么称呼你"],
+  "bookish": ["您", "请您", "建议", "进行", "提供", "我们", "已经", "可以", "感谢您的", "如需", "请稍候"],
+  "colloquial": ["吧", "啊", "呢", "呀", "嘛", "呗", "哦", "哈", "嗯", "行", "就", "又", "才", "你", "我", "别", "啥", "咋", "挺", "还", "没", "什么"],
+
+  "budget": {
+    "parts_max": 3,
+    "max_chars": 16,
+    "max_total": 80,
+    "_说明": "全局默认；每类可在 categories 里覆盖。配置中心的 eval_max_chars / eval_max_parts / eval_max_total 再覆盖一层（取更严的）。"
+  },
+
+  "categories": {
+    "身份": {
+      "budget": {"parts_max": 3, "max_chars": 16, "max_total": 45}
+    },
+    "记忆召回": {
+      "budget": {"parts_max": 3, "max_chars": 16, "max_total": 60},
+      "banned_from": "identity_probe"
+    },
+    "跨场景": {
+      "budget": {"parts_max": 3, "max_chars": 16, "max_total": 60}
+    },
+    "语气": {
+      "budget": {"parts_max": 3, "max_chars": 16, "max_total": 45},
+      "banned_from": "service_tone",
+      "need_colloquial": true,
+      "bookish_from": "bookish"
+    },
+    "不露后台": {
+      "budget": {"parts_max": 2, "max_chars": 16, "max_total": 35},
+      "_说明": "后台词统一在 groups.backstage 里，由 eval_ban_backstage 开关控制；这里不再抄一遍，免得关掉开关还有一份在判。"
+    },
+    "纠错": {
+      "budget": {"parts_max": 3, "max_chars": 16, "max_total": 50}
+    },
+    "任务": {
+      "budget": {"parts_max": 3, "max_chars": 16, "max_total": 50},
+      "banned": ["抱歉，我不能", "我无法", "我做不到"]
+    }
+  }
+}

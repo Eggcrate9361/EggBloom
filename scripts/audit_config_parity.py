@@ -19,6 +19,12 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 META = os.path.join(HERE, "_fieldmeta.json")
 
+# 2026-10-31：脚本从 `python scripts/audit_config_parity.py` 跑时 sys.path[0] 是
+# scripts/，`import config` 会直接 ModuleNotFoundError（下面的 _config_readpoints）。
+# 其它脚本都有这行，这里漏了 —— 补上，免得每次都得先设 PYTHONPATH。
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)
+
 from playwright.sync_api import sync_playwright
 
 EXE = os.environ.get("PW_CHROME") or os.path.join(

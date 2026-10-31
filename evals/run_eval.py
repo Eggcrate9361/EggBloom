@@ -65,12 +65,23 @@ def postprocess(raw: str) -> str:
     return text
 
 
-def run_offline(cases):
+def run_offline(cases, cfg=None):
     results = []
     for case in cases:
         out = postprocess(case.get("sample", ""))
-        results.append((case, judge_mod.judge(out, case), out))
+        results.append((case, judge_mod.judge(out, case, cfg), out))
     return results
+
+
+def describe_config(cfg):
+    """把当前生效的判据开关打出来 —— 关掉的检查必须看得见，不能静默放过。"""
+    on = lambda k: "开" if bool(cfg.get(k, True)) else "**关**"
+    return ("判据：ai自述={} 露后台={} 书面语={} 长度={} | 上限 {}字/{}条/{}字{}").format(
+        on("eval_ban_ai_self"), on("eval_ban_backstage"),
+        on("eval_require_colloquial"), on("eval_strict_budget"),
+        cfg.get("eval_max_chars"), cfg.get("eval_max_parts"), cfg.get("eval_max_total"),
+        ("｜额外禁用：" + str(cfg.get("eval_extra_banned")))
+        if cfg.get("eval_extra_banned") else "")
 
 
 def report(results):
@@ -108,6 +119,8 @@ def main(argv=None):
     ap.add_argument("--live", action="store_true", help="真调模型（需要 API key）")
     ap.add_argument("--json", action="store_true", help="输出 JSON，给 CI 用")
     ap.add_argument("--file", default=SCENARIOS, help="场景文件路径")
+    ap.add_argument("--no-config", action="store_true",
+                    help="忽略 bot_config.json，只用内置默认判据（CI/复现用）")
     args = ap.parse_args(argv)
 
     if args.live:
@@ -115,12 +128,20 @@ def main(argv=None):
               "现在请用 --offline。", file=sys.stderr)
         return 2
 
+    cfg = judge_mod.effective_config({} if args.no_config else None)
+    if not bool(cfg.get("eval_enabled", True)):
+        print("评测台已在配置中心关闭（eval_enabled=false），本次不判分。")
+        return 0
+
     cases = load_cases(args.file)
     if not cases:
         print("场景为空：" + args.file, file=sys.stderr)
         return 2
 
-    results = run_offline(cases)
+    if not args.json:
+        print(describe_config(cfg))
+
+    results = run_offline(cases, cfg)
     if args.json:
         payload = {
             "total": len(results),

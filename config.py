@@ -556,6 +556,24 @@ DEFAULT_CONFIG = {
     "slang_injector_enable": True,
     "nsfw_enabled": True,
 
+    # ── 评测台（1.5.11 P0-1）────────────────────────────────────────
+    # 判据**词表**在 evals/rules.json（改词改文件，不动代码）；
+    # 这里只放「判不判」的开关与长度上限，配置中心「功能开关」面板可改。
+    # 关掉某个开关 = 这类判据不判，不是把词删掉（run_eval 会把关掉的打印出来）。
+    "eval_enabled": True,
+    "eval_ban_ai_self": True,
+    "eval_ban_backstage": True,
+    "eval_require_colloquial": True,
+    "eval_strict_budget": True,
+    # live 判分要真调模型（花钱），默认关；prompt 组装收口后再接线
+    "eval_live_enable": False,
+    # 长度口径：与线上 reply_budget 的硬上限对齐，取「分类预算」与这里的更严值
+    "eval_max_chars": 16,
+    "eval_max_parts": 3,
+    "eval_max_total": 80,
+    # 临时追加的禁用词，逗号/顿号分隔（不想改 rules.json 时用）
+    "eval_extra_banned": "",
+
     # 消息长度
     "private_reply_max_length": 500,
     "group_reply_max_length": 800,

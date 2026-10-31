@@ -26,6 +26,31 @@ strip_ctx_marks → strip_tool_errors → de_ai_post_process → reply_guard
 
 它**不评模型本身**。模型回复得好不好，要真调模型（live）才知道。
 
+## 判据分别放在哪（都不在代码里）
+
+| 层 | 位置 | 怎么改 |
+|---|---|---|
+| 词表 / 分类配额 | `evals/rules.json` | 直接改文件，按 mtime 缓存，下次跑就生效 |
+| 开关 / 长度上限 / 追加词 | 配置中心「功能开关」面板（`eval_*`） | 网页上点，写进 `bot_config.json` |
+
+`judge.py` 只负责**怎么判**，不负责**判什么**。关掉某个开关 = 这类不判，
+不是把词删掉；`run_eval.py` 会把当前生效的开关打在表头，关掉的用 `**关**` 标出来：
+
+```
+判据：ai自述=开 露后台=**关** 书面语=开 长度=开 | 上限 16字/3条/80字
+```
+
+| 开关 | 管什么 |
+|---|---|
+| `eval_enabled` | 总开关；关掉后 run_eval 直接跳过判分并退出 0 |
+| `eval_ban_ai_self` | 「作为一个人工智能 / AI 助手 / 总的来说」这组 |
+| `eval_ban_backstage` | 「接口 / 模型 / 转述 / 原图」这组 |
+| `eval_require_colloquial` | 语气类的书面语/客服腔 |
+| `eval_strict_budget` | 长度与气泡 |
+| `eval_live_enable` | live 判分（占位，未接线） |
+| `eval_max_chars` / `eval_max_parts` / `eval_max_total` | 长度口径（与 `reply_budget` 硬上限取更严的） |
+| `eval_extra_banned` | 临时追加禁用词，逗号/顿号分隔 |
+
 ## 判据（机械项，红一条就不许合）
 
 | 判据 | 实现 |
