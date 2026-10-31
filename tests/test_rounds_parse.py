@@ -112,7 +112,7 @@ def test_poke_ignore_not_a_round():
 
 
 def test_private_poke():
-    print("\n[3] 私聊戳一戳归到 pm")
+    print("\n[3] 私聊戳一戳按人分桶（pm:<QQ>）")
     text = (
         "[13:45:06] [事件] 戳一戳: user_id=(/ω＼)(1234567890) group_id=私聊\n"
         "[13:45:06] [事件] 反戳 user=(/ω＼)(1234567890) group=私聊 retcode=0\n"
@@ -122,9 +122,35 @@ def test_private_poke():
     check("一轮", r["total"] == 1, r["total"])
     if r["rounds"]:
         row = r["rounds"][0]
-        check("scope=pm", row.get("scope") == "pm", row.get("scope"))
+        # 2026-10-31：私聊不再全塞进一个 `pm`，按人分成 `pm:<QQ>`
+        check("scope=pm:1234567890", row.get("scope") == "pm:1234567890", row.get("scope"))
         check("who 剥掉括号里的号", row.get("who") == "/ω＼", row.get("who"))
         check("回复取到", row.get("reply") == "手还挺欠，一下哪够", row.get("reply"))
+        labels = {s["key"]: s["label"] for s in r["scopes"]}
+        check("会话列表标签带昵称", labels.get("pm:1234567890") == "私聊 · /ω＼", labels)
+
+
+def test_private_scopes_split():
+    print("\n[3b] 两个私聊对象分成两个会话（用户反馈「日志私聊没有分开」）")
+    text = (
+        "[10:00:01] [事件] 收到: post_type=message msg_type=private uid=Texas(2011257385) gid=\n"
+        "[10:00:02] 收到: 在吗\n"
+        "[10:00:03] 私聊AI回复(Texas(2011257385)): 在\n"
+        "[10:05:01] [事件] 收到: post_type=message msg_type=private uid=小明(10086001) gid=\n"
+        "[10:05:02] 收到: 吃什么\n"
+        "[10:05:03] 私聊AI回复(小明(10086001)): 火锅\n"
+    )
+    r = _rounds_for(text)
+    keys = [s["key"] for s in r["scopes"]]
+    check("两个私聊会话", keys.count("pm:2011257385") == 1 and keys.count("pm:10086001") == 1, keys)
+    check("不再有合并的 pm", "pm" not in keys, keys)
+    by_scope = {x.get("scope"): x for x in r["rounds"]}
+    check("Texas 的回复只在他那条",
+          (by_scope.get("pm:2011257385") or {}).get("reply") == "在",
+          by_scope.get("pm:2011257385"))
+    check("小明的回复只在他那条",
+          (by_scope.get("pm:10086001") or {}).get("reply") == "火锅",
+          by_scope.get("pm:10086001"))
 
 
 def test_notice_events():
@@ -273,6 +299,7 @@ def main():
     test_poke_round()
     test_poke_ignore_not_a_round()
     test_private_poke()
+    test_private_scopes_split()
     test_notice_events()
     test_scope_key()
     test_decision_binds_own_batch()

@@ -1347,8 +1347,12 @@ _RND_DECISION = re.compile(r"\[(跳过|观察|决策放行|不参与)\]|暂不�
 _RND_OBSERVE = re.compile(r"\[观察\]")
 _RND_DEC_GO = re.compile(r"^群\[([^\]]+)\]\s*\[决策放行\].*?:\s*(.*)$", re.S)
 _RND_DEC_SKIP = re.compile(r"^群\[([^\]]+)\]\s*\[跳过\].*?:\s*(.*)$", re.S)
-_RND_REPLY_PM = re.compile(r"^(?:私聊|群)\[.*?\]?\s*AI回复\((.+?)\):\s*(.+)$", re.S)
-_RND_REPLY_GRP = re.compile(r"^群回复:\s*(.+)$", re.S)
+# `私聊AI回复(Texas(2011257385)): 10-31 16:31｜我改什么口了`（2026-10 起的真机格式）
+# 老格式带方括号（`私聊[xxx] AI回复(...)`），两种都要认 —— 只认带括号的那种时，
+# 私聊回复全靠后面的 `[发送]` 行兜底，AI 回复正文（含多行）反而丢了。
+_RND_REPLY_PM = re.compile(r"^(?:私聊|群)(?:\[[^\]]*\])?\s*AI回复\((.+?)\):\s*(.+)$", re.S)
+# `群回复: 奇怪啥` / `群回复(引用 id=-768466530): 我怎么就天才了`
+_RND_REPLY_GRP = re.compile(r"^群回复(?:\([^)]*\))?:\s*(.+)$", re.S)
 _RND_SEND = re.compile(r"^\[发送\]\s*(私聊|群\[([^\]]+)\])\s*→\s*([^:]*):.*?句=(.*)$", re.S)
 _RND_COST = re.compile(r"^AI 回复 \(")
 # `[记忆] uid=… scene=group 注入 4 段/532 字（身份 92 / …）`（1.5.11 P0-3 新增）
@@ -1380,19 +1384,29 @@ _RND_BAN = re.compile(
     r"^\[事件\]\s*群(禁言|解除禁言):\s*group=(\S+)\s+user=(\S+)(.*)$")
 
 
-def _scope_key(label):
-    """把日志里的会话标签归一成 key：群号 / `pm`。
+def _pm_scope(uid_or_label=""):
+    """私聊会话 key：`pm:<QQ>`。没有号就退回 `pm`（老日志/识别不出时）。
+
+    ★ 2026-10-31 用户反馈「日志私聊没有分开」：原来所有私聊都归成一个 `pm`，
+      和三个人的对话混在一条时间线里。私聊必须按人分桶，否则"跟谁聊的"看不出来。
+    """
+    m = re.search(r"(\d{5,})", str(uid_or_label or ""))
+    return "pm:" + m.group(1) if m else "pm"
+
+
+def _scope_key(label, uid=""):
+    """把日志里的会话标签归一成 key：群号 / `pm:<QQ>` / `pm`。
 
     `'123456789'` → `'123456789'`
     `'远望酒庄(123456788)'` → `'123456788'`
-    `'私聊'` / `'pm'` → `'pm'`
+    `'私聊'` / `'pm'` + uid → `'pm:<uid>'`（没有 uid 才是 `'pm'`）
 
     不归一的话，同一群在日志页会裂成 `群 123456789` 与
     `群 远望酒庄(123456788)` 两项 —— 后者来自带群名的 `群[...]` 行。
     """
     s = str(label or "").strip()
     if not s or s in ("私聊", "pm"):
-        return "pm"
+        return _pm_scope(uid)
     m = re.search(r"\((\d{5,})\)\s*$", s)
     if m:
         return m.group(1)
@@ -1588,7 +1602,7 @@ def _rnd_scope_from_event(text):
     if gid and gid != "gid=" and not gid.startswith("="):
         return _scope_key(gid), uid
     if msg_type == "private" or not gid:
-        return "pm", uid
+        return _scope_key("私聊", uid), uid
     return None, None
 
 
@@ -1688,7 +1702,7 @@ def collect_rounds(limit=120):
         m = _RND_POKE_EVENT.match(s)
         if m:
             _uid, _gid = m.group(1).strip(), m.group(2).strip()
-            _sc = _scope_key(_gid)
+            _sc = _scope_key(_gid, _uid)
             _nick = _rnd_who_nick(_uid)
             last_scope = (_sc, _nick)
             flush()
@@ -1702,7 +1716,7 @@ def collect_rounds(limit=120):
         # ── 撤回 / 成员增减 / 禁言：各成一轮，没有回复 ──
         m = _RND_RECALL.match(s)
         if m:
-            _sc = _scope_key(m.group(3))
+            _sc = _scope_key(m.group(3), m.group(2))
             _who = _rnd_who_nick(m.group(2))
             last_scope = (_sc, _who)
             flush()
@@ -1746,7 +1760,8 @@ def collect_rounds(limit=120):
             if m:
                 new_ask = m.group(3).strip()
                 new_who = _rnd_who_nick(m.group(2))
-                new_scope = "pm" if m.group(1) == "私聊" else _scope_key(m.group(2))
+                new_scope = (_scope_key("私聊", m.group(2)) if m.group(1) == "私聊"
+                             else _scope_key(m.group(2)))
             else:
                 m = _RND_ASK_GRP.match(s)
                 if m:
@@ -1822,7 +1837,7 @@ def collect_rounds(limit=120):
             continue
         m = _RND_POKE_REPLY.match(s)
         if m:
-            _sc = _scope_key(m.group(2)) if m.group(2) else "pm"
+            _sc = _scope_key(m.group(2)) if m.group(2) else str(cur.get("scope") or "pm")
             if str(cur.get("scope")) == _sc:
                 _piece = m.group(3).strip()[:400]
                 cur["reply"] = (_piece if not cur["reply"]
@@ -1830,7 +1845,7 @@ def collect_rounds(limit=120):
             continue
         m = _RND_POKE_MEME.match(s)
         if m:
-            _sc = _scope_key(m.group(2)) if m.group(2) else "pm"
+            _sc = _scope_key(m.group(2)) if m.group(2) else str(cur.get("scope") or "pm")
             if str(cur.get("scope")) == _sc:
                 cur["tools"].append({"name": "表情包",
                                      "q": m.group(3).strip(), "note": ""})
@@ -1892,7 +1907,9 @@ def collect_rounds(limit=120):
         # ── bot 回复 ──
         m = _RND_REPLY_PM.match(s)
         if m:
-            cur["reply"] = m.group(2).strip()[:400]
+            # 真机行里正文前带 `10-31 16:31｜` 时间戳前缀（message_id 那栏），去掉
+            _rep = re.sub(r"^\d{2}-\d{2} \d{2}:\d{2}[｜|]\s*", "", m.group(2).strip())
+            cur["reply"] = _rep[:400]
             continue
         m = _RND_REPLY_GRP.match(s)
         if m:
@@ -1908,21 +1925,33 @@ def collect_rounds(limit=120):
             elif piece:
                 cur["reply"] += "\n" + piece
             if m.group(1) == "私聊":
-                cur["scope"] = "pm"
+                cur["scope"] = _scope_key("私聊", m.group(3))
             continue
 
     flush()
     rounds = [r for r in rounds if r.get("ask") or r.get("reply")]
 
-    # 会话列表：私聊在前，群按最近活跃排序
+    # 会话列表：私聊按人分桶（在前），群按最近活跃排序
     agg = {}
+    nick_of = {}
     for r in rounds:
         k = str(r.get("scope") or "pm")
-        agg.setdefault(k, 0)
-        agg[k] += 1
-    scopes = [{"key": "pm", "label": "私聊", "count": agg.get("pm", 0)}]
+        agg[k] = agg.get(k, 0) + 1
+        if k.startswith("pm:") and r.get("who") and k not in nick_of:
+            nick_of[k] = str(r.get("who"))
+    scopes = []
+    for k in sorted([x for x in agg if x == "pm" or x.startswith("pm:")],
+                    key=lambda x: -agg[x]):
+        who = nick_of.get(k, "")
+        if who:
+            label = "私聊 · " + who
+        elif k == "pm":
+            label = "私聊"
+        else:
+            label = "私聊 · " + k.split(":", 1)[1]
+        scopes.append({"key": k, "label": label, "count": agg[k]})
     for k, n in sorted(agg.items(), key=lambda kv: -kv[1]):
-        if k == "pm":
+        if k == "pm" or k.startswith("pm:"):
             continue
         scopes.append({"key": k, "label": f"群 {k}", "count": n})
     return {"rounds": rounds[-limit:], "scopes": scopes, "total": len(rounds)}
