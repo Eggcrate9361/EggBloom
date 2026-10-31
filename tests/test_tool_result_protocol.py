@@ -152,7 +152,10 @@ def main():
     print("\n=== ⑤ 诚实铁律与协议对齐 ===")
     seg = bot_core._build_static_prompt(False)
     check("铁律点名 ❌/⚠️ 不许说成功", ("❌" in seg) and ("⚠️" in seg))
-    check("铁律禁说'发过去了'", "发过去了" in seg)
+    # 2026-10-31：铁律原文改成了「不许说『发你了』」（人格文件第 69 行），
+    # 这里卡死「发过去了」会假红 —— 判据改成"两种说法至少禁掉一种"。
+    check("铁律禁说'发过去了/发你了'",
+          ("发过去了" in seg) or ("发你了" in seg), seg[:0])
 
     print("\n" + "=" * 58)
     print(f"通过 {PASS} / 失败 {FAIL}")
