@@ -10345,6 +10345,7 @@ def _ai_worker() -> None:
             result = _call_deepseek_sync(
                 user_msg=params["user_msg"],
                 images=params.get("images"),
+                turn_images=params.get("turn_images"),
                 target_qq=params.get("target_qq"),
                 group_id=params.get("group_id"),
                 is_group=params.get("is_group", False),
@@ -11418,11 +11419,16 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
                         is_group: bool = False, private_memory_context: str = '',
                         personality_temperature: Optional[float] = None,
                         ego_inject_context: str = '', sender: str = '',
-                        scene_context: str = '', progress=None) -> Optional[str]:
+                        scene_context: str = '', progress=None,
+                        turn_images: Optional[List[str]] = None) -> Optional[str]:
     # 表情包工具要看到"这一轮发了什么图"（2026-10-30，替代关键词硬判）。
+    # ★ 2026-10-31：用 `turn_images`（这一轮真实收到的图）而不是 `images` ——
+    #   describe 模式下图走视觉转文字、`images` 是 None，只认它的话
+    #   `meme_save` 永远报"这一轮没有可存的图片"。
     try:
         from harness import tool_meme as _tmm
-        _tmm.set_turn(images=list(images or []), is_group=bool(is_group),
+        _turn_imgs = turn_images if turn_images is not None else (images or [])
+        _tmm.set_turn(images=list(_turn_imgs or []), is_group=bool(is_group),
                       sender=str(sender or target_qq or ""),
                       group_id=str(group_id or ""))
     except Exception:
@@ -12458,11 +12464,19 @@ def call_deepseek(user_msg: str, images: Optional[List[str]] = None,
                   is_group: bool = False, private_memory_context: str = '',
                   personality_temperature: Optional[float] = None,
                   ego_inject_context: str = '', sender: str = '',
-                  scene_context: str = '', on_slow=None) -> Optional[str]:
-    """非阻塞调用 DeepSeek API：将任务提交到后台队列，等待结果返回。"""
+                  scene_context: str = '', on_slow=None,
+                  turn_images: Optional[List[str]] = None) -> Optional[str]:
+    """非阻塞调用 DeepSeek API：将任务提交到后台队列，等待结果返回。
+
+    `turn_images`：**这一轮用户实际发了哪些图**（给表情包工具用）。
+      和 `images` 分开，是因为 describe 模式下图走视觉转文字、不进 API
+      （images=None），但 `meme_save` 仍然要知道"这轮有图可存"。
+      2026-10-31 真机：私聊发图后说"存表情包" → meme_save 报"这一轮没有可存的图片"。
+    """
     task_id = _submit_ai_task({
         "user_msg": user_msg,
         "images": images,
+        "turn_images": turn_images,
         "target_qq": target_qq,
         "group_id": group_id,
         "is_group": is_group,
@@ -16629,7 +16643,7 @@ def main():
                     _pm_text_for_ai, images, is_group=False, sender=sender,
                     history=chat_history.get(sender),
                     extra_ctx={"ego": _ego_ctx, "memory": pm_ctx})
-                reply = _qa_text or call_deepseek(_pm_text_for_ai, _pm_call_images, sender, private_memory_context=pm_ctx, personality_temperature=_ego_temp, ego_inject_context=_ego_ctx, on_slow=lambda: _private_slow_ack(sender))
+                reply = _qa_text or call_deepseek(_pm_text_for_ai, _pm_call_images, sender, private_memory_context=pm_ctx, personality_temperature=_ego_temp, ego_inject_context=_ego_ctx, on_slow=lambda: _private_slow_ack(sender), turn_images=images)
                 # 私聊联网搜索标记循环（与群聊共用函数；旧版私聊吐 [搜索:] 会原样漏发）
                 reply = _apply_search_tag_loop(reply, text, group_id=None,
                                                is_group=False, temperature=_ego_temp,

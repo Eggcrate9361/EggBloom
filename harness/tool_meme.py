@@ -25,6 +25,44 @@ _FAIL_COUNT = 0
 _FAIL_UNTIL = 0.0
 _TURN = {"images": [], "is_group": False, "sender": "", "group_id": ""}
 
+#: 上一轮"真的带图"的那次（2026-10-31）。用户发完图、隔一条文字再说「存表情包」
+#: 时，本轮 `_TURN["images"]` 是空的 —— 但那句"存"指的显然是刚发的那张。
+#: 只做 5 分钟内的同人会话回看，且只在上轮确有图时成立。
+_LAST_IMAGES = {"images": [], "is_group": False, "sender": "", "group_id": "", "ts": 0.0}
+_LAST_IMAGES_TTL = 300.0
+
+
+def set_turn(*, images=None, is_group: bool = False, sender: str = "",
+             group_id: str = "") -> None:
+    """每轮由主链写入：这一轮有哪些图、在哪个场景、发给谁。"""
+    _TURN["images"] = [str(x) for x in (images or []) if str(x or "").strip()]
+    _TURN["is_group"] = bool(is_group)
+    _TURN["sender"] = str(sender or "")
+    _TURN["group_id"] = str(group_id or "")
+    if _TURN["images"]:
+        _LAST_IMAGES.update(images=list(_TURN["images"]), is_group=bool(is_group),
+                            sender=_TURN["sender"], group_id=_TURN["group_id"],
+                            ts=time.time())
+
+
+def turn_images_for_save(path: str = "") -> list:
+    """这一轮可存的图：显式 path > 本轮 images > 上一轮（同人、5 分钟内）。"""
+    p = str(path or "").strip()
+    if p:
+        return [p]
+    imgs = list(_TURN.get("images") or [])
+    if imgs:
+        return imgs
+    same_person = (
+        _LAST_IMAGES.get("sender") == _TURN.get("sender")
+        and _LAST_IMAGES.get("group_id") == _TURN.get("group_id")
+        and _LAST_IMAGES.get("is_group") == _TURN.get("is_group")
+    )
+    if same_person and _LAST_IMAGES.get("images") \
+            and (time.time() - float(_LAST_IMAGES.get("ts") or 0)) <= _LAST_IMAGES_TTL:
+        return list(_LAST_IMAGES["images"])
+    return []
+
 MEME_TOOLS = [
     {
         "type": "function",
@@ -72,15 +110,6 @@ MEME_TOOLS = [
         },
     },
 ]
-
-
-def set_turn(*, images=None, is_group: bool = False, sender: str = "",
-             group_id: str = "") -> None:
-    """每轮由主链写入：这一轮有哪些图、在哪个场景、发给谁。"""
-    _TURN["images"] = [str(x) for x in (images or []) if str(x or "").strip()]
-    _TURN["is_group"] = bool(is_group)
-    _TURN["sender"] = str(sender or "")
-    _TURN["group_id"] = str(group_id or "")
 
 
 def set_sender(fn) -> None:
@@ -182,8 +211,7 @@ def meme_send(meme_id: str) -> Dict[str, Any]:
 
 def meme_save(path: str = "") -> Dict[str, Any]:
     """存这一轮（或指定）的图到表情库。返回每张的结果。"""
-    _p = path if isinstance(path, str) else ""
-    paths = [_p] if _p.strip() else list(_TURN.get("images") or [])
+    paths = turn_images_for_save(path if isinstance(path, str) else "")
     if not paths:
         return {"ok": False, "error": "这一轮没有可存的图片"}
     scene_group = bool(_TURN.get("is_group") and _TURN.get("group_id"))
