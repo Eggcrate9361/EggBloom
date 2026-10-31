@@ -851,6 +851,13 @@ def _private_flush(sender: str):
     parts = [p for p in (rec.get("parts") or []) if str(p).strip()]
     text = "\n".join(parts).strip()
     images = list(rec.get("images") or [])
+    # ★ 2026-10-31 真机（16:23 私聊）：缓冲里的 parts 已经带 `[图片]`（入口
+    #   extract_text 给的），重新入队时又给每张图补一个 image 段 → 一条图变成
+    #   两个 `[图片]` 占位。模型据此编出"第一张看清了、第二张没取到"，
+    #   被追问后又改口"其实是一张"——用户看到的"前后矛盾 / 两张图"就是这么来的。
+    #   这里把重复占位摘掉，图的存在由 image 段重新给出（一图一占位）。
+    if images and "[图片]" in text:
+        text = text.replace("[图片]", "").strip()
     if not text and not images:
         return
     if len(parts) > 1:
