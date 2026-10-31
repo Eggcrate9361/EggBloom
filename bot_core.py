@@ -4350,6 +4350,7 @@ def _persona_rule_blocks():
     if _RULE_BLOCK_CACHE.get("key") == key:
         return _RULE_BLOCK_CACHE["blocks"]
     blocks = {}
+    orphans = []
     m = re.search(r"(?m)^【不许】\s*$", raw)
     if m:
         rest = raw[m.end():]
@@ -4358,7 +4359,7 @@ def _persona_rule_blocks():
             rest = rest[:m2.start()]
         cur, buf = None, []
         for line in rest.splitlines():
-            mm = re.match(r"^###\s*(.+?)\s*$", line)
+            mm = re.match(r"^###(?!#)\s*(.+?)\s*$", line)
             if mm:
                 if cur:
                     blocks[cur] = "\n".join(buf).strip("\n")
@@ -4366,11 +4367,31 @@ def _persona_rule_blocks():
                 buf = []
             elif cur is not None:
                 buf.append(line)
+            elif line.strip():
+                # ★ 2026-10-31（P0-2 §3.4）：【不许】段里**只有 `### 名称` 才算规则块**。
+                #   写错的标题（`## 睡觉` / `#### 睡觉` / 少个 #）与散落的正文过去会被
+                #   静默丢弃 —— 规则看着在文件里，实际从没进过 prompt。
+                #   单个 `#` 开头的是注释（本文件里本来就有），不算错。
+                if not re.match(r"^#\s", line.strip()):
+                    orphans.append(line.strip())
         if cur:
             blocks[cur] = "\n".join(buf).strip("\n")
+    if orphans:
+        try:
+            log(f"[prompt] 人格规则层有 {len(orphans)} 行不在任何 ### 块里，"
+                f"不会注入：{orphans[0][:40]}")
+        except Exception:
+            pass
     _RULE_BLOCK_CACHE["key"] = key
     _RULE_BLOCK_CACHE["blocks"] = blocks
+    _RULE_BLOCK_CACHE["orphans"] = orphans
     return blocks
+
+
+def persona_rule_orphans():
+    """规则层里没被任何 `### 块` 认领的行（写错标题的规则会落到这里）。"""
+    _persona_rule_blocks()
+    return list(_RULE_BLOCK_CACHE.get("orphans") or [])
 
 
 _MISSING_RULE_LOGGED = set()
