@@ -66,17 +66,27 @@ def run_one(path, timeout):
 
 
 def run_evals():
-    path = os.path.join(ROOT, "evals", "run_eval.py")
-    if not os.path.exists(path):
+    """跑 evals/ 下所有机械用例：reply 判据 + 自主性策略层。"""
+    scripts = [("reply", os.path.join(ROOT, "evals", "run_eval.py")),
+               ("autonomy", os.path.join(ROOT, "evals", "autonomy_eval.py"))]
+    lines, ok_all, ran = [], True, 0
+    for name, path in scripts:
+        if not os.path.exists(path):
+            continue
+        ran += 1
+        r = subprocess.run([sys.executable, path], cwd=ROOT,
+                           capture_output=True, text=True,
+                           encoding="utf-8", errors="replace")
+        line = ""
+        for ln in (r.stdout or "").splitlines():
+            if ln.startswith("RESULT:"):
+                line = ln.strip()
+        line = line or (f"{name}: " + (r.stdout or r.stderr or "").strip()[-120:])
+        lines.append(line)
+        ok_all = ok_all and (r.returncode == 0)
+    if not ran:
         return None
-    r = subprocess.run([sys.executable, path], cwd=ROOT,
-                       capture_output=True, text=True,
-                       encoding="utf-8", errors="replace")
-    line = ""
-    for ln in (r.stdout or "").splitlines():
-        if ln.startswith("RESULT:"):
-            line = ln.strip()
-    return {"ok": r.returncode == 0, "line": line or (r.stdout or "").strip()[-120:]}
+    return {"ok": ok_all, "lines": lines, "line": " · ".join(lines)}
 
 
 def main(argv=None):

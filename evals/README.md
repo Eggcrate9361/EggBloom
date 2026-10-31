@@ -52,7 +52,6 @@ strip_ctx_marks → strip_tool_errors → de_ai_post_process → reply_guard
 | `eval_extra_banned` | 临时追加禁用词，逗号/顿号分隔 |
 
 ## 判据（机械项，红一条就不许合）
-
 | 判据 | 实现 |
 |---|---|
 | 气泡数 / 单条字数 / 总字数 | `reply_budget.check()`，与线上**同一份代码** |
@@ -87,6 +86,22 @@ strip_ctx_marks → strip_tool_errors → de_ai_post_process → reply_guard
 
 `expect` 可省；分类默认值在 `judge.CATEGORY_RULES`。加完跑
 `python evals/run_eval.py` 与 `python tests/test_evals.py`（后者会校验配额与 id 唯一）。
+
+## 另一套：自主性策略层（autonomy）
+
+reply 判据管"模型说的话"，`autonomy_eval.py` 管"**代码的裁决语义**"
+（`plugins/autonomy/policy.py` 的 `guard()`）。两套分开算 —— 混在一起那个
+`RESULT: 40 场` 就没意义了。
+
+```bash
+python evals/autonomy_eval.py     # RESULT: autonomy 13 场 / 13 过 / 0 红
+```
+
+用例在 `autonomy_cases.json`，锁四件事：越权 → `deny`；L3 未确认 → `need_confirm`；
+**未登记动作即便 `confirmed` 也 `deny`**；提示词里的等级与 `guard()` 同源。
+接线（`plugin.json` / `on_event`）是 1.6.0 的事，这里只保证"接线前语义不漂"。
+
+`run_all_tests.py --evals` 会把两套都跑，各打一行。
 
 ## 门槛
 
