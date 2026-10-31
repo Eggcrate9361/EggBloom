@@ -1910,17 +1910,24 @@ def collect_rounds(limit=120):
             # 真机行里正文前带 `10-31 16:31｜` 时间戳前缀（message_id 那栏），去掉
             _rep = re.sub(r"^\d{2}-\d{2} \d{2}:\d{2}[｜|]\s*", "", m.group(2).strip())
             cur["reply"] = _rep[:400]
+            # 这一行的正文就是整条回复（多行也在里面）。后面逐条 `[发送]` 是同一段
+            # 文字拆成的气泡，再拼一遍就重复了（2026-10-31 实测：每轮回复都打两遍）。
+            cur["_reply_from_ai"] = True
             continue
         m = _RND_REPLY_GRP.match(s)
         if m:
             cur["reply"] = m.group(1).strip()[:400]
+            cur["_reply_from_ai"] = True
             continue
 
         # ── 发送记录（群聊没有「AI回复」行，回复靠这些拼）──
         m = _RND_SEND.match(s)
         if m:
             piece = m.group(4).strip()
-            if piece and not cur["reply"]:
+            if cur.get("_reply_from_ai"):
+                # 回复正文已由 `私聊AI回复(...)` 收过一次，气泡行不再追拼
+                pass
+            elif piece and not cur["reply"]:
                 cur["reply"] = piece
             elif piece:
                 cur["reply"] += "\n" + piece
@@ -1929,6 +1936,8 @@ def collect_rounds(limit=120):
             continue
 
     flush()
+    for _r in rounds:
+        _r.pop("_reply_from_ai", None)
     rounds = [r for r in rounds if r.get("ask") or r.get("reply")]
 
     # 会话列表：私聊按人分桶（在前），群按最近活跃排序
