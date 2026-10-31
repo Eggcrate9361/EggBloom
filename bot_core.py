@@ -14591,6 +14591,14 @@ def _pipeline_step(group_id):
                 sent_text = de_ai_post_process(sent_text, _config)
             except Exception:
                 pass
+            # ── 出口硬约束（2026-10-31，FIXPLAN 1.5.11 P0-2）──
+            #   提示词是概率的：1.5.10 真机见过被问身份就念简历、把号码报出去、
+            #   把工具/视觉的中间态说给用户。这里用代码兜一道，规则见 reply_guard。
+            try:
+                from reply_guard import guard as _reply_guard
+                sent_text = _reply_guard(sent_text)
+            except Exception:
+                pass
 
             if sent_text:
                 # ── 插件钩子：after_reply（发送前，允许插件修改回复文本）──
@@ -16611,6 +16619,12 @@ def main():
                     try:
                         from de_ai import de_ai_post_process
                         sent_text = de_ai_post_process(sent_text, _config)
+                    except Exception:
+                        pass
+                    # ── 出口硬约束（与群聊一致，2026-10-31 P0-2）──
+                    try:
+                        from reply_guard import guard as _reply_guard
+                        sent_text = _reply_guard(sent_text)
                     except Exception:
                         pass
                     if sent_text:
