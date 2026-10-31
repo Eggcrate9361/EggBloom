@@ -351,6 +351,9 @@ _IDENTITY_STOPWORDS = frozenset((
     "儿子", "女儿", "老公", "老婆", "宝宝", "宝贝", "亲爱的",
 ))
 
+#: 自动入库的置信度门槛：低于它的走待确认队列，不进 prompt
+MIN_AUTO_FACT_CONF = 0.6
+
 #: 问句碎片：`概率：多少` 这种右半边是疑问词的，不是事实
 _QUESTION_WORDS = frozenset(("多少", "啥", "谁", "什么", "哪", "哪里", "几", ""))
 
@@ -366,6 +369,15 @@ def _fact_is_usable(category: str, content: str) -> bool:
     if not v or len(v) > 20:
         return False
     cat = str(category or "")
+    if cat in ("名字", "name"):
+        # 名字：2~6 个字、不带玩笑尾巴、不带代词/emoji
+        if not (2 <= len(v) <= 6):
+            return False
+        if v.endswith(_IDENTITY_TAILS):
+            return False
+        if any(p in v for p in ("我", "你", "他", "她", "它")) or any(ord(ch) > 0x1F000 for ch in v):
+            return False
+        return True
     if cat in ("身份", "identity"):
         if v in _IDENTITY_STOPWORDS:
             return False
@@ -493,6 +505,22 @@ class SuperMemory:
                 );
                 CREATE INDEX IF NOT EXISTS idx_events_scope ON events(scope_id, timestamp);
 
+                /* 待确认队列（2026-10-31，1.5.11 尾巴）：
+                   低置信度事实不直接进 facts（每轮注入），先存这里等人的一句确认。
+                   这样"抽取器猜的"和"用户说过的"在库里是分开的。 */
+                CREATE TABLE IF NOT EXISTS fact_candidates (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    scope_id TEXT NOT NULL,
+                    user_id TEXT DEFAULT '',
+                    category TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    confidence REAL DEFAULT 0.3,
+                    source_msg TEXT DEFAULT '',
+                    created_at REAL NOT NULL
+                );
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_cand_key
+                    ON fact_candidates(scope_id, user_id, category, content);
+
                 CREATE TABLE IF NOT EXISTS persona_kernel (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     scope_id TEXT NOT NULL,
@@ -616,23 +644,31 @@ class SuperMemory:
             return facts
         seen_content: set = set()      # 同内容去重（多条正则会命中同一句）
 
+        # 置信度按**句子形态**给（2026-10-31，1.5.11 尾巴）：
+        #   · 明确自述（我叫/我的生日是）→ 高，直接入库
+        #   · 带明确谓词的偏好（我喜欢/讨厌）→ 高
+        #   · 泛化的「我的X是Y」→ 中
+        #   · 「我在…」「今天…了」这种**瞬时状态** → 低，进待确认队列
+        # 低置信度不再直接进 facts（每轮注入），而是进 fact_candidates 等人点头。
         patterns = [
-            (r"我是(.+?)(?=[，。！？\s]|$)", "身份", lambda m: _clean_identity(m.group(1))),
-            (r"我叫(.+?)(?=[，。！？\s]|$)", "身份", lambda m: _clean_identity(m.group(1))),
+            (r"我是(.+?)(?=[，。！？\s]|$)", "身份", lambda m: _clean_identity(m.group(1)), 0.0),
+            # 「我叫X」是**名字**，不是身份 —— 混进身份会被形态闸误杀
+            # （小明/老王 2 个字且没有身份词尾）。
+            (r"我叫(.+?)(?=[，。！？\s]|$)", "名字", lambda m: _clean_identity(m.group(1)), 0.9),
             (r"我的([^，。！？\s]{2,10}?)是(.+?)(?=[，。！？\s]|$)",
-             "偏好", lambda m: f"{m.group(1)}：{m.group(2)}"),
+             "偏好", lambda m: f"{m.group(1)}：{m.group(2)}", 0.7),
             # ★ 原 `([^，。！？\s]+?)是(.+?)` 已删除：无主语约束 → 抽取对话碎片。
             #   要重新引入必须带明确的偏好主语（如"我更喜欢/我觉得…是"），不能裸匹配。
-            (r"我喜欢(.+?)(?=[，。！？\s]|$)", "偏好", lambda m: f"喜欢：{m.group(1)}"),
-            (r"我不喜欢(.+?)(?=[，。！？\s]|$)", "偏好", lambda m: f"不喜欢：{m.group(1)}"),
-            (r"我讨厌(.+?)(?=[，。！？\s]|$)", "偏好", lambda m: f"讨厌：{m.group(1)}"),
-            (r"我在(.+?)(?=[，。！？\s]|$)", "位置", lambda m: m.group(1).strip()),
-            (r"我的生日是(.+?)(?=[，。！？\s]|$)", "重要日期", lambda m: f"生日：{m.group(1)}"),
-            (r"今天(.+?)了", "事件", lambda m: f"事件：{m.group(1)}"),
-            (r"(.+?)是我的(.+?)(?=[，。！？\s]|$)", "关系", lambda m: f"{m.group(2)}：{m.group(1)}"),
+            (r"我喜欢(.+?)(?=[，。！？\s]|$)", "偏好", lambda m: f"喜欢：{m.group(1)}", 0.8),
+            (r"我不喜欢(.+?)(?=[，。！？\s]|$)", "偏好", lambda m: f"不喜欢：{m.group(1)}", 0.8),
+            (r"我讨厌(.+?)(?=[，。！？\s]|$)", "偏好", lambda m: f"讨厌：{m.group(1)}", 0.8),
+            (r"我在(.+?)(?=[，。！？\s]|$)", "位置", lambda m: m.group(1).strip(), 0.55),
+            (r"我的生日是(.+?)(?=[，。！？\s]|$)", "重要日期", lambda m: f"生日：{m.group(1)}", 0.9),
+            (r"今天(.+?)了", "事件", lambda m: f"事件：{m.group(1)}", 0.45),
+            (r"(.+?)是我的(.+?)(?=[，。！？\s]|$)", "关系", lambda m: f"{m.group(2)}：{m.group(1)}", 0.6),
         ]
 
-        for pattern, category, extractor in patterns:
+        for pattern, category, extractor, base_conf in patterns:
             matches = re.finditer(pattern, text)
             for m in matches:
                 try:
@@ -641,7 +677,7 @@ class SuperMemory:
                         continue
                     # 身份类走形态闸：裸名词（鸡蛋/小狗）直接丢，不留给
                     # persona_kernel 每轮注入。
-                    conf = 0.7
+                    conf = float(base_conf or 0.7)
                     if category == "身份":
                         conf = _identity_fact_confidence(text, content)
                         if conf <= 0.0:
@@ -686,6 +722,73 @@ class SuperMemory:
                 (str(scope_id), str(user_id), category, content, confidence, source_msg[:200], now, now, emb, tier),
             )
 
+    def _queue_fact(self, conn, scope_id: str, user_id: str, category: str,
+                    content: str, confidence: float, source_msg: str) -> None:
+        """低置信度事实进待确认队列（不注入 prompt）。"""
+        try:
+            conn.execute(
+                "INSERT OR IGNORE INTO fact_candidates "
+                "(scope_id, user_id, category, content, confidence, source_msg, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (str(scope_id), str(user_id), category, content,
+                 float(confidence), str(source_msg or "")[:200], time.time()),
+            )
+        except Exception:
+            pass
+
+    def pending_candidates(self, limit: int = 50, scope_id: str = "",
+                           user_id: str = "") -> List[Dict[str, Any]]:
+        """待确认队列（只读，给人看的）。"""
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            sql = "SELECT id, scope_id, user_id, category, content, confidence, created_at " \
+                  "FROM fact_candidates WHERE 1=1"
+            args: List[Any] = []
+            if scope_id:
+                sql += " AND scope_id=?"
+                args.append(str(scope_id))
+            if user_id:
+                sql += " AND user_id=?"
+                args.append(str(user_id))
+            sql += " ORDER BY created_at DESC LIMIT ?"
+            args.append(int(limit))
+            rows = conn.execute(sql, tuple(args)).fetchall()
+            conn.close()
+            return [{"id": r[0], "scope_id": r[1], "user_id": r[2], "category": r[3],
+                     "content": r[4], "confidence": r[5], "created_at": r[6]} for r in rows]
+        except Exception:
+            return []
+
+    def confirm_candidate(self, cid: int) -> bool:
+        """把队里的一条升成正式事实（置信度取 0.7，可注入）。"""
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            row = conn.execute(
+                "SELECT scope_id, user_id, category, content, source_msg, confidence "
+                "FROM fact_candidates WHERE id=?", (int(cid),)).fetchone()
+            if not row:
+                conn.close()
+                return False
+            scope_id, user_id, category, content, source_msg, conf = row
+            self._upsert_fact(conn, scope_id, user_id, category, content,
+                              source_msg or "（人工确认）", max(0.7, float(conf or 0.7)))
+            conn.execute("DELETE FROM fact_candidates WHERE id=?", (int(cid),))
+            conn.commit()
+            conn.close()
+            return True
+        except Exception:
+            return False
+
+    def discard_candidate(self, cid: int) -> bool:
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            conn.execute("DELETE FROM fact_candidates WHERE id=?", (int(cid),))
+            conn.commit()
+            conn.close()
+            return True
+        except Exception:
+            return False
+
     def _store_facts(self, scope_id: str, user_id: str, facts: List[Dict[str, str]], source_msg: str):
         if not facts:
             return
@@ -695,8 +798,14 @@ class SuperMemory:
                 # 写侧质量闸：垃圾进库只会越积越多，且每轮都要注入
                 if not _fact_is_usable(fact.get("category", ""), fact.get("content", "")):
                     continue
+                conf = float(fact.get("confidence", 0.7))
+                # 低置信度（抽取器猜的）→ 待确认队列；确认前不进 prompt
+                if conf < MIN_AUTO_FACT_CONF:
+                    self._queue_fact(conn, scope_id, user_id, fact["category"],
+                                     fact["content"], conf, source_msg)
+                    continue
                 self._upsert_fact(conn, scope_id, user_id, fact["category"], fact["content"],
-                                  source_msg, float(fact.get("confidence", 0.7)))
+                                  source_msg, conf)
             conn.commit()
             conn.close()
         except Exception as e:

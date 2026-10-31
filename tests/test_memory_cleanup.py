@@ -156,8 +156,8 @@ def test_identity_denoise():
     check("「我是大二学生」保留（长身份）",
           bool(f) and f[0]["content"] == "大二学生" and f[0]["confidence"] >= 0.9, f)
 
-    f = _identity("我叫小明")
-    check("「我叫小明」保留为身份（自报名字）",
+    f = [x for x in _facts("我叫小明") if x["category"] == "名字"]
+    check("「我叫小明」落为「名字」（不再是身份，避免被形态闸误杀）",
           bool(f) and f[0]["content"] == "小明" and f[0]["confidence"] >= 0.8, f)
 
     f = _identity("我是一名产品经理")
@@ -165,8 +165,9 @@ def test_identity_denoise():
           bool(f) and f[0]["content"] == "产品经理" and f[0]["confidence"] >= 0.8, f)
 
     pref = [x for x in _facts("我喜欢吃火锅") if x["category"] == "偏好"]
-    check("非身份事实仍走 0.7 默认置信度",
-          bool(pref) and pref[0]["confidence"] == 0.7, pref)
+    # 2026-10-31：偏好按句子形态给置信度（「我喜欢」= 0.8），不再一律 0.7
+    check("偏好事实置信度按形态给（≥0.8）",
+          bool(pref) and pref[0]["confidence"] >= 0.8, pref)
 
 
 # ── D. persona_kernel 按人 ─────────────────────────────────
