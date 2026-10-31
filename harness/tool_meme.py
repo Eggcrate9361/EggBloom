@@ -225,13 +225,29 @@ def meme_send(meme_id: str) -> Dict[str, Any]:
     return {"ok": True, "sent": os.path.relpath(full, MEME_ROOT).replace("\\", "/")}
 
 
+def _saved_detail(rel: str) -> Dict[str, Any]:
+    """刚存的这张：相对路径 + 标签 + 画面描述（模型据此说清"存的是哪张"）。"""
+    item = {"rel": rel}
+    try:
+        import meme_desc as _md
+        tags = _md.tags_for(MEME_ROOT, rel) or []
+        if tags:
+            item["tags"] = [str(t) for t in tags[:4]]
+        desc = str(_md.desc_for(MEME_ROOT, rel) or "").strip()
+        if desc:
+            item["desc"] = desc[:80]
+    except Exception:
+        pass
+    return item
+
+
 def meme_save(path: str = "") -> Dict[str, Any]:
     """存这一轮（或指定）的图到表情库。返回每张的结果。"""
     paths = turn_images_for_save(path if isinstance(path, str) else "")
     if not paths:
         return {"ok": False, "error": "这一轮没有可存的图片"}
     scene_group = bool(_TURN.get("is_group") and _TURN.get("group_id"))
-    saved, failed = [], []
+    saved, failed, dups = [], [], []
     for p in paths[:4]:
         try:
             import meme_collect as _mc
@@ -242,7 +258,7 @@ def meme_save(path: str = "") -> Dict[str, Any]:
             failed.append({"path": p, "error": f"{type(e).__name__}: {e}"})
             continue
         if rel:
-            saved.append(rel)
+            saved.append(_saved_detail(rel))
         else:
             # 静默跳过会让模型只能说"存不进去"；把同一条判据翻成人话
             why = ""
@@ -250,7 +266,18 @@ def meme_save(path: str = "") -> Dict[str, Any]:
                 why = _mc.skip_reason(p)
             except Exception:
                 pass
-            failed.append({"path": p, "error": why or "这张存不进去"})
+            if "存过" in str(why):
+                try:
+                    rel_ex, how = _mc.existing_entry(p)
+                except Exception:
+                    rel_ex, how = "", ""
+                if scene_group:
+                    # 群聊不展开"重复"这件事（用户要求只在私聊说）
+                    failed.append({"path": p, "error": "这张存不进去"})
+                else:
+                    dups.append({"path": rel_ex, "how": how})
+            else:
+                failed.append({"path": p, "error": why or "这张存不进去"})
     # 连续失败冷却（真机 21:11–21:12 连试三回，模型只能反复说同一句）
     global _FAIL_COUNT, _FAIL_UNTIL
     if saved:
@@ -260,11 +287,21 @@ def meme_save(path: str = "") -> Dict[str, Any]:
         if _FAIL_COUNT >= 3:
             _FAIL_UNTIL = time.time() + 600
             _FAIL_COUNT = 0
-    return {"ok": bool(saved), "saved": saved, "failed": failed,
-            "count": len(saved), "scene": "group" if scene_group else "private",
-            "cooldown": _FAIL_UNTIL > time.time(),
-            "note": ("这张存不进去，先别试了" if _FAIL_UNTIL > time.time()
-                     else ("存好了" if saved else "没存成，换个说法或稍后再试"))}
+    out = {"ok": bool(saved), "saved": saved, "failed": failed,
+           "count": len(saved), "scene": "group" if scene_group else "private",
+           "cooldown": _FAIL_UNTIL > time.time(),
+           "note": ("这张存不进去，先别试了" if _FAIL_UNTIL > time.time()
+                    else ("存好了" if saved else "没存成，换个说法或稍后再试"))}
+    # ★ 2026-11-01：现在存了哪张 / 是不是重复 —— 只在私聊说。
+    #   群聊里不展开，免得 bot 在群里聊"重复表情"。
+    if not scene_group:
+        if dups:
+            out["duplicates"] = dups
+            if not saved:
+                out["ok"] = True          # 早就存过 = 目标已达成，不算失败
+                out["note"] = "这张之前就存过了"
+                out["failed"] = [x for x in failed if x.get("error") not in ("", None)]
+    return out
 
 
 def register_all() -> Dict[str, Any]:

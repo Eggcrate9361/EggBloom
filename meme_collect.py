@@ -163,6 +163,33 @@ def _today_count(idx: dict) -> int:
     return n
 
 
+def existing_entry(path: str, *, cfg=None):
+    """库里已经有这张（或视觉重复）吗？返回 (rel, how)。
+
+    how: "same" = 字节一致；"visual" = 感知哈希判重；"": 没有。
+    2026-11-01：给 meme_save 用 —— 用户问"我刚存的是哪张"、重复时要能说清。
+    """
+    c = cfg if isinstance(cfg, dict) else _cfg()
+    src = str(path or "").strip()
+    if not src or not os.path.isfile(src):
+        return "", ""
+    try:
+        with open(src, "rb") as f:
+            sha = hashlib.sha1(f.read(_limits(c)[1] + 1)).hexdigest()
+    except OSError:
+        return "", ""
+    idx = _index()
+    if sha in idx:
+        v = idx[sha]
+        return str(v.get("path") or "") if isinstance(v, dict) else "", "same"
+    if bool(c.get("meme_collect_phash_dedupe", True)):
+        _maxd = int(c.get("meme_collect_phash_dist", 4) or 0)
+        k, v = visual_dup_of(src, idx, max_dist=_maxd)
+        if k:
+            return str(v.get("path") or ""), "visual"
+    return "", ""
+
+
 def skip_reason(path: str, *, cfg=None) -> str:
     """这张图为什么收不进去（空串 = 可以收）。
 
