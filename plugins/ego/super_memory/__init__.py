@@ -426,6 +426,38 @@ def _user_scope_filter(scope: str, focus_user: str) -> Tuple[str, tuple]:
     return " AND (user_id=? OR user_id='' OR user_id IS NULL)", (uid,)
 
 
+#: "Bot 自己做的动作"的事件类型（写入入口见 `add_action_event`）。
+#: 这些事件**不按人隔离**，理由见 `_event_scope_filter`。
+ACTION_EVENT_TYPES = (
+    "meme_save", "meme_send", "meme", "collect", "poke",
+    "task", "image", "file", "job", "proactive", "action",
+)
+
+
+def _event_scope_filter(scope: str, focus_user: str) -> Tuple[str, tuple]:
+    """事件按人过滤 —— 但 **Bot 自己的动作不按人切开**。
+
+    2026-11-01 用户质疑"按人隔离有什么必要"。核实下来：这一条本来是给**归属**
+    用的，不是给**可见性**用的，被我一把套到所有事件上，于是出现了不该有的效果：
+
+      · 事实 / 他人事件 → 按人是**必要**的：10-31 真机事故就是群里的
+        「事件：吃饭」「身份：老大」跨人注入，模型把 A 的事安到 B 头上；
+      · Bot 自己的动作 → **没必要**：那是我干的事，不是谁的事实。
+        B 问我"你昨天存的那张表情包呢"，我不该因为那张图是 A 发的就答"没存过"。
+
+    所以：动作类事件按**作用域**（群/会话）可见，其余仍按人。
+    """
+    uid = str(focus_user or "")
+    marks = ",".join("?" * len(ACTION_EVENT_TYPES))
+    if not uid:
+        return "", ()
+    if str(scope) == "group":
+        return (f" AND (event_type IN ({marks}) OR user_id=?)",
+                tuple(ACTION_EVENT_TYPES) + (uid,))
+    return (f" AND (event_type IN ({marks}) OR user_id=? OR user_id='' OR user_id IS NULL)",
+            tuple(ACTION_EVENT_TYPES) + (uid,))
+
+
 def _affection_level(score: int) -> str:
     """好感度 → 关系档（2026-10-21 调整阈值）。
 
@@ -905,8 +937,9 @@ class SuperMemory:
                 if not qvec:
                     use_vec = False
             min_sim = float(self.config.get("embed_min_sim", 0.35))
-            # 按人过滤（facts 与 events 同一口径，见 _user_scope_filter）
+            # 按人过滤：**事实按人**（防认错人）；**自己的动作不按人**（见 _event_scope_filter）
             uf_sql, uf_args = _user_scope_filter(scope, focus_user)
+            ev_sql, ev_args = _event_scope_filter(scope, focus_user)
 
             def _sim(emb_text):
                 if not use_vec or not emb_text:
@@ -934,9 +967,9 @@ class SuperMemory:
             cur = conn.execute(
                 "SELECT event_type, summary, emotion, importance, timestamp, embedding, tier FROM events "
                 "WHERE scope_id=? AND importance > 0.5 AND (? = 0 OR (embedding IS NOT NULL AND embedding != ''))"
-                + uf_sql +
+                + ev_sql +
                 " ORDER BY timestamp DESC LIMIT 100",
-                (str(scope_id), 1 if use_vec else 0) + uf_args,
+                (str(scope_id), 1 if use_vec else 0) + ev_args,
             )
             for row in cur.fetchall():
                 age = now - row[4]
