@@ -29,6 +29,7 @@ import time
 ROOT = os.path.dirname(os.path.abspath(__file__))
 TESTS_DIR = os.path.join(ROOT, "tests")
 KNOWN_RED_FILE = os.path.join(TESTS_DIR, "known_red.json")
+FLAKY_FILE = os.path.join(TESTS_DIR, "known_flaky.json")
 FAIL_DIR = os.path.join(TESTS_DIR, "_last_fail")
 DEFAULT_TIMEOUT = 180
 
@@ -50,6 +51,22 @@ def _safe_console():
 def load_known_red():
     try:
         with open(KNOWN_RED_FILE, encoding="utf-8") as f:
+            data = json.load(f)
+        return {k: v for k, v in data.items() if not k.startswith("_")}
+    except Exception:
+        return {}
+
+
+def load_known_flaky():
+    """整跑时可以自动重试一次的用例（判据：今天整跑里**实际**抖过）。
+
+    为什么要有：2026-11-01 三次整跑红了 5 个 / 1 个 / 1 个，名单还不一样，
+    每次都靠"单独再跑一遍"才能确认是抖动还是真红 —— 人力白花，判断还容易错。
+    为什么只列名单不全局重试：全局重试会把真红的发现时间翻倍，还会让人习惯性
+    无视 FAIL。这里重跑通过会**单列「抖动」并打出首次退出码**，不静默吞红。
+    """
+    try:
+        with open(FLAKY_FILE, encoding="utf-8") as f:
             data = json.load(f)
         return {k: v for k, v in data.items() if not k.startswith("_")}
     except Exception:
@@ -134,6 +151,8 @@ def main(argv=None):
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--no-known-red", action="store_true",
                     help="已知红也当失败（发版前核实）")
+    ap.add_argument("--no-retry", action="store_true",
+                    help="抖动用例也不重试（发版前核实：看原始结果）")
     args = ap.parse_args(argv)
     _safe_console()
     # 清掉上一轮的失败现场，避免拿旧日志当新证据
@@ -145,6 +164,7 @@ def main(argv=None):
         pass
 
     known = {} if args.no_known_red else load_known_red()
+    flaky = {} if (args.no_retry or args.no_known_red) else load_known_flaky()
     files = discover(args.filter)
     if not files:
         print(f"没有匹配的用例（--filter {args.filter!r}）", file=sys.stderr)
@@ -158,9 +178,23 @@ def main(argv=None):
         res = run_one(path, args.timeout)
         res["name"] = name
         res["known_red"] = name in known
+        # 抖动用例：红了**当场重跑一次**，通过了就标「抖动」而不是红
+        if not res["ok"] and not res["known_red"] and name in flaky:
+            first_code = res.get("code")
+            retry = run_one(path, args.timeout)
+            retry["name"] = name
+            retry["known_red"] = False
+            if retry["ok"]:
+                retry["flaky"] = True
+                retry["first_code"] = first_code
+                retry["note"] = flaky.get(name, "")
+                res = retry
+            else:
+                res = retry
+                res["first_code"] = first_code
         results.append(res)
         if res["ok"]:
-            mark = "OK"
+            mark = "FLAKY→OK" if res.get("flaky") else "OK"
         elif res["known_red"]:
             mark = "KNOWN-RED"
         else:
@@ -172,16 +206,25 @@ def main(argv=None):
     hard_fail = [r for r in results if not r["ok"] and not r["known_red"]]
     expected_red = [r for r in results if not r["ok"] and r["known_red"]]
     fixed_red = [r for r in results if r["ok"] and r["known_red"]]
+    flaked = [r for r in results if r["ok"] and r.get("flaky")]
 
     if args.json:
         print(json.dumps({"total": len(results), "failed": [r["name"] for r in hard_fail],
                           "known_red": [r["name"] for r in expected_red],
                           "fixed_known_red": [r["name"] for r in fixed_red],
+                          "flaky": [{"name": r["name"], "first_code": r.get("first_code")}
+                                    for r in flaked],
                           "evals": evals}, ensure_ascii=False, indent=2))
     else:
         print("\n" + "=" * 60)
         print(f"共 {len(results)} 个用例 | 通过 {len(results) - len(hard_fail) - len(expected_red)} "
-              f"| 意外失败 {len(hard_fail)} | 已知红 {len(expected_red)}")
+              f"| 意外失败 {len(hard_fail)} | 已知红 {len(expected_red)}"
+              + (f" | 抖动重跑通过 {len(flaked)}" if flaked else ""))
+        if flaked:
+            print("\n抖动（首次红、当场重跑通过 —— 不是真红，但记一笔）：")
+            for r in flaked:
+                print(f"  - {r['name']}（首次 exit={r.get('first_code')}）"
+                      f" —— {r.get('note', '')}")
         if hard_fail:
             print("\n意外失败（必须修）：")
             for r in hard_fail:

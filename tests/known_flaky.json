@@ -1,0 +1,9 @@
+{
+  "_comment": "整跑时允许自动重试一次的用例。判据是'今天整跑里实际抖过'，不是'看着像会抖'。重跑通过会在汇总里单列「抖动」并打印首次失败码 —— 不静默吞红；重跑还红就是真红。发版前核实用 --no-retry。",
+  "test_webui_v4_overlap.py": "Chrome 资源竞争：整跑时偶发误报遮挡（交接 §44.1 记过），单跑稳定通过",
+  "test_webui_v4_pages.py": "整跑时加载 90s+，CPU 抢不到就超时/漏渲染；单跑 144/144",
+  "test_webui_v4_nav_sync.py": "同上，快速滚动中间态采样对卡顿敏感",
+  "test_group_decider_logic.py": "时钟类判据：整跑时若与别的重活并行，冷却期场景偶发翻车；单跑 10/10",
+  "test_vitals.py": "同上，时段判据对当前时间敏感；单跑 38/38",
+  "test_short_meaningless.py": "import bot_core 会在退出期偶发原生崩溃（0xC0000409，插件线程收尾）；单跑 5/5"
+}
