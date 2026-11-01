@@ -13873,6 +13873,13 @@ def _pipeline_step(group_id):
     
     # ★ 1.5.10 H5：本批的 trace 进入线程上下文，后续决策/发送日志都带上它。
     _batch_tid = _set_trace(str(buffer.get("trace_id") or ""))
+    # ★ 1.6.0 前置 C（2026-11-01）：同一个 trace 也写进事件日志的 `trace_id`，
+    #   P0 的验收判据（"agent 与闲聊同一个 trace"）就是从这里比对的。
+    try:
+        from harness import session_log as _slt
+        _slt.set_trace(_batch_tid)
+    except Exception:
+        pass
     if group_id:
         _GROUP_TRACE[str(group_id)] = _batch_tid
 
@@ -14585,8 +14592,9 @@ def _pipeline_step(group_id):
             try:
                 from harness import session_log as _slog
                 if _slog.enabled_for(group_id):
-                    _slog.append_user_msg(group_id, _hist_user)
-                    _slog.append_bot_reply(group_id, _hist_reply)
+                    _tid = _cur_trace()
+                    _slog.append_user_msg(group_id, _hist_user, trace_id=_tid)
+                    _slog.append_bot_reply(group_id, _hist_reply, trace_id=_tid)
             except Exception:
                 pass
 

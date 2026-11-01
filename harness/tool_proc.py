@@ -37,6 +37,7 @@ import json
 import time
 import queue
 import atexit
+import re
 import threading
 import subprocess
 import uuid
@@ -503,14 +504,32 @@ def _new_job(label, cmd, kind="shell"):
 
 
 def job_start(args):
-    """在后台启动一个 Python 脚本文件（不阻塞；用 job_output 增量读取）。"""
+    """在后台启动一个 Python 脚本或**内联命令**（不阻塞；用 job_output/job_wait 读）。"""
     args = args or {}
+    # ★ 1.6.0 P3.2（2026-11-01）：允许内联命令，不必先 ws_write 一个脚本。
+    #   自主开发层的下载/装依赖都是"一次长命令"，多两次往返就是白烧预算。
+    inline = args.get("cmd")
+    if isinstance(inline, list) and inline:
+        cmd = [str(x) for x in inline]
+        j, err = _new_job(args.get("label") or " ".join(cmd[:2]), cmd, kind="shell")
+        if not j:
+            return f"[错误] {err}"
+        return (f"已在后台启动 {j.id}（shell）：{' '.join(cmd[:3])}…\n"
+                f"用 job_wait(job_id='{j.id}') 一次等到结束，或 job_output 增量读。")
+    if isinstance(inline, str) and inline.strip():
+        cmd = inline.strip()
+        j, err = _new_job(args.get("label") or cmd[:40], cmd, kind="shell")
+        if not j:
+            return f"[错误] {err}"
+        return (f"已在后台启动 {j.id}（shell）：{cmd[:60]}\n"
+                f"用 job_wait(job_id='{j.id}') 一次等到结束。")
+
     res = _ws.resolve(args.get("path"), must_exist=True)
     if not res.ok:
         return _ws.describe_error(res)
     path = res.path
     if os.path.isdir(path):
-        return f"[错误] {_ws.rel(path)} 是目录。job_start 需要一个脚本文件。"
+        return f"[错误] {_ws.rel(path)} 是目录。job_start 需要一个脚本文件（或传 cmd 内联命令）。"
 
     extra = args.get("args")
     cmd = [python_executable(), "-u", path]
@@ -559,6 +578,71 @@ def job_output(args):
     else:
         out += "\n[status: running]"
     return out
+
+
+#: `job_wait` 的单次等待天花板（1.6.0 P3.2）。产品态 120s，分离态才放宽（后续接 `separation.active()`）。
+JOB_WAIT_CEILING = float(os.environ.get("EGGBLOOM_JOB_WAIT_CEILING", "120") or 120)
+#: 返回时最多带多少行输出（尾部），防止 20 分钟的日志把上下文灌爆
+JOB_WAIT_TAIL_LINES = 80
+
+
+def job_wait(args):
+    """**一次调用等到结束**（不烧轮询预算）。
+
+    设计依据：`分离与真实-设计.md` §11.1 —— 20 分钟的下载应该只消耗 1 次工具预算，
+    而不是 200 次 `job_output`。内部每 2 秒看一次，超时才返回。
+    """
+    args = args or {}
+    jid = str(args.get("job_id") or "")
+    j = _JOBS.get(jid)
+    if not j:
+        alive = ", ".join(f"{k}({v.status})" for k, v in _JOBS.items()) or "无"
+        return f"[错误] 没有后台任务 {jid}。当前任务：{alive}"
+    try:
+        max_sec = float(args.get("max_sec") if args.get("max_sec") not in (None, "") else 120)
+    except (TypeError, ValueError):
+        max_sec = 120.0
+    max_sec = max(1.0, min(max_sec, JOB_WAIT_CEILING))
+    until = str(args.get("until") or "exit").strip()
+    pattern = None
+    if until and until != "exit":
+        try:
+            pattern = re.compile(until)
+        except re.error as e:
+            return f"[错误] until 不是合法正则：{e}"
+
+    t0 = time.time()
+    collected, hit = [], False
+    while True:
+        new, st = j.tail(wait=True, timeout=2.0)
+        if new:
+            if pattern is not None and any(pattern.search(x) for x in new):
+                hit = True
+            collected.extend(new)
+        if hit:
+            break
+        if st != "running":
+            break
+        if time.time() - t0 >= max_sec:
+            break
+        time.sleep(0.2)
+
+    elapsed = time.time() - t0
+    st = j.status
+    tail = collected[-JOB_WAIT_TAIL_LINES:]
+    lines = [f"{jid} [{st}] — {j.label}（等待 {elapsed:.1f}s，读回 {len(collected)} 行"
+             + (f"，命中 /{until}/" if hit else "") + "）"]
+    if st == "running":
+        lines.append(f"[status: running] 已等 {max_sec:.0f}s 还没结束，可以再等一次"
+                     "（job_wait）或先干别的（job_output 随时可读）。")
+    else:
+        lines.append(f"[status: {st}]（任务已结束）")
+    if tail:
+        lines.append("【输出·最后%d行】" % len(tail))
+        lines.extend(tail)
+    else:
+        lines.append("（本次无新增输出）")
+    return "\n".join(lines)
 
 
 def job_list(args=None):
@@ -682,16 +766,27 @@ PROC_TOOLS = [
          "reset": dict(_BOOL, description="为 true 时先重启会话（清空全部变量）")},
         ["code"]),
     _fn("job_start",
-        "在后台启动一个 Python 脚本（不阻塞；适合长任务）。用 job_output 增量读取输出。",
-        {"path": dict(_STR, description="脚本文件路径"),
+        "在后台启动任务（不阻塞；适合长任务）：给 path 跑 Python 脚本，或给 cmd 直接跑命令。"
+        "长任务用 job_wait 一次等到结束，别用 job_output 反复轮询。",
+        {"path": dict(_STR, description="脚本文件路径（与 cmd 二选一）"),
+         "cmd": {"type": ["string", "array"], "items": _STR,
+                 "description": "内联命令：字符串走 shell，或直接给 argv 列表（如 [\"python\",\"-u\",\"-c\",\"...\"]）"},
          "args": {"type": "array", "items": _STR, "description": "传给脚本的命令行参数"},
          "label": dict(_STR, description="任务显示名")},
-        ["path"]),
+        []),
     _fn("job_output",
         "读取后台任务的**新增**输出（增量，不重复）。wait=true 时等它结束（有上限）。",
         {"job_id": dict(_STR, description="job_start 返回的任务号"),
          "wait": dict(_BOOL, description="等待任务结束或超时"),
          "timeout_ms": dict(_NUM, description="等待上限（毫秒），仅 wait=true 时有效")},
+        ["job_id"]),
+    _fn("job_wait",
+        "**一次调用阻塞等到后台任务结束**（内部每 2 秒看一眼）。"
+        "20 分钟的下载只消耗 1 次工具调用，不要用 job_output 反复轮询。"
+        "until 可传正则（等某行出现就返回），默认 exit=等进程退出。",
+        {"job_id": dict(_STR, description="任务号"),
+         "max_sec": dict(_NUM, description=f"最多等多久（秒），默认 120，上限 {JOB_WAIT_CEILING:.0f}"),
+         "until": dict(_STR, description="'exit'（默认）或正则，命中即返回")},
         ["job_id"]),
     _fn("job_list", "列出所有后台任务及其状态。", {}, []),
     _fn("job_kill", "结束一个后台任务（含其子进程）。",
@@ -717,6 +812,7 @@ PROC_FUNCTIONS = {
     "py_run": tool_py_run,
     "job_start": job_start,
     "job_output": job_output,
+    "job_wait": job_wait,
     "job_list": job_list,
     "job_kill": job_kill,
     "todo_write": todo_write,

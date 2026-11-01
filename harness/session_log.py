@@ -44,6 +44,27 @@ _cache = {}
 # 每个命名空间的下一个 seq
 _seq = {}
 
+#: 进程内的"当前 trace"（2026-11-01，1.6.0 P0 前置 C）。
+#: bot_core 的 `_set_trace` 管日志行尾；这里管**事件载荷**。
+#: 两边同一个 id，1.6.0 才能用"同一个 trace"证明 agent 与闲聊走同一条路径。
+_TRACE_LOCAL = threading.local()
+
+
+def set_trace(tid: str) -> str:
+    """设置当前线程的 trace_id（空串 = 清除）。"""
+    try:
+        _TRACE_LOCAL.id = str(tid or "")
+    except Exception:
+        pass
+    return str(tid or "")
+
+
+def current_trace() -> str:
+    try:
+        return getattr(_TRACE_LOCAL, "id", "") or ""
+    except Exception:
+        return ""
+
 
 def _ns_path(kind, sid):
     safe = str(sid).replace(os.sep, "_").replace("/", "_")
@@ -93,11 +114,13 @@ def _get_events(kind, sid):
     return _cache[key]
 
 
-def append(kind, sid, ev_type, payload, *, ts=None):
+def append(kind, sid, ev_type, payload, *, ts=None, trace_id=None):
     """追加一条事件。返回写入的事件 dict；**校验失败时抛异常且不改变日志**。
 
     - payload 会被**深拷贝并冻结**（json round-trip），确保后续外部修改不影响日志。
     - 校验：载荷必须能无损 JSON 往返（无 set / 自定义对象 / NaN 等）。
+    - `trace_id`（2026-11-01）：不传则取 `current_trace()`；空串不写字段，
+      保持旧日志形状（1.5.10 的事件没有这个键，读取方要容错）。
     """
     if not isinstance(payload, dict):
         raise TypeError("payload 必须是 dict")
@@ -111,6 +134,8 @@ def append(kind, sid, ev_type, payload, *, ts=None):
         # round-trip 后有差异 → 说明存在丢精度的值（如 tuple→list 无所谓，但 NaN/Inf 不行）
         pass
 
+    _tid = str(trace_id if trace_id is not None else current_trace() or "")
+
     with _lock:
         events = _get_events(kind, sid)
         key = (kind, str(sid))
@@ -121,6 +146,8 @@ def append(kind, sid, ev_type, payload, *, ts=None):
             "type": ev_type,
             "payload": frozen,
         }
+        if _tid:
+            ev["trace_id"] = _tid
         # 先写盘成功，再改内存（避免磁盘失败却污染派生状态）
         try:
             os.makedirs(SESSION_LOG_DIR, exist_ok=True)
@@ -190,14 +217,15 @@ def edit_event(kind, sid, seq, *, content=None, op="edit"):
         return True, len(events)
 
 
-def append_user_msg(group_id, content, *, sender=None, ts=None):
+def append_user_msg(group_id, content, *, sender=None, ts=None, trace_id=None):
     """记录一条**模型可见**的用户消息（content 为进模型的最终形态）。"""
     return append("group", group_id, EV_USER_MSG,
-                  {"content": content, "sender": sender}, ts=ts)
+                  {"content": content, "sender": sender}, ts=ts, trace_id=trace_id)
 
 
-def append_bot_reply(group_id, content, *, ts=None):
-    return append("group", group_id, EV_BOT_REPLY, {"content": content}, ts=ts)
+def append_bot_reply(group_id, content, *, ts=None, trace_id=None):
+    return append("group", group_id, EV_BOT_REPLY, {"content": content}, ts=ts,
+                  trace_id=trace_id)
 
 
 def events_of(kind, sid):
