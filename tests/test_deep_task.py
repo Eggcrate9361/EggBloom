@@ -60,17 +60,23 @@ check("★ 开关关：私聊不给 deep_task", "deep_task" not in off)
 check("★ 开关关：群聊不给 deep_task",
       "deep_task" not in _names(is_group=True, agent_as_tool=False))
 
-on_priv = _names(agent_as_tool=True)
+on_priv = _names(agent_as_tool=True, agent_can_work=True)
 check("★ 开关开：私聊（白名单内）给 deep_task", "deep_task" in on_priv)
 check("开关开：私聊但没过白名单不给",
-      "deep_task" not in _names(agent_as_tool=True, privileged=False))
-check("开关开：群聊还要 agent_group_enable",
-      "deep_task" not in _names(is_group=True, agent_as_tool=True))
-check("开关开：群聊 + agent_group_enable 才给",
-      "deep_task" in _names(is_group=True, agent_as_tool=True,
-                            agent_group_enable=True))
+      "deep_task" not in _names(agent_as_tool=True, agent_can_work=True,
+                                privileged=False))
+# 2026-11-01 刀 4：群/私聊那两道场景开关收成「可干活」(agent_can_work)，
+# 判据跟着新键走（旧键的迁移在 config.load_config 里，见 test_agent_can_work）。
+check("开关开：群聊还要「可干活」",
+      "deep_task" not in _names(is_group=True, agent_as_tool=True, agent_can_work=False))
+check("开关开：群聊 + 可干活才给",
+      "deep_task" in _names(is_group=True, agent_as_tool=True, agent_can_work=True))
+check("开关开：可干活只影响这一组（旧键不再单独决定）",
+      "deep_task" not in _names(is_group=True, agent_as_tool=True,
+                                agent_can_work=False, agent_group_enable=True))
+_off_same = _names(agent_as_tool=False, agent_can_work=True)
 check("开关开时其它工具不受影响（只多这一组）",
-      set(on_priv) - set(off) == {"deep_task"}, set(on_priv) - set(off))
+      set(on_priv) - set(_off_same) == {"deep_task"}, set(on_priv) - set(_off_same))
 
 # ── 3. 递归闸 ────────────────────────────────────────────────────────
 r1 = td.deep_task("第一层", _runner=lambda **k: {"ok": True, "answer": "干完了", "steps": 3})

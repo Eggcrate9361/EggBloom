@@ -395,6 +395,12 @@ DEFAULT_CONFIG = {
     #   用户只能手改 JSON 才能打开，等于功能对普通用户不存在。
     #   两处分开授权：群聊是公开场合（有 @ 这个人工确认动作），
     #   私聊是伴侣场景，agent 的任务汇报式回答会把人设顶掉，所以各自一个开关。
+    #
+    # ── 1.6.0 刀 4（2026-11-01）：合并成一个「可干活」────────────────
+    #  语义 = **多一双手**，不是换人格：开 = 聊到需要多步动手时能调 deep_task；
+    #  关 = 只聊不干。新增 `agent_can_work` 作为唯一开关；
+    #  上面两个旧键**只读不写**（老配置仍认，见 load_config 里的迁移）。
+    "agent_can_work": False,
     "agent_group_enable": False,
     "agent_private_enable": False,
 
@@ -721,12 +727,15 @@ def load_config():
     if _config_cache is not None and sig == _config_cache_sig:
         return _config_cache
     cfg = DEFAULT_CONFIG.copy()
+    #: 用户文件里**实际写过**的键（迁移判据：默认值不算"写过"）
+    _file_keys = set()
 
     if os.path.exists(APP_CONFIG_FILE):
         try:
             with open(APP_CONFIG_FILE, "r", encoding="utf-8-sig") as f:
                 file_cfg = json.load(f)
             cfg.update(file_cfg)
+            _file_keys |= set(file_cfg.keys())
         except Exception:
             pass
 
@@ -762,6 +771,13 @@ def load_config():
         cfg["api_key"] = cfg.pop("deepseek_api_key")
     cfg.pop("deepseek_api_key", None)
     cfg.pop("deepseek_url", None)
+
+    # 1.6.0 刀 4：两个场景开关 → 一个「可干活」。
+    #   老配置（文件里没有 agent_can_work）按旧键推导一次，**行为不变**；
+    #   一旦文件里写了 agent_can_work，就以它为准（旧键从此不再参与）。
+    if "agent_can_work" not in _file_keys:
+        if any(cfg.get(k) for k in ("agent_group_enable", "agent_private_enable")):
+            cfg["agent_can_work"] = True
 
     if not cfg.get("api_url"):
         prov = cfg.get("api_provider", "deepseek")

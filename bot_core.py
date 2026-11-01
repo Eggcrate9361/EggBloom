@@ -7461,6 +7461,7 @@ def _tools_subset_for_scene(is_group: bool, privileged: bool = True) -> list:
     ★ 1.6.0 刀 3（2026-11-01）：`deep_task` 单独一组 `GROUP_DEEP`，
     **只有 `agent_as_tool` 打开时才进来**；私聊还要求进入过白名单（`privileged`），
     因为它会开一个能调工具的子 agent —— 普通私聊用户不该有这双手。
+    ★ 刀 4：群/私聊那两道场景开关收成 `agent_can_work`（能不能干活的唯一开关）。
     """
     from harness import tool_registry as _tr
     groups = [_tr.GROUP_CORE, _tr.GROUP_WORK, _tr.GROUP_WEB,
@@ -7471,11 +7472,8 @@ def _tools_subset_for_scene(is_group: bool, privileged: bool = True) -> list:
         groups.extend([_tr.GROUP_WRITE, _tr.GROUP_PROC,
                        _tr.GROUP_DESKTOP, _tr.GROUP_MCP])
     # 多步任务：开关关 → 模型根本看不到这个工具（回退粒度就是"别开它"）
-    if bool(_config.get("agent_as_tool", False)):
-        if is_group:
-            if bool(_config.get("agent_group_enable", False)):
-                groups.append(_tr.GROUP_DEEP)
-        elif privileged:
+    if bool(_config.get("agent_as_tool", False)) and _agent_can_work(is_group):
+        if is_group or privileged:
             groups.append(_tr.GROUP_DEEP)
     seen, names = set(), []
     for g in groups:
@@ -12482,6 +12480,16 @@ def _qq_agent_reply(text: str, images, *, is_group: bool, group_id: str = "",
     if not out:
         log(f"[qq_agent] 本轮没拿到答案（{(res or {}).get('error') or '空答案'}）")
     return out
+
+
+def _agent_can_work(is_group: bool = False) -> bool:
+    """「可干活」：开 = 需要多步动手时能调 deep_task（多一双手，不是换人格）。
+
+    1.6.0 刀 4（2026-11-01）：以前是 `agent_group_enable` / `agent_private_enable`
+    两个开关，现在收成 `agent_can_work` 一个；老配置的迁移在 `config.load_config()`
+    里做（文件里没有新键就按旧键推导），所以这里只管读新键。
+    """
+    return bool(_config.get("agent_can_work", False))
 
 
 def _agent_legacy_entry_enabled(is_group: bool) -> bool:

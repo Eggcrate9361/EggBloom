@@ -1911,13 +1911,9 @@ function renderGroupPanel(root){
     <hr class="panel-divider">
     <div class="settings-section-label">Agent 入口</div>
     <div class="field" style="display:flex;align-items:center;gap:24px">
-      <input type="checkbox" class="toggle-input" id="sAgentGroupEnable">
-      <div class="field-label" style="margin:0;flex-shrink:0">群聊内可派活</div>
-      <div class="field-desc" style="margin:0">被 @ 或叫名字、并且是管理员、并且说的是明确的执行指令（不是闲聊）时，交给 agent 多步执行。三个条件缺一不可。</div></div>
-    <div class="field" style="display:flex;align-items:center;gap:24px">
-      <input type="checkbox" class="toggle-input" id="sAgentPrivateEnable">
-      <div class="field-label" style="margin:0;flex-shrink:0">私聊内可派活</div>
-      <div class="field-desc" style="margin:0">同上，但只在私聊。默认关闭：派活得到的是任务汇报式回答，会把聊天的人格顶掉。带图的消息不走这条路。</div></div>
+      <input type="checkbox" class="toggle-input" id="sAgentCanWork">
+      <div class="field-label" style="margin:0;flex-shrink:0">可干活（多步任务）</div>
+      <div class="field-desc" style="margin:0">开：聊到需要连着查/读/跑/改的活时，它能调「多步任务工具」自己干完再回来接话 —— 多一双手，不是换人格。关：只聊不干。群里仍要求被 @ 或叫到名字；私聊仍要求在白名单里。原来是"群聊内可派活/私聊内可派活"两个开关，1.6.0 合并成这一个</div></div>
     <hr class="panel-divider">
     <div class="settings-section-label">群聊工具白名单</div>
     <div class="field" style="display:flex;align-items:center;gap:20px">
@@ -2569,7 +2565,7 @@ async function loadSettingsData(){
     s('sGroupExitCooldown', c.group_last_exit_cooldown);
     s('sQuietHours', c.quiet_hours); s('sQuietWhenMentioned', c.quiet_when_mentioned || 'wake');
     t('sGroupIdleExitEnable', c.group_idle_exit_enable);
-    t('sAgentGroupEnable', c.agent_group_enable); t('sAgentPrivateEnable', c.agent_private_enable);
+    t('sAgentCanWork', c.agent_can_work);
     s('sGroupIdleExitProb', c.group_idle_exit_probability); s('sGroupIdleMinSilence', c.group_idle_exit_min_silence); s('sPokeTimeout', c.poke_timeout); s('sGroupMsgBufferSession', c.group_msg_buffer_window_session); s('sGroupMsgBufferTrigger', c.group_msg_buffer_window_trigger);
     s('sGroupSendMaxParts', c.group_send_max_parts ?? 5); s('sGroupSendBlockThreshold', c.group_send_block_threshold ?? 100);
       const allowEn = $('sGroupToolAllowEnable');
@@ -2717,8 +2713,7 @@ function collectSettings(){
     group_last_exit_cooldown: num('sGroupExitCooldown'),
     quiet_hours: val('sQuietHours'), quiet_when_mentioned: val('sQuietWhenMentioned') || 'wake',
     group_idle_exit_enable: chk('sGroupIdleExitEnable'),
-    agent_group_enable: chk('sAgentGroupEnable'),
-    agent_private_enable: chk('sAgentPrivateEnable'),
+    agent_can_work: chk('sAgentCanWork'),
     group_idle_exit_probability: num('sGroupIdleExitProb'),
     group_idle_exit_min_silence: num('sGroupIdleMinSilence'),
     poke_timeout: (()=>{ const v=parseFloat(val('sPokeTimeout')); return isNaN(v)||v<0 ? undefined : v; })(),

@@ -24,6 +24,7 @@
   "history_recent_budget_chars": 6000,
   "history_ledger_budget_chars": 4000,
   "meme_cooldown": 10,
+  "agent_can_work": false,
   "agent_group_enable": false,
   "agent_private_enable": false,
   "qq_agent_enable": false,
