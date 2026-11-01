@@ -2995,6 +2995,17 @@ body.mech-open .rack .lb{animation:fadeMark 260ms linear 420ms forwards}
   border-color:transparent!important}
 .pc-card{color:#efe9dd}
 
+/* ── AIGC 全模态（2026-11-01）：生图页扩成图/语音/视频/素材的工作面 ── */
+.aigc-tabs{display:flex;gap:0;border-bottom:1px solid var(--line);margin-bottom:var(--s5)}
+.aigc-tab{font-family:var(--f-m);font-size:var(--z3);letter-spacing:.12em;color:var(--ink4);
+  padding:var(--s3) var(--s5);cursor:pointer;border-bottom:2px solid transparent;user-select:none}
+.aigc-tab:hover{color:var(--ink2)}
+.aigc-tab.on{color:var(--gold);border-bottom-color:var(--gold)}
+.aigc-tab .soon{font-size:var(--z1);color:var(--ink4);margin-left:6px;letter-spacing:0}
+.aigc-note{border:1px solid var(--line);padding:var(--s4) var(--s5);color:var(--ink3);
+  font-size:var(--z3);line-height:1.9;background:rgba(0,0,0,.12)}
+.aigc-note b{color:var(--gold);font-weight:400}
+.aigc-note code{font-family:var(--f-m);color:var(--ink2)}
 
 </style>
 
@@ -3306,7 +3317,7 @@ const PAGES = [
   { id:'protocol',  name:'协议',   sub:'连接与驱动', icon:'⇄', w:270, impl:true  },
   { id:'groupmanage',name:'群管理',sub:'群列表与开关',icon:'▦', w:320, impl:true  },
   { id:'memes',     name:'表情包', sub:'素材库',     icon:'◍', w:290, impl:true  },
-  { id:'imagegen',  name:'生图',   sub:'ComfyUI',   icon:'✦', w:250, impl:true  },
+  { id:'imagegen',  name:'AIGC',   sub:'全模态',     icon:'✦', w:250, impl:true  },
   { id:'behavior',  name:'群聊行为',sub:'说话时机',  icon:'◔', w:290, impl:true  },
   { id:'tokens',    name:'Token',  sub:'用量与预算', icon:'Σ', w:275, impl:true  },
   { id:'settings',  name:'配置中心',sub:'参数',      icon:'⚙', w:330, impl:true  },
@@ -3330,7 +3341,7 @@ let navTo = 0;
 
 /* 英文注记：明日方舟的「精致」主要来自中文下的小号英文 */
 const EN = {dashboard:'DASHBOARD',protocol:'PROTOCOL',groupmanage:'GROUPS',
-  memes:'MEMES',imagegen:'IMAGEGEN',behavior:'BEHAVIOR',tokens:'TOKEN',
+  memes:'MEMES',imagegen:'AIGC',behavior:'BEHAVIOR',tokens:'TOKEN',
   settings:'CONFIG',bot:'BOT',chatlogs:'LOGS',monitor:'MONITOR',
   console:'CONSOLE',memory:'MEMORY',plugins:'PLUGINS',agent:'AGENT'};
 
@@ -8504,7 +8515,15 @@ async function pageImagegen(el) {
   const running = !!st.comfyui_running;
 
   el.innerHTML = ''
-    + '<div class="hd"><span class="lab">生图服务</span><i class="rule"></i>'
+    /* AIGC 全模态（2026-11-01）：一个侧栏项，四个页签；语音/视频 1.6.0 接入 */
+    + '<div class="aigc-tabs">'
+    +   '<div class="aigc-tab on" data-t="img">生图</div>'
+    +   '<div class="aigc-tab" data-t="tts">语音<span class="soon">1.6.0</span></div>'
+    +   '<div class="aigc-tab" data-t="video">视频<span class="soon">1.6.0</span></div>'
+    +   '<div class="aigc-tab" data-t="lib">素材</div>'
+    + '</div>'
+    + '<div id="aigcMainPane">'
+    + '<div class="hd"><span class="lab">全模态 · 生图</span><i class="rule"></i>'
     +   '<span class="sig ' + (running ? 'live' : 'err') + '"><i></i>'
     +   (running ? 'ComfyUI 在线' : 'ComfyUI 未连接') + '</span></div>'
     + '<div class="stats">'
@@ -8546,7 +8565,32 @@ async function pageImagegen(el) {
     + '<div class="hd" style="margin-top:var(--s6)"><span class="lab">图库</span><i class="rule"></i>'
     +   '<span class="dim" id="igGalCount"></span>'
     +   '<button class="btn sm" id="igGalRefresh" style="margin-left:auto">刷新</button></div>'
-    + '<div class="me-cards" id="igGal" style="margin-top:var(--s3)"></div>';
+    + '<div class="me-cards" id="igGal" style="margin-top:var(--s3)"></div>'
+    + '</div>'
+    + '<div id="aigcSoonPane" hidden></div>';
+
+  /* 页签：图/素材沿用现有面板；语音、视频先给"规划中"的说明，不放假功能 */
+  const aigcSwitch = (key) => {
+    document.querySelectorAll('.aigc-tab').forEach(x => x.classList.toggle('on', x.dataset.t === key));
+    const main = $('aigcMainPane'), soon = $('aigcSoonPane');
+    if (!main || !soon) return;
+    main.hidden = (key === 'tts' || key === 'video');
+    soon.hidden = !main.hidden;
+    if (key === 'lib') {
+      const g = $('igGal');
+      if (g) g.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    }
+    if (!soon.hidden) {
+      const q = key === 'tts'
+        ? { t: '语音（TTS / ASR）', d: '文字转语音（piper，离线）与语音转写（faster-whisper）；<br>产物落 <code>data/media/audio/</code>，任务走统一任务层。', k: 'aigc_tts_backend / aigc_asr_backend' }
+        : { t: '视频', d: '图生视频与抽帧预览，1.6.0 只留接口，默认关闭；<br>先复用生图的 ComfyUI 工作流通道。', k: 'aigc_video_backend' };
+      soon.innerHTML = '<div class="aigc-note"><b>' + q.t + '</b> 计划 1.6.0 接入。<br>' + q.d
+        + '<br>开关：<code>' + q.k + '</code>（默认关，关掉即零网络请求）。</div>';
+    }
+  };
+  document.querySelectorAll('.aigc-tab').forEach(t => {
+    t.onclick = () => aigcSwitch(t.dataset.t);
+  });
 
   const msg = (ok, t) => { $('igMsg').innerHTML = '<div class="sig ' + (ok ? 'ok' : 'err')
     + '"><i></i>' + esc(t) + '</div>'; };

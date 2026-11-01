@@ -879,7 +879,7 @@ with sync_playwright() as pw:
     pg.screenshot(path=str(OUT / "_v4_config2.png"), full_page=True)
 
     print("\n=== ★ 全 15 页冒烟：逐页导航，不得有 JS 报错、不得是「未迁移」占位 ===")
-    PAGE_NAMES = ["仪表盘", "协议", "群管理", "表情包", "生图", "群聊行为", "Token",
+    PAGE_NAMES = ["仪表盘", "协议", "群管理", "表情包", "AIGC", "群聊行为", "Token",
                   "配置中心", "Bot", "日志", "通知", "控制台", "记忆", "插件", "Agent"]
     for i, nm in enumerate(PAGE_NAMES):
         before = len(errors)

@@ -58,7 +58,7 @@ if sync_playwright:
         sync_playwright = None
 
 # 页面 id 顺序（PAGES 数组）—— 用来把"内容标题"换算成页号
-NAMES = ["仪表盘", "协议", "群管理", "表情包", "生图", "群聊行为", "Token",
+NAMES = ["仪表盘", "协议", "群管理", "表情包", "AIGC", "群聊行为", "Token",
          "配置中心", "Bot", "日志", "通知", "控制台", "记忆", "插件", "Agent"]
 
 PROBE = """() => {
