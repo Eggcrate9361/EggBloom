@@ -116,6 +116,21 @@ textarea{min-height:80px;resize:vertical}
 .progress-bar{height:6px;background:var(--pv-surface-3);border-radius:var(--pv-r-full);overflow:hidden}
 .progress-fill{height:100%;border-radius:inherit;
   background:linear-gradient(90deg,var(--pv-gold-2),var(--pv-gold));transition:width .3s var(--pv-ease)}
+/* 全局进度条（2026-11-01）：切到任何页签都能看到蒸馏在跑 */
+.global-prog{border:1px solid var(--pv-line-2);border-radius:var(--pv-r-md);
+  padding:10px 14px;margin-bottom:var(--pv-4);background:var(--pv-surface-2)}
+.gp-head{display:flex;align-items:center;gap:10px;margin-bottom:8px;
+  font-size:var(--pv-fs-sm);color:var(--pv-ink-2)}
+.gp-dot{width:8px;height:8px;border-radius:50%;background:var(--pv-gold);
+  animation:gpPulse 1.6s ease-in-out infinite;flex:none}
+@keyframes gpPulse{0%,100%{opacity:.35}50%{opacity:1}}
+.gp-title{color:var(--pv-gold);letter-spacing:.06em}
+.gp-pct{font-family:var(--pv-mono);color:var(--pv-ink)}
+.gp-stage{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  color:var(--pv-ink-3);font-size:var(--pv-fs-xs)}
+.gp-jump{border:1px solid var(--pv-line-2);background:transparent;color:var(--pv-ink-2);
+  border-radius:var(--pv-r-sm);padding:2px 10px;font-size:var(--pv-fs-xs);cursor:pointer}
+.gp-jump:hover{border-color:var(--pv-gold);color:var(--pv-gold)}
 .level-pipeline{display:flex;align-items:center;justify-content:center;gap:var(--pv-2);
   margin:var(--pv-2) 0 var(--pv-4)}
 .level-step{display:flex;flex-direction:column;align-items:center;gap:var(--pv-1)}
@@ -500,6 +515,18 @@ button.sm{padding:5px 10px;font-size:var(--pv-fs-xs)}
     </div>
     <span class="pv-spacer"></span>
     <button class="ghost small" onclick="openSettings()">⚙ 设置</button>
+  </div>
+
+  <!-- 全局蒸馏进度：任何页签都能看到（2026-11-01） -->
+  <div id="globalProg" class="global-prog" style="display:none">
+    <div class="gp-head">
+      <i class="gp-dot"></i>
+      <span class="gp-title">蒸馏进行中</span>
+      <span class="gp-pct" id="gpPct">0%</span>
+      <span class="gp-stage" id="gpStage"></span>
+      <button class="gp-jump" onclick="showTab('new')">查看</button>
+    </div>
+    <div class="progress-bar"><div class="progress-fill" id="gpFill" style="width:0%"></div></div>
   </div>
 
   <!-- 总览 -->
@@ -1164,8 +1191,9 @@ async function startDistill() {
       toast(start.error, 'error');
       return;
     }
-    // 轮询进度
+    // 轮询进度（页面内面板 + 顶部全局条一起）
     pollProgress();
+    refreshGlobalProgress();
   } catch (e) {
     document.getElementById('btnStart').disabled = false;
     toast('启动失败: ' + e.message, 'error');
@@ -2059,6 +2087,45 @@ document.getElementById('modalOverlay').addEventListener('click', function(e) {
 // Initial load
 showTab('dashboard');
 updateLevelPipeline('L1');
+
+// ── 全局蒸馏进度（2026-11-01）─────────────────────────────────────
+// 进入插件页先问一次：如果蒸馏正在跑（可能是从别的页签切回来、或上次没关页面），
+// 顶部立刻出现进度条；跑完自动消失。切任何页签都看得到。
+let _gProgTimer = null;
+
+async function refreshGlobalProgress() {
+  const box = document.getElementById('globalProg');
+  if (!box) return;
+  try {
+    const st = await api('distill_status');
+    if (st && st.running) {
+      box.style.display = '';
+      const pct = Number(st.progress || 0);
+      document.getElementById('gpFill').style.width = pct + '%';
+      document.getElementById('gpPct').textContent = pct + '%';
+      document.getElementById('gpStage').textContent = st.stage || '';
+      if (!_gProgTimer) _gProgTimer = setInterval(refreshGlobalProgress, 2000);
+      return;
+    }
+    if (st && st.done) {
+      // 完成后留 8 秒「已完成，待审核」，免得页面悄悄恢复正常让人以为没跑
+      box.style.display = '';
+      document.getElementById('gpFill').style.width = '100%';
+      document.getElementById('gpPct').textContent = '100%';
+      document.getElementById('gpStage').textContent = '已完成，待人工审核';
+      if (!_gProgTimer) _gProgTimer = setInterval(refreshGlobalProgress, 2000);
+      setTimeout(() => { box.style.display = 'none'; }, 8000);
+      return;
+    }
+    box.style.display = 'none';
+    if (_gProgTimer) { clearInterval(_gProgTimer); _gProgTimer = null; }
+  } catch (e) {
+    box.style.display = 'none';
+  }
+}
+
+refreshGlobalProgress();
+
 </script>
 </body>
 </html>
