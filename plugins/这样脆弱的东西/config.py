@@ -22,7 +22,7 @@ DEFAULTS = {
     # ── 深挖引擎（v2）──
     "llm_enabled": True,               # 允许调用 LLM 深挖
     "deep_levels": ["L2", "L3", "L4"],  # 从哪些等级开始做 LLM 深挖
-    "max_llm_calls": 24,               # 本次蒸馏的 LLM 调用硬上限（防烧钱）
+    "max_llm_calls": 32,               # 本次蒸馏的 LLM 调用硬上限（防烧钱）；24 时 L2 实测用满 23，容易一刀切
     "llm_rpm": 3,                      # 上游实测约 3 请求/分钟，超了直接被拒
     "llm_max_tokens": 3000,            # 单次输出上限（要留够空间给推理 token）
     "llm_token_ceiling": 16000,        # 推理吃满预算时，允许自动抬到的上限

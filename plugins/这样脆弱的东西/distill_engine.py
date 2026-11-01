@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """这样脆弱的东西 蒸馏引擎 v2.2。
 
 流水线（每一级都在做上一级做不到的事）：
@@ -314,7 +314,19 @@ def _run(target_id, target_name, level, sources, external_text, mode="auto"):
                                             existing, chunk_hint=(c + 1, len(corpora))),
                         mt))
             try:
-                mapped = llm.batch(jobs)
+                # ★ 2026-11-01：map 阶段逐条推进进度。
+                #   以前只有 30 → 48 两次跳变，L2 一次跑 9 分钟、23 次调用，
+                #   用户在页面上看到的就是"卡在 30%"（真机报"蒸馏无法完成"）。
+                mapped = {}
+                _n_jobs = max(1, len(jobs))
+                for _i, (_key, _sys, _usr, _mt) in enumerate(jobs):
+                    try:
+                        _data, _ = llm.json(_sys, _usr, max_tokens=_mt, tag=str(_key))
+                    except BudgetExceeded:
+                        raise
+                    mapped[str(_key)] = _data
+                    _set(progress=30 + int(18 * (_i + 1) / _n_jobs))
+                    _set(stage=f"L2 取证 {_i + 1}/{_n_jobs}")
             except BudgetExceeded as e:
                 mapped = {}
                 _log(f"预算用尽，停止取证：{e}")
@@ -525,7 +537,7 @@ def _run(target_id, target_name, level, sources, external_text, mode="auto"):
             try:
                 from . import relational as rel_mod
                 from . import bot_identity
-                rel = rel_mod.build(talks_all, DC.nickname_map(),
+                rel = rel_mod.build(talks_all, data_collector.nickname_map(),
                                     bot_names=bot_identity.bot_names())
                 for e in rel_mod.to_features(rel):
                     have = {x.get("label") for x in (features.get("relationship") or [])}
