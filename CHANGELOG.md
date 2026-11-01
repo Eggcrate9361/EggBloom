@@ -3,6 +3,63 @@
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 `package.json` 的 `version`（唯一真相源）。
 
+## [1.5.11] - 2026-11-01
+
+主线是**收口**：人格与记忆冻结、评测台立起来、真机问题清零，顺手把更新通道做完。
+范围 `v1.5.10..v1.5.11`，39 个提交。
+
+### 新增
+
+- **评测台（P0-1）**：`evals/` 40 场机械判分（零成本、可复现），
+  `run_eval.py` / `python run_all_tests.py --evals` 一条命令跑完；
+  autonomy 策略层再补 13 条语义用例（`evals/autonomy_eval.py`）。
+- **出口硬约束 `reply_guard`**：号码、露后台、简历折叠 —— 提示词是概率的，
+  这一层用代码兜底（被问身份念简历、把 bot QQ 报出去这两类真机问题）。
+- **自愈 M1/M2**：`harness/trace_tools.py`（failure_top / log_search / trace_get /
+  repairs）+ `harness/self_heal.py`（配置快照校验、R1/R2 自修），
+  配置页「启动自愈」开关；`docs/self_heal.md` 写清口径与边界。
+- **事实抽取管线**：`src` + 按形态置信度（0.45~0.9）+ `fact_candidates` 待确认队列；
+  低置信度**不进 prompt**；`scripts/review_fact_queue.py` 人工确认、
+  `scripts/clean_memory_facts.py` 存量清洗。
+- **认账闸 `harness/consistency.py`**：用户在主张我说过某话 + 我在否认 + 我确实说过
+  → 发送前替换成认账句（私聊+群聊）。确定性，不依赖模型自觉。
+- **热补丁更新**：`harness/updater.py` + `scripts/make_patch.py`；
+  配置中心「更新」面板（检查 / 安装并重启 / **下载进度条** / 完成后自动重启）。
+  只覆盖代码与页面，人格、自建插件、数据、配置一律不动；本地改过的官方文件保留。
+- **表情包视觉去重**：dHash + 汉明距离（默认 ≤4），同图换编码/重新压缩不再收第二份；
+  `scripts/dedupe_memes.py` 清理存量。
+- **存图回执**：`meme_save` 返回 `{rel, tags, desc}`，模型能说"存的是哪张"；
+  私聊重复时直说"这张之前存过了"，群聊不展开。
+- **日志页**：私聊按人分开（`pm:<QQ>`）、记忆注入进轮次视图、新标签分级。
+- **运行时阈值进配置中心**：慢回填充、存图回看窗口、表情包上下限、
+  认账闸三项 —— 全部即时生效。
+
+### 修复
+
+- 群表情包采集只认 `message_type` → 轮询/懒人格式收不进来（`_is_group_msg`）。
+- 出口守卫把整句删空：`我是AAA无理由退货(3865661256)啊` → 现在剥掉数字保留句子。
+- 私聊合并后图片占位符翻倍 → 模型编出"第二张没取到"（真机"两张图/改口"）。
+- "存表情包"存不了：describe 模式下图走视觉，`set_turn` 只认 `images`（None）。
+- 一次问话回两次：慢回填充 3 秒太急，普通一轮 6 秒就出正文（改 12 秒、可配）。
+- 记忆垃圾：`身份=老大/鸡蛋`、`事件=吃饭` 被抽进 facts 每轮注入 →
+  读写两侧质量闸 + 存量清洗。
+- 日志页回复重复两遍；人格规则层写错标题静默消失；身份块因 `_nick_line`
+  未定义**从未生效**（修好后静态段 2810→2914 字符）。
+
+### 变更
+
+- 记忆收口：`memory_api.recall()` / `remember()` 成为唯一读写口。
+- 人格单源：话术搬进 `personality.txt`，规则层格式校验（`test_persona_format`）。
+- 判据去硬编码：`evals/rules.json` + 配置中心 `eval_*` 开关。
+- 全量入口 `run_all_tests.py`（**225 个用例**，`known_red.json` 保持空表）。
+- 提交规范允许并列 scope（`fix(a,b)`）。
+
+### 1.6.0 铺路
+
+- `session_log` 事件带 `trace_id`（`set_trace/current_trace`）——
+  P0「agent 与闲聊同一条路径」的判据。
+- `job_wait(job_id, max_sec, until)` 一次调用等到结束；`job_start` 支持内联 `cmd`。
+
 ## [1.5.10] - 2026-10-30
 
 主线是**真实**：能不能做是能力问题，"说自己做了"必须经得起查。范围 `v1.5.9..v1.5.10`。

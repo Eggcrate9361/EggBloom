@@ -599,9 +599,12 @@ DEFAULT_CONFIG = {
     "consistency_own_msgs": 4,         # 认账闸：查证时看我最近几条回复
 
     # 热补丁更新（2026-11-01）：给终端用户用的更新通道。
-    # 填 latest.json 的公网地址；空 = 关闭检查（开发机默认关）。
-    # 发布侧用 scripts/make_patch.py 生成补丁与 manifest。
-    "update_manifest_url": "",
+    # 默认指向 GitHub 最新 Release 的 latest.json（`/releases/latest/download/<asset>`
+    # 永远解析到最新一次正式发布），所以发布侧只要把 latest.json 挂上去，
+    # 老用户的「检查更新」就能找到新版本；空串 = 关闭检查。
+    "update_manifest_url": (
+        "https://github.com/Eggcrate9361/EggBloom/releases/latest/download/latest.json"
+    ),
 
     # 自定义内容
     "custom_exit_phrases_short": [],
