@@ -14540,6 +14540,15 @@ def _pipeline_step(group_id):
                 if draw_result.startswith("图片已生成:"):
                     img_path = draw_result[len("图片已生成:"):].strip()
                     send_group_image(group_id, img_path)
+                    # 画图也要进账（2026-11-01）：纯代码动作不记，问起来它就说"没画过"
+                    try:
+                        import self_actions as _acts_img
+                        _acts_img.record("image", scene="group", target=str(group_id),
+                                         group_id=str(group_id),
+                                         ref=os.path.basename(img_path),
+                                         detail=str(draw_desc)[:60])
+                    except Exception:
+                        pass
                 else:
                     smart_send_group(group_id, draw_result)
                 return
@@ -16780,6 +16789,15 @@ def main():
                     if draw_result.startswith("图片已生成:"):
                         img_path = draw_result[len("图片已生成:"):].strip()
                         send_image(img_path, sender)
+                        # 画图进账（2026-11-01，同群聊那处）
+                        try:
+                            import self_actions as _acts_img
+                            _acts_img.record("image", scene="private", target=str(sender),
+                                             source=str(sender),
+                                             ref=os.path.basename(img_path),
+                                             detail=str(draw_desc)[:60])
+                        except Exception:
+                            pass
                     else:
                         smart_send(draw_result, sender)
                     continue

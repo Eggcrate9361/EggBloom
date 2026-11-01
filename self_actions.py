@@ -12,13 +12,27 @@
 
 这一层只做一件事：**它自己的动作也进账**，并且下一轮能看到一小段。
 
+## 2026-11-01 晚补：光有"一小段"不够
+
+用户原话：「bot 什么时候存了什么表情包… 他知道自己是什么时候从谁存的什么样的
+表情包… 很多事件因为是纯代码没有进入记忆，bot 自己做了，但它不知道」。
+
+- 15 分钟的窗口只够"刚做过"；问"昨天那张呢"就答不上来；
+- 而且部分动作**根本没有记账**（`meme_save` 走工具、纯代码，一条都没有）。
+
+所以这一层现在做两件事：
+1. `record()` 记进短期账本（原样，供 `render()` 注入"你刚做过"）；
+2. **`PERSIST_KINDS` 里的动作同时写进记忆库事件**（`events` 表，经
+   `harness.memory_api.remember("event")`）—— 这样它隔天也能被召回；
+3. 记录里新增 `source`（这张图是谁那儿来的）/ `ref`（图库相对路径）/
+   `group_id`，回答"从谁那儿存的、存的哪张"时有据可依。
+
 ## 边界
 
-- 只记**对外可见的动作**（发图/发表情包/戳/采集/主动开口），不记内部思考与工具调用
-  （工具调用另有 trace）；
-- 不进人格、不做评价，只陈述"何时、在哪、做了什么"；
+- 只记**对外可见的动作**（发图/发表情包/存图/戳/采集/主动开口/派活），不记内部思考；
+- 不把"说了一句话"写进记忆库（那是 messages/历史的活，写进去会淹掉真正的事件）；
 - 保留 N 条（默认 200），落 `data/self_actions.jsonl`，按日可读；
-- 说的时候**不指名来源**：捡了谁的表情包只说"从群里捡的"，不把 A 的图归到 A 头上。
+- 记忆库写失败**不影响动作本身**，也不抛。
 """
 from __future__ import annotations
 
@@ -34,6 +48,23 @@ LOG_FILE = os.path.join(DATA_DIR, "self_actions.jsonl")
 MAX_KEEP = 200
 MAX_FILE_LINES = 5000
 
+#: 哪些动作值得**进长期记忆**（写 super_memory 的 events 表）。
+#: 不含 `say`：说话本身已在历史/消息表里，再写一遍会把真正的事件挤掉。
+PERSIST_KINDS = frozenset({
+    "meme_save", "meme_send", "meme", "collect", "poke",
+    "task", "image", "file", "job", "proactive",
+})
+
+#: 各类动作写进记忆时的重要度（影响衰减/保留层级，见 super_memory._classify_tier）
+PERSIST_IMPORTANCE = {
+    "meme_save": 0.7, "collect": 0.7, "task": 0.65,
+    "poke": 0.6, "image": 0.6, "file": 0.6, "job": 0.6,
+    "meme": 0.5, "meme_send": 0.5, "proactive": 0.5,
+}
+
+#: 关掉长期写入（排障/测试用）：`set_persist(False)`
+_PERSIST_ON = True
+
 _LOCK = threading.Lock()
 _MEM: Optional[deque] = None
 _LOG = print
@@ -43,6 +74,12 @@ def set_logger(fn) -> None:
     global _LOG
     if callable(fn):
         _LOG = fn
+
+
+def set_persist(on: bool) -> None:
+    """临时关掉"写进记忆库"（短期账本照记）。"""
+    global _PERSIST_ON
+    _PERSIST_ON = bool(on)
 
 
 def _load() -> deque:
@@ -75,14 +112,89 @@ def _rotate_if_big() -> None:
         pass
 
 
+def _in_test_main() -> bool:
+    """当前进程是不是"跑某个 tests/test_*.py"。
+
+    ★ 为什么要有这道闸：`record()` 现在会写记忆库，而测试里大量 record 假动作
+      （`sa.record("meme", target="777")`）。2026-11-01 实测：跑一遍
+      `test_self_actions` / `test_self_history`，仓库侧 `super_memory.db` 的
+      events 表多了 6 条假事件 —— 测试把生产记忆写脏了。
+      想真的测落库，设 `EGGBLOOM_ALLOW_ACTION_EVENTS=1`（并用
+      `EGGBLOOM_SUPER_MEMORY_DB` 指到临时库）。
+    """
+    try:
+        import sys
+        if os.environ.get("EGGBLOOM_ALLOW_ACTION_EVENTS") == "1":
+            return False
+        return os.path.basename(sys.argv[0] or "").startswith("test_")
+    except Exception:
+        return False
+
+
+def _persist(rec: dict) -> None:
+    """把这条动作写进**长期记忆**（events 表），让隔天问起来也答得上。
+
+    失败静默：记忆库没起来、插件没加载、sqlite 忙 —— 都不该影响动作本身。
+    """
+    kind = str(rec.get("kind") or "")
+    if not _PERSIST_ON or kind not in PERSIST_KINDS:
+        return
+    if _in_test_main():
+        return
+    scene = str(rec.get("scene") or "")
+    scope = "private" if scene == "private" else "group"
+    scope_id = str(rec.get("group_id") or rec.get("target") or "")
+    if not scope_id:
+        return
+    src = str(rec.get("source") or "")
+    detail = str(rec.get("detail") or "")
+    word = _KIND_WORD.get(kind, kind)
+    summary = f"{word}{('：' + detail) if detail else ''}"
+    if src and src != scope_id:
+        summary += f"（来自 {src}）"
+    try:
+        from harness.memory_api import remember
+        ok = remember("event", uid=(src or scope_id), text=summary, scene=scene,
+                      group_id=scope_id,
+                      meta={"scope": scope, "scope_id": scope_id,
+                            "user_id": (src if scene != "private" else scope_id),
+                            "event_type": kind,
+                            "importance": PERSIST_IMPORTANCE.get(kind, 0.6)})
+    except Exception as e:
+        try:
+            _LOG(f"[行为] 写记忆失败（不影响动作）: {e}")
+        except Exception:
+            pass
+        return
+    if ok:
+        try:
+            _LOG(f"[行为] 入记忆：{summary[:60]}")
+        except Exception:
+            pass
+
+
 def record(kind: str, *, scene: str = "", target: str = "",
-           detail: str = "", ts: Optional[float] = None) -> dict:
-    """记一条自己的动作。返回这条记录（失败也返回，不抛）。"""
+           detail: str = "", ts: Optional[float] = None,
+           source: str = "", ref: str = "", group_id: str = "",
+           persist: bool = True) -> dict:
+    """记一条自己的动作。返回这条记录（失败也返回，不抛）。
+
+    参数：
+      source  —— 这动作跟谁有关（表情包是谁发的、戳的是谁）
+      ref     —— 稳定的引用（图库里的相对路径 / 任务号），供事后精确找回
+      persist —— 是否同时写进长期记忆（默认按 PERSIST_KINDS 判断）
+    """
     rec = {"ts": float(ts if ts is not None else time.time()),
            "kind": str(kind or "")[:24],
            "scene": str(scene or "")[:12],
            "target": str(target or "")[:24],
-           "detail": str(detail or "")[:80]}
+           "detail": str(detail or "")[:120]}
+    if source:
+        rec["source"] = str(source or "")[:24]
+    if ref:
+        rec["ref"] = str(ref or "")[:80]
+    if group_id:
+        rec["group_id"] = str(group_id or "")[:24]
     try:
         with _LOCK:
             d = _load()
@@ -93,6 +205,8 @@ def record(kind: str, *, scene: str = "", target: str = "",
                 f.write(json.dumps(rec, ensure_ascii=False) + "\n")
     except Exception:
         pass
+    if persist:
+        _persist(rec)
     return rec
 
 
@@ -174,10 +288,13 @@ def search(*, query: str = "", kind: str = "", scene: str = "",
 _KIND_WORD = {
     "say": "说了一句",
     "meme": "发了一张表情包",
+    "meme_send": "发了一张表情包",
+    "meme_save": "存了一张表情包",
     "image": "发了一张图",
     "poke": "戳了对方",
     "collect": "把群里的一张图收进了表情库",
-    "task": "派了个活给子 agent",
+    "task": "派了个活给后台子 agent",
+    "job": "起了一个后台任务",
     "proactive": "主动开了口",
     "file": "发了一个文件",
 }
@@ -204,6 +321,7 @@ def render(*, scene: str = "", target: str = "", minutes: float = 15.0,
         kind = str(r.get("kind") or "")
         word = _KIND_WORD.get(kind, kind or "做了点什么")
         detail = str(r.get("detail") or "").strip()
+        src = str(r.get("source") or "").strip()
         try:
             hm = time.strftime("%H:%M", time.localtime(float(r.get("ts") or 0)))
         except Exception:
@@ -211,6 +329,10 @@ def render(*, scene: str = "", target: str = "", minutes: float = 15.0,
         line = f"- {hm} 你{word}"
         if detail:
             line += f"（{detail}）"
+        # 用户 2026-11-01：「他知道自己是什么时候**从谁**存的」——
+        # 来源照记；只在动作真有 source 时才出现（不是每句都挂个人名）。
+        if src and src != str(r.get("target") or ""):
+            line += f"〔来源 {src}〕"
         lines.append(line)
     return ("【你刚做过的事】（都是你自己干的；要查更早/更多的，用 self_history）\n"
             + "\n".join(lines))

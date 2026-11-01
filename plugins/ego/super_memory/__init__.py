@@ -1449,6 +1449,54 @@ def after_reply(scope: str = "", scope_id: str = "", message: str = "", reply: s
     return None
 
 # ── 通用插件通道动作（WebUI plugin_id='ego.super_memory'） ──
+def add_action_event(summary: str, *, scope: str = "group", scope_id: str = "",
+                     user_id: str = "", event_type: str = "action",
+                     importance: float = 0.6, ts: Optional[float] = None) -> bool:
+    """把 **Bot 自己做的动作**写成一条事件（2026-11-01）。
+
+    为什么要有这个入口：`events` 以前只由 `after_reply()` 从**用户消息**里抽出来 ——
+    Bot 自己存了表情包、发过图、派过活，代码执行完就没了，隔一句问它"你什么时候
+    存的"它答不上来（用户原话「bot 自己做了，但它不知道」）。
+
+    与 `_store_events` 的区别：那个吃的是抽取结果（含 embedding 重算、participants
+    等），这里只接受一句已成文的 summary，字段能填就填、填不了留空；
+    写失败返回 False，不抛 —— 记忆库坏了不该影响动作本身。
+    """
+    s = str(summary or "").strip()
+    if not s:
+        return False
+    try:
+        if not _memory.config.get("enabled", True):
+            return False
+        sid = str(scope_id or user_id or ("private" if scope == "private" else "") or "")
+        if not sid:
+            return False
+        now = float(ts if ts is not None else time.time())
+        imp = max(0.0, min(1.0, float(importance or 0.6)))
+        emb = ""
+        try:
+            vec = _embedder.embed(s)
+            if vec:
+                emb = json.dumps(vec)
+        except Exception:
+            emb = ""
+        conn = sqlite3.connect(DB_PATH)
+        try:
+            conn.execute(
+                "INSERT INTO events (scope_id, user_id, event_type, summary, participants,"
+                " emotion, timestamp, importance, embedding, tier)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (sid, str(user_id or ""), str(event_type or "action")[:24], s[:300], "",
+                 "", now, imp, emb, _memory._classify_tier(imp, 1)),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        return True
+    except Exception:
+        return False
+
+
 def _action_stats(params=None):
     params = params or {}
     scope_id = str(params.get("scope_id") or "default").strip()

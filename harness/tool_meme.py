@@ -241,6 +241,39 @@ def _saved_detail(rel: str) -> Dict[str, Any]:
     return item
 
 
+def _record_save(rel: str, detail: Dict[str, Any]) -> None:
+    """存图也要**进账**（2026-11-01 用户报障：bot 存了却不知道自己存了什么）。
+
+    以前 `meme_save` 是纯代码动作，`self_actions` 里一条都没有 —— 问它
+    「你什么时候存的表情包、从谁那儿存的、存的哪张」只能瞎猜。
+    现在短期账本 + 长期记忆都记：谁发的（source）、存的哪张（ref）、
+    什么标签/画面（detail）。
+    """
+    try:
+        import self_actions as _sa
+    except Exception:
+        return
+    tags = detail.get("tags") or []
+    desc = str(detail.get("desc") or "").strip()
+    src = str(_TURN.get("sender") or "")
+    gid = str(_TURN.get("group_id") or "") if _TURN.get("is_group") else ""
+    detail_text = "、".join(str(t) for t in tags[:3])
+    if desc:
+        detail_text = (detail_text + "｜" + desc[:50]) if detail_text else desc[:50]
+    if not detail_text:
+        detail_text = os.path.basename(rel)
+    try:
+        _sa.record("meme_save",
+                   scene=("group" if gid else "private"),
+                   target=(gid or src),
+                   group_id=gid,
+                   source=src,
+                   ref=rel,
+                   detail=detail_text)
+    except Exception:
+        pass
+
+
 def meme_save(path: str = "") -> Dict[str, Any]:
     """存这一轮（或指定）的图到表情库。返回每张的结果。"""
     paths = turn_images_for_save(path if isinstance(path, str) else "")
@@ -258,7 +291,9 @@ def meme_save(path: str = "") -> Dict[str, Any]:
             failed.append({"path": p, "error": f"{type(e).__name__}: {e}"})
             continue
         if rel:
-            saved.append(_saved_detail(rel))
+            _d = _saved_detail(rel)
+            saved.append(_d)
+            _record_save(rel, _d)
         else:
             # 静默跳过会让模型只能说"存不进去"；把同一条判据翻成人话
             why = ""

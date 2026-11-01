@@ -24,6 +24,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 import time
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -99,9 +100,17 @@ def _dump_failure(name, stdout, stderr, code):
 
 def run_one(path, timeout):
     t0 = time.time()
+    # 每个用例一个**临时记忆库**（2026-11-01）：动作账本现在会写 super_memory 的
+    # events 表，跑一遍测试就把假事件写进生产记忆（实测 6 条）。这里给每个用例
+    # 一个独立库，谁也别碰真的。
+    tmp = tempfile.mkdtemp(prefix="eggsandbox_")
+    env = dict(CHILD_ENV,
+               EGGBLOOM_SUPER_MEMORY_DB=os.path.join(tmp, "super_memory.db"),
+               EGGBLOOM_PLUGIN_BUDGET=os.path.join(tmp, "plugin_budget.json"),
+               EGGBLOOM_ALLOW_ACTION_EVENTS="1")
     try:
         r = subprocess.run([sys.executable, path], cwd=ROOT, timeout=timeout,
-                           capture_output=True, text=True, env=CHILD_ENV,
+                           capture_output=True, text=True, env=env,
                            encoding="utf-8", errors="replace")
         cost = time.time() - t0
         tail = [ln for ln in (r.stdout or "").strip().splitlines() if ln.strip()][-3:]

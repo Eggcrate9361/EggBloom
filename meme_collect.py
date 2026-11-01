@@ -351,13 +351,18 @@ def maybe_collect(path: str, *, tags=None, source: str = "auto",
         meme_engine.reload_index()
     except Exception:
         pass
-    # 行为账本（2026-10-30）：它要记得"我捡了张图"。来源只记群，不记人。
+    # 行为账本（2026-10-30；2026-11-01 补来源与引用）：
+    # 用户要它能答「什么时候、从谁那儿、存了哪张」。以前只记群不记人、
+    # 也不带图库路径，问起来只能说"捡了张图"。
     try:
         import self_actions as _acts
         _tags_txt = "、".join(str(t) for t in (tags or [])[:2]) or "未打标签"
         _acts.record("collect", scene=("group" if from_group else "private"),
-                     target=str(from_group or ""),
-                     detail=f"{rel}｜{_tags_txt}")
+                     target=str(from_group or sender or ""),
+                     group_id=str(from_group or ""),
+                     source=str(sender or ""),
+                     ref=str(rel or ""),
+                     detail=f"{_tags_txt}")
     except Exception:
         pass
     try:

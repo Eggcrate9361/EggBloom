@@ -9,7 +9,8 @@
   C. 跨场景开关 `memory_scope_share=False` → 不注入【另一边】
   D. 预算：超了丢后面的段，身份永远先装；丢弃要打日志
   E. 异常隔离：某一段挂了，其它段照常
-  F. remember 分发：user_msg / bot_msg / fact 写对地方，event 明确返回 False
+  F. remember 分发：user_msg / bot_msg / fact 写对地方；event 在记忆库可用时真落库
+     （2026-11-01 补：以前这里断言"event 返回 False"，用户报障 bot 做了却不记得之后改了契约）
   G. 有注入才打 [记忆] 日志（"这轮为什么只注入这些"可解释）
 
 全部打桩，不碰真实沙漏/people 文件。
@@ -132,8 +133,24 @@ def main():
                          meta={"key": "偏好", "scope": "private"}) is True
               and written.get("fact") == ("10001", "偏好", "喜欢猫", "private"),
               written.get("fact"))
-        check("event 明确返回 False（没有存储层，不装作成功）",
-              M.remember("event", uid="10001", text="今天吃饭") is False)
+        # ★ 2026-11-01 契约变更：event 以前明确返回 False（"没有存储层，不装作成功"）。
+        #   用户报障「bot 自己做了，但它不知道」之后补上了 events 落库，
+        #   所以这里不再断言 False，而是断言"能写就真写进去了"。
+        #   （测试入口给每个用例一个临时 EGGBLOOM_SUPER_MEMORY_DB，不会碰生产库）
+        try:
+            import plugins.ego.super_memory as _sm
+            _has_store = callable(getattr(_sm, "add_action_event", None))
+        except Exception:
+            _has_store = False
+        if _has_store:
+            check("event → 记忆库事件表",
+                  M.remember("event", uid="10001", text="今天吃饭",
+                             scene="private", group_id="",
+                             meta={"scope": "private", "scope_id": "10001",
+                                   "user_id": "10001", "event_type": "event"}) is True)
+        else:
+            check("记忆库不可用时 event 老实返回 False",
+                  M.remember("event", uid="10001", text="今天吃饭") is False)
         check("空文本返回 False", M.remember("user_msg", text="") is False)
         check("未知 kind 返回 False", M.remember("wat", text="x") is False)
 

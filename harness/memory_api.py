@@ -204,7 +204,8 @@ def remember(kind, *, uid="", text="", scene="", group_id="", meta=None) -> bool
     只做**分发**，不在这里做语义判断（那是各模块自己的事）：
       · user_msg / bot_msg → 沙漏（情景）
       · fact              → people.py（身份/偏好/关系，按人）
-      · event             → 目前没有独立存储，返回 False（留白不装作成功）
+      · event             → super_memory 的 `events` 表（2026-11-01 补上；
+                            之前这里明确返回 False，导致"Bot 自己做的事"没有落点）
     """
     kind = str(kind or "").strip()
     text = str(text or "")
@@ -240,5 +241,31 @@ def remember(kind, *, uid="", text="", scene="", group_id="", meta=None) -> bool
         except Exception:
             return False
 
-    # event：尚无存储层（super_memory 的 events 是另一条链），明确返回 False
+    # event：事件型记忆（Bot 自己做过的事 / 值得记住的发生）
+    # 2026-11-01：以前这里直接 return False（"没有存储层，不装作成功"）。
+    # 现在落到 super_memory 的 `events` 表（按 user_id 隔离，见其 _user_scope_filter），
+    # 这样"什么时候存了什么表情包"隔天问起来也能被召回。
+    if kind == "event":
+        meta = meta or {}
+        try:
+            from plugins.ego import super_memory as _sm
+        except Exception:
+            try:
+                import plugins.ego.super_memory as _sm  # noqa: F811
+            except Exception as e:
+                _log(f"[记忆] event 落库不可用: {e}")
+                return False
+        try:
+            return bool(_sm.add_action_event(
+                text,
+                scope=str(meta.get("scope") or scene or "group"),
+                scope_id=str(meta.get("scope_id") or group_id or uid or ""),
+                user_id=str(meta.get("user_id") or (uid if not group_id else "")),
+                event_type=str(meta.get("event_type") or "event"),
+                importance=float(meta.get("importance") or 0.6),
+            ))
+        except Exception as e:
+            _log(f"[记忆] event 落库失败: {e}")
+            return False
+
     return False
