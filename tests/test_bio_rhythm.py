@@ -143,8 +143,10 @@ def main():
     check("乘法在硬闸（quiet_hours）之后",
           pt.index("_in_quiet_hours(cfg.get") < pt.index("proactivity_factor"))
     check("乘后夹到 1.0", "min(1.0, chance * _bio)" in pt)
+    # 2026-11-01：test_decision 改成多目标后局部变量从 d 改名 out，
+    # 判据放宽到"某个变量上写了 bio"，意图（可观测）不变。
     check("test_decision 暴露 bio 状态（可观测）",
-          'd["bio"] = _b' in pt and 'd["bio"] = {"error"' in pt)
+          '["bio"] = _b' in pt and '["bio"] = {"error"' in pt)
     check("bio 缺失时降级为 1.0（不炸）", "except Exception:" in pt)
 
     print("\n[9] 开关：能退回旧行为（一般精度不是不可回退）")
