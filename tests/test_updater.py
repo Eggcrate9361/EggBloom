@@ -153,6 +153,32 @@ def main():
                         "base": {"plugins/ego/x.py": sha(fb2)}}, root=root)
     check("更新成功", open(target, encoding="utf-8").read() == "NEW", rep4)
 
+    print("\n[J] 带进度的整条链路（manifest → 下载 → 校验 → 覆盖）")
+    # 独立根目录，避免和上面的状态互相影响
+    root2 = os.path.join(td, "app2")
+    os.makedirs(os.path.join(root2, "harness"), exist_ok=True)
+    with open(os.path.join(root2, "harness", "a.py"), "w", encoding="utf-8") as f:
+        f.write("OLD")
+    z2 = os.path.join(td, "p4.zip")
+    make_zip(z2, {"harness/a.py": "NEW2"})
+    man2 = {"version": "9.9.9", "sha256": sha(z2), "size": os.path.getsize(z2),
+            "url": "file:///" + z2.replace("\\", "/")}
+    mp = os.path.join(td, "latest2.json")
+    with open(mp, "w", encoding="utf-8") as f:
+        json.dump(man2, f)
+    seen = []
+    rep5 = U.apply_from_manifest("file:///" + mp.replace("\\", "/"), root=root2,
+                                 on_progress=lambda ph, done, total: seen.append(ph))
+    check("安装成功", rep5.get("ok") is True, rep5)
+    check("版本透传", rep5.get("version") == "9.9.9", rep5)
+    check("内容已更新", open(os.path.join(root2, "harness", "a.py"), encoding="utf-8").read() == "NEW2")
+    check("进度阶段顺序", seen[:1] == ["manifest"] and "download" in seen
+          and "verify" in seen and seen[-1] == "done", seen)
+
+    print("\n[K] 没有更新地址")
+    rep6 = U.apply_from_manifest("", root=root2)
+    check("明确报错", rep6.get("ok") is False and "地址" in str(rep6.get("error")), rep6)
+
     print("\n" + "=" * 56)
     print(f"通过 {PASS} / 失败 {FAIL}")
     if FAILURES:

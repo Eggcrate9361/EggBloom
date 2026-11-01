@@ -5122,8 +5122,24 @@ function cfRenderArea(host, cfg, ctx) {
       '<div style="display:flex;gap:10px;margin-top:10px;flex-wrap:wrap">'
       + '<button type="button" class="btn primary" id="cfUpdCheck">检查更新</button>'
       + '<button type="button" class="btn" id="cfUpdApply" style="display:none">安装并重启</button>'
-      + '</div><div class="cfg-empty" id="cfUpdMsg" style="margin-top:8px">还没检查</div>');
+      + '</div>'
+      + '<div id="cfUpdWrap" style="display:none;margin-top:10px">'
+      +   '<div style="height:10px;border-radius:6px;background:rgba(0,0,0,.12);overflow:hidden">'
+      +     '<i id="cfUpdBar" style="display:block;height:100%;width:0%;'
+      +     'background:linear-gradient(90deg,#7bb7a4,#c8a24a);transition:width .25s"></i>'
+      +   '</div>'
+      +   '<div class="cfg-empty" id="cfUpdPct" style="margin-top:6px">0%</div>'
+      + '</div>'
+      + '<div class="cfg-empty" id="cfUpdMsg" style="margin-top:8px">还没检查</div>');
     const _msg = (t) => { const el = _updSec.querySelector('#cfUpdMsg'); if (el) el.textContent = t; };
+    const _bar = (pct, text) => {
+      const wrap = _updSec.querySelector('#cfUpdWrap');
+      const bar = _updSec.querySelector('#cfUpdBar');
+      const lab = _updSec.querySelector('#cfUpdPct');
+      if (wrap) wrap.style.display = '';
+      if (bar) bar.style.width = Math.max(0, Math.min(100, pct)) + '%';
+      if (lab) lab.textContent = text || (Math.round(pct) + '%');
+    };
     const _url = () => {
       const el = _updSec.querySelector('[data-k="update_manifest_url"] input, input#sUpdateManifestUrl')
         || document.querySelector('input#sUpdateManifestUrl');
@@ -5146,7 +5162,8 @@ function cfRenderArea(host, cfg, ctx) {
     });
     _updSec.querySelector('#cfUpdApply').addEventListener('click', async () => {
       if (!confirm('安装更新并重启？只替换程序文件，你的数据、人格、自建插件都不动。')) return;
-      _msg('下载并安装中…（完成后自动重启）');
+      _bar(0, '准备中');
+      _msg('开始下载…');
       try {
         const r = await fetch('/api/update/apply', {
           method: 'POST', headers: {'Content-Type': 'application/json'},
@@ -5154,8 +5171,32 @@ function cfRenderArea(host, cfg, ctx) {
         });
         const j = await r.json();
         if (!j.ok) { _msg('安装失败：' + (j.error || '未知错误')); return; }
-        _msg('已更新 ' + (j.applied || []).length + ' 个文件，保留本地改过的 '
-             + (j.kept || []).length + ' 个，正在重启…');
+        const timer = setInterval(async () => {
+          try {
+            const s = await (await fetch('/api/update/status')).json();
+            const pct = s.total ? Math.round(s.downloaded * 100 / s.total) : (s.percent || 0);
+            const mb = (n) => (n / 1048576).toFixed(1);
+            const label = s.phase === 'download' && s.total
+              ? (s.text + ' ' + mb(s.downloaded) + '/' + mb(s.total) + ' MB（' + pct + '%）')
+              : (s.text || s.phase || '处理中');
+            _bar(s.done ? 100 : pct, label);
+            if (s.done) {
+              clearInterval(timer);
+              if (s.ok) {
+                const rep = s.report || {};
+                _msg('已更新 ' + ((rep.applied || []).length) + ' 个文件'
+                     + (((rep.kept || []).length) ? '，保留本地改过的 ' + rep.kept.length + ' 个' : '')
+                     + '，正在重启…');
+                _bar(100, '安装完成，重启中…');
+                setTimeout(() => location.reload(), 4000);
+              } else {
+                _msg('安装失败：' + (s.error || '未知错误'));
+              }
+            }
+          } catch (e) {
+            /* 服务正在重启时会短暂连不上 —— 不报错，继续等 */
+          }
+        }, 600);
       } catch (e) { _msg('安装失败：' + e); }
     });
   }

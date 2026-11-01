@@ -674,36 +674,61 @@ def fetch_from_bot_core(path, timeout=0.5):
         return None
 
 
-def _update_apply_from_manifest(upd, man_url: str) -> dict:
-    """下载 manifest 指向的补丁 → 校验 → 覆盖。不重启（调用方决定）。"""
-    import tempfile
-    if not man_url:
-        return {"ok": False, "error": "没有配置更新地址"}
+# ── 更新进度（2026-11-01，配置页进度条）────────────────────────────────
+#   一次只允许跑一个：前端 POST /api/update/apply 立即返回，然后轮询
+#   /api/update/status。进度在后台线程里写，下载按 64KB 增量刷新。
+UPDATE_STATE = {
+    "running": False, "phase": "", "downloaded": 0, "total": 0,
+    "percent": 0, "ok": False, "done": False, "error": "",
+    "version": "", "text": "", "report": {},
+}
+_UPDATE_LOCK = threading.Lock()
+
+
+def _upd_state(**kw):
+    with _UPDATE_LOCK:
+        UPDATE_STATE.update(kw)
+
+
+def _upd_snapshot() -> dict:
+    with _UPDATE_LOCK:
+        return dict(UPDATE_STATE)
+
+
+def _update_progress(phase: str, done: int = 0, total: int = 0) -> None:
+    """updater.apply_from_manifest 的进度回调 → 全局状态。"""
+    text = {"manifest": "获取更新清单", "download": "下载补丁",
+            "verify": "校验并安装", "done": "安装完成"}.get(phase, phase)
+    pct = 0
+    if phase == "download":
+        pct = int(done * 100 / total) if total else 0
+    elif phase in ("verify", "done"):
+        pct = 100
+    _upd_state(phase=phase, downloaded=int(done), total=int(total),
+               percent=pct, text=text, running=(phase != "done"))
+
+
+def _update_worker(man_url: str, restart: bool) -> None:
     try:
-        req = urllib.request.Request(man_url, headers={"User-Agent": "EggBloom-Updater"})
-        with urllib.request.urlopen(req, timeout=15) as r:
-            man = json.loads(r.read().decode("utf-8"))
+        rep = _update_apply_from_manifest(man_url, on_progress=_update_progress)
+        ok = bool(rep.get("ok"))
+        _upd_state(running=False, done=True, ok=ok,
+                   error="" if ok else str(rep.get("error") or "安装失败"),
+                   version=str(rep.get("version") or ""),
+                   percent=100, phase="done",
+                   text=("安装完成" if ok else "安装失败"), report=rep)
+        if ok and restart:
+            threading.Thread(target=_restart_after_update, daemon=True).start()
     except Exception as e:
-        return {"ok": False, "error": f"拉 manifest 失败: {type(e).__name__}: {e}"}
-    zip_url = str(man.get("url") or "")
-    if not zip_url:
-        return {"ok": False, "error": "manifest 里没有补丁地址"}
-    tmp = os.path.join(tempfile.gettempdir(), f"eggbloom-patch-{int(time.time())}.zip")
-    try:
-        req = urllib.request.Request(zip_url, headers={"User-Agent": "EggBloom-Updater"})
-        with urllib.request.urlopen(req, timeout=120) as r, open(tmp, "wb") as f:
-            shutil.copyfileobj(r, f)
-    except Exception as e:
-        return {"ok": False, "error": f"下载补丁失败: {type(e).__name__}: {e}"}
-    try:
-        rep = upd.apply(tmp, man)
-    finally:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-    rep["version"] = str(man.get("version") or "")
-    return rep
+        _upd_state(running=False, done=True, ok=False, error=f"{type(e).__name__}: {e}",
+                   text="安装失败")
+
+
+def _update_apply_from_manifest(man_url: str, on_progress=None) -> dict:
+    """下载 manifest 指向的补丁 → 校验 → 覆盖（带进度）。不重启（调用方决定）。"""
+    sys.path.insert(0, str(PROJECT))
+    from harness import updater as _upd
+    return _upd.apply_from_manifest(man_url, on_progress=on_progress)
 
 
 def _restart_after_update():
@@ -2616,6 +2641,10 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(200, {"ok": False, "error": f"{type(e).__name__}: {e}"})
             return
 
+        if path == "/api/update/status":
+            self._send_json(200, _upd_snapshot())
+            return
+
         if path == "/" or path == "/index.html":
             try:
                 mtime = _get_html_mtime()
@@ -3321,18 +3350,22 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:
             pass
 
-        # ── 热补丁更新（2026-11-01）：安装 + 可选重启 ──
+        # ── 热补丁更新（2026-11-01）：安装 + 可选重启（后台跑，前端轮询进度）──
         if path == "/api/update/apply":
             try:
-                sys.path.insert(0, str(PROJECT))
-                from harness import updater as _upd
+                if _upd_snapshot().get("running"):
+                    self._send_json(200, {"ok": False, "error": "已经有一个更新在跑"})
+                    return
                 man_url = str(data.get("url") or load_config().get("update_manifest_url") or "")
-                rep = _update_apply_from_manifest(_upd, man_url)
-                rep["need_restart"] = bool(rep.get("ok"))
-                self._send_json(200, rep)
-                if rep.get("ok") and data.get("restart"):
-                    threading.Thread(target=_restart_after_update, daemon=True).start()
+                _upd_state(running=True, done=False, ok=False, error="", percent=0,
+                           phase="manifest", text="准备中", downloaded=0, total=0,
+                           version="", report={})
+                threading.Thread(target=_update_worker,
+                                 args=(man_url, bool(data.get("restart"))),
+                                 daemon=True).start()
+                self._send_json(200, {"ok": True, "started": True})
             except Exception as e:
+                _upd_state(running=False, done=True, ok=False, error=f"{type(e).__name__}: {e}")
                 self._send_json(200, {"ok": False, "error": f"{type(e).__name__}: {e}"})
             return
 

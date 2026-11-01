@@ -40,6 +40,7 @@ import json
 import os
 import shutil
 import sys
+import tempfile
 import time
 import urllib.request
 import zipfile
@@ -264,6 +265,72 @@ def apply(zip_path: str, manifest: dict, root: str = "",
                 shutil.copyfileobj(src, out)
             rep["applied"].append(rel)
     rep["ok"] = bool(rep["applied"])
+    return rep
+
+
+def apply_from_manifest(manifest_url: str, root: str = "",
+                        on_progress=None, timeout: float = 30.0) -> dict:
+    """拉清单 → 下载补丁 → 校验 → 覆盖。**带进度回调**（2026-11-01，进度条）。
+
+    `on_progress(phase, done, total)`：
+        phase ∈ {"manifest", "download", "verify", "apply", "done"}
+        done/total 是字节数（manifest/verify/apply 阶段 done=0,total=0）。
+    返回同 `apply()` 的报告，额外带 version/ok/error。
+    """
+    def _p(phase, done=0, total=0):
+        if callable(on_progress):
+            try:
+                on_progress(phase, int(done or 0), int(total or 0))
+            except Exception:
+                pass
+
+    root = root or app_root()
+    if not manifest_url:
+        return {"ok": False, "error": "没有配置更新地址"}
+    _p("manifest")
+    try:
+        req = urllib.request.Request(manifest_url, headers={"User-Agent": "EggBloom-Updater"})
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            man = json.loads(r.read().decode("utf-8"))
+    except Exception as e:
+        return {"ok": False, "error": f"拉 manifest 失败: {type(e).__name__}: {e}"}
+    zip_url = str(man.get("url") or "")
+    if not zip_url:
+        return {"ok": False, "error": "manifest 里没有补丁地址"}
+
+    tmp = os.path.join(tempfile.gettempdir(), f"eggbloom-patch-{int(time.time())}.zip")
+    done = 0
+    try:
+        req = urllib.request.Request(zip_url, headers={"User-Agent": "EggBloom-Updater"})
+        with urllib.request.urlopen(req, timeout=max(60.0, timeout)) as r, open(tmp, "wb") as f:
+            try:
+                total = int(r.headers.get("Content-Length") or 0)
+            except (TypeError, ValueError):
+                total = 0
+            while True:
+                chunk = r.read(64 * 1024)
+                if not chunk:
+                    break
+                f.write(chunk)
+                done += len(chunk)
+                _p("download", done, total)
+    except Exception as e:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        return {"ok": False, "error": f"下载失败: {type(e).__name__}: {e}"}
+
+    _p("verify", done, done)
+    try:
+        rep = apply(tmp, man, root=root)
+    finally:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+    rep["version"] = str(man.get("version") or "")
+    _p("done")
     return rep
 
 

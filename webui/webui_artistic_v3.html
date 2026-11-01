@@ -2110,9 +2110,21 @@ function renderUpdatePanel(root){
       <button class="btn" id="sUpdateApplyBtn" type="button" style="display:none">安装并重启</button>
     </div>
     <div class="field"><div class="field-desc" id="sUpdateResult">还没检查</div></div>
+    <div class="field" id="sUpdateWrap" style="display:none">
+      <div style="height:10px;border-radius:6px;background:rgba(0,0,0,.12);overflow:hidden">
+        <i id="sUpdateBar" style="display:block;height:100%;width:0%;background:linear-gradient(90deg,#7bb7a4,#c8a24a);transition:width .25s"></i>
+      </div>
+      <div class="field-desc" id="sUpdatePct" style="margin-top:6px">0%</div>
+    </div>
   `;
   const $ = (id) => document.getElementById(id);
   const setMsg = (t) => { const el = $('sUpdateResult'); if (el) el.textContent = t; };
+  const setBar = (pct, text) => {
+    const wrap = $('sUpdateWrap'), bar = $('sUpdateBar'), lab = $('sUpdatePct');
+    if (wrap) wrap.style.display = '';
+    if (bar) bar.style.width = Math.max(0, Math.min(100, pct)) + '%';
+    if (lab) lab.textContent = text || (Math.round(pct) + '%');
+  };
   $('sUpdateCheckBtn').addEventListener('click', async () => {
     const url = ($('sUpdateManifestUrl') || {}).value || '';
     setMsg('检查中…');
@@ -2132,7 +2144,8 @@ function renderUpdatePanel(root){
   $('sUpdateApplyBtn').addEventListener('click', async () => {
     const url = ($('sUpdateManifestUrl') || {}).value || '';
     if (!confirm('安装更新并重启？程序文件会被替换，用户数据和人格不会动。')) return;
-    setMsg('下载并安装中…（完成后会自动重启）');
+    setBar(0, '准备中');
+    setMsg('开始下载…');
     try {
       const res = await fetch('/api/update/apply', {
         method: 'POST', headers: {'Content-Type': 'application/json'},
@@ -2140,8 +2153,30 @@ function renderUpdatePanel(root){
       });
       const j = await res.json();
       if (!j.ok) { setMsg('安装失败：' + (j.error || '未知错误')); return; }
-      setMsg('已更新 ' + (j.applied || []).length + ' 个文件，正在重启…'
-             + ((j.kept || []).length ? '（保留本地改过的 ' + j.kept.length + ' 个）' : ''));
+      const timer = setInterval(async () => {
+        try {
+          const s = await (await fetch('/api/update/status')).json();
+          const pct = s.total ? Math.round(s.downloaded * 100 / s.total) : (s.percent || 0);
+          const mb = (n) => (n / 1048576).toFixed(1);
+          const label = s.phase === 'download' && s.total
+            ? (s.text + ' ' + mb(s.downloaded) + '/' + mb(s.total) + ' MB（' + pct + '%）')
+            : (s.text || s.phase || '处理中');
+          setBar(s.done ? 100 : pct, label);
+          if (s.done) {
+            clearInterval(timer);
+            if (s.ok) {
+              const rep = s.report || {};
+              setMsg('已更新 ' + ((rep.applied || []).length) + ' 个文件'
+                     + (((rep.kept || []).length) ? '（保留本地改过的 ' + rep.kept.length + ' 个）' : '')
+                     + '，正在重启…');
+              setBar(100, '安装完成，重启中…');
+              setTimeout(() => location.reload(), 4000);
+            } else {
+              setMsg('安装失败：' + (s.error || '未知错误'));
+            }
+          }
+        } catch (e) { /* 服务重启期间短暂连不上，继续等 */ }
+      }, 600);
     } catch (e) { setMsg('安装失败：' + e); }
   });
 }
