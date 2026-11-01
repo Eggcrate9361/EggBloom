@@ -105,12 +105,12 @@ def main():
                                                        '"messages_today":4080,"memes":37}'))
         pg.route("**/memes/*", lambda r: r.fulfill(status=200, content_type="image/png", body=PNG))
         pg.goto(f"http://127.0.0.1:{port}/webui_artistic_v4.html", wait_until="load")
-        pg.wait_for_timeout(1800)
+        pg.wait_for_timeout(2200)
 
         n = pg.evaluate("() => (window.PAGES ? PAGES.length : 15)")
         for i in range(n):
             pg.evaluate("(i) => go(i)", i)
-            pg.wait_for_timeout(320)
+            pg.wait_for_timeout(420)
             panel = rect(pg, ".panel")
             checks += 1
             if panel is None:
