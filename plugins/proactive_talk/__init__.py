@@ -357,6 +357,9 @@ def _resolved_call_name(cfg: dict, target: str) -> str:
     try:
         import people_alias as _pa
         name = str(_pa.get_alias(t) or "").strip()
+        # 再验一道：get_alias 自己也会拦，但这里不依赖它的实现（存量 `**` 就吃过一次）
+        if name and not _pa.alias_usable(name):
+            name = ""
         if name:
             return name
     except Exception:

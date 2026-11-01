@@ -94,7 +94,21 @@ try:
     check("单目标仍可用全局名", pt._resolved_call_name(cfg6, "999999") == "Texas",
           pt._resolved_call_name(cfg6, "999999"))
 
-    # ── 5. 行为：prompt 里只出现这一个人的称呼 ───────────────────────
+    # ── 5. 遮罩称呼（11-01 存量 `**`）不许盖住真名 ────────────────────
+    import people_alias as _pa_real
+    check("纯遮罩不算称呼", _pa_real.alias_usable("**") is False, _pa_real.alias_usable("**"))
+    check("真网名的符号写法仍可用（不误杀）",
+          _pa_real.alias_usable("(/ω＼)") is True, _pa_real.alias_usable("(/ω＼)"))
+    check("emoji 名字也算名字", _pa_real.alias_usable("😀") is True)
+
+    _setup()                   # 上一节把桩清空了，这里要装回来
+    _ALIAS[B] = "**"          # 复现存量脏数据
+    check("★ 存量遮罩别名被跳过，用回真名",
+          pt._resolved_call_name({"target_qqs": [A, B], "nickname": "Texas"}, B) == "Texas",
+          pt._resolved_call_name({"target_qqs": [A, B], "nickname": "Texas"}, B))
+    _ALIAS[B] = "小德"
+
+    # ── 6. 行为：prompt 里只出现这一个人的称呼 ───────────────────────
     _setup()
     prompts = {}
 

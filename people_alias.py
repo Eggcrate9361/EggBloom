@@ -206,8 +206,25 @@ def _save() -> bool:
         return False
 
 
+#: 只有遮罩/占位符的"称呼"不算称呼（存量数据里还躺着 `**`）
+_MASK_CHARS = set("*＊·•・×✕…—-_=~ \t\u3000")
+
+
+def alias_usable(alias: str) -> bool:
+    """这个称呼能不能用（读侧与写侧共用）。
+
+    ★ 2026-11-02 真机：主动消息把 2011257385 叫成 `**` —— 11-01 用户说
+      「叫我 **」时把遮罩当称呼写进了库。判据只有一条：
+      **去掉遮罩/空白后还要剩下东西**。不要求它像人名 ——
+      「(/ω＼)」「😀」这类本来就是真网名，别误杀。
+    """
+    a = str(alias or "").strip()
+    if not a:
+        return False
+    return bool("".join(ch for ch in a if ch not in _MASK_CHARS))
+
+
 def _prune(rec: dict, now: float) -> dict:
-    """丢掉过期项（读的时候顺手清，写的时候再落盘）。"""
     alias_at = float(rec.get("alias_at") or 0)
     if rec.get("alias") and alias_at and (now - alias_at) > ALIAS_TTL:
         rec.pop("alias", None)
@@ -238,6 +255,9 @@ def get_alias(qq, *, now: Optional[float] = None) -> str:
         return ""
     if float(rec.get("alias_at") or 0) and n - float(rec.get("alias_at")) > ALIAS_TTL:
         return ""
+    # 读侧拦住存量垃圾（11-01 那次「叫我 **」把 `**` 写进了库）
+    if not alias_usable(alias):
+        return ""
     return alias
 
 
@@ -245,6 +265,9 @@ def set_alias(qq, alias: str, *, now: Optional[float] = None) -> bool:
     q = str(qq or "").strip()
     a = str(alias or "").strip()
     if not q or not a or len(a) > MAX_ALIAS_LEN:
+        return False
+    # 写侧也拦：纯遮罩/纯符号不当称呼（1.5.x 的既有口径，这里补到入口）
+    if not alias_usable(a):
         return False
     n = time.time() if now is None else float(now)
     with _lock():
