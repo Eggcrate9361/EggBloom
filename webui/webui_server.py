@@ -572,7 +572,14 @@ def _invoke_generic_plugin(plugin_id, action, params):
             fn = acts.get(action)
             if callable(fn):
                 try:
-                    return fn(params or {})
+                    # 2026-11-01：动作签名有的收 params、有的不收（bili/web_search 的
+                    # get_config() 是 0 参），一律传 dict 会 TypeError。
+                    try:
+                        import inspect as _insp
+                        _argc = len(_insp.signature(fn).parameters)
+                    except (TypeError, ValueError):
+                        _argc = 1
+                    return fn(params or {}) if _argc >= 1 else fn()
                 except Exception as e:
                     return {"error": f"[{plugin_id}] {action} failed: {e}"}
     except Exception:

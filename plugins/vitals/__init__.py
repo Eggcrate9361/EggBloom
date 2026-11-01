@@ -149,7 +149,17 @@ def _cfg(key: str, default=None):
 
 
 def enabled() -> bool:
-    return bool(_cfg("vitals_enable", PLUGIN_MANIFEST.get("default_enabled", False)))
+    """插件内部闸：`vitals_enable` 未配置时**跟随插件开关**。
+
+    2026-11-01 修：原来默认取 manifest 的 `default_enabled`（False），
+    用户只在插件页把插件打开、没在配置里写 `vitals_enable`，
+    结果 `_on_event` 每次都在第一行 return —— 状态永远是 0、页面一直"无采样"。
+    插件关掉时 manager 根本不会调 on_load / on_event，这里不必再兜一次默认关。
+    """
+    v = _cfg("vitals_enable", None)
+    if v is None:
+        return True
+    return bool(v)
 
 
 # ── 疾病表 ───────────────────────────────────────────────────────

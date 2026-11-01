@@ -1891,8 +1891,17 @@ def start_event_server():
                                 import importlib
                                 mod = importlib.import_module(f"plugins.{pid}")
                                 acts = getattr(mod, "PLUGIN_ACTIONS", None) or {}
-                                if isinstance(acts, dict) and callable(acts.get(act)):
-                                    out = acts[act](params or {})
+                                _fn = acts.get(act) if isinstance(acts, dict) else None
+                                if callable(_fn):
+                                    # ★ 2026-11-01：动作签名有的收 params、有的不收
+                                    #   （bili/web_search 的 get_config() 是 0 参）。
+                                    #   以前一律传一个 dict → TypeError: takes 0 positional arguments。
+                                    try:
+                                        import inspect as _insp
+                                        _argc = len(_insp.signature(_fn).parameters)
+                                    except (TypeError, ValueError):
+                                        _argc = 1
+                                    out = _fn(params or {}) if _argc >= 1 else _fn()
                                     res = dict(out) if isinstance(out, dict) else {"ok": True, "result": out}
                                     res["handled"] = True
                             except Exception as _pe:
