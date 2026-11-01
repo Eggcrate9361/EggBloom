@@ -7457,6 +7457,10 @@ def _tools_subset_for_scene(is_group: bool, privileged: bool = True) -> list:
     私聊：core/work/write/proc/desktop/web/skill/todo/plugin/mcp —— 全给。
     群聊：去掉 write/proc/desktop（本机能力不进群），其余全给；
     最终还会再过一遍 group_tool_allowlist 白名单。
+
+    ★ 1.6.0 刀 3（2026-11-01）：`deep_task` 单独一组 `GROUP_DEEP`，
+    **只有 `agent_as_tool` 打开时才进来**；私聊还要求进入过白名单（`privileged`），
+    因为它会开一个能调工具的子 agent —— 普通私聊用户不该有这双手。
     """
     from harness import tool_registry as _tr
     groups = [_tr.GROUP_CORE, _tr.GROUP_WORK, _tr.GROUP_WEB,
@@ -7466,6 +7470,13 @@ def _tools_subset_for_scene(is_group: bool, privileged: bool = True) -> list:
     elif privileged:
         groups.extend([_tr.GROUP_WRITE, _tr.GROUP_PROC,
                        _tr.GROUP_DESKTOP, _tr.GROUP_MCP])
+    # 多步任务：开关关 → 模型根本看不到这个工具（回退粒度就是"别开它"）
+    if bool(_config.get("agent_as_tool", False)):
+        if is_group:
+            if bool(_config.get("agent_group_enable", False)):
+                groups.append(_tr.GROUP_DEEP)
+        elif privileged:
+            groups.append(_tr.GROUP_DEEP)
     seen, names = set(), []
     for g in groups:
         for n in _tr.names_in(g):
@@ -11514,6 +11525,15 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
                            group_id=str(group_id if is_group else ""))
     except Exception:
         pass
+    # 多步任务工具（1.6.0 刀 3）：告诉它这一轮在哪个场景、结果该转述给谁 ——
+    # 子 agent 的 system prompt 里要写清"结果会由主链转述"，它才不会对着用户直呼其名。
+    try:
+        from harness import tool_deep as _tdeep_ctx
+        _tdeep_ctx.set_context(is_group=bool(is_group),
+                               group_id=str(group_id if is_group else ""),
+                               sender=_pl_sender)
+    except Exception:
+        pass
     _people_alias_capture(_pl_sender, user_msg)
     # ★ stable_parts（2026-10-13 结构二次重排）：一天变不了几次的块 —— 构建器会
     #   把它们放在"摘要账本之后、滑动近轮之前"，让它们进入可缓存前缀。
@@ -15443,6 +15463,17 @@ def main():
                 log(f"[harness] 表情包检索工具已接入: {sorted(_meme_fns)}")
             except Exception as _me:
                 log(f"[harness] 表情包检索工具接入失败: {_me}")
+            # ── deep_task（1.6.0 刀 3）：agent 从"模式"降成"工具" ──
+            #   注册进 GROUP_DEEP，但**注入**另有一道闸（agent_as_tool，默认关），
+            #   见 _tools_subset_for_scene —— 注册 ≠ 给模型看。
+            try:
+                from harness import tool_deep as _tdeep
+                _deep_fns = _tdeep.register_all()
+                log(f"[harness] 多步任务工具已接入: {sorted(_deep_fns)}"
+                    f"（注入开关 agent_as_tool="
+                    f"{bool(_config.get('agent_as_tool', False))}）")
+            except Exception as _de:
+                log(f"[harness] 多步任务工具接入失败: {_de}")
             # ── 可观测三件套（FIXPLAN 1.5.11 §4.5 M1）──
             #   failure_top / log_search / trace_get / repairs_list：全是只读，
             #   让 agent 能回答"今天最常失败的是哪条链路""这次失败的全链路长什么样"。

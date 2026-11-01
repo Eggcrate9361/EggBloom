@@ -49,13 +49,14 @@ GROUP_GROUP = "group"
 GROUP_WRITE = "write"        # 写型（写文件/改文件）—— 有副作用，需私聊+意图
 GROUP_PROC = "proc"          # 执行型（py_run / job_*）—— 成本最高，最严格注入
 GROUP_TODO = "todo"          # 规划型（todo_write）
+GROUP_DEEP = "deep"          # 多步任务（deep_task）—— 1.6.0 刀 3；只在 agent_as_tool 打开时注入
 GROUP_MCP = "mcp"
 GROUP_SKILL = "skill"
 
 #: 分组展示顺序（serialize 时按此排序，保证跨请求一致）。
 #:  顺序 = 前缀缓存里的稳定位置；改动此元组等于**全局缓存失效一次**，慎重。
 GROUP_SEQ = (GROUP_CORE, GROUP_WORK, GROUP_TODO, GROUP_GROUP, GROUP_WEB,
-             GROUP_DESKTOP, GROUP_WRITE, GROUP_PROC, GROUP_SKILL, GROUP_MCP)
+             GROUP_DESKTOP, GROUP_WRITE, GROUP_PROC, GROUP_DEEP, GROUP_SKILL, GROUP_MCP)
 
 #: 默认"常驻"分组：只有这些分组会进**静态**工具列表（其余按需加载）。
 #:  work 只读、零副作用、定义短 → 常驻；省下的往返远比它的定义贵。
