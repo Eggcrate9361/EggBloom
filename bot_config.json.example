@@ -246,6 +246,7 @@
   "life_context_enable": false,
   "life_context_budget": 8000,
   "agent_as_tool": false,
+  "agent_legacy_entry": false,
   "eval_enabled": true,
   "eval_ban_ai_self": true,
   "eval_ban_backstage": true,

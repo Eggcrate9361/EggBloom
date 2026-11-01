@@ -2016,6 +2016,10 @@ function renderSwitchesPanel(root){
       <div class="field-label" style="margin:0;flex-shrink:0">配置自愈</div>
       <div class="field-desc" style="margin:0">启动时体检白名单里的开关/预算/记忆共享；类型或范围明显坏了就按上一份好快照（没有则按默认值）改回，并记进 data/repairs.jsonl。只修"明显坏了"的值，不碰 api_key / 目标QQ</div></div>
     <div class="field" style="display:flex;align-items:center;gap:20px">
+      <input type="checkbox" class="toggle-input" id="sAgentLegacyEntry">
+      <div class="field-label" style="margin:0;flex-shrink:0">入口旁路（旧 agent）</div>
+      <div class="field-desc" style="margin:0">开：群里@它时同步跑 agent 并把答案直接发出去（老行为，会绕过人格/预算/闸/审计）。关（默认）：入口只走主链，需要多步工具时由「多步任务工具」承接。排障回退时才打开它</div></div>
+    <div class="field" style="display:flex;align-items:center;gap:20px">
       <input type="checkbox" class="toggle-input" id="sAgentAsTool">
       <div class="field-label" style="margin:0;flex-shrink:0">多步任务工具</div>
       <div class="field-desc" style="margin:0">开：聊天模型可以调 deep_task，把"连续查/读/跑/改"的活交给子 agent 干完再照常回话（它只是一双手，不是换人格）。关：模型看不到这个工具，行为与 1.5.11 一致。私聊还要在白名单内、群聊还要开"可干活"</div></div>
@@ -2585,6 +2589,7 @@ async function loadSettingsData(){
     t('sNsfwEnable', c.nsfw_enabled); t('sSelfHealEnable', c.self_heal_enable);
   t('sLifeContextEnable', c.life_context_enable);
   t('sAgentAsTool', c.agent_as_tool);
+  t('sAgentLegacyEntry', c.agent_legacy_entry);
     t('sEvalEnabled', c.eval_enabled); t('sEvalBanAiSelf', c.eval_ban_ai_self); t('sEvalBanBackstage', c.eval_ban_backstage);
     t('sEvalRequireColloquial', c.eval_require_colloquial); t('sEvalStrictBudget', c.eval_strict_budget); t('sEvalLiveEnable', c.eval_live_enable);
     s('sEvalMaxChars', c.eval_max_chars); s('sEvalMaxParts', c.eval_max_parts); s('sEvalMaxTotal', c.eval_max_total);
@@ -2747,6 +2752,7 @@ function collectSettings(){
     self_heal_enable: chk('sSelfHealEnable'),
     life_context_enable: chk('sLifeContextEnable'),
     agent_as_tool: chk('sAgentAsTool'),
+    agent_legacy_entry: chk('sAgentLegacyEntry'),
     de_ai: { enabled: chk('sDeAiEnable'), prompt_inject: chk('sDeAiPromptInject'), post_process: chk('sDeAiPostProcess'),
       ban_words: chk('sDeAiBanWords'), ban_dashes: chk('sDeAiBanDashes'), ban_rule_of_three: chk('sDeAiBanTriple'),
       ban_filler: chk('sDeAiBanFiller'), ban_sycophancy: chk('sDeAiBanSyco'), max_sentence_len: num('sDeAiMaxLen') },

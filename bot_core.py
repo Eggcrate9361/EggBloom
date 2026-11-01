@@ -12484,6 +12484,22 @@ def _qq_agent_reply(text: str, images, *, is_group: bool, group_id: str = "",
     return out
 
 
+def _agent_legacy_entry_enabled(is_group: bool) -> bool:
+    """入口要不要**同步跑 agent 并直接发**（1.6.0 刀 3b 的闸，默认关）。
+
+    这条旁路是 FIXPLAN §1.1 点名的病灶：`@它 看下今天新闻` 会被它接走，
+    跑完 `smart_send*` 直接发出去 —— 人格、预算、闸、审计、认账全绕过，
+    于是同一句话"闲聊"和"任务"给两个答案。
+
+    现在默认关：入口只走主链，需要多步工具时由 `deep_task` 承接（刀 3a）。
+    要回退到老行为，把 `agent_legacy_entry` 打开即可（连同原来的两个开关）。
+    """
+    if not bool(_config.get("agent_legacy_entry", False)):
+        return False
+    key = "agent_group_enable" if is_group else "agent_private_enable"
+    return bool(_config.get(key, False))
+
+
 def _qq_task_dispatch(goal: str, ctx: Optional[dict] = None) -> str:
     """把活派给后台子 agent；完成后把结果发回对话。返回 task_id。
 
@@ -16359,7 +16375,11 @@ def main():
                     # ── 群内 Agent 模式（任务：主程序 agent 能力 · 群内入口）──
                     # **默认关**：agent_group_enable 打开 且 双闸通过才触发。
                     # 闸一=权限（仅管理员白名单），闸二=明确执行意图（非闲聊）。
-                    if (is_at_bot or has_xiao_a) and text and _config.get("agent_group_enable", False):
+                    # ★ 1.6.0 刀 3b（2026-11-01）：再压一道 `agent_legacy_entry`（默认关）。
+                    #   这条分支跑完直接 smart_send_group —— 绕过人格/预算/闸/审计，
+                    #   正是 FIXPLAN §1.1 说的"旁路"。关掉之后由 deep_task 承接。
+                    if _agent_legacy_entry_enabled(True) and (is_at_bot or has_xiao_a) and text \
+                            and _config.get("agent_group_enable", False):
                         try:
                             from harness import agent_service as _agent
                             if _agent.is_ready():
@@ -16694,7 +16714,8 @@ def main():
                 #
                 # 为什么带图时不走：图片已经下载到本地路径，agent 侧拿不到这个路径，
                 # 模型会答「我看不到图」。带图的消息继续走主链（那里有视觉链路）。
-                if text and not images and _config.get("agent_private_enable", False):
+                if text and not images and _agent_legacy_entry_enabled(False) \
+                        and _config.get("agent_private_enable", False):
                     try:
                         from harness import agent_service as _pagent
                         if _pagent.is_ready():
