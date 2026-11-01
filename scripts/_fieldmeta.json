@@ -779,6 +779,16 @@
    "default": true,
    "default_text": "开启"
   },
+  "life_context_enable": {
+   "label": "生活上下文单出口",
+   "desc": "开：这一轮的动态上下文（记忆/时间/群况/工具清单…）合成一段统一注入，日志会打「[生活上下文] 合并 N 块」。关：逐块注入（改造前的样子，逐字节相同）。1.6.0 通路第一刀，灰度通过再开",
+   "ctl": "bool",
+   "panel": "switches",
+   "unit": "",
+   "id": "sLifeContextEnable",
+   "default": false,
+   "default_text": "关闭"
+  },
   "nsfw_enabled": {
    "label": "NSFW 内容",
    "desc": "是否允许 Bot 参与/回复成人向话题，关闭则回避",
@@ -937,6 +947,16 @@
    "default": 4,
    "default_text": "4"
   },
+  "life_context_budget": {
+   "label": "生活上下文预算（字）",
+   "desc": "「生活上下文单出口」打开后，这一轮动态上下文最多注入多少字；超了从尾部整块丢（不截半句）。0 = 不限。默认 8000",
+   "ctl": "number",
+   "panel": "tuning",
+   "unit": "字",
+   "id": "sLifeContextBudget",
+   "default": 8000,
+   "default_text": "8000"
+  },
   "consistency_min_overlap": {
    "label": "认账闸重合阈值",
    "desc": "用户在主张我说过某话、我在否认时，证据句要有多少重合才算「确实说过」；越低越容易拦（也越容易误伤）",
@@ -974,8 +994,7 @@
    "panel": "update",
    "unit": "",
    "id": "sUpdateManifestUrl",
-   "default": "",
-   "default_text": "空"
+   "default": "https://github.com/Eggcrate9361/EggBloom/releases/latest/download/latest.json"
   },
   "private_reply_max_length": {
    "label": "私聊回复最大长度（字）",

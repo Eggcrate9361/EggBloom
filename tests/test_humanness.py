@@ -271,13 +271,19 @@ class TestWiring(unittest.TestCase):
             self.assertLess(idx, call, f"注入在模型调用之后，不会生效：{needle}")
 
     def test_scene_context_goes_to_system_message(self):
+        """现场资料必须进 **system 级**动态上下文，不能拼回用户消息。
+
+        2026-11-01（1.6.0 刀 2）：注入点从 `dynamic_parts.append(...)` 收口成
+        `_add("scene", ...)`（同一个出口，只是记下来源 key）。判据跟着出口走，
+        但「不能进用户消息」这条**不变** —— 进了用户消息模型又会当成对方说的话。
+        """
         with open(os.path.join(_ROOT, "bot_core.py"), encoding="utf-8") as f:
             src = f.read()
         anchor = src.find("if scene_context:")
         self.assertGreater(anchor, 0, "缺少 scene_context 注入")
         seg = src[anchor:anchor + 500]
-        self.assertIn("dynamic_parts.append", seg,
-                      "现场资料没有进 system 消息")
+        self.assertIn('_add("scene"', seg, "现场资料没有进 system 消息")
+        self.assertIn("【现场资料·不是对方说的话】", seg, "现场资料块的标题没了")
         self.assertNotIn("merged_text_for_ai", seg,
                          "现场资料又被拼回用户消息")
 

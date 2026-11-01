@@ -562,6 +562,15 @@ DEFAULT_CONFIG = {
     # data/repairs.jsonl。只修"明显坏了"的值，不碰 api_key / 目标QQ / 群列表。
     "self_heal_enable": True,
 
+    # ── 生活上下文单出口（1.6.0 刀 2，2026-11-01）────────────────────
+    # 开：`_call_deepseek_sync` 的动态上下文（记忆/时间/群况/工具清单…）
+    # 交给 harness.life_context.merge() 合成一段注入，日志打「[生活上下文] 合并 N 块」。
+    # 关（默认）：逐块注入 = 改造前的样子，逐字节相同（golden 钉在
+    # tests/test_life_context_mainchain.py）。灰度通过再开。
+    "life_context_enable": False,
+    # 合并后的字数上限；超了从尾部整块丢（不截半句）。0 = 不限。
+    "life_context_budget": 8000,
+
     # ── 评测台（1.5.11 P0-1）────────────────────────────────────────
     # 判据**词表**在 evals/rules.json（改词改文件，不动代码）；
     # 这里只放「判不判」的开关与长度上限，配置中心「功能开关」面板可改。

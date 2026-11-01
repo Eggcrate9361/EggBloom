@@ -243,6 +243,8 @@
   "slang_injector_enable": true,
   "nsfw_enabled": true,
   "self_heal_enable": true,
+  "life_context_enable": false,
+  "life_context_budget": 8000,
   "eval_enabled": true,
   "eval_ban_ai_self": true,
   "eval_ban_backstage": true,

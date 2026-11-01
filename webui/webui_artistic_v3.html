@@ -2016,6 +2016,10 @@ function renderSwitchesPanel(root){
       <div class="field-label" style="margin:0;flex-shrink:0">配置自愈</div>
       <div class="field-desc" style="margin:0">启动时体检白名单里的开关/预算/记忆共享；类型或范围明显坏了就按上一份好快照（没有则按默认值）改回，并记进 data/repairs.jsonl。只修"明显坏了"的值，不碰 api_key / 目标QQ</div></div>
     <div class="field" style="display:flex;align-items:center;gap:20px">
+      <input type="checkbox" class="toggle-input" id="sLifeContextEnable">
+      <div class="field-label" style="margin:0;flex-shrink:0">生活上下文单出口</div>
+      <div class="field-desc" style="margin:0">开：这一轮的动态上下文（记忆/时间/群况/工具清单…）合成一段统一注入，日志会打「[生活上下文] 合并 N 块」。关：逐块注入（改造前的样子，逐字节相同）。1.6.0 通路第一刀，灰度通过再开</div></div>
+    <div class="field" style="display:flex;align-items:center;gap:20px">
       <input type="checkbox" class="toggle-input" id="sNsfwEnable">
       <div class="field-label" style="margin:0;flex-shrink:0">NSFW 内容</div>
       <div class="field-desc" style="margin:0">是否允许 Bot 参与/回复成人向话题，关闭则回避</div></div>
@@ -2083,6 +2087,9 @@ function renderTuningPanel(root){
     <div class="field"><div class="field-label">视觉去重距离</div>
       <input class="input" id="sMemePhashDist" type="number" min="0" max="16">
       <div class="field-desc">dHash 汉明距离：0 = 完全一样才算重复；默认 4（同图换编码/轻微压缩仍判重）</div></div>
+    <div class="field"><div class="field-label">生活上下文预算（字）</div>
+      <input class="input" id="sLifeContextBudget" type="number" min="0" max="40000" step="500">
+      <div class="field-desc">「生活上下文单出口」打开后，这一轮动态上下文最多注入多少字；超了从尾部整块丢（不截半句）。0 = 不限。默认 8000</div></div>
     <div class="field"><div class="field-label">认账闸重合阈值</div>
       <input class="input" id="sConsMinOverlap" type="number" min="0" max="1" step="0.05">
       <div class="field-desc">用户在主张我说过某话、我在否认时，证据句要有多少重合才算「确实说过」；越低越容易拦（也越容易误伤）</div></div>
@@ -2572,6 +2579,7 @@ async function loadSettingsData(){
     t('sImageCacheEnable', c.image_cache_enable); t('sSelfLearningEnable', c.self_learning_enable);
     t('sPrivateMemoryEnable', c.private_memory_enable); t('sMemoryScopeShare', c.memory_scope_share); t('sSlangInjectorEnable', c.slang_injector_enable);
     t('sNsfwEnable', c.nsfw_enabled); t('sSelfHealEnable', c.self_heal_enable);
+  t('sLifeContextEnable', c.life_context_enable);
     t('sEvalEnabled', c.eval_enabled); t('sEvalBanAiSelf', c.eval_ban_ai_self); t('sEvalBanBackstage', c.eval_ban_backstage);
     t('sEvalRequireColloquial', c.eval_require_colloquial); t('sEvalStrictBudget', c.eval_strict_budget); t('sEvalLiveEnable', c.eval_live_enable);
     s('sEvalMaxChars', c.eval_max_chars); s('sEvalMaxParts', c.eval_max_parts); s('sEvalMaxTotal', c.eval_max_total);
@@ -2581,6 +2589,7 @@ async function loadSettingsData(){
     s('sMemePhashDist', c.meme_collect_phash_dist);
     s('sUpdateManifestUrl', c.update_manifest_url || '');
     s('sConsMinOverlap', c.consistency_min_overlap); s('sConsOwnWindow', c.consistency_own_window_min); s('sConsOwnMsgs', c.consistency_own_msgs);
+  s('sLifeContextBudget', c.life_context_budget);
     t('sDeAiEnable', (c.de_ai&&c.de_ai.enabled)!==false); t('sDeAiPromptInject', (c.de_ai&&c.de_ai.prompt_inject)!==false); t('sDeAiPostProcess', (c.de_ai&&c.de_ai.post_process)!==false);
     t('sDeAiBanWords', (c.de_ai&&c.de_ai.ban_words)!==false); t('sDeAiBanDashes', (c.de_ai&&c.de_ai.ban_dashes)!==false); t('sDeAiBanTriple', (c.de_ai&&c.de_ai.ban_rule_of_three)!==false);
     t('sDeAiBanFiller', (c.de_ai&&c.de_ai.ban_filler)!==false); t('sDeAiBanSyco', (c.de_ai&&c.de_ai.ban_sycophancy)!==false);
@@ -2728,8 +2737,10 @@ function collectSettings(){
     meme_collect_min_kb: num('sMemeMinKb'), meme_collect_max_mb: num('sMemeMaxMb'),
     meme_collect_phash_dist: num('sMemePhashDist'),
     consistency_min_overlap: num('sConsMinOverlap'), consistency_own_window_min: num('sConsOwnWindow'), consistency_own_msgs: num('sConsOwnMsgs'),
+    life_context_budget: num('sLifeContextBudget'),
     update_manifest_url: val('sUpdateManifestUrl'),
     self_heal_enable: chk('sSelfHealEnable'),
+    life_context_enable: chk('sLifeContextEnable'),
     de_ai: { enabled: chk('sDeAiEnable'), prompt_inject: chk('sDeAiPromptInject'), post_process: chk('sDeAiPostProcess'),
       ban_words: chk('sDeAiBanWords'), ban_dashes: chk('sDeAiBanDashes'), ban_rule_of_three: chk('sDeAiBanTriple'),
       ban_filler: chk('sDeAiBanFiller'), ban_sycophancy: chk('sDeAiBanSyco'), max_sentence_len: num('sDeAiMaxLen') },

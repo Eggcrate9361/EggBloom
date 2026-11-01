@@ -399,11 +399,28 @@ def _plan_plugin_inject(items, tag=""):
         return "\n".join(str(it[2]) for it in _ordered), dict(_empty)
 
 
+def _dyn_add(container, key: str, text) -> None:
+    """往动态上下文容器里加一块。
+
+    1.6.0 刀 2：容器从 `list` 换成 `life_context.Parts` 之后还能用同一个调用点 ——
+    list 追加文本，Parts 记下 `(key, text)`。空文本一律不加（老代码也是靠
+    `_build_cached_messages` 里的 `if part:` 过滤，这里提前过滤，效果相同）。
+    """
+    if not text:
+        return
+    add = getattr(container, "add", None)
+    if callable(add):
+        add(key, text)
+    elif container is not None:
+        container.append(text)
+
+
 def _inject_ego_context(dynamic_parts, inject_text: str, tag: str = "EGO"):
     """把 EGO 注入内容作为 system 级指令追加进 dynamic_parts（而非用户消息尾部）。"""
     if not inject_text or dynamic_parts is None:
         return
-    dynamic_parts.append(f"【{tag}上下文】以下是关于当前对话对象的长期状态，不是对方说的话：\n{inject_text}")
+    _dyn_add(dynamic_parts, "ego",
+             f"【{tag}上下文】以下是关于当前对话对象的长期状态，不是对方说的话：\n{inject_text}")
 
 
 def _inject_sleep_state(dynamic_parts, is_group: bool = True):
@@ -427,7 +444,8 @@ def _inject_sleep_state(dynamic_parts, is_group: bool = True):
     # 写在人格文件 `### 睡觉` 块里；这里只报**这一轮的事实**（你在睡觉、被叫醒），
     # 再把人格式的那段取出来拼上（缺块时 `_persona_rule_segment` 自己会记日志）。
     _sleep_rule = _persona_rule_segment("睡觉")
-    dynamic_parts.append("【你正在睡觉】这个点你已经睡了，这条消息把你叫醒的。" + _sleep_rule)
+    _dyn_add(dynamic_parts, "sleep",
+             "【你正在睡觉】这个点你已经睡了，这条消息把你叫醒的。" + _sleep_rule)
 # ── frozen 模式（PyInstaller 打包）检测 —— 必须在任何路径计算之前 ──
 if getattr(sys, 'frozen', False):
     SCRIPT_DIR = os.path.dirname(sys.executable)
@@ -11470,7 +11488,22 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
     # T6: 用缓存构建 static_prompt（人格+规则+多样性+表情包+铁律+群聊规则），
     # 按 (is_group, config_rev, personality_mtime) 缓存，前缀稳定 → 命中 DeepSeek 硬盘缓存
     static_prompt = _build_static_prompt(is_group)
-    dynamic_parts = []
+    # ★ 1.6.0 刀 2（2026-11-01）：动态上下文收成**一个出口**。
+    #   收集器记 (key, text) 并保序；开关 `life_context_enable` 关 → texts()
+    #   与改造前逐字节同一个列表，开 → `life_context.merge()` 合成一块。
+    #   开关默认关：这一刀只加出口，不改行为，回退就是别开它。
+    _life_on = bool(_config.get("life_context_enable", False))
+    try:
+        from harness import life_context as _lctx
+        dynamic_parts = _lctx.Parts()
+    except Exception as _lctx_err:
+        _lctx = None
+        dynamic_parts = []
+        log(f"[生活上下文] 收集器不可用，退回老列表: {_lctx_err}")
+
+    def _add(key: str, text) -> None:
+        """这一轮动态上下文的一块（key 只用于日志/丢尾，顺序就是注入顺序）。"""
+        _dyn_add(dynamic_parts, key, text)
     # P0-4：先把这句话里可能的「叫我 X」「说 A 答 B」记下来，再注入 ——
     # 同一轮里说改称呼，这一轮就生效（不然等于答应了当轮不认）。
     _pl_sender = str(sender or "") or str(target_qq or "")
@@ -11510,7 +11543,7 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
         _tag_text = _ptag.context(user_msg, _config.get("focus_qq"),
                                   resolve_qq_nick, sender=_tag_sender)
         if _tag_text:
-            dynamic_parts.append(_tag_text)
+            _add("tag", _tag_text)
     except Exception:
         pass
 
@@ -11529,7 +11562,7 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
             private=not is_group,
         )
         if _mem_block:
-            dynamic_parts.append(_mem_block)
+            _add("memory", _mem_block)
     except Exception as _mem_err:
         log(f"[记忆] recall 异常，本轮不注入: {_mem_err}")
 
@@ -11541,7 +11574,7 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
             import people as _pp
             _nm = _pp.display(_pl_sender) or ""
             _line = f"【对话对象】你现在私聊的是{('「' + _nm + '」') if _nm else ''}（QQ {_pl_sender}）。"
-            dynamic_parts.append(_line)
+            _add("who", _line)
         except Exception:
             pass
 
@@ -11550,7 +11583,7 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
     try:
         _avd = _avatar_desc(_pl_sender, user_msg)
         if _avd:
-            dynamic_parts.append("【他的头像】" + _avd)
+            _add("avatar", "【他的头像】" + _avd)
     except Exception:
         pass
 
@@ -11559,10 +11592,10 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
     try:
         if (str(_config.get("qq_agent_mode", "inline")) == "tools"
                 and bool(_config.get("qq_agent_enable", False))):
-            dynamic_parts.append(
+            _add("tools", 
                 "【派活】用户让你查资料/看文件/办具体事时，用 dispatch_task(goal) 交给后台"
                 "子 agent，然后正常回一句（别装成已经查完了）；他问进度就用 task_status。")
-            dynamic_parts.append(
+            _add("tools", 
                 "【表情包】用户要你发之前收的那张图时，用 meme_find 找到 id、"
                 "再用 meme_send 发；别用 match_meme 随便配一张。用户发图并说"
                 "「存/收下/留着」时，用 meme_save 存进表情库，再回一句存好了。")
@@ -11578,7 +11611,7 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
             target=str(group_id if is_group else (_pl_sender or target_qq or "")),
             include_group_say=(not is_group))
         if _acts_blk:
-            dynamic_parts.append(_acts_blk)
+            _add("acts", _acts_blk)
     except Exception:
         pass
 
@@ -11597,21 +11630,21 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
         if _coarse:
             stable_parts.append(_coarse)
         if _fine:
-            dynamic_parts.append(_fine)
+            _add("time", _fine)
         # 对方话里的时间前提与钟点矛盾 → 确定性指出（不指望模型自己比对）
         _mm = _bh_t.mismatch_note(user_msg, _time_key)
         if _mm:
-            dynamic_parts.append(_mm)
+            _add("time_mismatch", _mm)
     except Exception:
         # 降级：退回原逻辑（群聊按 600s 节流，私聊每轮给）
         _now_ts = datetime.datetime.now()
         if not is_group:
-            dynamic_parts.append(
+            _add("time", 
                 "【当前时间】" + _now_ts.strftime("%Y年%m月%d日 %H:%M") + "，星期" + ["一","二","三","四","五","六","日"][_now_ts.weekday()])
         else:
             _last_time = _GROUP_TIME_INJECT_AT.get(group_id, 0)
             if not isinstance(_last_time, (int, float)) or not _last_time or (time.time() - _last_time) >= 600:
-                dynamic_parts.append(
+                _add("time", 
                     "【当前时间】" + _now_ts.strftime("%Y年%m月%d日 %H:%M") + "，星期" + ["一","二","三","四","五","六","日"][_now_ts.weekday()]
                 )
                 _GROUP_TIME_INJECT_AT[group_id] = time.time()
@@ -11646,7 +11679,7 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
                     t = datetime.datetime.fromtimestamp(ts).strftime("%H:%M")
                     display = snick if snick else "群友"
                     timeline_lines.append(f"[{t}] {display}: {txt[:50]}")
-                dynamic_parts.append("【群聊动态】\n" + "\n".join(timeline_lines))
+                _add("scene", "【群聊动态】\n" + "\n".join(timeline_lines))
         group_members = list(GROUP_MEMBERS.get(group_id, {}).values())
         # 群主/管理员常驻注入（2026-10-11）：被问"群主是谁"是高频场景，
         # 且这是协议层现成的事实 —— 不该靠模型主动查工具或装懂。极低成本(一行)。
@@ -11657,7 +11690,7 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
         # T2-3 群成员列表按需注入：仅当用户消息涉及成员时才注入，省 15 个昵称的 token
         _member_kw = ["选", "谁", "@", "在线", "成员", "随机", "人"]
         if group_members and any(k in user_msg for k in _member_kw):
-            dynamic_parts.append("【群成员列表】" + "、".join(group_members[:15]))
+            _add("scene", "【群成员列表】" + "、".join(group_members[:15]))
         summary = GROUP_SUMMARY.get(group_id, "")
         if summary:
             # ★ 改为常驻注入（2026-10-13 重排）：旧的"每10分钟注一次"让这块
@@ -11673,7 +11706,7 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
     if SLANG_OK and _config.get("slang_injector_enable", True):
         slang_ctx = get_slang_context(user_msg)
         if slang_ctx:
-            dynamic_parts.append(slang_ctx)
+            _add("slang", slang_ctx)
     # EGO 人格/记忆/风格/节奏注入 → system 级上下文（独立于群聊/私聊钩子，提升指令权重）
     if ego_inject_context:
         _inject_ego_context(dynamic_parts, ego_inject_context)
@@ -11683,12 +11716,12 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
     if scene_context:
         # 2026-10-31（P0-2）：只留"这是程序给的背景、不是对方说的话"这个事实标签；
         # 「按人格自然接话、不要复述、不要提到标题」是话术，已归人格文件。
-        dynamic_parts.append("【现场资料·不是对方说的话】以下是程序给的背景信息：\n"
+        _add("scene", "【现场资料·不是对方说的话】以下是程序给的背景信息：\n"
                              + scene_context)
     # 私聊的沙漏检索已并入 memory_api.recall()（唯一读口），这里不再单取。
     if private_memory_context:
         # 2026-10-31（P0-2）：「回复时不要提及这些内容」是话术，已归人格【别露后台】
-        dynamic_parts.append(f"【用户画像】以下是你记得的对方情况：\n{private_memory_context}")
+        _add("memory_private", f"【用户画像】以下是你记得的对方情况：\n{private_memory_context}")
     # ── T7 批一 ★0 → 2.0 阶段C：群聊历史召回 ──
     # 已收进 memory_api.recall()（唯一读口）：群内人物画像 + 带 τ 阈值的 santglass
     # 检索都在那边，sources 只取沙漏（super_memory 群侧由 EGO 钩子注入，同源双注是
@@ -11710,7 +11743,7 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
         elapsed = time.time() - GROUP_LAST_EXIT[group_id]
         if elapsed < 900:
             mins = max(1, int(elapsed / 60))
-            dynamic_parts.append(f"【重要】你{mins}分钟前刚说过退场语，这次回来不要再重复退场语。")
+            _add("exit", f"【重要】你{mins}分钟前刚说过退场语，这次回来不要再重复退场语。")
 
     # ── skill L1 元数据（harness.skill_loader）──
     #  只在"本轮真的会注入 skill 工具"时给出清单，避免闲聊也背这段文字。
@@ -11720,7 +11753,7 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
         if _bh2.has_skills() and _bh2._should_offer_skills(user_msg):
             _sk_block = _bh2.skill_l1_block()
             if _sk_block:
-                dynamic_parts.append(_sk_block)
+                _add("skills", _sk_block)
     except Exception:
         pass
 
@@ -11737,9 +11770,9 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
             user_msg, has_search=True)
         if _fr_anchors and _bh3._any_in(user_msg, _bh3._WEB_KW + _bh3._DESKTOP_KW +
                                         ("今天", "现在", "最新", "目前", "今年", "最近")):
-            dynamic_parts.append(_fr_anchors)
+            _add("freshness", _fr_anchors)
         if _fr_directive:
-            dynamic_parts.append(_fr_directive)
+            _add("freshness", _fr_directive)
     except Exception:
         pass
 
@@ -11841,6 +11874,25 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
             stable_parts.append(_cap_block)
     except Exception as _e:
         log(f"[能力视图] 生成失败（不注入）: {_e}")
+
+    # ── 动态上下文出口（1.6.0 刀 2）──────────────────────────────────
+    # 开关 `life_context_enable` 关：texts() 就是改造前那个 list（逐字节不变，
+    # 由 tests/test_life_context_mainchain.py 的 golden 钉住）；
+    # 开：交给 life_context.merge() 合成一块 —— 以后 agent 侧共用这个出口。
+    if hasattr(dynamic_parts, "texts"):
+        _dyn_texts = dynamic_parts.texts()
+        if _life_on and _lctx is not None:
+            try:
+                _lc_budget = _cfg_int("life_context_budget", 8000, 0, 40000)
+                _lc_merged = _lctx.merge(dynamic_parts, budget=_lc_budget)
+                log(f"[生活上下文] 合并 {len(dynamic_parts)} 块 → {len(_lc_merged)} 字"
+                    + (f"（预算 {_lc_budget}，超了整块丢尾）" if _lc_budget else "（不限预算）"))
+                dynamic_parts = [_lc_merged] if _lc_merged else []
+            except Exception as _lx_err:
+                log(f"[生活上下文] 合成失败，退回老路径: {_lx_err}")
+                dynamic_parts = _dyn_texts
+        else:
+            dynamic_parts = _dyn_texts
 
     messages = _build_cached_messages(history, cache_key, static_prompt, dynamic_parts,
                                       user_msg, images, stable_parts=stable_parts)
