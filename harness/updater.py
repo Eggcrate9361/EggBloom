@@ -161,6 +161,29 @@ def sha256_file(path: str) -> str:
     return h.hexdigest()
 
 
+def version_tuple(v: str) -> tuple:
+    """把 `1.5.11` / `1.5.11-dev+z` 解析成可比较的整数元组。"""
+    import re as _re
+    m = _re.match(r"^\s*v?(\d+)(?:\.(\d+))?(?:\.(\d+))?", str(v or ""))
+    if not m:
+        return ()
+    return tuple(int(x or 0) for x in m.groups())
+
+
+def is_newer(remote: str, local: str) -> bool:
+    """远端是不是**比本地新**。本地版本未知（空）时按"有新版本"处理。
+
+    2026-11-01 修：原来用 `!=` 判断 —— 本地 1.5.11 而线上最新还是 1.5.10 时，
+    会显示"发现新版本 1.5.10"（其实是降级）。现在按数字比较。
+    """
+    r, l = version_tuple(remote), version_tuple(local)
+    if not r:
+        return False
+    if not l:
+        return True
+    return r > l
+
+
 def check(manifest_url: str, timeout: float = 8.0, root: str = "") -> dict:
     """拿远端 manifest 和本地版本比一比。不写盘、不下载补丁。"""
     out = {"ok": False, "local": "", "remote": "", "newer": False,
@@ -182,7 +205,7 @@ def check(manifest_url: str, timeout: float = 8.0, root: str = "") -> dict:
     out["manifest"] = data
     out["remote"] = str(data.get("version") or "")
     out["ok"] = True
-    out["newer"] = bool(out["remote"]) and out["remote"] != out["local"]
+    out["newer"] = is_newer(out["remote"], out["local"])
     return out
 
 

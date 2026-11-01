@@ -179,6 +179,18 @@ def main():
     rep6 = U.apply_from_manifest("", root=root2)
     check("明确报错", rep6.get("ok") is False and "地址" in str(rep6.get("error")), rep6)
 
+    print("\n[L] 版本比较（不能把降级当更新）")
+    for remote, local, want in (("1.5.11", "1.5.10", True),
+                                ("1.5.10", "1.5.11", False),
+                                ("1.5.11", "1.5.11", False),
+                                ("1.6.0", "1.5.11", True),
+                                ("1.5.10", "", True),
+                                ("", "1.5.10", False)):
+        got = U.is_newer(remote, local)
+        check(f"{remote or '空'} vs {local or '空'} → {want}", got is want, got)
+    check("解析带 v 前缀/后缀", U.version_tuple("v1.5.11-dev+x") == (1, 5, 11),
+          U.version_tuple("v1.5.11-dev+x"))
+
     print("\n" + "=" * 56)
     print(f"通过 {PASS} / 失败 {FAIL}")
     if FAILURES:
