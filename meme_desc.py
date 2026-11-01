@@ -37,21 +37,28 @@ TAGS_NAME = "tags.json"
 DESC_NAME = "descriptions.json"
 
 _LOCK = threading.Lock()
-#: 路径 → (mtime, 解析后的 dict)。tags.json 40KB，每发一张都读盘没必要。
+#: 路径 → ((mtime_ns, size), 解析后的 dict)。tags.json 40KB，每发一张都读盘没必要。
 _CACHE: Dict[str, tuple] = {}
 #: 正在后台补描述的 key，防同一张图并发打多次视觉。
 _INFLIGHT = set()
 
 
 def _read_json(path: str) -> Dict:
-    """带 mtime 缓存的 JSON 读取。读不到一律返回 {}（这条链不许抛）。"""
+    """带 mtime 缓存的 JSON 读取。读不到一律返回 {}（这条链不许抛）。
+
+    ★ 2026-11-01：缓存键从 `getmtime()`（秒级 float）换成 `(st_mtime_ns, st_size)`。
+      整跑里踩过一次假红：同一秒内先写好的、再写坏的，mtime 命中旧值 →
+      读到的是**上一版内容**（"坏 JSON 按没有处理" 那条用例偶尔拿到旧描述）。
+      纳秒 + 大小一起变，同秒重写也不会误命中。
+    """
     try:
-        m = os.path.getmtime(path)
+        st = os.stat(path)
+        key = (st.st_mtime_ns, st.st_size)
     except Exception:
         return {}
     with _LOCK:
         hit = _CACHE.get(path)
-    if hit and hit[0] == m:
+    if hit and hit[0] == key:
         return hit[1]
     d: Dict = {}
     try:
@@ -62,7 +69,7 @@ def _read_json(path: str) -> Dict:
     except Exception:
         d = {}
     with _LOCK:
-        _CACHE[path] = (m, d)
+        _CACHE[path] = (key, d)
     return d
 
 

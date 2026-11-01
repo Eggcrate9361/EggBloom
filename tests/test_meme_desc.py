@@ -67,7 +67,12 @@ try:
         f.write("{坏掉的 JSON")
     check("坏 JSON 不崩、按没有处理", md.desc_for(meme_dir, gif) == "",
           md.desc_for(meme_dir, gif))
+    # ★ 2026-11-01 补：整跑里这条偶尔假红 —— 缓存键以前是**秒级 mtime**，
+    #   同一秒内"先写好、再写坏"会命中旧值（读到上一版内容）。
+    #   现在立刻写回好内容，必须马上读到新值，证明同秒重写不误命中。
     md.save_desc(meme_dir, "vrchat/kipfel_001.gif", "银发少女笑着比心")
+    check("同秒重写后立刻读到新值（缓存键含纳秒+大小）",
+          md.desc_for(meme_dir, gif) == "银发少女笑着比心", md.desc_for(meme_dir, gif))
 
     # ── 3. note_line ────────────────────────────────────────────
     line = md.note_line(meme_dir, gif)
