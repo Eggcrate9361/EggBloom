@@ -335,6 +335,18 @@ for lid, meta in lists.items():
 
 path = os.path.join(HERE, "_fieldmeta.json")
 
+# ── 明确退休的字段（2026-11-01 1.6.0 刀 4）───────────────────────────
+# v3 已不再渲染它们，但下面"保留 v4 独有字段"的机制会把旧条目带回来 ——
+# 那样配置页会同时出现三个 agent 开关（用户要求只留一个）。
+# 退休 ≠ 删除配置：旧键仍在 config.DEFAULT_CONFIG 里**只读**，
+# 老配置的迁移在 config.load_config()（文件没有新键时按旧键推导）。
+RETIRED = {
+    "agent_group_enable": "1.6.0 刀 4 合并为 agent_can_work（旧键只读）",
+    "agent_private_enable": "1.6.0 刀 4 合并为 agent_can_work（旧键只读）",
+}
+#: 本次真正被退休掉的键（打日志用，别让"字段消失"变成静默行为）
+_retired_hit = {k for k in RETIRED if k not in out}
+
 # ── 保留 v3 里没有的字段（2026-10-24 补）────────────────────────────
 # 本脚本只能抽出 v3 页面上存在的字段。但 _fieldmeta.json 里还有几个
 # **只在 v4 加过、v3 从没有**的字段（bot_nicknames、group_quote_mode）。
@@ -347,12 +359,15 @@ _carried = OrderedDict()
 try:
     _old = json.load(io.open(path, encoding="utf-8"))
     for _k, _v in (_old.get("fields") or {}).items():
-        if _k not in out:
+        if _k not in out and _k not in RETIRED and _k not in _retired_hit:
             _carried[_k] = _v
 except Exception:
     pass
 for _k, _v in _carried.items():
     out[_k] = _v
+
+if _retired_hit:
+    print("退休字段（不再保留）%d 个: %s" % (len(_retired_hit), sorted(_retired_hit)))
 
 io.open(path, "w", encoding="utf-8").write(
     json.dumps({"panels": PANELS, "fields": out, "actions": actions},

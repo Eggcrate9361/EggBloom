@@ -1324,26 +1324,6 @@
    "default_text": "空",
    "restart": true
   },
-  "agent_group_enable": {
-   "label": "群聊内可派活",
-   "desc": "被 @ 或叫名字、并且是管理员、并且说的是明确的执行指令（不是闲聊）时，交给 agent 多步执行。三个条件缺一不可。",
-   "ctl": "bool",
-   "panel": "group",
-   "unit": "",
-   "id": "sAgentGroupEnable",
-   "default": false,
-   "default_text": "关闭"
-  },
-  "agent_private_enable": {
-   "label": "私聊内可派活",
-   "desc": "同上，但只在私聊。默认关闭：派活得到的是任务汇报式回答，会把聊天的人格顶掉。带图的消息不走这条路。",
-   "ctl": "bool",
-   "panel": "group",
-   "unit": "",
-   "id": "sAgentPrivateEnable",
-   "default": false,
-   "default_text": "关闭"
-  },
   "qq_agent_enable": {
    "label": "回复链走 agent",
    "desc": "打开后，命中意图闸的私聊/群聊消息先进 agent 循环（自己拼原语去查），拿不到答案自动回落老链路。默认关闭；还必须在下方的名单里点名，否则谁都不走。",

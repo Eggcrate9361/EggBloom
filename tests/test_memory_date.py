@@ -94,8 +94,12 @@ def test_weekday():
     _wd = {"一": 0, "二": 1, "三": 2, "四": 3, "五": 4, "六": 5, "日": 6, "天": 6}
     _dt = datetime.date.fromisoformat(got[0])
     check("那天是周三", _dt.weekday() == _wd["三"], (_dt, _dt.weekday()))
-    check("在上周（6~13 天前）",
-          6 <= (_today() - _dt).days <= 13, (_today() - _dt).days)
+    # ★ 2026-11-02 修：原来断言"6~13 天前"——那是在**假设今天不是周一**。
+    #   2026-11-02 正好是周一，"上周三"= 10-28，只有 5 天前 → 用例假红。
+    #   改成算确切那天：上一个 ISO 周的周三。
+    _this_monday = _today() - datetime.timedelta(days=_today().weekday())
+    _expect = _this_monday - datetime.timedelta(days=7) + datetime.timedelta(days=2)
+    check("落在上一个 ISO 周的周三", _dt == _expect, (_dt, _expect))
 
 
 def test_absolute_date():
