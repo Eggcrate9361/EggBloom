@@ -570,6 +570,11 @@ if _config.get("protocol_enabled", False):
                 continue
 ONE_BOT_TOKEN = _config.get("onebot_token", "")
 BOT_QQ = _config.get("bot_qq", "")
+#: 2026-11-01：登录账号的真实昵称与 UID（get_login_info 得到）。
+#: 配置里的 `bot_qq` / `bot_group_nick` 可能过时（换号/改名后忘改），
+#: 只认配置就会出现"用户 @AronaBot 被当成 @别人，整条跳过"。
+LOGIN_NICK = ""
+LOGIN_UID = ""
 TARGET_QQS = _config.get("target_qqs", [])
 DEEPSEEK_API_KEY = _config.get("api_key", "")
 DEEPSEEK_URL = _config.get("api_url", "https://api.deepseek.com/chat/completions")
@@ -12600,6 +12605,11 @@ def _bot_self_names() -> set:
       显式限定即可（显式列表永远优先且不受群名片影响）。
     """
     names: set = {str(BOT_QQ)}
+    # ★ 2026-11-01：登录账号的真实昵称/UID 也认（配置过时就不认自己了）
+    if LOGIN_NICK:
+        names.add(str(LOGIN_NICK).strip())
+    if LOGIN_UID:
+        names.add(str(LOGIN_UID).strip())
     try:
         for n in _bot_nicknames():
             if n:
@@ -12728,6 +12738,9 @@ def _bot_nicknames() -> List[str]:
     g = str(_config.get("bot_group_nick") or "").strip()
     if g and g not in out:
         out.append(g)
+    # ★ 2026-11-01：登录账号的真实昵称也算（配置可能过时）
+    if LOGIN_NICK and LOGIN_NICK not in out:
+        out.append(LOGIN_NICK)
     return out or ["小a"]
 
 
@@ -15089,6 +15102,7 @@ def _mcp_http_post(handler):
 
 def main():
     global chat_history, group_chat_history
+    global LOGIN_NICK, LOGIN_UID, BOT_QQ
 
     log("=" * 50)
     log("EggBloom v8 - 多账号 + 文件转发 + 消息转存")
@@ -15216,6 +15230,22 @@ def main():
             break
 
     log("OneBot 已连接")
+
+    # ★ 2026-11-01：把登录账号的**真实昵称 / UID** 记下来。
+    #   配置里的 bot_qq、bot_group_nick 换号/改名后容易过时；只认配置会出现
+    #   “用户 @AronaBot，被当成 @别人 → 整条跳过”这种身份识别缺陷。
+    try:
+        _login = (resp.get("data") or {}) if isinstance(resp, dict) else {}
+        LOGIN_NICK = str(_login.get("nickname") or "").strip()
+        LOGIN_UID = str(_login.get("user_id") or "").strip()
+        if LOGIN_NICK:
+            log(f"[身份] 登录账号: {LOGIN_NICK}({LOGIN_UID or '?'})")
+        if LOGIN_UID and str(BOT_QQ or "").strip() != LOGIN_UID:
+            log(f"[身份] 配置 bot_qq={BOT_QQ or '(空)'} 与登录账号 {LOGIN_UID} 不一致，"
+                f"按登录账号为准（editing bot_config.json 可消除此提示）")
+            BOT_QQ = LOGIN_UID
+    except Exception as _le:
+        log(f"[身份] 读取登录信息失败（忽略）: {_le}")
 
     # ── harness：把内置工具注册进 tool_registry（供 Agent/主链按需加载）──
     #  **只注册元数据**（schema + 分组），实现仍在 TOOL_FUNCTIONS。
