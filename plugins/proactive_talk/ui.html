@@ -257,6 +257,14 @@ button.sm{padding:5px 10px;font-size:var(--pv-fs-xs)}
 .pv-inline-code{background:var(--pv-surface-2);border:1px solid var(--pv-line);border-radius:4px;
   padding:1px 5px;font-family:var(--pv-mono);font-size:var(--pv-fs-xs)}
 .pv-truncate{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* 好友勾选面板（2026-11-01） */
+.pt-bar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px}
+.pt-friends{display:flex;flex-direction:column;gap:6px;max-height:280px;overflow:auto}
+.pt-fr{display:flex;align-items:center;gap:8px;border:1px solid var(--line);
+  border-radius:6px;padding:6px 10px;background:rgba(0,0,0,.10)}
+.pt-fr .pt-name{flex:1;min-width:80px;color:var(--ink);font-size:var(--z3)}
+.pt-fr .pt-nick{width:130px;min-width:90px}
 </style>
 </head>
 <body>
@@ -293,18 +301,17 @@ button.sm{padding:5px 10px;font-size:var(--pv-fs-xs)}
 
   <div class="pv-panel">
     <div class="pv-panel-h"><h2>对象与话术</h2><i class="pv-rule"></i></div>
-    <div class="pv-flex" style="align-items:flex-start">
-      <div class="pv-field" style="flex:1;min-width:170px;margin:0">
-        <label class="pv-label">目标私聊 QQ（多个用逗号分隔；空 = 主配置全部）</label>
-        <input class="pv-input" id="f-target" placeholder="10003, 10004">
+    <div class="pv-field" style="margin:0">
+      <label class="pv-label">主动对象（勾好友即可，不用手打 QQ；每人的称呼单独填）</label>
+      <div class="pt-bar">
+        <button class="btn sm" id="pick-friends">从好友列表选择</button>
+        <button class="btn sm" id="save-basic">保存</button>
+        <span class="dim" id="pick-hint">未勾选 = 用主配置 target_qqs</span>
       </div>
-      <div class="pv-field" style="flex:1;min-width:150px;margin:0">
-        <label class="pv-label">称呼</label>
-        <input class="pv-input" id="f-nick" placeholder="（可空）">
-      </div>
-      <div style="display:flex;align-items:flex-end;padding-bottom:2px">
-        <button id="save-basic">保存</button>
-      </div>
+      <div id="friend-list" class="pt-friends"></div>
+      <!-- 兼容旧路径：没有好友列表时还能手填 -->
+      <input class="pv-input" id="f-target" placeholder="手动：10003, 10004（一般不用填）"
+             style="margin-top:8px;font-size:12px">
     </div>
     <div class="pv-field" style="margin-top:12px">
       <label class="pv-label">追加人设（接在默认风格约束后面）</label>
@@ -385,16 +392,56 @@ async function load(){
   CFG=(r&&(r.config||r))||{};
   if(CFG.config) CFG=CFG.config;
   $('f-target').value=((CFG.target_qqs&&CFG.target_qqs.length)?CFG.target_qqs.join(', '):(CFG.target_qq||''));
-  $('f-nick').value=CFG.nickname||'';
+  renderTargets(buildSavedTargets());
   $('f-persona').value=CFG.persona_extra||'';
   drawRhythm(CFG);
   const st=await call('get_status');
   if(st&&st.ok) drawStatus(st);
 }
+
+/* ── 好友勾选（2026-11-01）：不用手打 QQ，每人一个称呼 ── */
+function _esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function buildSavedTargets(){
+  const qqs=(CFG.target_qqs&&CFG.target_qqs.length)?CFG.target_qqs
+           :(CFG.target_qq?String(CFG.target_qq).split(/[,，;；\s]+/).filter(Boolean):[]);
+  const al=CFG.target_aliases||{};
+  return qqs.filter(Boolean).map(q=>({qq:String(q), nick:al[String(q)]||'', name:'', checked:true}));
+}
+function renderTargets(list){
+  const box=$('friend-list'); if(!box) return;
+  if(!list.length){ box.innerHTML='<div class="dim" style="padding:6px 2px">还没有选择对象，点「从好友列表选择」。</div>'; return; }
+  box.innerHTML=list.map(f=>(
+    '<div class="pt-fr" data-qq="'+_esc(f.qq)+'">'
+    + '<input type="checkbox" '+(f.checked?'checked':'')+'>'
+    + '<span class="pt-name">'+_esc(f.name||f.nick||f.qq)+'</span>'
+    + '<span class="mono dim">'+_esc(f.qq)+'</span>'
+    + '<input class="pv-input pt-nick" placeholder="称呼" value="'+_esc(f.nick||'')+'">'
+    + '</div>')).join('');
+}
+async function pickFriends(){
+  setMsg('读取好友列表…',true);
+  const r=await call('list_friends');
+  if(!r||r.ok===false){ setMsg('拿不到好友：'+((r&&r.error)||'未知错误'),false); return; }
+  const list=(r.friends||[]).map(f=>({qq:f.qq, nick:f.nick||'', name:f.name||f.nick||f.qq, checked:false}));
+  const savedMap={}; buildSavedTargets().forEach(s=>{savedMap[s.qq]=s;});
+  list.forEach(f=>{ if(savedMap[f.qq]){ f.checked=true; f.nick=savedMap[f.qq].nick||''; } });
+  Object.keys(savedMap).forEach(q=>{ if(!list.some(f=>f.qq===q)) list.push(savedMap[q]); });
+  renderTargets(list);
+  setMsg('共 '+list.length+' 个，勾选后点保存',true);
+}
+$('pick-friends').onclick=pickFriends;
+
 $('refresh').onclick=load;
 $('save-basic').onclick=async()=>{
-  const r=await call('set_config',{target_qqs:$('f-target').value.split(/[,，;；\s]+/).map(s=>s.trim()).filter(Boolean), target_qq:'',
-    nickname:$('f-nick').value.trim(), persona_extra:$('f-persona').value});
+  const picked=[];
+  document.querySelectorAll('#friend-list .pt-fr').forEach(row=>{
+    const cb=row.querySelector('input[type=checkbox]');
+    if(cb&&cb.checked) picked.push({qq:row.dataset.qq, nick:(row.querySelector('.pt-nick')||{}).value||''});
+  });
+  if(!picked.length) picked.push(...$('f-target').value.split(/[,，;；\s]+/).map(s=>s.trim()).filter(Boolean).map(q=>({qq:q,nick:''})));
+  const aliases={}; picked.forEach(p=>{ if(p.nick.trim()) aliases[p.qq]=p.nick.trim(); });
+  const r=await call('set_config',{target_qqs:picked.map(p=>p.qq), target_aliases:aliases, target_qq:'',
+    nickname:'', persona_extra:$('f-persona').value});
   if(r&&(r.ok!==false)){ setMsg('已保存',true); await load(); } else setMsg('保存失败：'+JSON.stringify(r),false);
 };
 document.addEventListener('change',async ev=>{

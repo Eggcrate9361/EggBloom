@@ -50,7 +50,10 @@ DEFAULT_CONFIG = {
     #   轮到谁按"谁最久没被搭话"排序 —— 不会同一个人连续霸屏。
     #   空列表 = 退回 target_qq；再空 = 主配置 target_qqs 全部。
     "target_qqs": [],
-    "nickname": "",             # 怎么称呼对方（可空）
+    "nickname": "",             # 怎么称呼对方（可空；没有单独配置时兜底用）
+    # ★ 2026-11-01：每人一个称呼（好友勾选面板写入）。
+    #   {"2011257385": "Texas"} —— 生成时优先用这个人的称呼，不再全局一个。
+    "target_aliases": {},
     "heartbeat_sec": 900,       # 心跳间隔（秒），每次心跳评估一次要不要开口
     "min_interval_min": 180,    # 两次主动开口的最小间隔（分钟）
     "active_cooldown_min": 30,  # 用户最近发言后多久内不打扰（分钟）
@@ -329,7 +332,10 @@ def _send_bubbles(qq: str, bubbles: list) -> int:
 
 def _build_messages(cfg: dict, state: dict, target: str) -> list:
     now = datetime.now()
-    nickname = str(cfg.get("nickname") or "").strip()
+    # 2026-11-01：优先用这个人自己的称呼（target_aliases），没有再退回全局 nickname
+    _aliases = cfg.get("target_aliases") or {}
+    nickname = str((_aliases.get(str(target)) if isinstance(_aliases, dict) else "") or
+                   cfg.get("nickname") or "").strip()
     extra = str(cfg.get("persona_extra") or "").strip()
     max_bubbles = int(cfg.get("max_bubbles") or 4)
 
@@ -789,6 +795,29 @@ def get_api_status():
         return {"ok": False, "status": "检测异常", "detail": str(e)}
 
 
+def list_friends(params=None):
+    """Bot 的好友列表（插件页勾选用，不用手打 QQ）。"""
+    if not _ctx:
+        return {"ok": False, "error": "插件未启用"}
+    try:
+        base = str(_ctx.get_config("onebot_url", "http://127.0.0.1:3000")).rstrip("/")
+        resp = _ctx.http_post(f"{base}/get_friend_list", {}, timeout=10)
+        if not resp or resp.get("retcode") != 0:
+            return {"ok": False, "error": f"拿不到好友列表：{str(resp)[:100]}"}
+        out = []
+        for f in (resp.get("data") or []):
+            qq = str(f.get("user_id") or "").strip()
+            if not qq:
+                continue
+            out.append({"qq": qq,
+                        "nick": str(f.get("remark") or f.get("nickname") or "").strip(),
+                        "name": str(f.get("nickname") or "").strip()})
+        out.sort(key=lambda x: x["qq"])
+        return {"ok": True, "friends": out, "count": len(out)}
+    except Exception as e:
+        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
+
 def test_links(params=None):
     """检测三条联动通道：人设 / 情绪 / 私聊记忆。"""
     if not _ctx:
@@ -813,6 +842,7 @@ PLUGIN_ACTIONS = {
     "send_now": send_now,
     "test_decision": test_decision,
     "test_links": test_links,
+    "list_friends": list_friends,
 }
 
 PLUGIN_HOOKS = {
