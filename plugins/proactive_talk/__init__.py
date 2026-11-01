@@ -330,12 +330,63 @@ def _send_bubbles(qq: str, bubbles: list) -> int:
 # ── 生成 ──────────────────────────────────────────────────
 
 
+def _resolved_call_name(cfg: dict, target: str) -> str:
+    """这个人该怎么被称呼（按可信度从高到低）。
+
+    ★ 2026-11-02 真机事故：主动消息把 **3150007406** 叫成「Texas」——
+      而 Texas 是 **2011257385** 的名字（日志：`私聊 → Texas(2011257385)`）。
+      根因：配置里只有一个全局 `nickname`（多目标时代之前留下的），
+      多目标之后它被当成"通用称呼"套给所有人。
+
+    现在的顺序：
+      1. `target_aliases[qq]` —— 用户在插件页给这个人填的称呼（最准）；
+      2. `people_alias.get_alias(qq)` —— 他自己说过「叫我 X」；
+      3. 全局 `nickname` —— **只在只有一个目标时**才可信（那本来就指他；
+         用户显式配过，比自动抓来的网名更准）；
+      4. `people.display(qq)` —— 他自己的网名/群名片；
+      5. 都没有 → 空（不猜，宁可只说"你"）。
+    """
+    t = str(target or "").strip()
+    if not t:
+        return ""
+    aliases = cfg.get("target_aliases") or {}
+    if isinstance(aliases, dict):
+        name = str(aliases.get(t) or "").strip()
+        if name:
+            return name
+    try:
+        import people_alias as _pa
+        name = str(_pa.get_alias(t) or "").strip()
+        if name:
+            return name
+    except Exception:
+        pass
+    # 全局 nickname：多目标时**不可信**（它就是这次事故的来源）
+    try:
+        targets = [str(x) for x in (cfg.get("target_qqs") or []) if str(x or "").strip()]
+        if not targets and cfg.get("target_qq"):
+            targets = [str(cfg.get("target_qq"))]
+    except Exception:
+        targets = []
+    if len(targets) <= 1:
+        name = str(cfg.get("nickname") or "").strip()
+        if name:
+            return name
+    try:
+        import people as _pp
+        name = str(_pp.display(t) or "").strip()
+        if name:
+            return name
+    except Exception:
+        pass
+    return ""
+
+
 def _build_messages(cfg: dict, state: dict, target: str) -> list:
     now = datetime.now()
-    # 2026-11-01：优先用这个人自己的称呼（target_aliases），没有再退回全局 nickname
-    _aliases = cfg.get("target_aliases") or {}
-    nickname = str((_aliases.get(str(target)) if isinstance(_aliases, dict) else "") or
-                   cfg.get("nickname") or "").strip()
+    # 2026-11-01：优先用这个人自己的称呼（target_aliases）；
+    # 2026-11-02：再加「叫我X」/ 他自己的网名，并且**多目标时不再用全局 nickname**。
+    nickname = _resolved_call_name(cfg, target)
     extra = str(cfg.get("persona_extra") or "").strip()
     max_bubbles = int(cfg.get("max_bubbles") or 4)
 
