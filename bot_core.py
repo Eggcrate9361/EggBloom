@@ -3328,6 +3328,9 @@ def _people_alias_capture(sender, text) -> None:
         return
     try:
         alias = people_alias.parse_alias(text)
+        # 纯遮罩（「叫我 **」）不存：存了等于给这个人改名叫「**」
+        if alias and _alias_is_mask(alias):
+            alias = ""
         if alias and people_alias.set_alias(who, alias):
             log(f"[人档案] {who} 的称呼 → {alias}")
         trig, rep = people_alias.parse_agreement(text)
@@ -13031,6 +13034,39 @@ def _is_at_others(text: str) -> bool:
     return False
 
 
+def _alias_is_mask(alias) -> bool:
+    """这个"称呼"是不是纯遮罩（`**` / `＊` / `???`）—— 遮罩不能当名字用。
+
+    2026-11-01 真机：有人让 Bot「叫我 **」，people_aliases 就把 `**` 存成称呼，
+    此人之后在 prompt 与日志里一律显示成 `[**·ax1d]` —— 群里同一个人被叫成
+    「**」，模型只能靠 4 位锚去猜是谁，这正是"分不清人"的一半原因。
+    遮罩不携带身份信息，直接退回群名片/昵称。
+    """
+    s = str(alias or "").strip()
+    if not s:
+        return False
+    return all(ch in "*＊?？·•.-_— " for ch in s)
+
+
+def _compute_forced(*, is_at_bot: bool, has_xiao_a: bool, has_bot_nick: bool,
+                    quote_me: bool, has_quote: bool, has_text_at: bool,
+                    in_session: bool) -> bool:
+    """这条消息要不要**免过决策器**直接回。
+
+    ★ 2026-11-01：引用别人的话不算在叫我。
+      真机 18:13：用户引用另一个人的「我一直在好奇…插件一直扣钱」，Bot 仍然回
+      「没换，我哪有钱」「问错人了吧」—— prompt 里明明写着"他在引用别人、
+      不是在叫我"，但 `in_session` 让它无条件强制回复。
+      现在：引用他人 + 没有任何指向我的信号 → 交给决策器（它翻车也有插件挡住）。
+    """
+    addressed = bool(is_at_bot or has_xiao_a or has_bot_nick or quote_me)
+    if addressed or has_text_at:
+        return True
+    if has_quote:
+        return False
+    return bool(in_session)
+
+
 def _display_name(sender, group_id="") -> str:
     """把 QQ 号变成模型能读懂的说话人标签（2026-10-13 "乱扣帽子"修复）。
 
@@ -13059,7 +13095,7 @@ def _display_name(sender, group_id="") -> str:
     # 过期在 people_alias 里判，这里只读。
     try:
         _alias = people_alias.get_alias(s)
-        if _alias:
+        if _alias and not _alias_is_mask(_alias):
             return _alias
     except Exception:
         pass
@@ -16294,8 +16330,11 @@ def main():
                     #   按'不是我'放行给决策器」——同一件事两个消费者，结论打架。
                     _quote_me = bool(quote_me)
                     # 触发口径（旧 10216 那个条件的反面）：任一项命中 → 免过决策器。
-                    _forced = bool(is_at_bot or has_xiao_a or has_bot_nick
-                                   or _quote_me or has_text_at or in_session)
+                    _forced = _compute_forced(
+                        is_at_bot=is_at_bot, has_xiao_a=has_xiao_a,
+                        has_bot_nick=has_bot_nick, quote_me=_quote_me,
+                        has_quote=has_quote, has_text_at=has_text_at,
+                        in_session=in_session)
                     _res = _pipeline_upsert(
                         group_id, sender=sender, text=text,
                         images=_img_paths, reply_mid=_reply_mid,

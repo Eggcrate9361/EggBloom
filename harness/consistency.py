@@ -24,7 +24,7 @@ import re
 #: 用户"主张我说过"的触发词
 _CLAIM_TRIGGERS = (
     "你不是说", "你不是讲", "你不是答应", "你刚才说", "你刚刚说", "你刚才讲",
-    "你说过", "你前面说", "你之前说", "你刚说",
+    "你说过", "你前面说", "你之前说", "你刚说", "你记得你说过",
 )
 
 #: 回复里的"否认"标记
@@ -33,6 +33,22 @@ _DENY_MARKERS = (
     "我瞎说", "瞎说的", "逗你玩", "骗你的", "我什么时候说", "我哪说",
     "我哪句说", "没有第二",
 )
+
+#: 否认的正则（子串匹配不到的那几种问法）
+#:   2026-11-01 真机：用户问「小a，你记得你说过这句话吗？」，
+#:   模型答「我说过吗？」—— 旧的 _DENY_MARKERS 里没有这个写法，认账闸没拦住。
+_DENY_RES = (
+    re.compile(r"我(?:有)?说过(?:吗|么|嘛|？|\?)"),
+    re.compile(r"我(?:哪里|哪儿|哪|什么时候)(?:说|讲)过"),
+    re.compile(r"我(?:有)?讲(?:过)?(?:吗|么|嘛)"),
+)
+
+#: "这句话"这类回指 —— 真正的被主张内容在引用块里
+_DEICTIC = ("这句话", "这句", "这一句", "那句话", "那句", "上面那句",
+            "刚才那句", "刚那句", "上一条", "刚才那条", "那条")
+
+#: 引用块：`[引用:…] 被引用的原文`（到换行或下一个 [xxx] 为止）
+_QUOTE_INLINE = re.compile(r"\[引用:[^\]]*\]\s*([^\n\[]+)")
 
 #: 抽取被主张内容时要去掉的尾巴
 _TAIL = "吗呀啊呢吧哈嘛哦啦。？！?!，, \t\n"
@@ -49,6 +65,12 @@ def _bigrams(s: str) -> set:
     return {s[i:i + 2] for i in range(len(s) - 1)}
 
 
+def _quoted_part(text: str) -> str:
+    """取引用块里的原文（`[引用:我(Bot)｜…] 撞小孩赔的` → `撞小孩赔的`）。"""
+    m = _QUOTE_INLINE.search(str(text or ""))
+    return (m.group(1) or "").strip() if m else ""
+
+
 def extract_claim(user_text: str) -> str:
     """从用户话里抽出"他说我说过的那句"。抽不到返回空串。"""
     t = str(user_text or "")
@@ -63,11 +85,27 @@ def extract_claim(user_text: str) -> str:
     # 去掉句尾语气词与标点："还有一张吗？" → "还有一张"
     while claim and claim[-1] in _TAIL:
         claim = claim[:-1]
-    return claim.strip()
+    claim = claim.strip()
+
+    # ★ 2026-11-01：回指（"这句话吗？"）本身不是内容 —— 用引用块里的原文当主张。
+    #   真机：「小a，你记得你说过这句话吗？」引用的是 Bot 4 秒前说的「撞小孩赔的」，
+    #   旧逻辑抽出「这句话」→ 找不到见证 → 判成"我确实没说过" → 放过了否认。
+    #   注意要把 `[当前] 你说过这句话吗` 那行里的 "@某人" 之类的标签剥掉再判。
+    _bare = re.sub(r"^(?:\[当前\]\s*)?@\S+\s*", "", claim).strip()
+    if (not _bare) or (len(_bare) <= 8 and any(_bare.startswith(d) or d in _bare for d in _DEICTIC)):
+        _q = _quoted_part(t)
+        if _q:
+            _q = re.sub(r"^\[当前\]\s*", "", _q).strip()
+            if _q:
+                return _q
+    return claim
 
 
 def looks_like_denial(reply: str) -> bool:
-    return any(m in str(reply or "") for m in _DENY_MARKERS)
+    r = str(reply or "")
+    if any(m in r for m in _DENY_MARKERS):
+        return True
+    return any(rx.search(r) for rx in _DENY_RES)
 
 
 def overlap_ratio(claim: str, witness: str) -> float:
