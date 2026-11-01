@@ -598,6 +598,13 @@ DEFAULT_CONFIG = {
     "consistency_own_window_min": 30,  # 认账闸：「你上一条说的」块有效时长（分钟）
     "consistency_own_msgs": 4,         # 认账闸：查证时看我最近几条回复
 
+    # ── 上下文预算（2026-11-01）：想"多给模型一点上下文"时的三个旋钮 ──
+    #  实测：群聊一次回复约 8.7K token；16 轮 ≈ 1K token 的历史。
+    #  16→32 轮大约 +1.5K token（+15%），单次成本 +0.0005 元左右。
+    "group_history_rounds": 16,     # 群聊带最近几轮（4~40）
+    "private_history_rounds": 16,   # 私聊带最近几轮（4~40）
+    "history_msg_chars": 300,       # 单条历史保留字数（80~800；300→600 只影响长消息）
+
     # 热补丁更新（2026-11-01）：给终端用户用的更新通道。
     # 默认指向 GitHub 最新 Release 的 latest.json（`/releases/latest/download/<asset>`
     # 永远解析到最新一次正式发布），所以发布侧只要把 latest.json 挂上去，

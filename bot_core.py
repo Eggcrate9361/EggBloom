@@ -3309,9 +3309,9 @@ def _record_bot_group_msg(group_id, text):
         pass
     try:
         gh = group_chat_history.setdefault(group_id, [])
-        gh.append({"role": "assistant", "content": str(text)[:300],
+        gh.append({"role": "assistant", "content": str(text)[:_hist_chars()],
                    "ts": time.time()})
-        group_chat_history[group_id] = gh[-16:]
+        group_chat_history[group_id] = gh[-_history_cap():]
     except Exception:
         pass
 
@@ -10601,8 +10601,8 @@ def _summarize_group_history_inner(group_id, gh):
     _GROUP_SUMMARY_PREV[group_id] = old_summary  # 本次摘要成为下轮的上上次
     GROUP_SUMMARY[group_id] = new_summary
     _GROUP_SUMMARY_AT[group_id] = time.time()
-    # C2 存储对齐：压缩后只保留最近16轮完整对话
-    group_chat_history[group_id] = gh[-16:]
+    # C2 存储对齐：压缩后保留最近 N 轮完整对话（N=group_history_rounds，默认 16）
+    group_chat_history[group_id] = gh[-_history_cap():]
     # ★ 只有走到这里（摘要真的生成并落地）才提交长度标记 —— 这是"后做事"的那一半
     _GROUP_SUMMARY_LEN[group_id] = len(gh)
     log(f"群[{group_id}] 历史已压缩，摘要: {summary[:60]}")
@@ -11746,8 +11746,9 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
     # 选择历史 + 构建消息（用缓存优化版）
     # ★ 2026-10-21：窗口 10 → 16 条。最近 4 轮（8 条）要给原文，10 条只剩 2 条
     #   能进摘要账本；给到 16 条才有 8 条可压缩。成本仍由"有界窗口 + 账本 cap"控制。
+    _rounds = _cfg_int("group_history_rounds", 16, 4, 40)
     if is_group and group_id:
-        history = group_chat_history.get(group_id, [])[-16:]
+        history = group_chat_history.get(group_id, [])[-_rounds:]
         cache_key = f"g_{group_id}"
         # 任务 5.3 事件溯源试点：白名单群改为**从仅追加日志派生** history。
         # 派生是纯函数，与内存版记录同一字符串；日志为空（首次/刚启用）时回退内存，
@@ -11755,13 +11756,13 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
         try:
             from harness import session_log as _slog
             if _slog.enabled_for(group_id):
-                _derived = _slog.replay(group_id, limit=16)
+                _derived = _slog.replay(group_id, limit=_rounds)
                 if _derived:
                     history = _derived
         except Exception:
             pass
     else:
-        history = chat_history.get(target_qq, [])[-16:]
+        history = chat_history.get(target_qq, [])[-_cfg_int("private_history_rounds", 16, 4, 40):]
         cache_key = f"p_{target_qq}"
 
     # ── 按需工具集（harness.tool_registry）──
@@ -13046,6 +13047,25 @@ def _alias_is_mask(alias) -> bool:
     if not s:
         return False
     return all(ch in "*＊?？·•.-_— " for ch in s)
+
+
+def _cfg_int(key: str, default: int, lo: int = 1, hi: int = 64) -> int:
+    """读一个整数配置并夹到区间里；坏值退回默认（配置中心改了即时生效）。"""
+    try:
+        v = int(_config.get(key, default))
+    except (TypeError, ValueError):
+        return int(default)
+    return max(int(lo), min(int(hi), v))
+
+
+def _history_cap() -> int:
+    """历史保留条数（压缩与组装同一个口径，默认 16 保持不变）。"""
+    return _cfg_int("group_history_rounds", 16, 4, 40)
+
+
+def _hist_chars() -> int:
+    """单条历史保留字数（默认 300，可调到 800）。"""
+    return _cfg_int("history_msg_chars", 300, 80, 800)
 
 
 def _compute_forced(*, is_at_bot: bool, has_xiao_a: bool, has_bot_nick: bool,
@@ -14637,12 +14657,12 @@ def _pipeline_step(group_id):
             gh = group_chat_history.setdefault(group_id, [])
             # 群聊历史：user 消息带上发送者前缀，让 AI 区分不同用户
             # merged_text 已包含 [昵称(QQ号)] 格式，直接存储
-            _hist_user = merged_text[:300]
-            _hist_reply = reply[:300]
+            _hist_user = merged_text[:_hist_chars()]
+            _hist_reply = reply[:_hist_chars()]
             gh.append({"role": "user", "content": _hist_user, "ts": time.time()})
             gh.append({"role": "assistant", "content": _hist_reply, "ts": time.time()})
-            # C2 存储对齐：群聊截断 30→16 轮（组装只取最近10轮）
-            group_chat_history[group_id] = gh[-16:]
+            # C2 存储对齐：保留 group_history_rounds×2 条（组装按 group_history_rounds 取）
+            group_chat_history[group_id] = gh[-_history_cap():]
 
             # 任务 5.3 事件溯源试点：把**模型可见的形态**追加到仅追加会话日志。
             # 铁律「模型可见即已记录」——这里记录的字符串与进入 history、最终进 prompt 的
