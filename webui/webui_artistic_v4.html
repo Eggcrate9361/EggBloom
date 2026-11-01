@@ -644,6 +644,40 @@ input,select,textarea{font:inherit;color:inherit}
 @media (prefers-reduced-motion: reduce){
   *{animation-duration:1ms !important;transition-duration:1ms !important}
 }
+
+/* ── 更新面板（2026-11-01）：跟 v4 同一套语言 —— 细线、像素字、金色进度 ── */
+.upd-box{position:relative;margin-top:var(--s4);padding:var(--s4) var(--s5);
+  border:1px solid var(--line2);background:var(--panel);
+  font-family:var(--f-px0);overflow:hidden}
+.upd-box::before,.upd-box::after{content:"";position:absolute;width:11px;height:11px;
+  border:1px solid var(--accent-dim);pointer-events:none}
+.upd-box::before{left:-1px;top:-1px;border-right:0;border-bottom:0}
+.upd-box::after{right:-1px;bottom:-1px;border-left:0;border-top:0}
+.upd-hd{display:flex;align-items:baseline;gap:var(--s3);margin-bottom:var(--s3)}
+.upd-hd b{font-family:var(--f-m);font-size:var(--z1);letter-spacing:.26em;color:var(--ink2);
+  font-weight:400;text-transform:uppercase}
+.upd-hd i{font-style:normal;font-size:var(--z1);color:var(--ink4);letter-spacing:.06em}
+.upd-hd .upd-ver{margin-left:auto;font-family:var(--f-m);font-size:var(--z1);
+  color:var(--accent);letter-spacing:.12em}
+.upd-row{display:flex;align-items:center;gap:var(--s3);flex-wrap:wrap}
+.upd-msg{font-size:var(--z2);color:var(--ink3);line-height:1.7}
+.upd-msg.ok{color:var(--ok)} .upd-msg.err{color:var(--err)} .upd-msg.run{color:var(--accent)}
+.upd-prog{margin-top:var(--s4)}
+.upd-bar{position:relative;height:9px;border:1px solid var(--line2);background:
+  repeating-linear-gradient(135deg,transparent 0 5px,rgba(0,0,0,.05) 5px 6px);
+  overflow:hidden}
+.upd-bar i{display:block;height:100%;width:0%;
+  background:repeating-linear-gradient(90deg,var(--accent) 0 7px,var(--accent-dim) 7px 8px);
+  transition:width 320ms var(--ez)}
+.upd-box[data-state="running"] .upd-bar i{animation:upd-pulse 1.1s var(--ez) infinite alternate}
+@keyframes upd-pulse{from{opacity:.55}to{opacity:1}}
+.upd-meta{display:flex;justify-content:space-between;align-items:baseline;margin-top:6px;
+  font-family:var(--f-m);font-size:var(--z1);color:var(--ink4);letter-spacing:.1em}
+.upd-meta .upd-pct{font-size:var(--z3);color:var(--accent);letter-spacing:.04em}
+.upd-box[data-state="error"] .upd-bar i{background:var(--err)}
+.upd-box[data-state="error"] .upd-meta .upd-pct{color:var(--err)}
+.upd-box[data-state="done"] .upd-bar i{background:var(--ok)}
+.upd-box[data-state="done"] .upd-meta .upd-pct{color:var(--ok)}
 </style>
 <style id="theme-arknights">
 /* ══════════════════════════════════════════════════════════════════
@@ -5114,90 +5148,111 @@ function cfRenderArea(host, cfg, ctx) {
       ? '<div class="cfg-sec"><div class="cfg-empty">这一组暂时没有可改的项</div></div>'
       : secHtml);
 
-  /* ── 更新面板的动作按钮（2026-11-01）─────────────────────────────
-     字段区是通用渲染，按钮得单独挂。更新只替换程序文件，人格/自建插件/数据不动。 */
+  /* ── 更新面板的动作区（2026-11-01）─────────────────────────────
+     字段区是通用渲染，动作区单独挂；样式跟 v4 同一套（细线/像素字/金色进度）。
+     更新只替换程序文件，人格/自建插件/数据不动。 */
   const _updSec = host.querySelector('[data-sec="update"]');
   if (_updSec && !_updSec.querySelector('#cfUpdCheck')) {
     _updSec.insertAdjacentHTML('beforeend',
-      '<div style="display:flex;gap:10px;margin-top:10px;flex-wrap:wrap">'
-      + '<button type="button" class="btn primary" id="cfUpdCheck">检查更新</button>'
-      + '<button type="button" class="btn" id="cfUpdApply" style="display:none">安装并重启</button>'
+      '<div class="upd-box" id="cfUpdBox" data-state="idle">'
+      + '<div class="upd-hd"><b>Update</b><i>热更新通道 · 只替换程序文件</i>'
+      +   '<span class="upd-ver" id="cfUpdVer"></span></div>'
+      + '<div class="upd-row">'
+      +   '<button type="button" class="btn primary" id="cfUpdCheck">检查更新</button>'
+      +   '<button type="button" class="btn" id="cfUpdApply" style="display:none">安装并重启</button>'
+      +   '<span class="upd-msg" id="cfUpdMsg">还没检查</span>'
       + '</div>'
-      + '<div id="cfUpdWrap" style="display:none;margin-top:10px">'
-      +   '<div style="height:10px;border-radius:6px;background:rgba(0,0,0,.12);overflow:hidden">'
-      +     '<i id="cfUpdBar" style="display:block;height:100%;width:0%;'
-      +     'background:linear-gradient(90deg,#7bb7a4,#c8a24a);transition:width .25s"></i>'
-      +   '</div>'
-      +   '<div class="cfg-empty" id="cfUpdPct" style="margin-top:6px">0%</div>'
-      + '</div>'
-      + '<div class="cfg-empty" id="cfUpdMsg" style="margin-top:8px">还没检查</div>');
-    const _msg = (t) => { const el = _updSec.querySelector('#cfUpdMsg'); if (el) el.textContent = t; };
-    const _bar = (pct, text) => {
-      const wrap = _updSec.querySelector('#cfUpdWrap');
-      const bar = _updSec.querySelector('#cfUpdBar');
-      const lab = _updSec.querySelector('#cfUpdPct');
+      + '<div class="upd-prog" id="cfUpdWrap" style="display:none">'
+      +   '<div class="upd-bar"><i id="cfUpdBar"></i></div>'
+      +   '<div class="upd-meta"><span id="cfUpdStage">准备中</span>'
+      +     '<span class="upd-pct" id="cfUpdPct">0%</span></div>'
+      + '</div></div>');
+    const _q = (id) => _updSec.querySelector('#' + id);
+    const _state = (s) => { const b = _q('cfUpdBox'); if (b) b.dataset.state = s; };
+    const _msg = (t, kind) => {
+      const el = _q('cfUpdMsg');
+      if (!el) return;
+      el.textContent = t;
+      el.className = 'upd-msg' + (kind ? ' ' + kind : '');
+    };
+    const _bar = (pct, stage) => {
+      const wrap = _q('cfUpdWrap'), bar = _q('cfUpdBar');
+      const lab = _q('cfUpdPct'), st = _q('cfUpdStage');
       if (wrap) wrap.style.display = '';
       if (bar) bar.style.width = Math.max(0, Math.min(100, pct)) + '%';
-      if (lab) lab.textContent = text || (Math.round(pct) + '%');
+      if (lab) lab.textContent = Math.round(pct) + '%';
+      if (st && stage) st.textContent = stage;
     };
     const _url = () => {
-      const el = _updSec.querySelector('[data-k="update_manifest_url"] input, input#sUpdateManifestUrl')
+      // v4 的通用字段是 `<input data-k="update_manifest_url">` 本身带 data-k，
+      // 不是包在容器里 —— 选择器要同时覆盖两种形态（2026-11-01 实测踩到：
+      // 只写 `[data-k] input` 会拿到空串，点检查永远报"没有配置更新地址"）。
+      const el = _updSec.querySelector('input[data-k="update_manifest_url"]')
+        || _updSec.querySelector('[data-k="update_manifest_url"] input')
         || document.querySelector('input#sUpdateManifestUrl');
       return el ? el.value : '';
     };
     _updSec.querySelector('#cfUpdCheck').addEventListener('click', async () => {
-      _msg('检查中…');
+      _msg('检查中…', 'run');
       try {
         const r = await fetch('/api/update/check?url=' + encodeURIComponent(_url()));
         const j = await r.json();
-        if (!j.ok) { _msg('检查失败：' + (j.error || '未知错误')); return; }
+        const ver = _q('cfUpdVer');
+        if (ver && j.local) ver.textContent = 'v' + j.local;
+        if (!j.ok) { _msg('检查失败：' + (j.error || '未知错误'), 'err'); _state('error'); return; }
         if (j.newer) {
-          _msg('发现新版本 ' + j.remote + '（当前 ' + (j.local || '未知') + '）');
+          _msg('发现新版本 ' + j.remote + '（当前 ' + (j.local || '未知') + '）', 'ok');
           _updSec.querySelector('#cfUpdApply').style.display = '';
+          _bar(0, '待安装 · ' + j.remote);
+          _state('ready');
         } else {
           _msg('已是最新（' + (j.local || '未知') + '）');
           _updSec.querySelector('#cfUpdApply').style.display = 'none';
+          _state('idle');
         }
-      } catch (e) { _msg('检查失败：' + e); }
+      } catch (e) { _msg('检查失败：' + e, 'err'); _state('error'); }
     });
     _updSec.querySelector('#cfUpdApply').addEventListener('click', async () => {
       if (!confirm('安装更新并重启？只替换程序文件，你的数据、人格、自建插件都不动。')) return;
+      _state('running');
       _bar(0, '准备中');
-      _msg('开始下载…');
+      _msg('开始下载…', 'run');
       try {
         const r = await fetch('/api/update/apply', {
           method: 'POST', headers: {'Content-Type': 'application/json'},
           body: JSON.stringify({url: _url(), restart: true})
         });
         const j = await r.json();
-        if (!j.ok) { _msg('安装失败：' + (j.error || '未知错误')); return; }
+        if (!j.ok) { _msg('安装失败：' + (j.error || '未知错误'), 'err'); _state('error'); return; }
         const timer = setInterval(async () => {
           try {
             const s = await (await fetch('/api/update/status')).json();
             const pct = s.total ? Math.round(s.downloaded * 100 / s.total) : (s.percent || 0);
             const mb = (n) => (n / 1048576).toFixed(1);
-            const label = s.phase === 'download' && s.total
-              ? (s.text + ' ' + mb(s.downloaded) + '/' + mb(s.total) + ' MB（' + pct + '%）')
+            const stage = s.phase === 'download' && s.total
+              ? ('下载 ' + mb(s.downloaded) + ' / ' + mb(s.total) + ' MB')
               : (s.text || s.phase || '处理中');
-            _bar(s.done ? 100 : pct, label);
+            _bar(s.done ? 100 : pct, stage);
             if (s.done) {
               clearInterval(timer);
               if (s.ok) {
                 const rep = s.report || {};
+                _state('done');
                 _msg('已更新 ' + ((rep.applied || []).length) + ' 个文件'
                      + (((rep.kept || []).length) ? '，保留本地改过的 ' + rep.kept.length + ' 个' : '')
-                     + '，正在重启…');
-                _bar(100, '安装完成，重启中…');
+                     + '，正在重启…', 'ok');
+                _bar(100, '安装完成 · 重启中');
                 setTimeout(() => location.reload(), 4000);
               } else {
-                _msg('安装失败：' + (s.error || '未知错误'));
+                _state('error');
+                _msg('安装失败：' + (s.error || '未知错误'), 'err');
               }
             }
           } catch (e) {
             /* 服务正在重启时会短暂连不上 —— 不报错，继续等 */
           }
         }, 600);
-      } catch (e) { _msg('安装失败：' + e); }
+      } catch (e) { _msg('安装失败：' + e, 'err'); _state('error'); }
     });
   }
 
