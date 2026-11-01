@@ -68,6 +68,8 @@ _fwU/
 
 # 测试运行时临时目录（test_meme_back 等会在此生成假图）
 tests/_meme_back_tmp/
+# 全量测试的失败现场（run_all_tests.py 生成，查抖动用）
+tests/_last_fail/
 
 # README 本地渲染预览（render_readme.py 的产物，不进仓库）
 README_preview.html

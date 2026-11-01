@@ -29,7 +29,22 @@ import time
 ROOT = os.path.dirname(os.path.abspath(__file__))
 TESTS_DIR = os.path.join(ROOT, "tests")
 KNOWN_RED_FILE = os.path.join(TESTS_DIR, "known_red.json")
+FAIL_DIR = os.path.join(TESTS_DIR, "_last_fail")
 DEFAULT_TIMEOUT = 180
+
+#: 子进程统一走 UTF-8。Windows 控制台默认 cp936，父进程按 UTF-8 解码会拿到
+#: 一屏乱码 + `\ufffd`，严重时 `print` 直接 UnicodeEncodeError 把整个入口打断
+#: （2026-11-01 实测：5 个用例红的结果没打出来，反而死在最后一行汇总上）。
+CHILD_ENV = dict(os.environ, PYTHONUTF8="1", PYTHONIOENCODING="utf-8")
+
+
+def _safe_console():
+    """把本进程的 stdout/stderr 切成 UTF-8，任何控制台都不会因为转义炸掉。"""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
 
 
 def load_known_red():
@@ -50,19 +65,41 @@ def discover(pattern=""):
     return [os.path.join(TESTS_DIR, x) for x in files]
 
 
+def _dump_failure(name, stdout, stderr, code):
+    """失败现场留档：只留 3 行 tail 是查不出抖动的（2026-11-01 教训）。"""
+    try:
+        os.makedirs(FAIL_DIR, exist_ok=True)
+        path = os.path.join(FAIL_DIR, name.replace(".py", "") + ".log")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(f"exit={code}\n{'=' * 60}\n")
+            f.write("--- stdout ---\n" + (stdout or "") + "\n")
+            if stderr:
+                f.write("--- stderr ---\n" + stderr + "\n")
+        return os.path.relpath(path, ROOT)
+    except Exception:
+        return ""
+
+
 def run_one(path, timeout):
     t0 = time.time()
     try:
         r = subprocess.run([sys.executable, path], cwd=ROOT, timeout=timeout,
-                           capture_output=True, text=True,
+                           capture_output=True, text=True, env=CHILD_ENV,
                            encoding="utf-8", errors="replace")
         cost = time.time() - t0
         tail = [ln for ln in (r.stdout or "").strip().splitlines() if ln.strip()][-3:]
-        return {"ok": r.returncode == 0, "code": r.returncode, "secs": round(cost, 1),
-                "tail": tail}
+        res = {"ok": r.returncode == 0, "code": r.returncode, "secs": round(cost, 1),
+               "tail": tail}
+        if not res["ok"]:
+            res["log"] = _dump_failure(os.path.basename(path), r.stdout, r.stderr,
+                                       r.returncode)
+            # 失败行里 often 就是判据本身（[FAIL] xxx :: 实际值），单独拎出来
+            res["fails"] = [ln.strip() for ln in (r.stdout or "").splitlines()
+                            if "[FAIL]" in ln][:6]
+        return res
     except subprocess.TimeoutExpired:
         return {"ok": False, "code": "TIMEOUT", "secs": round(time.time() - t0, 1),
-                "tail": [f"超过 {timeout}s 未结束"]}
+                "tail": [f"超过 {timeout}s 未结束"], "fails": []}
 
 
 def run_evals():
@@ -74,7 +111,7 @@ def run_evals():
         if not os.path.exists(path):
             continue
         ran += 1
-        r = subprocess.run([sys.executable, path], cwd=ROOT,
+        r = subprocess.run([sys.executable, path], cwd=ROOT, env=CHILD_ENV,
                            capture_output=True, text=True,
                            encoding="utf-8", errors="replace")
         line = ""
@@ -98,6 +135,14 @@ def main(argv=None):
     ap.add_argument("--no-known-red", action="store_true",
                     help="已知红也当失败（发版前核实）")
     args = ap.parse_args(argv)
+    _safe_console()
+    # 清掉上一轮的失败现场，避免拿旧日志当新证据
+    try:
+        for fn in os.listdir(FAIL_DIR):
+            if fn.endswith(".log"):
+                os.remove(os.path.join(FAIL_DIR, fn))
+    except Exception:
+        pass
 
     known = {} if args.no_known_red else load_known_red()
     files = discover(args.filter)
@@ -141,6 +186,10 @@ def main(argv=None):
             print("\n意外失败（必须修）：")
             for r in hard_fail:
                 print(f"  - {r['name']}（exit={r['code']}）")
+                for ln in (r.get("fails") or [])[:3]:
+                    print(f"      {ln}")
+                if r.get("log"):
+                    print(f"      ↳ 完整输出：{r['log']}")
         if expected_red:
             print("\n已知红（tests/known_red.json 里登记过）：")
             for r in expected_red:
