@@ -295,8 +295,8 @@ button.sm{padding:5px 10px;font-size:var(--pv-fs-xs)}
     <div class="pv-panel-h"><h2>对象与话术</h2><i class="pv-rule"></i></div>
     <div class="pv-flex" style="align-items:flex-start">
       <div class="pv-field" style="flex:1;min-width:170px;margin:0">
-        <label class="pv-label">目标私聊 QQ（空 = 主配置第一个）</label>
-        <input class="pv-input" id="f-target" placeholder="10003">
+        <label class="pv-label">目标私聊 QQ（多个用逗号分隔；空 = 主配置全部）</label>
+        <input class="pv-input" id="f-target" placeholder="10003, 10004">
       </div>
       <div class="pv-field" style="flex:1;min-width:150px;margin:0">
         <label class="pv-label">称呼</label>
@@ -384,7 +384,7 @@ async function load(){
   const r=await call('get_config');
   CFG=(r&&(r.config||r))||{};
   if(CFG.config) CFG=CFG.config;
-  $('f-target').value=CFG.target_qq||'';
+  $('f-target').value=((CFG.target_qqs&&CFG.target_qqs.length)?CFG.target_qqs.join(', '):(CFG.target_qq||''));
   $('f-nick').value=CFG.nickname||'';
   $('f-persona').value=CFG.persona_extra||'';
   drawRhythm(CFG);
@@ -393,7 +393,7 @@ async function load(){
 }
 $('refresh').onclick=load;
 $('save-basic').onclick=async()=>{
-  const r=await call('set_config',{target_qq:$('f-target').value.trim(),
+  const r=await call('set_config',{target_qqs:$('f-target').value.split(/[,，;；\s]+/).map(s=>s.trim()).filter(Boolean), target_qq:'',
     nickname:$('f-nick').value.trim(), persona_extra:$('f-persona').value});
   if(r&&(r.ok!==false)){ setMsg('已保存',true); await load(); } else setMsg('保存失败：'+JSON.stringify(r),false);
 };

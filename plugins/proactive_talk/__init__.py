@@ -44,7 +44,12 @@ _DIR = os.path.dirname(os.path.abspath(__file__))
 _CONFIG_PATH = os.path.join(_DIR, "data", "config.json")
 
 DEFAULT_CONFIG = {
-    "target_qq": "",            # 目标私聊 QQ；空 = 主配置 target_qqs 第一个
+    "target_qq": "",            # 兼容旧配置：单个目标私聊 QQ
+    # ★ 2026-11-01：多目标。以前只能盯一个人（"主动为什么只有一个人"）。
+    #   列表里的每个人独立计时（各自的最小间隔），每轮心跳最多开口一次，
+    #   轮到谁按"谁最久没被搭话"排序 —— 不会同一个人连续霸屏。
+    #   空列表 = 退回 target_qq；再空 = 主配置 target_qqs 全部。
+    "target_qqs": [],
     "nickname": "",             # 怎么称呼对方（可空）
     "heartbeat_sec": 900,       # 心跳间隔（秒），每次心跳评估一次要不要开口
     "min_interval_min": 180,    # 两次主动开口的最小间隔（分钟）
@@ -151,17 +156,43 @@ def _in_quiet_hours(spec: str, now: datetime) -> bool:
         return False
 
 
+def _parse_qqs(raw) -> list:
+    """把 `target_qqs` 的各种形状（list / 逗号 / 换行字符串）规整成去重列表。"""
+    if isinstance(raw, str):
+        raw = re.split(r"[,，;；\s]+", raw)
+    if not isinstance(raw, (list, tuple, set)):
+        return []
+    seen, out = set(), []
+    for x in raw:
+        q = str(x or "").strip()
+        if q and q not in seen:
+            seen.add(q)
+            out.append(q)
+    return out
+
+
+def _resolve_targets(cfg: dict) -> list:
+    """这一轮要考虑的全部目标（有序）。
+
+    优先级：`target_qqs`（多目标）→ `target_qq`（旧单目标）→ 主配置 target_qqs。
+    2026-11-01 之前只有 `_resolve_target`（永远返回一个），所以"主动"只能盯一个人。
+    """
+    out = _parse_qqs(cfg.get("target_qqs"))
+    single = str(cfg.get("target_qq") or "").strip()
+    if single and single not in out:
+        out.append(single)
+    if not out and _ctx:
+        try:
+            out = _parse_qqs(_ctx.get_config("target_qqs", []))
+        except Exception:
+            out = []
+    return out
+
+
 def _resolve_target(cfg: dict) -> str:
-    qq = str(cfg.get("target_qq") or "").strip()
-    if qq:
-        return qq
-    try:
-        tqs = _ctx.get_config("target_qqs", []) if _ctx else []
-        if isinstance(tqs, list) and tqs:
-            return str(tqs[0])
-    except Exception:
-        pass
-    return ""
+    """兼容旧调用：返回第一个目标。"""
+    ts = _resolve_targets(cfg)
+    return ts[0] if ts else ""
 
 
 def _silent_desc(last_user_ts: float) -> str:
@@ -416,19 +447,28 @@ def _update_pending_topic(bubbles: list, target: str = ""):
 # ── 决策闸门 ──────────────────────────────────────────────
 
 
-def _evaluate(cfg: dict, state: dict, force: bool = False) -> dict:
+def _evaluate(cfg: dict, state: dict, force: bool = False, target: str = "") -> dict:
     """返回 {'ok': bool, 'target': str, 'blocked_by': str}。force=True 跳过全部闸门。"""
     now = time.time()
-    target = _resolve_target(cfg)
-    if not target:
-        return {"ok": False, "blocked_by": "未配置目标 QQ（插件 target_qq 与主配置 target_qqs 均为空）"}
+    targets = _resolve_targets(cfg)
+    target = str(target or "").strip()
+    if target and target not in targets:
+        targets = [target] + targets
+    if not targets:
+        return {"ok": False, "blocked_by": "未配置目标 QQ（插件 target_qqs/target_qq 与主配置 target_qqs 均为空）"}
+    target = target or targets[0]
     if force:
         return {"ok": True, "target": target, "blocked_by": ""}
 
-    last_pro = float(state.get("last_proactive_ts") or 0)
+    # ★ 2026-11-01：最小间隔改成**按人**算（`last_proactive_by`），这样
+    #   A 刚被搭话不影响 B；旧状态没有这个字典时退回全局 `last_proactive_ts`。
+    by = state.get("last_proactive_by") or {}
+    last_pro = float((by.get(target) if isinstance(by, dict) else 0) or 0)
+    if not last_pro:
+        last_pro = float(state.get("last_proactive_ts") or 0)
     if last_pro and now - last_pro < float(cfg.get("min_interval_min") or 180) * 60:
         left = int((float(cfg.get("min_interval_min") or 180) * 60 - (now - last_pro)) // 60)
-        return {"ok": False, "target": target, "blocked_by": f"距上次主动开口不足最小间隔（还需 {left} 分钟）"}
+        return {"ok": False, "target": target, "blocked_by": f"距上次和 TA 说话不足最小间隔（还需 {left} 分钟）"}
 
     last_user = float(state.get("last_user_ts") or 0)
     if last_user and now - last_user < float(cfg.get("active_cooldown_min") or 30) * 60:
@@ -486,38 +526,61 @@ def _ai_ready() -> bool:
         return True
 
 
-def _proactive_once(force: bool = False) -> dict:
-    """完整跑一轮：评估 → 生成 → 切气泡 → 发送 → 更新状态。"""
+def _proactive_once(force: bool = False, target: str = "") -> dict:
+    """完整跑一轮：挑人 → 评估 → 生成 → 切气泡 → 发送 → 更新状态。
+
+    2026-11-01：多目标。每轮**最多开口一次**；在通过闸门的人里挑
+    「最久没被搭话」的那个，避免同一个人连续被找、其他人永远排不上。
+    """
     global _ctx
     if not _ctx:
         return {"ok": False, "error": "插件未启用"}
     with _send_lock:
         cfg = _load_config()
         state = _ctx.get_state() or {}
-        decision = _evaluate(cfg, state, force=force)
-        if not decision.get("ok"):
-            return {"ok": False, "skipped": True, "reason": decision.get("blocked_by")}
-        target = decision["target"]
 
-        text = _ai_text(_build_messages(cfg, state, target), max_tokens=300)
+        if target:
+            candidates = [str(target)]
+            reasons = []
+        else:
+            candidates, reasons = [], []
+            for t in _resolve_targets(cfg):
+                d = _evaluate(cfg, state, force=force, target=t)
+                if d.get("ok"):
+                    candidates.append(t)
+                else:
+                    reasons.append(f"{t}: {d.get('blocked_by')}")
+        if not candidates:
+            return {"ok": False, "skipped": True,
+                    "reason": "；".join(reasons[:4]) or "没有可开口的目标"}
+
+        # 轮转公平：按上次和这个人说话的时间排，最久的优先
+        by = state.get("last_proactive_by") or {}
+        chosen = sorted(candidates, key=lambda t: float((by.get(t) if isinstance(by, dict) else 0) or 0))[0]
+
+        text = _ai_text(_build_messages(cfg, state, chosen), max_tokens=300)
         bubbles = _clean_bubbles(text, cfg.get("max_bubbles"))
         if not bubbles:
             return {"ok": False, "error": "AI 未产出可用消息"}
 
-        sent = _send_bubbles(target, bubbles)
+        sent = _send_bubbles(chosen, bubbles)
         if sent == 0:
             return {"ok": False, "error": "发送失败（OneBot 未连接？）"}
 
         joined = " / ".join(bubbles)
         hmap = dict(state.get("history_map") or {})
-        hist = list(hmap.get(target) or [])
+        hist = list(hmap.get(chosen) or [])
         hist.append({"ts": time.time(), "text": joined[:120]})
-        hmap[target] = hist[-10:]
+        hmap[chosen] = hist[-10:]
         _ctx.set_state("history_map", hmap)
-        _ctx.set_state("last_proactive_ts", time.time())
-        _update_pending_topic(bubbles, target)
-        _log(f"主动开口 → {target}: {joined[:60]}")
-        return {"ok": True, "target": target, "bubbles": bubbles}
+        now = time.time()
+        by = dict(by) if isinstance(by, dict) else {}
+        by[chosen] = now
+        _ctx.set_state("last_proactive_by", by)
+        _ctx.set_state("last_proactive_ts", now)
+        _update_pending_topic(bubbles, chosen)
+        _log(f"主动开口 → {chosen}: {joined[:60]}")
+        return {"ok": True, "target": chosen, "bubbles": bubbles}
 
 
 # ── 心跳线程 ──────────────────────────────────────────────
@@ -648,9 +711,15 @@ def set_config(params):
 def get_status(params=None):
     state = (_ctx.get_state() or {}) if _ctx else {}
     history = state.get("history") or []
+    try:
+        targets = _resolve_targets(_load_config())
+    except Exception:
+        targets = []
     return {
         "ok": True,
         "heartbeat_alive": bool(_thread and _thread.is_alive()),
+        "targets": targets,
+        "last_proactive_by": state.get("last_proactive_by") or {},
         "last_proactive_ts": state.get("last_proactive_ts") or 0,
         "last_user_ts": state.get("last_user_ts") or 0,
         "pending_topics": state.get("pending_topics") or {},
@@ -659,17 +728,18 @@ def get_status(params=None):
 
 
 def send_now(params=None):
-    """立即主动发一条（跳过所有闸门），后台线程执行。"""
+    """立即主动发一条（跳过所有闸门），后台线程执行。params.target 可指定谁。"""
     if not _ctx:
         return {"ok": False, "error": "插件未启用"}
+    _t = str((params or {}).get("target") or "").strip()
 
     def _run():
-        r = _proactive_once(force=True)
+        r = _proactive_once(force=True, target=_t)
         if not r.get("ok"):
             _log(f"手动触发失败: {r.get('error') or r.get('reason')}", "warn")
 
     threading.Thread(target=_run, daemon=True).start()
-    return {"ok": True, "msg": "已触发，稍后查看私聊"}
+    return {"ok": True, "msg": f"已触发（{_t or '自动挑人'}），稍后查看私聊"}
 
 
 def test_decision(params=None):
@@ -678,9 +748,19 @@ def test_decision(params=None):
         return {"ok": False, "error": "插件未启用"}
     cfg = _load_config()
     state = _ctx.get_state() or {}
-    d = _evaluate(cfg, state, force=False)
-    d["resolved_target"] = _resolve_target(cfg)
-    d["chance"] = cfg.get("speak_chance")
+    targets = _resolve_targets(cfg)
+    decisions = []
+    for t in targets or [""]:
+        d = _evaluate(cfg, state, force=False, target=t)
+        d["target"] = t or d.get("target") or ""
+        decisions.append(d)
+    # 兼容旧前端：第一层 key 用"第一个能开口的"，没有就用第一条失败原因
+    d = next((x for x in decisions if x.get("ok")), decisions[0] if decisions else {"ok": False, "blocked_by": "未配置目标 QQ"})
+    out = dict(d)
+    out["targets"] = targets
+    out["decisions"] = decisions
+    out["resolved_target"] = targets[0] if targets else ""
+    out["chance"] = cfg.get("speak_chance")
     # 作息状态一起回给前端：不暴露就没人知道乘子有没有生效，
     # 而它是"凌晨少说话"这件事的唯一证据。开关关掉时 hint 说明原因。
     try:
@@ -688,10 +768,10 @@ def test_decision(params=None):
         _b = bio_state()
         if not cfg.get("bio_rhythm", True):
             _b = dict(_b, hint="作息乘子已关闭（bio_rhythm=False），全天同一概率")
-        d["bio"] = _b
+        out["bio"] = _b
     except Exception as e:
-        d["bio"] = {"error": str(e)}
-    return d
+        out["bio"] = {"error": str(e)}
+    return out
 
 
 def get_api_status():
