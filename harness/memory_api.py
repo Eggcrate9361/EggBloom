@@ -107,14 +107,22 @@ def _identity_blocks(uid, group_id, private):
     return out
 
 
-def _retrieval(query, scene, group_id, private):
-    """检索：私聊走沙漏 light；群聊走 memory_context builder（只取沙漏源）。"""
+def _retrieval(query, scene, group_id, private, uid=""):
+    """检索：私聊走沙漏 light；群聊走 memory_context builder（只取沙漏源）。
+
+    ★ 2026-11-02 修（用户："私聊还是做对不同人的记忆隔离吧"）：
+      私聊分支原来**不传 scope** → `get_memory_prompt_block` 里"日期类问题"
+      那层照旧扫整份沙漏（沙漏只写群聊、且不分人）→ 私聊能读到群里别人的话。
+      现在私聊显式传 `("private", uid)`：沙漏里没有私聊数据 → 直接返回空，
+      宁缺勿串。
+    """
     if not query:
         return None
     if private:
         try:
             from sandglass_bridge import get_memory_prompt_block
-            blk = get_memory_prompt_block(query, light=True)
+            blk = get_memory_prompt_block(query, light=True,
+                                          scope=("private", str(uid or "")))
             if blk:
                 return ("检索", blk)
         except Exception:
@@ -180,7 +188,7 @@ def recall(uid, *, scene="group", group_id="", query="", private=False,
     cs = cross_scene_block(uid, gid, cfg=cfg)
     if cs:
         parts.append(("跨场景", cs))
-    rt = _retrieval(query, scene, gid, private)
+    rt = _retrieval(query, scene, gid, private, uid)
     if rt:
         parts.append(rt)
     pb = _people_block(gid)

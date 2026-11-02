@@ -639,7 +639,11 @@ DEFAULT_CONFIG = {
     # 运行时阈值（2026-10-31，用户原话「都是硬编码」）：
     # 配置中心 → 功能 → 阈值。全部即时生效，0 一般表示"关"。
     "meme_save_lookback_sec": 300,     # 说「存表情包」时往前找多久内的上一轮图片    "meme_collect_min_kb": 2,          # 表情库单张下限
-    "meme_collect_max_mb": 3,          # 表情库单张上限
+    "meme_collect_max_mb": 3,
+    # 2026-11-02：只收「像表情包」的图 —— 群里的手机照片/长截图别进库。
+    # require_pure_image：消息里除图之外超过 12 字，就当普通图片（不收）。
+    "meme_collect_require_pure_image": True,
+    "meme_collect_max_dim": 1600,          # 表情库单张上限
     "consistency_min_overlap": 0.3,    # 认账闸：证据句重合阈值
     "consistency_own_window_min": 30,  # 认账闸：「你上一条说的」块有效时长（分钟）
     "consistency_own_msgs": 4,         # 认账闸：查证时看我最近几条回复

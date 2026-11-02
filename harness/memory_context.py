@@ -199,7 +199,8 @@ def build_block(message, scope="group", scope_id="", ctx=None, sources=("sand", 
     _bydate = ""
     try:
         import sandglass_bridge as _sb
-        _bydate = _sb.recall_by_date(message) or ""
+        # ★ 2026-11-02：作用域必须透传 —— 否则私聊问日期会读到群聊里别人的话。
+        _bydate = _sb.recall_by_date(message, scope=(scope, scope_id)) or ""
     except Exception:
         _bydate = ""
     if _bydate:

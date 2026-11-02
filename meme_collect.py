@@ -47,6 +47,34 @@ MIN_BYTES = 2 * 1024
 MAX_BYTES = 3 * 1024 * 1024
 
 
+def _looks_like_meme(path: str, cfg=None) -> str:
+    """这张图像不像表情包；不像就返回原因（空串 = 像）。
+
+    ★ 2026-11-02 用户：「表情包会把普通图片放进去」。
+      群里随手拍的手机照片也被收进了表情库（3000×4000 那种）。
+      判据只看**尺寸形态**，不猜内容：
+        · 最长边 > `meme_collect_max_dim`（默认 1600）→ 像照片；
+        · 长宽比 > 3 或 < 1/3 → 像截图/长图；
+      PIL 不可用 / 读图失败 → 放行（不因为环境问题把采集关死）。
+    """
+    cfg = cfg if isinstance(cfg, dict) else _cfg()
+    try:
+        from PIL import Image
+        with Image.open(path) as im:
+            w, h = im.size
+    except Exception:
+        return ""
+    try:
+        max_dim = int(float(cfg.get("meme_collect_max_dim", 1600) or 0))
+    except (TypeError, ValueError):
+        max_dim = 1600
+    if max_dim > 0 and max(w, h) > max_dim:
+        return f"像普通照片（{w}×{h}，最长边超过 {max_dim}）"
+    if h and (w / float(h) > 3.0 or w / float(h) < (1.0 / 3.0)):
+        return f"像长截图（{w}×{h}）"
+    return ""
+
+
 def _limits(cfg=None) -> tuple:
     """单张大小的上下限（字节）。可配：`meme_collect_min_kb` / `meme_collect_max_mb`。"""
     cfg = cfg if isinstance(cfg, dict) else _cfg()
@@ -396,7 +424,7 @@ def visual_dup_of(path: str, idx: dict, max_dist: int = 4):
 
 
 def maybe_collect(path: str, *, tags=None, source: str = "auto",
-                  from_group: str = "") -> str:
+                  from_group: str = "", pure_image=None) -> str:
     """把一张图收进图库。返回相对路径；跳过返回空串。
 
     ★ 2026-11-02 真机：群里 41 张图只入库 28 张，剩下 13 张**一声不吭**就没了，
@@ -426,6 +454,12 @@ def maybe_collect(path: str, *, tags=None, source: str = "auto",
         return _skip(src, f"图太小（{sz}B，下限 {_lo // 1024}KB）")
     if sz > _hi:
         return _skip(src, f"图太大（{sz / 1024 / 1024:.1f}MB，上限 {_hi // 1024 // 1024}MB）")
+    # ★ 2026-11-02：只收"像表情包"的图 —— 群里随手发的照片/截图别进库。
+    if bool(cfg.get("meme_collect_require_pure_image", True)) and pure_image is False:
+        return _skip(src, "这条消息带文字，按普通图片处理（不收进表情库）")
+    _bad = _looks_like_meme(src, cfg)
+    if _bad:
+        return _skip(src, _bad)
     try:
         with open(src, "rb") as f:
             raw = f.read(_hi + 1)
@@ -509,12 +543,12 @@ def maybe_collect(path: str, *, tags=None, source: str = "auto",
     return rel
 
 
-def maybe_collect_async(path: str, *, source: str = "auto",
+def maybe_collect_async(path: str, *, source: str = "auto", pure_image=None,
                         from_group: str = "") -> None:
     """后台收（下载完立刻返回，不挡回复）。"""
     def _run():
         try:
-            maybe_collect(path, source=source, from_group=from_group)
+            maybe_collect(path, source=source, from_group=from_group, pure_image=pure_image)
         except Exception:
             pass
     try:

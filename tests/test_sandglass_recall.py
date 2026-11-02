@@ -102,7 +102,9 @@ class TestRecallHistoryBlock(unittest.TestCase):
         self.assertIn('scope="group"', seg, "群聊召回没走群作用域")
         self.assertIn("if not group_id:", seg, "召回未限定在群聊路径")
         # 私聊 light 模式保留（语义检索归 super_memory）
-        self.assertIn("get_memory_prompt_block(query, light=True)", src)
+        # ★ 2026-11-02：私聊检索必须带作用域（之前只断言了"传了 light"）
+        self.assertIn("get_memory_prompt_block(query, light=True", src)
+        self.assertIn('scope=("private", str(uid or ""))', src)
         # bot_core 只许通过 recall() 拿记忆，不许再自己 import 这些读口
         for bad in ("recall_history_block(", "build_people_block(",
                     "get_memory_prompt_block("):

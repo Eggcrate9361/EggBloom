@@ -68,7 +68,12 @@ def main():
     p.set(SB, "cross_scene_recent",
           lambda uid, **kw: ["昨晚在群里说想换工作"] if kw.get("exclude_group", "") == "" else [])
     p.set(SB, "build_people_block", lambda gid: f"【群里的人】群{gid}有3个人")
-    p.set(SB, "get_memory_prompt_block", lambda q, light=True: f"【私聊记忆】关于「{q}」")
+    # ★ 2026-11-02：私聊检索现在必须带 scope=("private", uid) —— stub 收下并记下来
+    _scope_seen = {}
+    def _fake_prompt_block(q, light=True, skip_search=False, scope=None, group_id=""):
+        _scope_seen["scope"] = scope
+        return f"【私聊记忆】关于「{q}」"
+    p.set(SB, "get_memory_prompt_block", _fake_prompt_block)
     written = {}
     p.set(SB, "log_user_message", lambda text, **kw: written.setdefault("user", (text, kw)))
     p.set(SB, "log_bot_reply", lambda text, **kw: written.setdefault("bot", (text, kw)))
@@ -83,6 +88,8 @@ def main():
         check("带称呼", "【称呼】" in out, out)
         check("带跨场景（私聊取群里说的）", "【另一边】" in out and "换工作" in out, out)
         check("带私聊检索", "【私聊记忆】" in out, out)
+        check("★ 私聊检索带作用域", _scope_seen.get("scope") == ("private", "10001"),
+              _scope_seen.get("scope"))
         check("私聊不带群画像", "【群里的人】" not in out, out)
 
         print("\n[B] 群聊：身份 / 跨场景 / 检索 / 群画像")

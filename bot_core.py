@@ -5097,8 +5097,19 @@ def extract_images(msg):
             import meme_collect as _mcollect
             _m = msg or {}
             _gid = str(_m.get("group_id") or _m.get("_group_id") or "")
+            # ★ 2026-11-02：「这条消息除了图还有没有文字」——纯图/图+短句才算表情包，
+            #   带大段文字的是"发照片讨论"，别收进表情库。
+            _txt_len = 0
+            try:
+                for _seg in (_m.get("message") or []):
+                    if isinstance(_seg, dict) and _seg.get("type") == "text":
+                        _txt_len += len(str((_seg.get("data") or {}).get("text") or "").strip())
+            except Exception:
+                _txt_len = 0
+            _pure = (_txt_len <= 12)
             for _p in images:
-                _mcollect.maybe_collect_async(_p, source="group", from_group=_gid)
+                _mcollect.maybe_collect_async(_p, source="group", from_group=_gid,
+                                              pure_image=_pure)
     except Exception:
         pass
     return images

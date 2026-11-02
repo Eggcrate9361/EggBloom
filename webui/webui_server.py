@@ -4148,21 +4148,43 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/memes/delete":
             try:
-                data = json.loads(self.rfile.read(int(self.headers.get('Content-Length', 0))))
-                # 只允许删除 meme 目录内的图片（basename + 扩展名校验），防止删除任意文件
-                raw_name = str(data.get('name', ''))
-                name = Path(raw_name).name.strip()
-                if not name or Path(name).suffix.lower() not in {'.jpg', '.jpeg', '.png', '.gif', '.webp'}:
+                # ★ 2026-11-02 修：此前 `Path(raw_name).name` 会把 `collected/xxx.jpg`
+                #   削成 `xxx.jpg`，于是在 memes/memes/ 根下找不到 → 静默"成功"但没删。
+                #   现在按安全的**相对路径**删，并同步清 index.json / blocked.json。
+                safe = _safe_meme_rel(data.get('name', ''))
+                meme_dir = (PROJECT / 'memes' / 'memes').resolve()
+                target = (meme_dir / safe).resolve() if safe else None
+                if (not safe or not _within(target, meme_dir)
+                        or Path(safe).suffix.lower() not in {'.jpg', '.jpeg', '.png', '.gif', '.webp'}):
                     self._send_json(200, {'success': False, 'error': '非法文件名或类型'})
                     return
-                meme_dir = PROJECT / 'memes' / 'memes'
-                target = meme_dir / name
+                deleted = False
                 if target.exists() and target.is_file():
                     target.unlink()
+                    deleted = True
                 tag_file = target.with_suffix('.json')
                 if tag_file.exists() and tag_file.is_file():
                     tag_file.unlink()
-                self._send_json(200, {'success': True})
+                # 同步索引与黑名单（不然列表/匹配里还留着 ghosts）
+                try:
+                    cbase = meme_dir / 'collected'
+                    ip = cbase / 'index.json'
+                    if ip.exists() and safe.startswith('collected/'):
+                        idx = json.loads(ip.read_text(encoding='utf-8')) or {}
+                        idx = {k: v for k, v in idx.items()
+                               if not (isinstance(v, dict)
+                                       and str(v.get('path') or '').replace('\\', '/') == safe)}
+                        ip.write_text(json.dumps(idx, ensure_ascii=False, indent=1), encoding='utf-8')
+                    bp = cbase / 'blocked.json'
+                    if bp.exists():
+                        blk = json.loads(bp.read_text(encoding='utf-8')) or {}
+                        blk = {k: v for k, v in blk.items()
+                               if not (isinstance(v, dict)
+                                       and str(v.get('rel') or '').replace('\\', '/') == safe)}
+                        bp.write_text(json.dumps(blk, ensure_ascii=False, indent=1), encoding='utf-8')
+                except Exception:
+                    pass
+                self._send_json(200, {'success': True, 'deleted': deleted, 'name': safe})
             except Exception as e:
                 self._send_json(200, {'success': False, 'error': str(e)})
             return
