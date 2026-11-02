@@ -15638,13 +15638,32 @@ def main():
                         _use = _treg.resolve(_tools, lazy=True) or None
                     except Exception:
                         _use = None
+            # ★ 2026-11-02：子 agent 的每一次调用**都要记账**。
+            #   此前 `token_stats.record()` 只在主链三处调用 —— agent / deep_task 的
+            #   调用完全不计，于是"看价格"时少算了整块（真机：85 秒的 deep_task
+            #   只多出 1 条记录）。这里统一记 lane="agent"。
+            def _bill(_res):
+                try:
+                    from token_stats import record as _ts_record
+                    _scene = "private"
+                    try:
+                        from harness import tool_deep as _tdp
+                        _scene = _tdp.current_scene()
+                    except Exception:
+                        pass
+                    _ts_record(_scene, (_res or {}).get("usage") or {}, {"agent": True},
+                               lane="agent", model=_last_model_name())
+                except Exception:
+                    pass
+                return _res
+
             # ★ 流式优先：思维链**边生成边推**给前端（on_reasoning 回调）。
             #   失败/无回调时退回同步调用，行为与以前一致（不会让 agent 挂掉）。
             if on_reasoning is not None:
                 try:
-                    return _agent_stream_chat(_messages, (_use if _use else []),
-                                              max_tokens=max_tokens,
-                                              on_reasoning=on_reasoning)
+                    return _bill(_agent_stream_chat(_messages, (_use if _use else []),
+                                                    max_tokens=max_tokens,
+                                                    on_reasoning=on_reasoning))
                 except Exception as _se:
                     log(f"[Agent] 流式失败，退回同步: {_se}")
             msg, usage = _call_chat_sync(
@@ -15653,12 +15672,12 @@ def main():
             )
             # reasoning_content 必须带出去：推理模型的思维链在这里，
             # 以前只返回前三个字段 → Agent 页看不到"思考过程"。
-            return {
+            return _bill({
                 "content": msg.get("content") or "",
                 "tool_calls": msg.get("tool_calls") or [],
                 "usage": usage or {},
                 "reasoning": msg.get("reasoning_content") or msg.get("reasoning") or "",
-            }
+            })
 
         # 工具实现 = 内置 TOOL_FUNCTIONS + skill 内部工具 + 已缓存的 MCP 工具
         _agent_fns = dict(TOOL_FUNCTIONS)

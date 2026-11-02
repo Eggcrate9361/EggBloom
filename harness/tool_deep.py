@@ -99,8 +99,13 @@ def set_context(*, is_group: bool = False, group_id: str = "",
 
 
 def depth() -> int:
-    """当前线程/进程内套了几层（测试用）。"""
+    """当前调度了几层（测试用）。"""
     return _DEPTH
+
+
+def current_scene() -> str:
+    """这一轮在什么场景（给计价/日志归因用：group / private）。"""
+    return "group" if _CTX.get("is_group") else "private"
 
 
 def _enter() -> bool:
