@@ -652,7 +652,12 @@ DEFAULT_CONFIG = {
     # 2026-11-02：只收「像表情包」的图 —— 群里的手机照片/长截图别进库。
     # require_pure_image：消息里除图之外超过 12 字，就当普通图片（不收）。
     "meme_collect_require_pure_image": True,
-    "meme_collect_max_dim": 1600,          # 表情库单张上限
+    "meme_collect_max_dim": 1600,
+    # 2026-11-02：新收的先进「审核区」，通过后才进发送池（用户："不直接用"）。
+    # 关掉 = 老行为（收了就能发）。
+    "meme_require_approval": True,
+    # 宽高比超过这个值按"游戏/横屏截图"处理，不收（方图/竖图才是表情包）。
+    "meme_collect_landscape_ratio": 1.35,          # 表情库单张上限
     "consistency_min_overlap": 0.3,    # 认账闸：证据句重合阈值
     "consistency_own_window_min": 30,  # 认账闸：「你上一条说的」块有效时长（分钟）
     "consistency_own_msgs": 4,         # 认账闸：查证时看我最近几条回复

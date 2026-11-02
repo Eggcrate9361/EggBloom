@@ -198,6 +198,19 @@ def _resolve_target(cfg: dict) -> str:
     return ts[0] if ts else ""
 
 
+def _last_ts_for(state: dict, target: str) -> float:
+    """这个人最后一次私聊说话的时间（没有就退回全局旧字段）。"""
+    m = state.get("last_user_ts_by") or {}
+    if isinstance(m, dict) and target:
+        try:
+            _v = m.get(str(target))
+            if _v:
+                return float(_v)
+        except Exception:
+            pass
+    return float(state.get("last_user_ts") or 0)
+
+
 def _silent_desc(last_user_ts: float) -> str:
     if not last_user_ts:
         return "你们有一阵子没说话了"
@@ -450,7 +463,7 @@ def _build_messages(cfg: dict, state: dict, target: str) -> list:
 
     user_prompt = (
         f"现在是 {now.strftime('%H:%M')}（{_period(now)}）。\n"
-        f"{_silent_desc(state.get('last_user_ts') or 0)}。\n"
+        f"{_silent_desc(_last_ts_for(state, target))}。\n"
         f"{mood_line}"
         f"{memory_line}"
         f"他最近说过的话（私聊和群里的都有，群里的话可以私聊接着聊）：\n{recent_lines}\n"
@@ -530,7 +543,9 @@ def _evaluate(cfg: dict, state: dict, force: bool = False, target: str = "") -> 
         left = int((float(cfg.get("min_interval_min") or 180) * 60 - (now - last_pro)) // 60)
         return {"ok": False, "target": target, "blocked_by": f"距上次和 TA 说话不足最小间隔（还需 {left} 分钟）"}
 
-    last_user = float(state.get("last_user_ts") or 0)
+    # ★ 2026-11-02：冷却按**这个人**算 —— 旧版看全局 last_user_ts，
+    #   B 刚说完话就把对 A 的主动开口也一起挡了（反过来也会误放行）。
+    last_user = _last_ts_for(state, target)
     if last_user and now - last_user < float(cfg.get("active_cooldown_min") or 30) * 60:
         left = int((float(cfg.get("active_cooldown_min") or 30) * 60 - (now - last_user)) // 60)
         return {"ok": False, "target": target, "blocked_by": f"用户刚说过话，冷却中（还需 {left} 分钟）"}
@@ -729,20 +744,29 @@ def on_message(ctx: PluginContext, event: dict):
 
         if etype == "private":
             via = "私聊"
-            ctx.set_state("last_user_ts", time.time())      # 冷却只认私聊
+            # ★ 2026-11-02：私聊必须按**发送者**分桶。
+            #   旧版用 `target`（配置里唯一的那个人）当 key，于是 B 发来的私聊
+            #   被记成「A 最近说过的话」，对 B 主动开口时引用了 A 的内容。
+            bucket = sender
+            # 冷却也按人算：谁刚说过话，就只冷却谁
+            ts_map = dict(ctx.get_state("last_user_ts_by") or {})
+            ts_map[sender] = time.time()
+            ctx.set_state("last_user_ts_by", ts_map)
+            ctx.set_state("last_user_ts", time.time())      # 兼容旧字段
         elif etype == "group":
             # 只记目标本人在群里的发言，其他群友的话不关主动私聊的事
             if not target or sender != target:
                 return None
+            bucket = target
             via = "群里"
         else:
             return None
 
         window = int(cfg.get("recent_window") or 6)
         recent = ctx.get_state("recent_msgs", {}) or {}
-        lst = list(recent.get(target or sender) or [])
+        lst = list(recent.get(bucket) or [])
         lst.append({"ts": time.time(), "text": text[:100], "via": via})
-        recent[target or sender] = lst[-window:]
+        recent[bucket] = lst[-window:]
         ctx.set_state("recent_msgs", recent)
     except Exception:
         pass

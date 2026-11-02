@@ -271,6 +271,8 @@
   "meme_collect_max_mb": 3,
   "meme_collect_require_pure_image": true,
   "meme_collect_max_dim": 1600,
+  "meme_require_approval": true,
+  "meme_collect_landscape_ratio": 1.35,
   "consistency_min_overlap": 0.3,
   "consistency_own_window_min": 30,
   "consistency_own_msgs": 4,

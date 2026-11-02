@@ -3288,6 +3288,7 @@ class Handler(BaseHTTPRequestHandler):
                         _m['collected'] = bool(_ent)
                         _m['collected_ts'] = float(_ent.get('ts') or 0)
                         _m['blocked'] = _rel in _blk_rel
+                        _m['status'] = str(_ent.get('status') or 'approved')
                 except Exception:
                     pass
                 self._send_json(200, {'memes': memes})
@@ -3360,6 +3361,19 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(200, {'days': days, 'count': len(items), 'memes': items})
             except Exception as e:
                 self._send_json(200, {'days': 7, 'count': 0, 'memes': [], 'error': str(e)})
+            return
+
+        if path == "/api/memes/pending":
+            # ★ 2026-11-02：审核区 —— 新收的图先摆在这儿，通过后才进发送池。
+            try:
+                sys.path.insert(0, str(PROJECT))
+                import meme_collect as _mc2
+                items = _mc2.list_by_status("pending")
+                for it in items:
+                    it["url"] = it.get("path") or ""
+                self._send_json(200, {"count": len(items), "memes": items})
+            except Exception as e:
+                self._send_json(200, {"count": 0, "memes": [], "error": str(e)})
             return
 
         # Serve meme images statically
@@ -4187,6 +4201,55 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(200, {'success': True, 'deleted': deleted, 'name': safe})
             except Exception as e:
                 self._send_json(200, {'success': False, 'error': str(e)})
+            return
+
+        if path == "/api/memes/review":
+            # 批量审核：{"names": [...], "action": "approve|reject|delete"}
+            try:
+                names = data.get("names") or data.get("name") or []
+                if isinstance(names, str):
+                    names = [names]
+                names = [str(n) for n in names if str(n or "").strip()]
+                action = str(data.get("action") or "").lower()
+                if not names or action not in ("approve", "reject", "delete"):
+                    self._send_json(200, {"success": False,
+                                          "error": "需要 names 与 action(approve/reject/delete)"})
+                    return
+                sys.path.insert(0, str(PROJECT))
+                import meme_collect as _mc2
+                done, errors = 0, []
+                meme_dir = (PROJECT / "memes" / "memes").resolve()
+                if action == "delete":
+                    for n in names:
+                        safe = _safe_meme_rel(n)
+                        tgt = (meme_dir / safe).resolve() if safe else None
+                        if not safe or not _within(tgt, meme_dir):
+                            errors.append(n)
+                            continue
+                        try:
+                            if tgt.exists() and tgt.is_file():
+                                tgt.unlink()
+                            side = tgt.with_suffix(".json")
+                            if side.exists() and side.is_file():
+                                side.unlink()
+                            _mc2.set_status(safe, _mc2.STATUS_REJECTED)   # 顺带拉黑，防再收
+                            done += 1
+                        except Exception:
+                            errors.append(n)
+                else:
+                    st = _mc2.STATUS_APPROVED if action == "approve" else _mc2.STATUS_REJECTED
+                    done = _mc2.set_status_many(names, st)
+                    if action == "reject":
+                        # 拒绝 = 不再是候选 + 进黑名单（不再被采集回来）
+                        for n in names:
+                            try:
+                                _mc2.block(n, reason="review-rejected")
+                            except Exception:
+                                pass
+                self._send_json(200, {"success": True, "done": done,
+                                      "errors": errors, "action": action})
+            except Exception as e:
+                self._send_json(200, {"success": False, "error": str(e)})
             return
 
         if path in ("/api/memes/block", "/api/memes/unblock"):

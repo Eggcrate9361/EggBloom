@@ -28,10 +28,43 @@ def _blocked_rels():
     return set()
 
 
+#: 审核状态索引（2026-11-02）：新收的图先 pending，审核通过才进发送池。
+_INDEX_FILE = os.path.join(MEME_DIR, "collected", "index.json")
+
+
+def _approved_rels():
+    """可以发的图（旧条目没有 status → 视为 approved）。读不到就返回 None（不过滤）。"""
+    try:
+        if not os.path.isfile(_INDEX_FILE):
+            return None
+        with open(_INDEX_FILE, "r", encoding="utf-8") as f:
+            d = json.load(f)
+        if not isinstance(d, dict) or not d:
+            return None
+        out = set()
+        for v in d.values():
+            if not isinstance(v, dict):
+                continue
+            if str(v.get("status") or "approved") == "approved":
+                out.add(str(v.get("path") or "").replace("\\", "/"))
+        return out
+    except Exception:
+        return None
+
+
 def _pick(filenames):
-    """从候选里挑一个，跳过被拉黑的；全被拉黑就返回 None。"""
-    cands = [f for f in (filenames or [])
-             if str(f).replace("\\", "/") not in _blocked_rels()]
+    """从候选里挑一个：跳过拉黑的、跳过没审核的；没有可用的返回 None。"""
+    blk = _blocked_rels()
+    ok = _approved_rels()
+    cands = []
+    for f in (filenames or []):
+        rel = str(f).replace("\\", "/")
+        if rel in blk:
+            continue
+        # 只认 collected/ 下的审核状态；老图库（vrchat/kagura…）不在索引里，照常可用
+        if ok is not None and rel.startswith("collected/") and rel not in ok:
+            continue
+        cands.append(f)
     return random.choice(cands) if cands else None
 
 

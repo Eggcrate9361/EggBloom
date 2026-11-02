@@ -72,6 +72,14 @@ def _looks_like_meme(path: str, cfg=None) -> str:
         return f"像普通照片（{w}×{h}，最长边超过 {max_dim}）"
     if h and (w / float(h) > 3.0 or w / float(h) < (1.0 / 3.0)):
         return f"像长截图（{w}×{h}）"
+    # 2026-11-02 用户：「游戏截图」也被收进来了 —— 横屏 16:9/21:9 的图基本是
+    # 截图/录屏，不是表情包（表情包多为方图或竖图）。
+    try:
+        _land = float(cfg.get("meme_collect_landscape_ratio", 1.35) or 0)
+    except (TypeError, ValueError):
+        _land = 1.35
+    if _land > 0 and h and (w / float(h)) > _land:
+        return f"像游戏/横屏截图（{w}×{h}，宽高比 {w / float(h):.2f}）"
     return ""
 
 
@@ -244,6 +252,124 @@ def _log_skip(src: str, reason: str) -> None:
         _LOG(f"[表情采集] 跳过 {os.path.basename(src)}：{reason}")
     except Exception:
         pass
+
+
+#: 审核状态（2026-11-02）：新收的默认 pending，审核通过才进发送池。
+STATUS_PENDING = "pending"
+STATUS_APPROVED = "approved"
+STATUS_REJECTED = "rejected"
+_MIGRATE_MARK = ".approval_migrated"
+
+
+def status_of(rel: str, idx: dict = None) -> str:
+    """一张图的审核状态；索引里没有的按 approved（旧图不改行为）。"""
+    rel = str(rel or "").replace("\\", "/")
+    idx = _index() if idx is None else idx
+    for v in idx.values():
+        if isinstance(v, dict) and str(v.get("path") or "").replace("\\", "/") == rel:
+            return str(v.get("status") or STATUS_APPROVED)
+    return STATUS_APPROVED
+
+
+def set_status(rel: str, status: str) -> bool:
+    """改一张图的审核状态（pending/approved/rejected）。"""
+    rel = str(rel or "").replace("\\", "/")
+    status = str(status or "").strip().lower()
+    if not rel or status not in (STATUS_PENDING, STATUS_APPROVED, STATUS_REJECTED):
+        return False
+    with _LOCK:
+        idx = _index()
+        hit = False
+        for v in idx.values():
+            if isinstance(v, dict) and str(v.get("path") or "").replace("\\", "/") == rel:
+                v["status"] = status
+                v["reviewed_at"] = time.time()
+                hit = True
+        if not hit:
+            return False
+        _save_index(idx)
+        return True
+
+
+def set_status_many(rels, status: str) -> int:
+    """批量改状态；返回改成功的条数（页面多选用）。"""
+    rels = {str(r or "").replace("\\", "/") for r in (rels or []) if str(r or "").strip()}
+    status = str(status or "").strip().lower()
+    if not rels or status not in (STATUS_PENDING, STATUS_APPROVED, STATUS_REJECTED):
+        return 0
+    with _LOCK:
+        idx = _index()
+        n = 0
+        for v in idx.values():
+            if not isinstance(v, dict):
+                continue
+            rel = str(v.get("path") or "").replace("\\", "/")
+            if rel in rels:
+                v["status"] = status
+                v["reviewed_at"] = time.time()
+                n += 1
+        if n:
+            _save_index(idx)
+        return n
+
+
+def list_by_status(status: str = "") -> list:
+    """列出某个状态的图（空 = 全部），按收藏时间倒序。"""
+    idx = _index()
+    st = str(status or "").strip().lower()
+    out = []
+    for v in idx.values():
+        if not isinstance(v, dict):
+            continue
+        cur = str(v.get("status") or STATUS_APPROVED)
+        if st and cur != st:
+            continue
+        if st == STATUS_REJECTED:
+            continue                      # 被拒的不回列表（已进黑名单/待删）
+        out.append({"path": str(v.get("path") or ""), "tags": v.get("tags") or [],
+                    "ts": float(v.get("ts") or 0), "status": cur,
+                    "src": str(v.get("src") or ""),
+                    "from_group": str(v.get("from_group") or "")})
+    out.sort(key=lambda x: -x["ts"])
+    return out
+
+
+def approved_rels() -> set:
+    """可以拿去发的图（旧图没有 status 字段 → 视为 approved）。"""
+    out = set()
+    for v in _index().values():
+        if not isinstance(v, dict):
+            continue
+        if str(v.get("status") or STATUS_APPROVED) == STATUS_APPROVED:
+            out.add(str(v.get("path") or "").replace("\\", "/"))
+    return out
+
+
+def migrate_status(default: str = STATUS_PENDING) -> int:
+    """一次性迁移：给没有 status 的旧条目补上（默认进审核区）。
+
+    只在 `collected/.approval_migrated` 不存在时跑一次；
+    用户明确要"新收的先审核"，所以旧图也一起进审核区 —— 想直接放行就把
+    配置 `meme_require_approval` 关掉。
+    """
+    mark = os.path.join(COLLECT_DIR, _MIGRATE_MARK)
+    if os.path.exists(mark):
+        return 0
+    with _LOCK:
+        idx = _index()
+        n = 0
+        for v in idx.values():
+            if isinstance(v, dict) and not v.get("status"):
+                v["status"] = str(default or STATUS_PENDING)
+                n += 1
+        if n:
+            _save_index(idx)
+        try:
+            os.makedirs(COLLECT_DIR, exist_ok=True)
+            open(mark, "w", encoding="utf-8").write(str(time.time()))
+        except Exception:
+            pass
+        return n
 
 
 def _blocklist() -> dict:
@@ -511,9 +637,11 @@ def maybe_collect(path: str, *, tags=None, source: str = "auto",
                     meme_desc.save_desc(MEME_DIR, rel, _desc[:300])
             except Exception:
                 pass
+        _need_review = bool(cfg.get("meme_require_approval", True))
         idx[sha] = {"path": rel, "tags": [str(t) for t in (tags or [])],
                     "ts": time.time(), "src": str(source or "")[:40],
                     "from_group": str(from_group or "")[:24],
+                    "status": STATUS_PENDING if _need_review else STATUS_APPROVED,
                     "phash": _ph if _ph is not None else _dhash(dst)}
         _save_index(idx)
 

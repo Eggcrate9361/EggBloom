@@ -8790,6 +8790,13 @@ async function pageMemes(el) {
     const rr = await API('/memes/recent?days=7');
     recent = (rr && rr.memes) || [];
   } catch (e) { recent = []; }
+  /* ★ 2026-11-02：审核区 —— 新收的图先摆这里，通过后才进发送池。
+     用户要的是"多选"：勾几张，一次通过/不喜欢/删除。 */
+  let pending = [];
+  try {
+    const rp = await API('/memes/pending');
+    pending = (rp && rp.memes) || [];
+  } catch (e) { pending = []; }
   const info = (m) => (typeof m === 'string' ? { name: m, tags: [] } : m);
   all = all.map(info);
 
@@ -8818,6 +8825,7 @@ async function pageMemes(el) {
     +     (emotions.length ? '<div><h4>情绪筛选</h4><div class="me-cloud" id="meEmoBox"></div></div>' : '')
     +   '</aside>'
     +   '<section>'
+    +     '<div id="meRevBox" style="margin-bottom:var(--s4)"></div>'
     +     (recent.length ? '<div style="margin-bottom:var(--s4)">'
     +       '<div style="display:flex;align-items:center;gap:var(--s2);margin-bottom:var(--s2)">'
     +         '<span class="lab" style="font-size:11px">最近 7 天新增</span>'
@@ -8873,6 +8881,55 @@ async function pageMemes(el) {
       draw();
     });
   }
+  /* 审核区：多选 + 批量操作 */
+  const drawReview = () => {
+    const box = $('meRevBox');
+    if (!box) return;
+    if (!pending.length) { box.innerHTML = ''; return; }
+    box.innerHTML = '<div style="display:flex;align-items:center;gap:var(--s2);margin-bottom:var(--s2)">'
+      + '<span class="lab" style="font-size:11px">审核区</span>'
+      + '<span class="dim" style="font-size:9px">新收的表情包先在这里，通过了才会被拿去发（' + pending.length + ' 张待审）</span>'
+      + '<span style="margin-left:auto;display:flex;gap:6px">'
+      + '<button class="btn sm" id="meRevAll">全选</button>'
+      + '<button class="btn sm" id="meRevApprove">通过所选</button>'
+      + '<button class="btn sm" id="meRevReject">不喜欢所选</button>'
+      + '<button class="btn sm" id="meRevDel">删除所选</button>'
+      + '</span></div>'
+      + '<div id="meRevRow" style="display:flex;gap:var(--s2);overflow-x:auto;padding-bottom:var(--s2)">'
+      + pending.map(function (m) {
+          const name = m.path || m.name || '';
+          const url = '/memes/' + name.split('/').map(encodeURIComponent).join('/');
+          return '<label class="me-card" style="min-width:132px;max-width:132px;cursor:pointer">'
+            + '<input type="checkbox" data-rev="' + esc(name) + '" style="position:absolute;margin:4px">'
+            + '<div class="pic"><img src="' + esc(url) + '" loading="lazy" draggable="false"></div>'
+            + '<div class="me-nm" style="font-size:9px">' + esc(name.split('/').pop()) + '</div>'
+            + '</label>';
+        }).join('')
+      + '</div>';
+
+    const sel = () => qsa('[data-rev]', $('meRevRow')).filter(x => x.checked).map(x => x.dataset.rev);
+    const act = async (action) => {
+      const names = sel();
+      if (!names.length) { say(false, '先勾几张'); return; }
+      if (action === 'delete' && !await pvConfirm('删除所选 ' + names.length + ' 张？', '文件会从表情库移除，不可恢复。', '删除')) return;
+      try {
+        const r = await API('/memes/review', { method: 'POST', body: JSON.stringify({ names: names, action: action }) });
+        if (r && (r.success === false || r.error)) { say(false, r.error || '操作失败'); return; }
+        say(true, (action === 'approve' ? '已通过 ' : action === 'reject' ? '已拒绝 ' : '已删除 ') + (r.done || names.length) + ' 张');
+        pageMemes(el);
+      } catch (e) { say(false, e.message); }
+    };
+    if ($('meRevAll')) $('meRevAll').onclick = function () {
+      const boxes = qsa('[data-rev]', $('meRevRow'));
+      const allOn = boxes.every(x => x.checked);
+      boxes.forEach(x => { x.checked = !allOn; });
+    };
+    if ($('meRevApprove')) $('meRevApprove').onclick = () => act('approve');
+    if ($('meRevReject')) $('meRevReject').onclick = () => act('reject');
+    if ($('meRevDel')) $('meRevDel').onclick = () => act('delete');
+  };
+  drawReview();
+
   /* 最近 7 天新增：小卡片横排 + 不喜欢 */
   const drawRecent = () => {
     const box = $('meNewRow');
