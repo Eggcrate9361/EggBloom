@@ -77,6 +77,8 @@
   "admin_commands_enable": true,
   "owner_qqs": [],
   "owner_titles": ["老大"],
+  "assume_owner_friend": true,
+  "assume_owner_friend_in_group": false,
   "capability_view_enable": true,
   "capability_show_disabled": true,
   "group_role_cache_sec": 600,

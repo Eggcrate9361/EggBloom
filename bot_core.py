@@ -8979,6 +8979,36 @@ def _owner_identity_line(sender) -> str:
             "但别把「主人」这套挂嘴上，除非他自己提起。")
 
 
+def _owner_friend_prior(sender, is_group: bool = False) -> str:
+    """不是主人时，给一句「这人一般是老大的朋友」的关系先验（2026-11-02）。
+
+    用户的原话：「关系不是我定义的，是 bot 判断的，按设计本来管理员就只有一个人，
+    准确说，一般加上的都是"老大的朋友"」。
+    所以这不是写死的档案，而是**默认先验**：先按"老大的朋友"对待，熟了再按互动改。
+
+    作用域：默认只在私聊给（群里的人是被拉进群的，不代表是老大朋友）；
+    想把群聊也开，把 `assume_owner_friend_in_group` 打开。
+    """
+    qq = str(sender or "").strip()
+    if not qq:
+        return ""
+    if qq in _owner_qq_set():
+        return ""                       # 主人本人：走身份说明，不给这个
+    if is_group and not bool(_config.get("assume_owner_friend_in_group", False)):
+        return ""
+    if not bool(_config.get("assume_owner_friend", True)):
+        return ""
+    try:
+        titles = [str(t).strip() for t in (_config.get("owner_titles") or []) if str(t).strip()]
+    except Exception:
+        titles = []
+    boss = (titles[0] if titles else "老大")
+    return (f"【关系先验】你不是在跟主人说话（对方 QQ {qq}）。按默认设计，"
+            f"能加到这台机器上的私人一般就是「{boss}的朋友」——先按这个对待："
+            "可以熟络、可以帮他做事，但别把他当成主人本人，也别反过来当陌生人防着。"
+            "如果聊下来发现关系不一样（同事、网友、纯路人），按实际改。")
+
+
 def _auto_accept_cfg() -> dict:
     cfg = _config.get("auto_accept")
     if isinstance(cfg, dict):
@@ -11964,6 +11994,8 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
     #   此前三份名单各管一段、prompt 里一个字都没说，Bot 把东家当普通群友，
     #   甚至回"你爹是谁我还没见着呢"。只对名单内的人生效，别人零 token。
     _add("identity", _owner_identity_line(_pl_sender))
+    # 关系先验（2026-11-02）：不是主人时，默认按「老大的朋友」对待，熟了自己改。
+    _add("relation_prior", _owner_friend_prior(_pl_sender, is_group))
     # 现场资料（群聊近况/当前局面/决策结论）走 system，而不是拼在用户消息里。
     # 放进用户消息时模型会把它当成"对方发来的简报"逐条回应，实测出现
     # 「我这边收到的原文长这样」「我账上…」这种后台汇报腔（2026-10-25）。

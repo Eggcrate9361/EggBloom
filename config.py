@@ -209,6 +209,10 @@ DEFAULT_CONFIG = {
     # 空 = 退回 admin_qqs（兼容老配置，别让升级后"突然不认主"）。
     "owner_qqs": [],
     "owner_titles": ["老大"],
+    # 关系先验（2026-11-02）：不是主人时，默认按「老大的朋友」对待（熟了由 Bot 自己改）。
+    # 群里默认不给（进群不等于老大朋友）；要把群聊也开就打开第二项。
+    "assume_owner_friend": True,
+    "assume_owner_friend_in_group": False,
     # 能力清单（1.5.9）：把「这轮给了什么工具」与「我会什么」分开。
     # 关掉即回到 1.5.8 的旧文案（只列本轮工具，名单外一律否认）。
     "capability_view_enable": True,
