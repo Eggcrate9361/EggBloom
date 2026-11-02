@@ -2078,7 +2078,7 @@ function renderTuningPanel(root){
     <div class="settings-panel-desc" style="font-size:12px;color:#8a8f9a;margin:0 0 10px;line-height:1.6">运行时阈值：都是代码里原本写死的数，改完保存即生效。0 通常表示「关掉」。</div>
     <div class="field"><div class="field-label">慢回填充（秒）</div>
       <input class="input" id="sSlowAckAfter" type="number" min="0" step="0.5">
-      <div class="field-desc">私聊生成超过这么多秒还没结果，先发一条「在/等下」接住；0 = 关。默认 12（原来硬编码 3，普通一轮 6 秒就出正文，3 秒的填充像多回了一次）</div></div>
+      <div class="field-desc">私聊生成超过这么多秒还没结果，先发一条「在/等下」接住；0 = 关（**默认关**）。带工具的一轮本来就常超 10 秒，开着会让每次问话先多出一条「在」，看着像被敷衍了一次；真想开就填 45 之类，只在真的卡很久时才冒一句</div></div>
     <div class="field"><div class="field-label">存图回看窗口（秒）</div>
       <input class="input" id="sMemeSaveLookback" type="number" min="0">
       <div class="field-desc">发完图隔一会儿才说「存表情包」时，往前找多久内的上一轮图片；0 = 只认本轮</div></div>

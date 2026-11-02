@@ -12765,14 +12765,14 @@ def call_deepseek(user_msg: str, images: Optional[List[str]] = None,
     _is_web_task = bool(re.search(r'https?://\S+', _q)) or bool(re.search(r'(问卷|填表|填表单|答题|做.*?(问卷|题)|填写|表单|网页.*?(任务|操作)|帮我.*?(打开|填))', _q))
     _slow_after = 0.0
     if on_slow is not None:
-        # 2026-10-31：默认 3 秒 → **12 秒**（可配 `private_slow_ack_after`，0 = 关）。
-        #   真机 23:03：普通一轮 6 秒就出结果，3 秒先发一条「在」再去正文 ——
-        #   用户看到的是"一次问话回复两次，其中一次只说了个在"。
-        #   填充的意思是"我很慢别以为我死了"，不是每轮都抢话说。
+        # 2026-10-31：3 秒 → 12 秒（「在」抢在正文前面，像被敷衍了一次）。
+        # 2026-11-02：12 秒**仍然吵** —— 带工具的一轮（网页任务 / deep_task）
+        #   本来就常超 12 秒，用户看到的还是"先一个在、再正文"。默认改 0（关）。
+        #   想开就调大（45 之类），只在真的卡很久时才冒一句。
         try:
-            _slow_after = float(_config.get("private_slow_ack_after", 12.0) or 0.0)
+            _slow_after = float(_config.get("private_slow_ack_after", 0.0) or 0.0)
         except (TypeError, ValueError):
-            _slow_after = 12.0
+            _slow_after = 0.0
     # ★ 2026-11-02：超时之后才回来的结果要**补发**（此前直接丢弃，钱照付）。
     #   只带一句前缀说明它是迟到的，别让它看起来像凭空插话。
     _late_to = str(group_id or "") if is_group else str(target_qq or sender or "")
