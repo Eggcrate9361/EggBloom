@@ -10762,6 +10762,39 @@ def _should_continue_tool_round(round_no: int, ok_flags, max_plain_rounds: int) 
         return False
 
 
+def _deep_task_hint(user_msg, tools_for_call, cfg=None) -> str:
+    """「通读/审查」类请求的系统提示（没有 deep_task 时返回空串）。
+
+    ★ 2026-11-02 真机：私聊「帮我看看 X 插件有没有问题」，
+      模型把 3 轮工具预算全花在 `ws_glob` 上（5 次列目录），
+      一次 `ws_read` 都没做，最后只能回「我还没读进去，你等我」。
+      `deep_task` 一轮就能把"读多个文件 + 判断"整件活包走 ——
+      所以这里明确让它**第一轮就用**，别先反复 glob。
+    """
+    names = set()
+    try:
+        names = {str(n) for n in (tools_for_call or [])}
+    except Exception:
+        pass
+    if "deep_task" not in names:
+        return ""
+    try:
+        if not re.search(
+                r'(审查|通读|通看|挑刺|挑毛病|有没有(问题|毛病|bug|错)'
+                r'|看看.*(代码|插件|实现)|review|检查.*(代码|实现))',
+                str(user_msg or ""), re.I):
+            return ""
+    except Exception:
+        return ""
+    try:
+        limit = int((cfg or _config).get("max_tool_rounds") or 3)
+    except Exception:
+        limit = 3
+    return ("【系统提示】这类「通读多个文件再判断」的活，**第一轮就直接调 deep_task**"
+            "（把要看的范围写进 task），不要把工具轮次花在反复 ws_glob 目录上；"
+            f"子 agent 读完后你再照常回话。工具轮次上限 {limit} 轮，用完就只能收尾了。")
+
+
 def _ctx_over_budget(messages, ratio: float = 0.8):
     """估算当前 messages 体量，判断是否已吃满上下文预算（总量闸）。
 
@@ -11923,6 +11956,13 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
         _web_hint = "【重要】本次请求涉及问卷/表单/网页任务。请调用 web_operate 工具实际打开并操作网页：open_url 拿快照 -> 按 ref 逐个 click/fill 作答（动作后自动回传新快照）；问卷/多步任务优先用 action=autonomous + goal 自主完成。禁止凭文字假装完成。"
     if _web_hint:
         messages.append({"role": "user", "content": "[系统提示] " + _web_hint})
+
+    # ── 多步任务引导（2026-11-02 真机）──────────────────────────────
+    # 判据抽在 _deep_task_hint（可单测）：通读/审查类请求 + 本轮真有 deep_task 工具时，
+    # 明确让模型第一轮就派活，别把轮次耗在 glob 目录上。
+    _deep_hint = _deep_task_hint(user_msg, tools_for_call)
+    if _deep_hint:
+        messages.append({"role": "user", "content": _deep_hint})
 
     allow_tools = True
     
