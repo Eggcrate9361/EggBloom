@@ -43,6 +43,15 @@ API_PROVIDERS = {
         "models": ["gpt-4o", "gpt-4o-mini", "gpt-3.5-turbo"],
         "note": "国际，需网络可达",
     },
+    "opencode_go": {
+        "name": "OpenCode Go",
+        "url": "https://opencode.ai/inference/go/openai/v1/chat/completions",
+        "models": ["deepseek-v4.1-flash", "deepseek-v4-pro", "glm-5.3-flash", "glm-5.3",
+                   "glm-5.2", "kimi-k3", "kimi-k3.1-pro", "kimi-k2.7-code",
+                   "minimax-m3.1-flash", "mimo-v2.6-flash", "mimo-v2.5",
+                   "longcat-2.0", "step-5-preview", "hy3"],
+        "note": "Go 订阅（$10/月起，含月度额度）；OpenAI 兼容端点，Key 用 Console 的 API key",
+    },
     "ollama": {
         "name": "Ollama (本地)",
         "url": "http://127.0.0.1:11434",

@@ -1,3 +1,8 @@
+import uuid as _uuid_oc
+
+#: OpenCode Go 的会话标识（进程内稳定；重启换新）
+_OC_SESSION = "eggbloom-" + _uuid_oc.uuid4().hex[:16]
+
 # -*- coding: utf-8 -*-
 """providers.py - AI Provider 接口抽象
 
@@ -60,6 +65,10 @@ class Provider:
         # 可选：调用方额外要带进请求体的字段（例如 {"thinking": {"type": "disabled"}}
         # 用来关掉推理型模型的思考过程）。默认 None = 完全不影响原有行为。
         self.extra_body = extra_body
+
+    def extra_headers(self):
+        """供应商特有的请求头（默认没有）。"""
+        return {}
 
     def _apply_extra(self, payload):
         """把 extra_body 合并进请求体。默认无操作。"""
@@ -131,6 +140,10 @@ class OpenAIProvider(Provider):
             "Content-Type": "application/json",
             "Authorization": f"Bearer {self.api_key}",
         }
+        try:
+            headers.update(self.extra_headers() or {})
+        except Exception:
+            pass
 
         def _attempt():
             req = urllib.request.Request(self.api_url, data=body, headers=headers)
@@ -190,6 +203,26 @@ class OpenAIProvider(Provider):
             log(f"stream failed: {e}, fallback")
             return self.chat(messages, max_tokens=max_tokens)[0]
         return full
+
+
+class OpenCodeGoProvider(OpenAIProvider):
+    """OpenCode Go 订阅网关（OpenAI 兼容 /chat/completions）。
+
+    官方要求（`/v2/docs/console/go`「Where can I use it?」）：
+      · 用客户端自己的 User-Agent，别用通用 SDK 名；
+      · 每个会话带稳定的 `x-opencode-session`（用于路由与 prompt 缓存）。
+
+    我们没有"会话"这个概念透传到 provider 层，就发一个**进程内稳定**的
+    session id：同一次运行里所有请求归一个会话，重启换新。
+    """
+
+    name = "opencode_go"
+
+    def extra_headers(self):
+        return {
+            "User-Agent": "EggBloom/1.6 (QQ bot; https://github.com/Eggcrate9361/EggBloom)",
+            "x-opencode-session": _OC_SESSION,
+        }
 
 
 class OllamaProvider(Provider):
@@ -641,6 +674,9 @@ _PROVIDER_REGISTRY = {
     "hunyuan": OpenAIProvider,
     "siliconflow": OpenAIProvider,
     "openrouter": OpenAIProvider,
+    # 2026-11-02：OpenCode Go 订阅网关（OpenAI 兼容 + 自己的 UA/会话头）
+    "opencode_go": OpenCodeGoProvider,
+    "opencode": OpenCodeGoProvider,
     # 非 OpenAI 兼容协议：专属适配器
     "anthropic": AnthropicProvider,
     "claude": AnthropicProvider,
