@@ -10476,9 +10476,61 @@ def _submit_ai_task(params: Dict) -> int:
     return task_id
 
 
+def _spawn_late_delivery(task_id: int, deliver, *, max_wait: float = 300.0) -> None:
+    """等待方已经放弃，但任务还在跑 —— 跑完了把结果**补发**出去（2026-11-02）。
+
+    为什么（真机 11-02 09:34）：
+        09:34:35 工具调用 deep_task
+        09:36:00 等待超时（93s，最后一次进展在 88s 前）→ 本批放弃
+        09:36:01 deep_task 返回了「审查完了…」→ **没人发送**
+        09:36:06 主链又生成了一条回复（16119 tokens ¥0.011）→ 同样没人发送
+    用户看到的是超时提示，钱付了、活干完了，答案被扔了。
+
+    现在的语义：等待方超时后挂一个"迟到投递"，任务真的完成且**拿到非空文字**时
+    补发一条（带前缀说明它是迟到的），最多等 max_wait 秒。
+    只发一次：entry 上打 `late_delivered` 标记 + 弹掉 entry。
+    """
+    def _watch(tid=task_id, cb=deliver):
+        deadline = time.time() + max(10.0, float(max_wait or 300.0))
+        try:
+            while time.time() < deadline:
+                with _ai_results_lock:
+                    entry = _ai_results.get(tid)
+                if entry is None:
+                    return                      # 已被清理（或已被正常取走）
+                ev = entry.get("event")
+                if ev is None:
+                    return
+                if ev.wait(timeout=2.0):
+                    with _ai_results_lock:
+                        ent = _ai_results.pop(tid, None)
+                    if not ent or ent.get("late_delivered"):
+                        return
+                    ent["late_delivered"] = True
+                    txt = str(ent.get("result") or "").strip()
+                    if not txt or ent.get("error"):
+                        log(f"[迟到投递] 任务 {tid} 完成但没有可用文字，丢弃")
+                        return
+                    try:
+                        log(f"[迟到投递] 任务 {tid} 超时后完成（{len(txt)} 字），补发")
+                        cb(txt)
+                    except Exception as e:
+                        log(f"[迟到投递] 补发失败: {e}")
+                    return
+        except Exception as e:
+            log(f"[迟到投递] 监视异常（不影响主流程）: {e}")
+
+    try:
+        threading.Thread(target=_watch, daemon=True,
+                         name=f"late-deliver-{task_id}").start()
+    except Exception as e:
+        log(f"[迟到投递] 启动失败: {e}")
+
+
 def _wait_ai_result(task_id: int, timeout: float = 60.0,
                     idle_timeout: float = None, max_total: float = None,
-                    *, on_slow=None, slow_after: float = 0.0) -> Optional[str]:
+                    *, on_slow=None, slow_after: float = 0.0,
+                    on_late=None) -> Optional[str]:
     """等待指定 AI 任务的结果，超时返回 None。超时不移除 entry，后台任务完成后仍可被后续轮询/读取。
 
     ★ 2026-10-27 改判据：从「总共等 timeout 秒」改成「多久没进展」。
@@ -10550,6 +10602,9 @@ def _wait_ai_result(task_id: int, timeout: float = 60.0,
         _gap = _elapsed
     log(f"AI 任务 {task_id} 等待超时（已等 {_elapsed:.0f}s，最后一次进展在 {_gap:.0f}s 前；"
         f"后台任务仍将继续执行，但本批已放弃）")
+    # ★ 2026-11-02：放弃了不等于白干 —— 后台跑完就补发（只发一次）
+    if on_late is not None:
+        _spawn_late_delivery(task_id, on_late)
     return None
 
 
@@ -12718,14 +12773,34 @@ def call_deepseek(user_msg: str, images: Optional[List[str]] = None,
             _slow_after = float(_config.get("private_slow_ack_after", 12.0) or 0.0)
         except (TypeError, ValueError):
             _slow_after = 12.0
+    # ★ 2026-11-02：超时之后才回来的结果要**补发**（此前直接丢弃，钱照付）。
+    #   只带一句前缀说明它是迟到的，别让它看起来像凭空插话。
+    _late_to = str(group_id or "") if is_group else str(target_qq or sender or "")
+    _late_is_group = bool(is_group)
+
+    def _late_deliver(_txt: str, _to=_late_to, _grp=_late_is_group) -> None:
+        body = "（刚才那事跑完了）" + str(_txt or "").strip()
+        try:
+            if _grp and _to:
+                send_group_message(_to, body)
+            elif _to:
+                send_message(body, _to)
+            else:
+                return
+            log(f"[迟到投递] 已补发给 {'群' if _grp else '私聊'} {_to}")
+        except Exception as _e:
+            log(f"[迟到投递] 发送失败: {_e}")
+
     if _is_web_task:
         return _wait_ai_result(task_id, timeout=600.0, idle_timeout=180.0, max_total=600.0,
-                               on_slow=on_slow, slow_after=_slow_after)
+                               on_slow=on_slow, slow_after=_slow_after,
+                               on_late=_late_deliver)
     # ★ 2026-11-02：私聊 hard 上限 150 → 240 秒。deep_task 这类"派给子 agent 干真活"
     #   的一轮实测 85 秒起步（读 1000 行 + 跑测试），150 秒的硬顶会把正常的活砍掉。
     #   idle 判据没放松：只要中途有进展就续期，真卡死照样 45 秒放弃。
     return _wait_ai_result(task_id, timeout=30.0, idle_timeout=45.0, max_total=240.0,
-                           on_slow=on_slow, slow_after=_slow_after)
+                           on_slow=on_slow, slow_after=_slow_after,
+                           on_late=_late_deliver)
 
 
 def save_instruction(text, reply):
