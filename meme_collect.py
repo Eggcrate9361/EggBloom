@@ -38,6 +38,9 @@ MEME_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "memes", "me
 COLLECT_DIR = os.path.join(MEME_DIR, "collected")
 INDEX_FILE = os.path.join(COLLECT_DIR, "index.json")
 TAGS_FILE = os.path.join(MEME_DIR, "tags.json")
+#: 「不喜欢」黑名单（2026-11-02）：{sha1: {rel, phash, ts, reason}}
+#: 进了这里：不再被采集回来、不会被 match_meme 挑中；文件保留（可恢复）。
+BLOCK_FILE = os.path.join(COLLECT_DIR, "blocked.json")
 
 ALLOWED_EXT = {".gif", ".jpg", ".jpeg", ".png", ".webp"}
 MIN_BYTES = 2 * 1024
@@ -215,6 +218,97 @@ def _log_skip(src: str, reason: str) -> None:
         pass
 
 
+def _blocklist() -> dict:
+    """读「不喜欢」名单。坏文件当空（这条链不许抛）。"""
+    try:
+        if os.path.isfile(BLOCK_FILE):
+            with open(BLOCK_FILE, "r", encoding="utf-8") as f:
+                d = json.load(f)
+            return d if isinstance(d, dict) else {}
+    except Exception:
+        pass
+    return {}
+
+
+def _save_blocklist(d: dict) -> bool:
+    try:
+        os.makedirs(COLLECT_DIR, exist_ok=True)
+        tmp = BLOCK_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(d, f, ensure_ascii=False, indent=1)
+        os.replace(tmp, BLOCK_FILE)
+        return True
+    except Exception as e:
+        _LOG(f"[表情采集] 黑名单写入失败: {e}")
+        return False
+
+
+def block(rel: str, reason: str = "user-blocked") -> bool:
+    """把一张表情包加进「不喜欢」名单（按 rel 路径找 sha；找不到就按路径存）。"""
+    rel = str(rel or "").strip().replace("\\", "/")
+    if not rel:
+        return False
+    idx = _index()
+    sha = ""
+    phash = None
+    for k, v in idx.items():
+        if isinstance(v, dict) and str(v.get("path") or "").replace("\\", "/") == rel:
+            sha, phash = k, v.get("phash")
+            break
+    key = sha or ("rel:" + rel)
+    with _LOCK:
+        d = _blocklist()
+        d[key] = {"rel": rel, "phash": phash, "ts": time.time(), "reason": str(reason)[:60]}
+        return _save_blocklist(d)
+
+
+def unblock(rel: str) -> bool:
+    rel = str(rel or "").strip().replace("\\", "/")
+    if not rel:
+        return False
+    with _LOCK:
+        d = _blocklist()
+        gone = [k for k, v in d.items()
+                if isinstance(v, dict) and str(v.get("rel") or "") == rel]
+        if not gone and rel not in d:
+            return True
+        for k in gone:
+            d.pop(k, None)
+        d.pop(rel, None)
+        return _save_blocklist(d)
+
+
+def blocked_rels() -> set:
+    """被拉黑的 rel 路径集合（match_meme 用来跳过）。"""
+    out = set()
+    for v in _blocklist().values():
+        if isinstance(v, dict) and v.get("rel"):
+            out.add(str(v["rel"]).replace("\\", "/"))
+    return out
+
+
+def is_blocked(rel: str = "", sha: str = "", phash=None, max_dist: int = 4) -> bool:
+    """这张图是否在「不喜欢」名单里（rel / sha1 / 感知哈希三选一命中即算）。"""
+    d = _blocklist()
+    if not d:
+        return False
+    rel = str(rel or "").strip().replace("\\", "/")
+    if sha and sha in d:
+        return True
+    for k, v in d.items():
+        if not isinstance(v, dict):
+            continue
+        if rel and str(v.get("rel") or "").replace("\\", "/") == rel:
+            return True
+        try:
+            if (phash is not None and v.get("phash") is not None
+                    and _hamming(int(phash), int(v["phash"])) <= int(max_dist)):
+                return True
+        except Exception:
+            pass
+    return False
+
+
 def skip_reason(path: str, *, cfg=None) -> str:
     """这张图为什么收不进去（空串 = 可以收）。
 
@@ -351,6 +445,13 @@ def maybe_collect(path: str, *, tags=None, source: str = "auto",
             _ds, _dv = visual_dup_of(src, idx, max_dist=_maxd)
             if _ds:
                 return _skip(src, f"与已收的 {str(_dv.get('path'))} 视觉重复")
+        # ★ 2026-11-02：用户「不喜欢」的图不许再收回来（sha 或感知哈希命中都算）。
+        try:
+            _blk_ph = _dhash(src)
+        except Exception:
+            _blk_ph = None
+        if is_blocked(sha=sha, phash=_blk_ph):
+            return _skip(src, "这张在你标记过「不喜欢」的名单里")
         cap = int(cfg.get("meme_collect_daily_cap", DEFAULT_DAILY_CAP) or 0)
         if cap > 0 and _today_count(idx) >= cap:
             return _skip(src, f"今天的采集额度满了（{cap} 张）")

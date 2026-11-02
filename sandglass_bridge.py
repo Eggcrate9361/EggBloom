@@ -770,13 +770,29 @@ def _resolve_date_targets(message):
     return out[:3]      # 最多查 3 天，再多会把 prompt 撑爆
 
 
-def recall_by_date(message, limit=12):
+def recall_by_date(message, limit=12, scope=None, scope_id=""):
     """问句里出现日期 → 把那天的记录捞出来；那天没记录就**明确说没有**（防编造）。
 
-    limit：每天最多摘多少条；每条截 80 字，避免把 prompt 撑爆。"""
+    limit：每天最多摘多少条；每条截 80 字，避免把 prompt 撑爆。
+
+    ★ 2026-11-02 真机（用户："私聊 315，记忆混乱，把我的事记到 Texas 头上"）：
+      沙漏是**所有会话共用一份**（`[群:gid]` 前缀；私聊内容从来不写进来）。
+      此前这里不加作用域 → 私聊问"昨天我干了什么"会把**群聊里别人**的发言
+      摘出来，还标成"对方:"，模型自然当成"这个人昨天说的"。
+      现在：
+        · scope=("private", uid) → 沙漏里没有私聊记录，**返回空**（宁缺勿串）；
+        · scope=("group", gid)   → 只取本群前缀的行；无标记的老行不取（来源不明）；
+        · scope=None             → 保持旧行为（旧调用方/测试不受影响）。
+    """
     dates = _resolve_date_targets(message)
     if not dates:
         return ""
+    _kind, _key = ("", "")
+    if isinstance(scope, (tuple, list)) and len(scope) >= 2:
+        _kind, _key = str(scope[0] or ""), str(scope_id or scope[1] or "")
+    if _kind == "private":
+        return ""                       # 沙漏里没有私聊数据，别拿别人的话顶包
+    _marker = ("[群:%s]" % _key) if (_kind == "group" and _key) else ""
     path = _vault_file()
     if not path:
         return ""
@@ -785,11 +801,16 @@ def recall_by_date(message, limit=12):
         with open(path, "r", encoding="utf-8", errors="ignore") as f:
             for ln in f:
                 d10 = ln[:10]
-                if d10 in dates:
-                    parts = ln.rstrip("\r\n").split(" | ", 2)
-                    if len(parts) == 3:
-                        who = "我" if parts[1].strip() == "agent" else "对方"
-                        hits[d10].append(parts[0][11:16] + " " + who + ": " + parts[2][:80])
+                if d10 not in dates:
+                    continue
+                if _marker and _marker not in ln:
+                    continue                # 群作用域：只认本群
+                if _kind == "group" and "[群:" not in ln:
+                    continue                # 无标记老行来源不明，不注
+                parts = ln.rstrip("\r\n").split(" | ", 2)
+                if len(parts) == 3:
+                    who = "我" if parts[1].strip() == "agent" else "对方"
+                    hits[d10].append(parts[0][11:16] + " " + who + ": " + parts[2][:80])
     except Exception as e:
         _log(f"[Sandglass] 按日期召回失败（已忽略）: {e}")
         return ""
@@ -978,9 +999,14 @@ def get_memory_prompt_block(message="", light=False, skip_search=False,
     parts = []
 
     # 第一层：人物画像（传 group_id → 只列本群成员 + 标注重名）
-    people = _build_people_context(group_id)
-    if people:
-        parts.append(f"【群内人物】\n{people}")
+    #  ★ 2026-11-02：私聊不列「群内人物」。此前私聊调用不传 group_id →
+    #    把所有群的人都列进来，等于把别人的名字/关系灌进私聊上下文。
+    _is_private = (isinstance(scope, (tuple, list)) and len(scope) >= 2
+                   and str(scope[0] or "") == "private")
+    if not _is_private:
+        people = _build_people_context(group_id)
+        if people:
+            parts.append(f"【群内人物】\n{people}")
 
     # 第二层：相关记忆搜索（light 模式跳过，省 token；builder 接线后 skip_search 也跳）
     if message and not light and not skip_search:
@@ -992,7 +1018,7 @@ def get_memory_prompt_block(message="", light=False, skip_search=False,
     #   关键词检索对日期是瞎的（搜"8月17"能给"我才17岁"），必须按时间戳取。
     if message:
         try:
-            bydate = recall_by_date(message)
+            bydate = recall_by_date(message, scope=scope, scope_id=group_id)
             if bydate:
                 parts.append(bydate)
         except Exception:

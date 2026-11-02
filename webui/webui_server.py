@@ -3263,6 +3263,33 @@ class Handler(BaseHTTPRequestHandler):
                         if not tags:
                             tags = tag_db.get(rel, [])
                         memes.append({'name': rel, 'url': rel, 'tags': tags})
+                # ★ 2026-11-02：带上「什么时候收的」「是不是被拉黑」——
+                #   表情包页要按 7 天新增分组，管理员还得能一键"不喜欢"。
+                try:
+                    _cbase = PROJECT / 'memes' / 'memes' / 'collected'
+                    _idx = {}
+                    _ip = _cbase / 'index.json'
+                    if _ip.exists():
+                        _idx = json.loads(_ip.read_text(encoding='utf-8')) or {}
+                    _blk = {}
+                    _bp = _cbase / 'blocked.json'
+                    if _bp.exists():
+                        _blk = json.loads(_bp.read_text(encoding='utf-8')) or {}
+                    _by_rel = {}
+                    for _sha, _v in (_idx.items() if isinstance(_idx, dict) else []):
+                        if isinstance(_v, dict) and _v.get('path'):
+                            _by_rel[str(_v['path']).replace('\\', '/')] = _v
+                    _blk_rel = {str(v.get('rel') or '').replace('\\', '/')
+                                for v in (_blk.values() if isinstance(_blk, dict) else [])
+                                if isinstance(v, dict)}
+                    for _m in memes:
+                        _rel = str(_m.get('name') or '')
+                        _ent = _by_rel.get(_rel) or {}
+                        _m['collected'] = bool(_ent)
+                        _m['collected_ts'] = float(_ent.get('ts') or 0)
+                        _m['blocked'] = _rel in _blk_rel
+                except Exception:
+                    pass
                 self._send_json(200, {'memes': memes})
             except Exception as e:
                 self._send_json(200, {'error': str(e), 'memes': []})
@@ -4101,6 +4128,64 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(200, {'success': True})
             except Exception as e:
                 self._send_json(200, {'success': False, 'error': str(e)})
+            return
+
+        if path in ("/api/memes/block", "/api/memes/unblock"):
+            # ★ 2026-11-02：表情包页的「不喜欢 / 恢复」。拉黑只写名单（不动文件）：
+            #   不再采集回来、match_meme 也挑不到；想恢复随时能撤。
+            try:
+                data = json.loads(self.rfile.read(int(self.headers.get('Content-Length', 0))))
+                raw = str(data.get('name', '') or '')
+                safe = _safe_meme_rel(raw)
+                if not safe:
+                    self._send_json(200, {'success': False, 'error': '非法的表情包名'})
+                    return
+                sys.path.insert(0, str(PROJECT))
+                import meme_collect as _mc
+                if path.endswith('unblock'):
+                    ok = _mc.unblock(safe)
+                else:
+                    ok = _mc.block(safe, reason=str(data.get('reason') or 'user-blocked'))
+                self._send_json(200, {'success': bool(ok), 'name': safe})
+            except Exception as e:
+                self._send_json(200, {'success': False, 'error': str(e)})
+            return
+
+        if path == "/api/memes/recent":
+            try:
+                days = 7
+                try:
+                    q = parse_qs(urlparse(self.path).query)
+                    days = int((q.get('days') or ['7'])[0])
+                except Exception:
+                    days = 7
+                cutoff = time.time() - max(0, days) * 86400
+                cbase = PROJECT / 'memes' / 'memes' / 'collected'
+                idx = {}
+                ip = cbase / 'index.json'
+                if ip.exists():
+                    idx = json.loads(ip.read_text(encoding='utf-8')) or {}
+                blk = {}
+                bp = cbase / 'blocked.json'
+                if bp.exists():
+                    blk = json.loads(bp.read_text(encoding='utf-8')) or {}
+                blk_rel = {str(v.get('rel') or '').replace('\\', '/')
+                           for v in (blk.values() if isinstance(blk, dict) else [])
+                           if isinstance(v, dict)}
+                items = []
+                for sha, v in (idx.items() if isinstance(idx, dict) else []):
+                    if not isinstance(v, dict):
+                        continue
+                    ts = float(v.get('ts') or 0)
+                    if ts < cutoff:
+                        continue
+                    rel = str(v.get('path') or '').replace('\\', '/')
+                    items.append({'name': rel, 'url': rel, 'tags': v.get('tags') or [],
+                                  'ts': ts, 'blocked': rel in blk_rel})
+                items.sort(key=lambda x: -x['ts'])
+                self._send_json(200, {'days': days, 'count': len(items), 'memes': items})
+            except Exception as e:
+                self._send_json(200, {'days': 7, 'count': 0, 'memes': [], 'error': str(e)})
             return
 
         if path == "/api/memes/tags":

@@ -17086,12 +17086,17 @@ def main():
                         from harness import memory_context as _mc
                         _mblk = _mc.build_block(text or "", scope="private",
                                                 scope_id=str(sender), sources=("sand", "sm"))
-                        _old = (_mpb(text or "", light=False, skip_search=True) or "").strip()
+                        # ★ 2026-11-02：旧层也带作用域 —— 否则它的「按日期召回」会扫整份
+                        #   沙漏（只有群聊记录），把别人的发言当成"对方昨天说的"注进私聊。
+                        _old = (_mpb(text or "", light=False, skip_search=True,
+                                     scope=("private", str(sender))) or "").strip()
                         pm_ctx = ((_mblk + "\n\n" + _old) if _mblk else _old)[:1200]
                     except Exception:
                         try:
                             from sandglass_bridge import get_memory_prompt_block as _mpb
-                            pm_ctx = (_mpb(text or "", light=False) or "").strip()[:1200]
+                            pm_ctx = (_mpb(text or "", light=False,
+                                        scope=("private", str(sender)))
+                              or "").strip()[:1200]
                         except Exception as _e:
                             pm_ctx = ""
                             log(f"[私聊画像] 组装失败（已降级为空）: {_e}")

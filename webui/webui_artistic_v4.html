@@ -8783,6 +8783,13 @@ async function pageMemes(el) {
     const r = await API('/memes');
     all = (r && (r.memes || r.items)) || [];
   } catch (e) { el.innerHTML = '<div class="errbox">读取 /api/memes 失败：' + esc(e.message) + '</div>'; return; }
+  /* ★ 2026-11-02：最近 7 天新增单独拉一份 —— 管理员要能一眼看到"这几天捡回来什么"，
+     并且当场决定「不喜欢」（进黑名单：不再采回来、也不会被挑中去发）。 */
+  let recent = [];
+  try {
+    const rr = await API('/memes/recent?days=7');
+    recent = (rr && rr.memes) || [];
+  } catch (e) { recent = []; }
   const info = (m) => (typeof m === 'string' ? { name: m, tags: [] } : m);
   all = all.map(info);
 
@@ -8811,6 +8818,14 @@ async function pageMemes(el) {
     +     (emotions.length ? '<div><h4>情绪筛选</h4><div class="me-cloud" id="meEmoBox"></div></div>' : '')
     +   '</aside>'
     +   '<section>'
+    +     (recent.length ? '<div style="margin-bottom:var(--s4)">'
+    +       '<div style="display:flex;align-items:center;gap:var(--s2);margin-bottom:var(--s2)">'
+    +         '<span class="lab" style="font-size:11px">最近 7 天新增</span>'
+    +         '<i class="rule"></i>'
+    +         '<span class="dim" style="font-size:9px">' + recent.length + ' 张 · 不满意的点「不喜欢」，以后不会再收也不会再发</span>'
+    +       '</div>'
+    +       '<div id="meNewRow" style="display:flex;gap:var(--s2);overflow-x:auto;padding-bottom:var(--s2)"></div>'
+    +     '</div>' : '')
     +     '<div style="display:flex;gap:var(--s3);flex-wrap:wrap;align-items:center;margin-bottom:var(--s3)">'
     +       '<div class="fld" style="min-width:190px;flex:1"><input id="meSearch" '
     +         'placeholder="搜索标签、文件名、情绪…" autocomplete="off"></div>'
@@ -8858,6 +8873,40 @@ async function pageMemes(el) {
       draw();
     });
   }
+  /* 最近 7 天新增：小卡片横排 + 不喜欢 */
+  const drawRecent = () => {
+    const box = $('meNewRow');
+    if (!box) return;
+    box.innerHTML = recent.map(function (m) {
+      const name = m.name || '';
+      const url = '/memes/' + name.split('/').map(encodeURIComponent).join('/');
+      const day = m.ts ? new Date(m.ts * 1000).toISOString().slice(5, 10) : '';
+      return '<div class="me-card" data-recent="1" data-name="' + esc(name) + '" '
+        + 'style="min-width:132px;max-width:132px;opacity:' + (m.blocked ? '.4' : '1') + '">'
+        + '<div class="pic"><img src="' + esc(url) + '" loading="lazy" draggable="false"></div>'
+        + '<div class="me-nm" style="font-size:9px">' + esc(day) + ' · ' + esc(name.split('/').pop())
+        + (m.blocked ? '（已不喜欢）' : '') + '</div>'
+        + '<div class="me-ac"><button class="btn sm" data-nb="' + esc(name) + '">'
+        + (m.blocked ? '恢复' : '不喜欢') + '</button></div>'
+        + '</div>';
+    }).join('');
+  };
+  drawRecent();
+  if ($('meNewRow')) $('meNewRow').addEventListener('click', async function (ev) {
+    const b = ev.target.closest('[data-nb]');
+    if (!b) return;
+    const name = b.dataset.nb;
+    const blocked = /已不喜欢/.test(b.closest('.me-card').textContent || '');
+    b.disabled = true;
+    try {
+      const r = await API(blocked ? '/memes/unblock' : '/memes/block',
+        { method: 'POST', body: JSON.stringify({ name: name }) });
+      if (r && (r.success === false || r.error)) { b.disabled = false; say(false, r.error || '操作失败'); return; }
+      say(true, blocked ? ('已恢复「' + name + '」') : ('已拉黑「' + name + '」：以后不会再收、也不会再发'));
+      pageMemes(el);
+    } catch (e) { b.disabled = false; say(false, e.message); }
+  });
+
   /* 主渲染 */
   const draw = () => {
     const kw = $('meSearch').value.trim().toLowerCase();
@@ -8883,6 +8932,8 @@ async function pageMemes(el) {
         + '<div class="me-nm">' + esc(name) + '</div>'
         + (tg ? '<div class="me-tg">' + tg + '</div>' : '')
         + '<div class="me-ac"><button class="btn sm" data-me="tag">标签</button>'
+        + '<button class="btn sm" data-me="' + (m.blocked ? 'unblock' : 'block') + '">'
+        + (m.blocked ? '恢复' : '不喜欢') + '</button>'
         + '<button class="btn sm" data-me="del">删除</button></div>'
         + '</div>';
     }).join('') : '<div class="empty">没有匹配的素材</div>';
@@ -8898,6 +8949,16 @@ async function pageMemes(el) {
     const tagsOf = card.dataset.tags ? card.dataset.tags.split(',').filter(Boolean) : [];
     const btn = ev.target.closest('[data-me]');
     if (btn && btn.dataset.me === 'tag') { memeLightbox(name, card.dataset.url, tagsOf, { onTagged: () => pageMemes(el) }); return; }
+    if (btn && (btn.dataset.me === 'block' || btn.dataset.me === 'unblock')) {
+      btn.disabled = true;
+      try {
+        const r = await API(btn.dataset.me === 'block' ? '/memes/block' : '/memes/unblock',
+          { method: 'POST', body: JSON.stringify({ name: name }) });
+        if (r && (r.success === false || r.error)) { btn.disabled = false; alert(r.error || '操作失败'); return; }
+        pageMemes(el);
+      } catch (e) { btn.disabled = false; alert(e.message); }
+      return;
+    }
     if (btn && btn.dataset.me === 'del') {
       if (!await pvConfirm('删除「' + name + '」？', '该素材会从表情库移除，不可恢复。', '删除')) return;
       btn.disabled = true;

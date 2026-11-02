@@ -10,6 +10,35 @@ from difflib import SequenceMatcher
 
 MEME_DIR = os.path.dirname(os.path.abspath(__file__))
 TAGS_FILE = os.path.join(MEME_DIR, "tags.json")
+#: 「不喜欢」名单（2026-11-02，由 meme_collect.block 写入；这里只读）
+BLOCK_FILE = os.path.join(MEME_DIR, "collected", "blocked.json")
+
+
+def _blocked_rels():
+    """被用户拉黑的表情包相对路径（每次匹配现读，改了立刻生效）。"""
+    try:
+        if os.path.isfile(BLOCK_FILE):
+            with open(BLOCK_FILE, "r", encoding="utf-8") as f:
+                d = json.load(f)
+            if isinstance(d, dict):
+                return {str(v.get("rel") or "").replace("\\", "/")
+                        for v in d.values() if isinstance(v, dict)}
+    except Exception:
+        pass
+    return set()
+
+
+def _pick(filenames):
+    """从候选里挑一个，跳过被拉黑的；全被拉黑就返回 None。"""
+    cands = [f for f in (filenames or [])
+             if str(f).replace("\\", "/") not in _blocked_rels()]
+    return random.choice(cands) if cands else None
+
+
+def _pick_path(filenames):
+    """挑一个并拼成绝对路径；没有可用的候选返回 None。"""
+    w = _pick(filenames)
+    return os.path.join(MEME_DIR, w) if w else None
 
 # 用户情绪词 → 数据库标签（所有 key 必须是 tags.json 中实际存在的标签）
 SYNONYM_MAP = {
@@ -95,8 +124,7 @@ def match_meme(emotion_or_keyword):
     # Step 1: 精确关键词匹配
     for tag, filenames in _inverted_index.items():
         if tag in s:
-            winner = random.choice(filenames)
-            return os.path.join(MEME_DIR, winner)
+            return _pick_path(filenames)
     
     # Step 2: 同义词匹配
     best_score = 0
@@ -106,7 +134,7 @@ def match_meme(emotion_or_keyword):
         for syn in synonyms:
             if syn in s:
                 if tag in _inverted_index:
-                    return os.path.join(MEME_DIR, random.choice(_inverted_index[tag]))
+                    return _pick_path(_inverted_index[tag])
     
     # Step 3: 模糊相似匹配
     for tag in _inverted_index:
@@ -116,12 +144,12 @@ def match_meme(emotion_or_keyword):
             best_tag = tag
     
     if best_tag and best_score > 0.5 and best_tag in _inverted_index:
-        return os.path.join(MEME_DIR, random.choice(_inverted_index[best_tag]))
+        return _pick_path(_inverted_index[best_tag])
     
     # Step 4: 兜底随机
     all_files = list(_tag_db.keys())
     if all_files:
-        return os.path.join(MEME_DIR, random.choice(all_files))
+        return _pick_path(all_files)
     
     return None
 
