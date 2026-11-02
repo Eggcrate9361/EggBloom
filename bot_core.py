@@ -15502,6 +15502,11 @@ def main():
             try:
                 from harness import tool_deep as _tdeep
                 _deep_fns = _tdeep.register_all()
+                # ★ 2026-11-02 真机事故：工具注册了、schema 也注入给模型了，
+                #   但**执行表没接线** —— 模型真调时 runner 找不到函数，
+                #   回「未知工具: deep_task」（模型只好退回 ws_read 手工翻文件）。
+                #   别的工具块都有这一行，唯独这里漏了。注册 ≠ 可执行。
+                _work_fns.update(_deep_fns)
                 log(f"[harness] 多步任务工具已接入: {sorted(_deep_fns)}"
                     f"（注入开关 agent_as_tool="
                     f"{bool(_config.get('agent_as_tool', False))}）")
