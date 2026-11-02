@@ -107,6 +107,7 @@ def run_one(path, timeout):
     env = dict(CHILD_ENV,
                EGGBLOOM_SUPER_MEMORY_DB=os.path.join(tmp, "super_memory.db"),
                EGGBLOOM_PLUGIN_BUDGET=os.path.join(tmp, "plugin_budget.json"),
+               EGGBLOOM_OUTBOX_DB=os.path.join(tmp, "outbox.sqlite3"),
                EGGBLOOM_ALLOW_ACTION_EVENTS="1")
     try:
         r = subprocess.run([sys.executable, path], cwd=ROOT, timeout=timeout,

@@ -112,6 +112,9 @@ def get(uid) -> Dict[str, Any]:
         "name": str(names.get("global") or base.get("name") or ""),
         "names": names,
         "alias": str(ext.get("alias") or ""),
+        #: 别名/称号列表（2026-11-02）：一个人可能有多个叫法，
+        #  鸡蛋=开发者=老大=爹 都是同一个人，记忆块要能对上一个。
+        "aliases": [str(a) for a in (ext.get("aliases") or []) if str(a).strip()],
         "accounts": [str(x) for x in (ext.get("accounts") or [])],
         "facts": list(ext.get("facts") or []),
         "notes": list(ext.get("notes") or []),
@@ -169,6 +172,112 @@ def set_alias(uid, alias: str) -> bool:
     rec["alias"] = a
     _save()
     return True
+
+
+def add_alias(uid, alias: str) -> bool:
+    """追加一个别名/称号（去重；不动主别名 alias）。"""
+    u, a = str(uid or "").strip(), str(alias or "").strip()
+    if not u or not a or len(a) > 24:
+        return False
+    rec = _extra_store().setdefault(u, {})
+    cur = [str(x) for x in (rec.get("aliases") or [])]
+    if a in cur:
+        return False
+    cur.append(a)
+    rec["aliases"] = cur[-12:]
+    _save()
+    return True
+
+
+def label(uid, *, with_uid: bool = True, max_alias: int = 2) -> str:
+    """记忆块里用的短标签：`老大（鸡蛋/开发者）（3150007406）`。
+
+    只取**名字层面**（主别名 > 全局名 > 别名列表），不塞 facts ——
+    记忆行要短，身份/关系由【人物档案】那段去讲。
+    """
+    u = str(uid or "").strip()
+    if not u:
+        return ""
+    p = get(u)
+    main = p["alias"] or p["name"] or ""
+    extra = [a for a in (p["aliases"] or [])
+             if a and a not in (main, p["name"])][:max_alias]
+    head = main or ("、".join(extra) if extra else "")
+    if main and extra:
+        head = f"{main}（{'/'.join(extra)}）"
+    elif not head and extra:
+        head = extra[0]
+    if with_uid:
+        return f"{head}({u})" if head else str(u)
+    return head or str(u)
+
+
+def roster_block(limit: int = 8, *, include_uids=(), skip=()) -> str:
+    """一段「你认识的人」小抄（2026-11-02）。
+
+    用户要的"隔离"不只是分开存 —— bot 还得知道**谁是谁**：
+    鸡蛋/开发者/老大/爹 是同一个人（主人），Texas 是朋友。
+    这里只列**有名字信息**的人，每人一行：名字 + 别名 + 身份/关系事实。
+    """
+    seen, rows = set(), []
+    try:
+        uids = list(include_uids) + list(_extra_store().keys())
+    except Exception:
+        uids = list(include_uids)
+    skip = {str(x) for x in (skip or ())}
+    for raw in uids:
+        u = canonical(str(raw or ""))
+        if not u or u in seen or u in skip:
+            continue
+        seen.add(u)
+        try:
+            p = get(u)
+        except Exception:
+            continue
+        main = p["alias"] or p["name"] or ""
+        extra = [a for a in (p["aliases"] or []) if a and a not in (main, p["name"])]
+        role = ""
+        for f in (p["facts"] or []):
+            if isinstance(f, dict) and str(f.get("k")) in ("身份", "关系"):
+                role = str(f.get("v") or "").strip()[:24]
+                break
+        if not (main or extra or role):
+            continue
+        who = main or (extra[0] if extra else "")
+        bits = [who] if who else []
+        if extra and main:
+            bits.append("（" + "/".join(extra[:3]) + "）")
+        line = "".join(bits) or u
+        if role:
+            line += f"：{role}"
+        rows.append(line)
+        if len(rows) >= max(1, int(limit)):
+            break
+    if not rows:
+        return ""
+    return "【你认识的人】" + "；".join(rows) + "。"
+
+
+def resolve(text) -> str:
+    """从一句话里认出说的是谁（别名/称号/名字 → uid）。认不出返回空串。
+
+    只做**唯一命中**：多个候选都命中就算模糊，不猜（记忆串人比记不住更糟）。
+    """
+    t = str(text or "").strip()
+    if not t:
+        return ""
+    hits = set()
+    for uid in list(_extra_store().keys()) + list(_base_store().keys()):
+        u = str(uid)
+        p = get(u)
+        cands = [p["alias"], p["name"]] + list(p["aliases"] or []) \
+                + [v for v in (p["names"] or {}).values()]
+        for c in cands:
+            c = str(c or "").strip()
+            if c and len(c) >= 2 and c in t:
+                hits.add(canonical(u))
+                break
+    return hits.pop() if len(hits) == 1 else ""
 
 
 def add_fact(uid, key: str, value: str, *, scope: str = "global",

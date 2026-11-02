@@ -2436,6 +2436,12 @@ def _ob_init() -> None:
         _ob.set_sender(_outbound_low_send)
         _ob.set_logger(log)
         _ob.set_config(lambda: _config)
+        # ★ 2026-11-02（A 方案 1/4）：先把 worker 起起来 —— 它会从落盘队列
+        #   恢复上次没发完的消息（`sending` 拉回 `pending`），再开始接新任务。
+        try:
+            _ob._ensure_worker()
+        except Exception:
+            pass
     except Exception as e:
         log(f"[outbound] 初始化失败（退回直连）: {e}")
 
@@ -8987,6 +8993,16 @@ def _owner_identity_line(sender) -> str:
     except Exception:
         titles = []
     titles = titles[:3] or ["老大"]
+    # ★ 2026-11-02：主人有多个叫法（鸡蛋/开发者/老大/爹），一并说明，
+    #   否则他说"我是鸡蛋"时模型不认识这是同一个人。
+    try:
+        import people as _id_pp
+        _extra = [a for a in (_id_pp.get(qq).get("aliases") or [])
+                  if a and a not in titles][:3]
+    except Exception:
+        _extra = []
+    if _extra:
+        titles = titles + _extra
     how = "」「".join(titles)
     return (f"【身份】你现在是在跟这台机器的主人（主要管理员）说话，QQ {qq}。"
             f"他让你叫他「{how}」。他的话优先照办，别推诿、别装不熟；"
@@ -12010,6 +12026,14 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
     _add("identity", _owner_identity_line(_pl_sender))
     # 关系先验（2026-11-02）：不是主人时，默认按「老大的朋友」对待，熟了自己改。
     _add("relation_prior", _owner_friend_prior(_pl_sender, is_group))
+    # 谁是谁（2026-11-02）：鸡蛋/开发者/老大/爹 是同一个人；Texas 是朋友。
+    # 只在私聊给（群里另有【群内人物】，且不该把别处的人名带进群）。
+    if not is_group:
+        try:
+            import people as _roster_pp
+            _add("roster", _roster_pp.roster_block(limit=8, skip=(_pl_sender,)))
+        except Exception:
+            pass
     # 现场资料（群聊近况/当前局面/决策结论）走 system，而不是拼在用户消息里。
     # 放进用户消息时模型会把它当成"对方发来的简报"逐条回应，实测出现
     # 「我这边收到的原文长这样」「我账上…」这种后台汇报腔（2026-10-25）。

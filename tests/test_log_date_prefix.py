@@ -63,7 +63,17 @@ def test_writer_has_date():
     bot_core.LOG_FILE = str(p)
     try:
         bot_core.log("[测试] 只有一行")
-        text = p.read_text(encoding="utf-8").strip()
+        # 2026-11-02：插件心跳线程也走同一个 log()，写盘有缓冲 —— 读太早会读不到
+        # 自己那行（真机偶发：只看到 [Plugin:proactive_talk] 心跳线程启动）。
+        text = ""
+        for _ in range(20):
+            try:
+                text = p.read_text(encoding="utf-8").strip()
+            except Exception:
+                text = ""
+            if "只有一行" in text:
+                break
+            time.sleep(0.05)
     finally:
         bot_core.LOG_FILE = orig
     today = datetime.datetime.now().strftime("%Y-%m-%d")

@@ -40,6 +40,11 @@ from __future__ import annotations
 
 import queue
 import threading
+
+try:
+    from . import outbox as _outbox
+except Exception:            # 单文件跑测试时没有包上下文
+    import outbox as _outbox
 import time
 from typing import Any, Callable, Dict, Optional
 
@@ -50,6 +55,8 @@ _CFG: Optional[Callable[[], dict]] = None
 
 _LOCK = threading.Lock()
 _QUEUE: "queue.Queue[dict]" = queue.Queue()
+#: 已经在内存队列里的 jid（恢复时跳过，防止同一条发两次）
+_INMEM_IDS: set = set()
 _WORKER: Optional[threading.Thread] = None
 _STARTED = False
 
@@ -110,7 +117,12 @@ def stats() -> dict:
     with _LOCK:
         out = dict(_STATS)
         out["queue"] = _QUEUE.qsize()
-        return out
+    # 落盘队列的分状态计数（sent/pending/dead…）—— 事后查"那条到底发没发"
+    try:
+        out["db"] = _outbox.default().stats()
+    except Exception:
+        out["db"] = {}
+    return out
 
 
 def reset_stats() -> None:
@@ -119,14 +131,48 @@ def reset_stats() -> None:
             _STATS[k] = 0
 
 
+def _recover_from_disk() -> int:
+    """把上次没发完的任务排回内存队列（重启恢复）。"""
+    n = 0
+    try:
+        ob = _outbox.default()
+        n += ob.recover()
+        with _LOCK:
+            _skip = set(_INMEM_IDS)
+        for chat in ob.chats_with_pending():
+            for row in ob.due(chat):
+                if row["id"] in _skip:
+                    continue
+                job = {"kind": row["kind"], "target": row["target"],
+                       "payload": row["payload"], "is_group": row["is_group"],
+                       "suffix": "", "jid": row["id"],
+                       "done": threading.Event(), "ok": None}
+                job["done"].set()          # 恢复的任务没有等待者
+                _QUEUE.put(job)
+                with _LOCK:
+                    _INMEM_IDS.add(row["id"])
+                n += 1
+        if n:
+            _log(f"[发送] 重启恢复 {n} 条未发出的消息")
+    except Exception as e:
+        _log(f"[发送] 恢复失败（本次不恢复）: {e}")
+    return n
+
+
 def _ensure_worker() -> None:
     global _WORKER, _STARTED
     with _LOCK:
         if _STARTED:
             return
         _STARTED = True
-        _WORKER = threading.Thread(target=_run, daemon=True, name="outbound-worker")
-        _WORKER.start()
+    # ★ 恢复必须在**锁外**做：`_recover_from_disk` 自己也要拿 `_LOCK`，
+    #   threading.Lock 不可重入 —— 放在锁里会死锁（测试直接挂住）。
+    try:
+        _recover_from_disk()
+    except Exception:
+        pass
+    _WORKER = threading.Thread(target=_run, daemon=True, name="outbound-worker")
+    _WORKER.start()
 
 
 def _label(kind: str, is_group: bool) -> str:
@@ -172,6 +218,11 @@ def _do_job(job: dict) -> None:
     if sender is None:
         _log(f"[发送] {label} → {target}: 没有底层发送器（未注入），丢弃")
         _mark(failed=True)
+        try:
+            if job.get("jid"):
+                _outbox.default().mark_failed(job["jid"], "没有底层发送器", backoff=False)
+        except Exception:
+            pass
         job["ok"] = False
         job["done"].set()
         return
@@ -187,8 +238,14 @@ def _do_job(job: dict) -> None:
                 _LAST_SENT[target + ("|g" if is_group else "|p")] = time.time()
             _log(f"[发送] {label} → {target}: retcode=0{job.get('suffix') or ''}")
             _mark(sent=True)
+            try:
+                if job.get("jid"):
+                    _outbox.default().mark_sent(job["jid"], resp)
+            except Exception:
+                pass
             job["ok"] = True
             job["resp"] = resp
+            _forget(job)
             job["done"].set()
             return
         if attempt == 1:
@@ -199,9 +256,22 @@ def _do_job(job: dict) -> None:
     _log(f"[发送] {label} → {target}: retcode={resp.get('retcode')} "
          f"msg={str(resp.get('msg') or '')[:80]}{job.get('suffix') or ''}")
     _mark(failed=True)
+    try:
+        if job.get("jid"):
+            _outbox.default().mark_failed(job["jid"], str(resp.get("msg") or ""), resp)
+    except Exception:
+        pass
     job["ok"] = False
     job["resp"] = resp
     job["done"].set()
+
+
+def _forget(job: dict) -> None:
+    try:
+        with _LOCK:
+            _INMEM_IDS.discard(str(job.get("jid") or ""))
+    except Exception:
+        pass
 
 
 def _mark(sent: bool = False, failed: bool = False, deduped: bool = False) -> None:
@@ -231,6 +301,24 @@ def submit(kind: str, target: str, payload: dict, *, is_group: bool = False,
     job = {"kind": kind, "target": str(target or ""), "payload": payload or {},
            "is_group": bool(is_group), "suffix": suffix,
            "done": threading.Event(), "ok": None}
+    # ★ 2026-11-02（A 方案 1/4）：先落盘再入内存队列 —— 进程挂了也不丢。
+    #   落盘失败只记一行，不挡发送（发送可用性优先于可审计性）。
+    try:
+        _ob = _outbox.default()
+        _chat = ("g:" if is_group else "p:") + str(target or "")
+        _dk = ""
+        try:
+            _dk = "|".join(str(x) for x in _dedupe_key(job))
+        except Exception:
+            _dk = ""
+        job["jid"] = _ob.add(_chat, kind, str(target or ""), payload or {},
+                             is_group=bool(is_group), dedupe=_dk)
+        if job["jid"]:
+            with _LOCK:
+                _INMEM_IDS.add(job["jid"])
+    except Exception as e:
+        job["jid"] = ""
+        _log(f"[发送] 落盘失败（继续走内存队列）: {e}")
     dedupe = _num("outbound_dedupe_sec", DEFAULT_DEDUPE_SEC)
     if dedupe > 0:
         key = _dedupe_key(job)
