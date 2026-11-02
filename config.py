@@ -43,6 +43,15 @@ API_PROVIDERS = {
         "models": ["gpt-4o", "gpt-4o-mini", "gpt-3.5-turbo"],
         "note": "国际，需网络可达",
     },
+    "opencode": {
+        "name": "OpenCode（按量）",
+        "url": "https://opencode.ai/inference/openai/v1/chat/completions",
+        "models": ["deepseek-v4.1-flash", "deepseek-v4.1-flash-free", "glm-5.3-flash",
+                   "glm-5.3", "kimi-k3", "kimi-k2.7-code", "minimax-m3",
+                   "qwen3.8-max", "qwen3.8-flash", "longcat-2.0", "mimo-v2.6-flash"],
+        "note": "OpenCode Console 按量计费；Console 的 key 只能在 /inference/openai 用，"
+                "Go 订阅的 key 才走 /inference/go",
+    },
     "opencode_go": {
         "name": "OpenCode Go",
         "url": "https://opencode.ai/inference/go/openai/v1/chat/completions",

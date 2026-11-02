@@ -4082,7 +4082,17 @@ class Handler(BaseHTTPRequestHandler):
                     try:
                         with open(str(HERE / 'model-debug.log'), 'a', encoding='utf-8') as df:
                             df.write('[TRY] ' + url + '\n')
-                        req = urllib.request.Request(url, headers={"Authorization": "Bearer " + api_key, "Accept": "application/json"})
+                        # ★ 2026-11-02 真机：OpenCode 的网关在 Cloudflare 后面，
+                        #   urllib 默认 UA 是 `Python-urllib/3.x` —— Cloudflare 直接
+                        #   回 `HTTP 403: ERROR CODE: 1010`（banned user agent）。
+                        #   拉模型列表也要带正常 UA；opencode 还要会话头。
+                        _h = {"Authorization": "Bearer " + api_key,
+                              "Accept": "application/json",
+                              "User-Agent": "EggBloom/1.6 (+https://github.com/Eggcrate9361/EggBloom)",
+                              "Accept-Language": "zh-CN,zh;q=0.9"}
+                        if "opencode" in (provider_id or "").lower() or "opencode.ai" in (url or ""):
+                            _h["x-opencode-session"] = "eggbloom-models"
+                        req = urllib.request.Request(url, headers=_h)
                         with urllib.request.urlopen(req, timeout=per_timeout) as r:
                             data = json.loads(r.read().decode("utf-8"))
                             raw = data.get("data") or data.get("models") or []
