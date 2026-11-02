@@ -28,6 +28,7 @@
 from __future__ import annotations
 
 import threading
+import time
 from typing import Any, Dict, Optional
 
 #: 工具 schema（与 tool_task 同一形状：走 tool_registry.resolve）
@@ -61,6 +62,33 @@ _CTX: Dict[str, Any] = {"is_group": False, "group_id": "", "sender": ""}
 #: 递归闸：同一时刻只允许一层 deep_task（agent 内部再调就拒）
 _DEPTH = 0
 _DEPTH_LOCK = threading.Lock()
+
+#: 主链的"我还活着"ticker（bot_core 每轮注入）。
+#: ★ 2026-11-02 真机：deep_task 跑 85 秒、中间一个进展都没有 —— 主链的等待判据是
+#:   "多久没进展"，于是 t=93s 直接判超时放弃，用户收到的是超时而不是那份审查。
+#:   工具再慢也得**边跑边打点**，让等待方知道不是卡死。
+_PROGRESS = None
+_PROGRESS_TS = [0.0]
+_PROGRESS_MIN_GAP = 3.0
+
+
+def set_progress(fn) -> None:
+    """注入"这一轮还在推进"的回调（bot_core 的 _tick_progress）。"""
+    global _PROGRESS
+    _PROGRESS = fn if callable(fn) else None
+
+
+def _tick(force: bool = False) -> None:
+    """打一次进展（节流 3 秒；deep_task 的每一步都会走到这里）。"""
+    now = time.time()
+    if not force and now - _PROGRESS_TS[0] < _PROGRESS_MIN_GAP:
+        return
+    _PROGRESS_TS[0] = now
+    if _PROGRESS:
+        try:
+            _PROGRESS()
+        except Exception:
+            pass
 
 
 def set_context(*, is_group: bool = False, group_id: str = "",
@@ -137,13 +165,23 @@ def deep_task(task: str = "", context: str = "", *,
                   "context_hint": hint, "publish": False}
         if sid:
             kwargs["session_id"] = sid
+        # ★ 2026-11-02：子 agent 每一轮（模型/工具）都给主链打一次"还活着"，
+        #   否则 85 秒的任务会被等待方的 idle 判据当成卡死、提前放弃。
+        kwargs["on_event"] = lambda _ev, _d: _tick()
+        _tick(force=True)
         try:
             res = runner(**kwargs)
         except TypeError:
-            # 老签名/测试桩可能不认 publish/session_id：退回最小参数再试一次
-            kwargs.pop("publish", None)
-            kwargs.pop("session_id", None)
-            res = runner(**kwargs)
+            # 老签名/测试桩可能不认 publish/session_id/on_event：逐级退回
+            for k in ("on_event", "publish", "session_id"):
+                kwargs.pop(k, None)
+            try:
+                res = runner(**kwargs)
+            except TypeError:
+                kwargs.pop("context_hint", None)
+                res = runner(**kwargs)
+        finally:
+            _tick(force=True)
     except Exception as e:
         return {"ok": False, "error": f"多步任务失败（{type(e).__name__}: {e}）"}
     finally:
@@ -177,4 +215,5 @@ def register_all() -> Dict[str, Any]:
     return {k: _tr.adapt_kwargs(v) for k, v in fns.items()}
 
 
-__all__ = ["DEEP_TOOLS", "set_context", "deep_task", "depth", "register_all"]
+__all__ = ["DEEP_TOOLS", "set_context", "set_progress", "deep_task", "depth",
+           "register_all"]

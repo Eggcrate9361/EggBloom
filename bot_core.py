@@ -11563,6 +11563,11 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
         _tdeep_ctx.set_context(is_group=bool(is_group),
                                group_id=str(group_id if is_group else ""),
                                sender=_pl_sender)
+        # ★ 2026-11-02 真机：deep_task 跑 85 秒、中间零进展 → 等待方 93 秒判超时，
+        #   用户收到超时而不是那份审查。把本轮 progress ticker 交给它，
+        #   子 agent 每一步都会续一次期。
+        if callable(progress):
+            _tdeep_ctx.set_progress(progress)
     except Exception:
         pass
     _people_alias_capture(_pl_sender, user_msg)
@@ -12666,7 +12671,10 @@ def call_deepseek(user_msg: str, images: Optional[List[str]] = None,
     if _is_web_task:
         return _wait_ai_result(task_id, timeout=600.0, idle_timeout=180.0, max_total=600.0,
                                on_slow=on_slow, slow_after=_slow_after)
-    return _wait_ai_result(task_id, timeout=30.0, idle_timeout=45.0, max_total=150.0,
+    # ★ 2026-11-02：私聊 hard 上限 150 → 240 秒。deep_task 这类"派给子 agent 干真活"
+    #   的一轮实测 85 秒起步（读 1000 行 + 跑测试），150 秒的硬顶会把正常的活砍掉。
+    #   idle 判据没放松：只要中途有进展就续期，真卡死照样 45 秒放弃。
+    return _wait_ai_result(task_id, timeout=30.0, idle_timeout=45.0, max_total=240.0,
                            on_slow=on_slow, slow_after=_slow_after)
 
 
