@@ -13350,6 +13350,36 @@ def _strip_context_marks(text: str) -> str:
         return text
 
 
+
+#: 回复里"发言标签"的形态：昵称(123456789) / (123456789) / （QQ：123）
+_SPEAKER_LABEL_RE = re.compile(r"[（(]\s*(?:QQ\s*[:：]?\s*)?\d{5,12}\s*[)）]", re.I)
+
+
+def _strip_speaker_labels(text, *names) -> str:
+    """剥掉模型从历史里抄来的发言标签（2026-11-02 真机）。
+
+    样本：`你要是真去群里问，我第一个答：我爹就一个，(/ω＼)(3150007406)`
+    —— 模型把 `昵称(QQ): 内容` 的历史格式当成了自己的输出格式，
+    用户看到的是"话说一半被截断，后面跟一串乱码"。
+
+    只动**回复文本**，不动历史：历史里带标签有用（模型靠它区分谁说的）。
+    """
+    if not text:
+        return text
+    t = str(text)
+    # ① 昵称本体（含随历史一起抄来的括号昵称，如「(/ω＼)」）
+    for n in (names or ()):
+        n = str(n or "").strip()
+        if n:
+            t = t.replace(n, "")
+    t = _SPEAKER_LABEL_RE.sub("", t)                 # ② (123456789)
+    t = re.sub(r"[（(]\s*[)）]", "", t)              # ③ 摘空后留下的空括号
+    t = re.sub(r"([，、：,;；])\s*\1+", r"\1", t)    # ④ 连续标点收成一个
+    t = re.sub(r"(?m)^[，、：,;；:]+\s*", "", t)       # ⑤ 行首残留的标点
+    t = re.sub(r"[，、：,;；]\s*(?=\n|$)", "", t)   # ③ 摘掉标签后的残连接符
+    t = re.sub(r"[ \t]{2,}", " ", t)
+    return t.strip() or ""
+
 def _line_is_directed_to_others(line: str, *, addressed: bool = False) -> bool:
     """这一行是不是"用户在跟别人说话"（该跳过）。
 
@@ -15102,7 +15132,7 @@ def _pipeline_step(group_id):
             #   模型看到输入里有 `[18:46] [名字·锚] 原文`，有时会把 `[18:46]`
             #   当成回复格式照抄（真机发出过「[18:46] 别戳」）。
             #   prompt 里已经写了格式说明，这里是兜底 —— 改过的文本一律删。
-            sent_text = _strip_context_marks(sent_text)
+            sent_text = _strip_speaker_labels(_strip_context_marks(sent_text), sender)
             # ── 去AI味：规则级后处理（发送前清理破折号/套话/客服口吻等）──
             try:
                 from de_ai import de_ai_post_process
@@ -17258,7 +17288,7 @@ def main():
                     sent_text = clean_reply.strip() if clean_reply else ""
                     sent_text = _trim_incomplete(sent_text, getattr(reply, "truncated", False))
                     # ── 剥掉模型模仿来的上下文标记（2026-10-27，与群聊一致）──
-                    sent_text = _strip_context_marks(sent_text)
+                    sent_text = _strip_speaker_labels(_strip_context_marks(sent_text), sender)
                     # ── 去AI味：规则级后处理（私聊同样生效）──
                     try:
                         from de_ai import de_ai_post_process
