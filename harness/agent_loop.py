@@ -290,9 +290,15 @@ def run_agent(*, session_id, user_input, chat_fn, tool_functions,
             }]
             try:
                 try:
-                    ret = chat_fn(_msgs, [], on_reasoning=None)
+                    # ★ 2026-11-02：收敛轮要**更大的输出预算**。推理模型的思维链
+                    #   也吃 completion 预算；1500 在一份代码审查结论上会被思考
+                    #   吃光，content 直接空串（真机：deep_task 跑 35s 回空结论）。
+                    ret = chat_fn(_msgs, [], on_reasoning=None, max_tokens=2500)
                 except TypeError:
-                    ret = chat_fn(_msgs, [])
+                    try:
+                        ret = chat_fn(_msgs, [], on_reasoning=None)
+                    except TypeError:
+                        ret = chat_fn(_msgs, [])
                 _c, _tc, _u, _r = _normalize_chat_return(ret)
                 _accumulate_usage(res.usage_total, _u)
                 return (str(_c or "").strip() or None) if not _tc else None
@@ -358,11 +364,35 @@ def run_agent(*, session_id, user_input, chat_fn, tool_functions,
 
             # 无工具调用 → 收敛，得到最终答复
             if not tool_calls:
-                res.ok = True
-                res.answer = str(content or "").strip()
-                _append_log(EV_FINAL, {"content": res.answer, "steps": step + 1})
-                _emit("final", {"content": res.answer, "steps": step + 1,
-                                "elapsed": round(time.time() - t0, 2)})
+                _ans = str(content or "").strip()
+                # ★ 2026-11-02 真机：模型这一轮只吐了 reasoning_content，
+                #   content 是空串却带 finish_reason=stop —— 旧代码直接
+                #   `ok=True, answer=""` 收尾，调用方（deep_task）只能报
+                #   「多步任务跑完了但没有结论」。先补一轮"只要结论"，
+                #   实在要不到才如实判失败（不再假装成功）。
+                if not _ans:
+                    _ans = (_converge_anyway(messages, "上一轮只输出了思考过程，没有正文")
+                            or "")
+                if not _ans and str(reasoning or "").strip():
+                    # 最后兜底：把思维链的尾部当"草稿结论"交出去，并标明来源
+                    _rs = str(reasoning).strip()
+                    _ans = ("（下面是我边想边写的，可能不完整）\n"
+                            + _rs[-1200:].strip())
+                if _ans:
+                    res.ok = True
+                    res.answer = _ans
+                    _append_log(EV_FINAL, {"content": res.answer, "steps": step + 1})
+                    _emit("final", {"content": res.answer, "steps": step + 1,
+                                    "elapsed": round(time.time() - t0, 2)})
+                else:
+                    res.ok = False
+                    res.error = "模型没有给出结论（只有思考过程）"
+                    res.answer = ""
+                    _append_log(EV_FINAL, {"content": "", "steps": step + 1,
+                                           "error": res.error})
+                    _emit("final", {"content": "", "steps": step + 1,
+                                    "error": res.error,
+                                    "elapsed": round(time.time() - t0, 2)})
                 return _finalize(res)
 
             # 记录模型的中间文字（若有）

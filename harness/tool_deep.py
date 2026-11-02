@@ -151,11 +151,18 @@ def deep_task(task: str = "", context: str = "", *,
 
     if not isinstance(res, dict):
         return {"ok": False, "error": "多步任务没有返回结果"}
-    if not res.get("ok"):
-        return {"ok": False, "error": str(res.get("error") or "多步任务失败")[:200]}
     answer = str(res.get("answer") or "").strip()
+    err = str(res.get("error") or "").strip()
+    if not res.get("ok"):
+        # ★ 2026-11-02：子 agent 只"想了"没"写"（正文空）时，别把死路甩给模型 ——
+        #   告诉它自己接着做，否则它会再派一次，重复烧 30 秒。
+        if not err or "没有给出结论" in err:
+            return {"ok": False,
+                    "error": "派活没拿到结论（子 agent 只想了没写）。你自己接着做，别重复派。"}
+        return {"ok": False, "error": err[:200]}
     if not answer:
-        return {"ok": False, "error": "多步任务跑完了但没有结论"}
+        return {"ok": False,
+                "error": "派活跑完了但没结论。你自己接着做，别重复派。"}
     return {"ok": True, "answer": answer, "steps": int(res.get("steps") or 0)}
 
 
