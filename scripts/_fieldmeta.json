@@ -636,8 +636,8 @@
    "panel": "meme",
    "unit": "秒",
    "id": "sMemeCooldown",
-   "default": 60,
-   "default_text": "60"
+   "default": 180,
+   "default_text": "180"
   },
   "meme_collect_phash_dedupe": {
    "label": "采集视觉去重（同图换编码不再收第二份）",

@@ -3838,6 +3838,9 @@ def _meme_back_send(target, is_group: bool, images=None):
     返回：文件名=成功 / MEME_BACK_COOLDOWN=冷却中 / None=没发出去（落回原路径）。"""
     if not MEME_OK or not _config.get("meme_enable", True):
         return None
+    # ★ 2026-11-02：回敬可以单独关（有人不喜欢"你发表情我也发表情"）。
+    if not bool(_config.get("meme_back_enable", True)):
+        return None
     key = f"{'group' if is_group else 'private'}_{target}"
     now = time.time()
     if now - MEME_LAST_SENT.get(key, 0) < MEME_COOLDOWN:
