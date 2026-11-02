@@ -62,6 +62,9 @@ _CLASSIFIER = None
 _DESCRIBER = None
 _LOCK = threading.Lock()
 _LOG = print
+#: 跳过日志的去重表（(文件, 原因) → 上次打印时间）
+_SKIP_LOCK = threading.Lock()
+_SKIP_SEEN = {}
 
 
 def set_logger(fn) -> None:
@@ -190,6 +193,28 @@ def existing_entry(path: str, *, cfg=None):
     return "", ""
 
 
+def _log_skip(src: str, reason: str) -> None:
+    """跳过时说清原因（同一 (文件, 原因) 60 秒内只报一次，避免刷屏）。
+
+    ★ 2026-11-02 真机：群里 41 张图只入库 28 张，其余 13 张**一声不吭**
+      就没了 —— 用户体感是"应该是拿了，但是是没拿"。静默丢弃是最难查的一类 bug。
+    """
+    key = (str(src or ""), str(reason or ""))
+    now = time.time()
+    with _SKIP_LOCK:
+        last = _SKIP_SEEN.get(key)
+        if last is not None and now - last < 60:
+            return
+        _SKIP_SEEN[key] = now
+        if len(_SKIP_SEEN) > 500:                 # 防无限增长
+            for k in list(_SKIP_SEEN)[:250]:
+                _SKIP_SEEN.pop(k, None)
+    try:
+        _LOG(f"[表情采集] 跳过 {os.path.basename(src)}：{reason}")
+    except Exception:
+        pass
+
+
 def skip_reason(path: str, *, cfg=None) -> str:
     """这张图为什么收不进去（空串 = 可以收）。
 
@@ -278,34 +303,46 @@ def visual_dup_of(path: str, idx: dict, max_dist: int = 4):
 
 def maybe_collect(path: str, *, tags=None, source: str = "auto",
                   from_group: str = "") -> str:
-    """把一张图收进图库。返回相对路径；跳过返回空串。"""
+    """把一张图收进图库。返回相对路径；跳过返回空串。
+
+    ★ 2026-11-02 真机：群里 41 张图只入库 28 张，剩下 13 张**一声不吭**就没了，
+      用户体感正是"应该是拿了，但是是没拿"。现在每条跳过都打一行原因
+      （同一 (文件, 原因) 60 秒内只报一次）。
+    """
     cfg = _cfg()
-    if not bool(cfg.get("meme_collect_enable", True)):
+
+    def _skip(p: str, reason: str) -> str:
+        _log_skip(p, reason)
         return ""
+
     src = str(path or "").strip()
+    if not bool(cfg.get("meme_collect_enable", True)):
+        return _skip(src, "采集总开关关着")
     if not src or not os.path.isfile(src):
-        return ""
+        return _skip(src, "图没落地（本地找不到这张）")
     ext = os.path.splitext(src)[1].lower()
     if ext not in ALLOWED_EXT:
-        return ""
+        return _skip(src, f"这个格式不收（{ext or '没扩展名'}）")
     try:
         sz = os.path.getsize(src)
     except Exception:
-        return ""
+        return _skip(src, "读不了这个文件")
     _lo, _hi = _limits(cfg)
-    if sz < _lo or sz > _hi:
-        return ""
+    if sz < _lo:
+        return _skip(src, f"图太小（{sz}B，下限 {_lo // 1024}KB）")
+    if sz > _hi:
+        return _skip(src, f"图太大（{sz / 1024 / 1024:.1f}MB，上限 {_hi // 1024 // 1024}MB）")
     try:
         with open(src, "rb") as f:
             raw = f.read(_hi + 1)
         sha = hashlib.sha1(raw).hexdigest()
     except Exception:
-        return ""
+        return _skip(src, "读不了这个文件")
 
     with _LOCK:
         idx = _index()
         if sha in idx:
-            return ""
+            return _skip(src, f"这张已经存过了（{str((idx.get(sha) or {}).get('path') or '')}）")
         # 视觉去重（2026-11-01）：同图不同编码（QQ 重新压缩/转格式）sha 不同，
         # 但看起来一模一样。默认开，阈值 4/64 位（很保守，宁漏不误杀）。
         _ph = None
@@ -313,19 +350,18 @@ def maybe_collect(path: str, *, tags=None, source: str = "auto",
             _maxd = int(cfg.get("meme_collect_phash_dist", 4) or 0)
             _ds, _dv = visual_dup_of(src, idx, max_dist=_maxd)
             if _ds:
-                _LOG(f"[表情采集] 跳过：与已收的 {str(_dv.get('path'))} 视觉重复")
-                return ""
+                return _skip(src, f"与已收的 {str(_dv.get('path'))} 视觉重复")
         cap = int(cfg.get("meme_collect_daily_cap", DEFAULT_DAILY_CAP) or 0)
         if cap > 0 and _today_count(idx) >= cap:
-            return ""
+            return _skip(src, f"今天的采集额度满了（{cap} 张）")
         try:
             os.makedirs(COLLECT_DIR, exist_ok=True)
             name = sha[:12] + ext
             dst = os.path.join(COLLECT_DIR, name)
             if not os.path.exists(dst):
                 shutil.copyfile(src, dst)
-        except Exception:
-            return ""
+        except Exception as _e:
+            return _skip(src, f"写不进图库（{type(_e).__name__}）")
         rel = "collected/" + name
         if not tags and bool(cfg.get("meme_collect_classify", True)):
             tags = _classify(src)

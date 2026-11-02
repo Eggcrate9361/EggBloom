@@ -11319,6 +11319,10 @@ def _agent_stream_chat(messages, tools=None, max_tokens=800,
     model = cfg.get("model_name") or "deepseek-flash"
     body = {"model": model, "messages": messages, "max_tokens": int(max_tokens),
             "temperature": _effective_temperature(None), "stream": True}
+    # ★ 2026-11-02：流式要显式要 usage，否则上游一个 token 数都不给 ——
+    #   agent 的调用因此一直记为 0（价格统计全瞎）。DeepSeek/OpenAI 兼容端
+    #   都认 stream_options.include_usage（末块带累计 usage）。
+    body["stream_options"] = {"include_usage": True}
     if tools:
         body["tools"] = tools
         body["tool_choice"] = "auto"
@@ -11330,6 +11334,7 @@ def _agent_stream_chat(messages, tools=None, max_tokens=800,
     content = ""
     reasoning = ""
     tc_map = {}
+    usage = {}
     with urllib.request.urlopen(req, timeout=180) as r:
         for raw in r:
             line = raw.decode("utf-8", "ignore").strip()
@@ -11342,6 +11347,10 @@ def _agent_stream_chat(messages, tools=None, max_tokens=800,
                 chunk = json.loads(data)
             except Exception:
                 continue
+            # 末块带累计 usage（include_usage 才有）；中间块的 usage 是 null
+            _u = chunk.get("usage")
+            if isinstance(_u, dict) and _u.get("total_tokens"):
+                usage = _u
             delta = (chunk.get("choices") or [{}])[0].get("delta") or {}
             rc = delta.get("reasoning_content") or delta.get("reasoning")
             if rc:
@@ -11367,7 +11376,8 @@ def _agent_stream_chat(messages, tools=None, max_tokens=800,
                 if fn.get("arguments"):
                     slot["function"]["arguments"] += fn["arguments"]
     tool_calls = [tc_map[k] for k in sorted(tc_map.keys()) if tc_map[k]["function"]["name"]]
-    return {"content": content, "tool_calls": tool_calls, "usage": {}, "reasoning": reasoning}
+    return {"content": content, "tool_calls": tool_calls, "usage": usage,
+            "reasoning": reasoning}
 
 
 def _call_chat_sync(messages, runtime_cfg=None, max_tokens=AI_MAX_TOKENS, stream=False,
