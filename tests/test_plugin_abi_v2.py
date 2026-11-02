@@ -53,20 +53,38 @@ check("get_host_api 可见", "api_call" in pm.get_host_api(), str(pm.get_host_ap
 ctx = PluginContext("abi_test", "1.0.0", manager=pm)
 
 # ══ 3. api_call / send_group / send_private ══════════════════
+#   ★ 1.6.0 刀 5：插件不再直连 OneBot —— send_group/send_private 走宿主
+#   `send_text`（→ 出站队列），返回形状保持 {"retcode": 0} 兼容老插件。
 print("\n=== 3. api_call 与消息发送 ===")
+sent_texts = []
+
+
+def fake_send_text(text, target=None, group_id=None):
+    sent_texts.append((text, target, group_id))
+    return True
+
+
+pm.set_host_api(send_text=fake_send_text)
+check("send_text 能力已注入", "send_text" in pm.get_host_api(), str(pm.get_host_api()))
+
 r = ctx.api_call("send_qzone_msg", {"content": "测试说说"})
 check("api_call 返回宿主结果", isinstance(r, dict) and r.get("retcode") == 0, str(r))
 check("api_call 原样透传 action/params", calls[-1] == ("send_qzone_msg", {"content": "测试说说"}), str(calls[-1]))
 
-ctx.send_group(20001, "群消息")
-check("send_group → send_group_msg", calls[-1][0] == "send_group_msg", str(calls[-1]))
-check("send_group 参数正确",
-      calls[-1][1] == {"group_id": "20001", "message": "群消息"}, str(calls[-1][1]))
+n_before = len(calls)
+r1 = ctx.send_group(20001, "群消息")
+check("send_group 走宿主 send_text（不再直连 send_group_msg）",
+      sent_texts[-1] == ("群消息", None, "20001"), str(sent_texts[-1:]))
+check("send_group 没有碰 api_call", len(calls) == n_before, calls[n_before:])
+check("send_group 返回 retcode=0（老插件判据不变）",
+      isinstance(r1, dict) and r1.get("retcode") == 0, str(r1))
 
-ctx.send_private(10003, "私聊消息")
-check("send_private → send_private_msg", calls[-1][0] == "send_private_msg", str(calls[-1]))
-check("send_private 参数正确",
-      calls[-1][1] == {"user_id": "10003", "message": "私聊消息"}, str(calls[-1][1]))
+r2 = ctx.send_private(10003, "私聊消息")
+check("send_private 走宿主 send_text",
+      sent_texts[-1] == ("私聊消息", "10003", None), str(sent_texts[-1:]))
+check("send_private 没有碰 api_call", len(calls) == n_before, calls[n_before:])
+check("send_private 返回 retcode=0",
+      isinstance(r2, dict) and r2.get("retcode") == 0, str(r2))
 
 # 未注入时优雅降级
 saved = pm._host_api.pop("api_call")

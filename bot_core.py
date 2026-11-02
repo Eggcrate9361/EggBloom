@@ -2407,6 +2407,67 @@ def api_call(endpoint: str, data: Optional[Dict] = None, timeout: float = 15) ->
     return resp
 
 
+def _outbound_low_send(kind: str, target: str, payload: dict, is_group: bool = False) -> dict:
+    """★ 1.6.0 刀 5：**全程序唯一**直连 OneBot 发送出口。
+
+    `harness/outbound.py` 负责排队/串行/重试/日志；这里只做"换成 OneBot 的
+    endpoint + 参数"这一件事。别的地方（主链发送函数、插件 ABI）一律走队列 ——
+    验收标准就是 `grep send_group_msg|send_private_msg` 只剩这一个函数。
+    """
+    try:
+        if is_group:
+            data = {"group_id": int(target)}
+            endpoint = "send_group_msg"
+        else:
+            data = {"user_id": int(target)}
+            endpoint = "send_private_msg"
+        msg = payload.get("message")
+        data["message"] = msg if msg is not None else str(payload.get("text") or "")
+        return api_call(endpoint, data)
+    except Exception as e:
+        log(f"[发送] 底层出口异常: {e}")
+        return {"retcode": -1, "msg": str(e)[:80]}
+
+
+def _ob_init() -> None:
+    """把出站队列接到宿主上（只接一次；失败不致命）。"""
+    try:
+        from harness import outbound as _ob
+        _ob.set_sender(_outbound_low_send)
+        _ob.set_logger(log)
+        _ob.set_config(lambda: _config)
+    except Exception as e:
+        log(f"[outbound] 初始化失败（退回直连）: {e}")
+
+
+_ob_init()
+
+
+def _ob_send_text(text: str, target: str, *, is_group: bool = False,
+                  suffix: str = "") -> bool:
+    try:
+        from harness import outbound as _ob
+        return bool(_ob.send_text(str(text), str(target), is_group=is_group, suffix=suffix))
+    except Exception as e:
+        log(f"[发送] 队列不可用，退回直连: {e}")
+        return _outbound_low_send("text", str(target), {"text": str(text)}, is_group).get("retcode") == 0
+
+
+def _ob_send_msg(segments, target: str, *, is_group: bool = False, suffix: str = "",
+                 kind: str = "text"):
+    """把一条**消息段/带引用**的消息入队，返回 (ok, resp)。"""
+    try:
+        from harness import outbound as _ob
+        payload = {"message": segments}
+        if isinstance(segments, str):
+            payload["text"] = segments
+        return _ob.send_job(kind, str(target), payload, is_group=is_group, suffix=suffix)
+    except Exception as e:
+        log(f"[发送] 队列不可用，退回直连: {e}")
+        r = _outbound_low_send(kind, str(target), {"message": segments}, is_group)
+        return r.get("retcode") == 0, r
+
+
 def _group_action(kind: str, req: dict) -> dict:
     """执行群管理动作（webui 群管理页）：改名/名片/设撤管理/禁言/解禁/踢/全员禁言。"""
     try:
@@ -2550,14 +2611,11 @@ def smart_send(text, target_qq=None):
     if len(sentences) == 1:
         return send_message(text, target_qq)
     
-    # 逐句发送（模拟真人节奏）
+    # 逐句发送（模拟真人节奏）—— 走统一出站队列（1.6.0 刀 5）
     for s in sentences:
-        resp = api_call("send_private_msg",
-            {"user_id": int(target_qq), "message": s})
-        if resp.get("retcode") != 0:
-            log(f"[发送] 私聊 → {target_qq} 句子失败: retcode={resp.get('retcode')} msg={resp.get('msg','')} 句={s[:30]}")
+        if not _ob_send_text(s, target_qq, suffix=f" 句={s[:30]}"):
+            log(f"[发送] 私聊 → {target_qq} 句子失败: 句={s[:30]}")
             return False
-        log(f"[发送] 私聊 → {target_qq}: retcode=0 句={s[:30]}")
         # 短句快节奏（0.3s），长句慢节奏（0.6-1.0s）
         delay = 0.3 if len(s) <= 15 else min(1.0, 0.3 + len(s) * 0.02)
         time.sleep(delay)
@@ -2622,19 +2680,12 @@ def send_message(text, target_qq=None):
     #   条数上限 4，剩余并进最后一条。设 0 则退回旧的按 MSG_SPLIT_LEN 硬切。
     parts = split_private_reply(text, _private_reply_cap(), hard_limit=MSG_SPLIT_LEN)
     if len(parts) <= 1:
-        resp = api_call("send_private_msg",
-            {"user_id": int(target_qq), "message": text})
-        log(f"[发送] 私聊 → {target_qq}: retcode={resp.get('retcode')} msg={resp.get('msg','')}"
-            f"{_trace_suffix()}")
-        return resp.get("retcode") == 0
+        return _ob_send_text(text, target_qq, suffix=_trace_suffix())
 
     for i, part in enumerate(parts):
         prefix = f"({i+1}/{len(parts)}) " if len(parts) > 1 else ""
-        resp = api_call("send_private_msg",
-            {"user_id": int(target_qq), "message": prefix + part})
-        log(f"[发送] 私聊 → {target_qq} ({i+1}/{len(parts)}): retcode={resp.get('retcode')}"
-            f"{_trace_suffix()}")
-        if resp.get("retcode") != 0:
+        if not _ob_send_text(prefix + part, target_qq,
+                             suffix=f" ({i+1}/{len(parts)}){_trace_suffix()}"):
             return False
         if len(parts) > 1:
             time.sleep(0.5)
@@ -2734,10 +2785,9 @@ def send_group_message(group_id, text, reply_id: int = 0):
     if _f:
         log(f"[出站审计] 群[{group_id}] 已脱敏: {'; '.join(_f)}")
     chat_log("out", "group", group_id, text, _bot_nicknames()[0])
-    resp = api_call("send_group_msg",
-        {"group_id": int(group_id),
-         "message": quote_message_payload(text[:MSG_SPLIT_LEN], reply_id)})
-    success = resp.get("retcode") == 0
+    success, resp = _ob_send_msg(
+        quote_message_payload(text[:MSG_SPLIT_LEN], reply_id), group_id,
+        is_group=True, suffix=_trace_suffix())
     if success:
         GROUP_LAST_BOT_MSG[group_id] = time.time()
         _remember_own_group_msg(group_id, text, resp)
@@ -2916,10 +2966,9 @@ def smart_send_group(group_id, text, reply_id: int = 0):
                 block[0] = f"[CQ:at,qq={m.group(1) or m.group(2)}] {m.group(3)}"
             msg = '\n'.join(block)
             _first = not any(b for b in _quoted_done)   # 每个 @ 块都发，但引用只挂第一块
-            resp = api_call("send_group_msg",
-                            {"group_id": int(group_id),
-                             "message": quote_message_payload(msg, reply_id if _first else 0)})
-            if resp.get("retcode") != 0:
+            _ok_b, resp = _ob_send_msg(
+                quote_message_payload(msg, reply_id if _first else 0), group_id, is_group=True)
+            if not _ok_b:
                 # 旧版这里静默 return False → "最后一句没发出去"在日志里一个字都没有
                 log(f"[发送] 群[{group_id}] @块发送失败 retcode={resp.get('retcode')} "
                     f"msg={str(resp.get('msg',''))[:60]} 内容={msg[:40]}")
@@ -2963,10 +3012,9 @@ def smart_send_group(group_id, text, reply_id: int = 0):
         ated_qqs = set()
         for _i, _ln in enumerate(_out_lines):
             msg = format_at_once(_ln)
-            resp = api_call("send_group_msg",
-                {"group_id": int(group_id),
-                 "message": quote_message_payload(msg, reply_id if _i == 0 else 0)})
-            if resp.get("retcode") != 0:
+            _ok_l, resp = _ob_send_msg(
+                quote_message_payload(msg, reply_id if _i == 0 else 0), group_id, is_group=True)
+            if not _ok_l:
                 log(f"[发送] 群[{group_id}] 分行 {_i + 1}/{len(_out_lines)} 失败 "
                     f"retcode={resp.get('retcode')} msg={str(resp.get('msg',''))[:60]} "
                     f"内容={msg[:40]}（后续 {len(_out_lines) - _i - 1} 行未发送）")
@@ -3031,10 +3079,9 @@ def smart_send_group(group_id, text, reply_id: int = 0):
     
     for _i, s in enumerate(sentences):
         msg = format_at_once(s)
-        resp = api_call("send_group_msg",
-            {"group_id": int(group_id),
-             "message": quote_message_payload(msg, reply_id if _i == 0 else 0)})
-        if resp.get("retcode") != 0:
+        _ok_s, resp = _ob_send_msg(
+            quote_message_payload(msg, reply_id if _i == 0 else 0), group_id, is_group=True)
+        if not _ok_s:
             # 逐句发送中途失败：后面几句全都不会发了 —— 必须留下痕迹
             #（"最后一句话没发出来"的另一条真实路径，旧版静默 return False）
             log(f"[发送] 群[{group_id}] 分句 {_i + 1}/{len(sentences)} 失败 "
@@ -3603,9 +3650,8 @@ def send_image(file_path, target_qq=None):
             with open(send_path, "rb") as f:
                 b64 = base64.b64encode(f.read()).decode()
             msg = [{"type": "image", "data": {"file": f"base64://{b64}"}}]
-            resp = api_call("send_private_msg",
-                {"user_id": int(target_qq), "message": msg})
-            retcode = resp.get("retcode", -1)
+            _ok_img, resp = _ob_send_msg(msg, target_qq, kind="image")
+            retcode = 0 if _ok_img else (resp.get("retcode", -1) or -1)
             if retcode == 0:
                 log(f"发送图片成功: {os.path.basename(file_path)} → {target_qq}")
             else:
@@ -3632,9 +3678,7 @@ def send_group_image(group_id, file_path):
         with open(send_path, "rb") as f:
             b64 = base64.b64encode(f.read()).decode()
         msg = [{"type": "image", "data": {"file": f"base64://{b64}"}}]
-        resp = api_call("send_group_msg",
-            {"group_id": int(group_id), "message": msg})
-        ok = resp.get("retcode") == 0
+        ok, resp = _ob_send_msg(msg, group_id, is_group=True, kind="image")
         if ok:
             log(f"群[{group_id}] 已发图: {os.path.basename(file_path)}")
         else:
@@ -9242,8 +9286,8 @@ def _notify_admin(text: str, event_key: str = ""):
         for qq in admins:
             r = {"qq": qq}
             try:
-                resp = api_call("send_private_msg", {"user_id": int(qq), "message": text})
-                code = resp.get("retcode") if isinstance(resp, dict) else resp
+                _ok_n, resp = _ob_send_msg(text, qq)
+                code = 0 if _ok_n else (resp.get("retcode") if isinstance(resp, dict) else -1)
                 r["ok"] = (code == 0)
                 r["retcode"] = code
                 log(f"[通知] 已通知管理员 {qq} retcode={code}")
@@ -9520,10 +9564,10 @@ def _send_poke_back(user_id, group_id=None):
     try:
         msg = [{"type": "poke", "data": {"type": 0}}]
         if gid:
-            resp = api_call("send_group_msg", {"group_id": gid, "message": msg})
+            _ok_p, resp = _ob_send_msg(msg, gid, is_group=True, kind="poke")
         else:
-            resp = api_call("send_private_msg", {"user_id": uid, "message": msg})
-        code = resp.get("retcode") if isinstance(resp, dict) else resp
+            _ok_p, resp = _ob_send_msg(msg, uid, kind="poke")
+        code = 0 if _ok_p else (resp.get("retcode") if isinstance(resp, dict) else -1)
         log(f"[事件] 反戳(兜底段) user={user_id} group={group_id or '私聊'} retcode={code}")
         return code == 0
     except Exception as e:

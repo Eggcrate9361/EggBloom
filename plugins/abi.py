@@ -230,12 +230,18 @@ class PluginContext:
             return None
 
     def send_group(self, group_id, text: str) -> Optional[dict]:
-        """发群消息。"""
-        return self.api_call("send_group_msg", {"group_id": str(group_id), "message": text})
+        """发群消息。
+
+        ★ 1.6.0 刀 5：插件不再直连 OneBot —— 走宿主的 `send_text`（→ 出站队列）。
+          返回值形状保持兼容（成功给 {"retcode": 0}），老插件按 retcode 判断不会坏。
+        """
+        ok = bool(self.send_text(str(text), target=None, group_id=str(group_id)))
+        return {"retcode": 0 if ok else -1, "ok": ok}
 
     def send_private(self, user_id, text: str) -> Optional[dict]:
-        """发私聊消息。"""
-        return self.api_call("send_private_msg", {"user_id": str(user_id), "message": text})
+        """发私聊消息（同样走宿主出口，见 send_group 的说明）。"""
+        ok = bool(self.send_text(str(text), target=str(user_id)))
+        return {"retcode": 0 if ok else -1, "ok": ok}
 
     # ── 事件广播：真总线（ABI v2）──
     def emit(self, event_name: str, **payload: Any) -> list:
