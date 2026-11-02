@@ -4865,6 +4865,7 @@ window.FIELD_META = {
     "eval_max_total": {"label": "总字数上限", "desc": "整条回复合计字数；线上硬上限 80 字", "ctl": "number", "panel": "evals", "unit": "", "id": "sEvalMaxTotal", "default": 80, "default_text": "80"},
     "eval_extra_banned": {"label": "额外禁用词", "desc": "临时想拦的词写这里，不用改 rules.json", "ctl": "text", "panel": "evals", "unit": "", "id": "sEvalExtraBanned", "default": "", "default_text": "空"},
     "private_slow_ack_after": {"label": "慢回填充（秒）", "desc": "私聊生成超过这么多秒还没结果，先发一条「在/等下」接住；0 = 关（**默认关**）。带工具的一轮本来就常超 10 秒，开着会让每次问话先多出一条「在」，看着像被敷衍了一次；真想开就填 45 之类，只在真的卡很久时才冒一句", "ctl": "number", "panel": "tuning", "unit": "秒", "id": "sSlowAckAfter", "default": 0.0, "default_text": "0.0"},
+    "private_meme_auto_detect": {"label": "私聊自动配表情包", "desc": "模型没标「[表情:x]」时，要不要靠情绪猜着补一张。默认关 —— 开着时每次回话都可能跟一张莫名其妙的图", "ctl": "bool", "panel": "tuning", "unit": "", "id": "sPrivateMemeAuto", "default": false, "default_text": "关闭"},
     "meme_save_lookback_sec": {"label": "存图回看窗口（秒）", "desc": "发完图隔一会儿才说「存表情包」时，往前找多久内的上一轮图片；0 = 只认本轮", "ctl": "number", "panel": "tuning", "unit": "秒", "id": "sMemeSaveLookback", "default": 300, "default_text": "300"},
     "meme_collect_min_kb": {"label": "表情包下限（KB）", "desc": "小于这个大小的图不收（防缩略图/坏图）", "ctl": "number", "panel": "tuning", "unit": "", "id": "sMemeMinKb"},
     "meme_collect_max_mb": {"label": "表情包上限（MB）", "desc": "大于这个大小的图不收", "ctl": "number", "panel": "tuning", "unit": "", "id": "sMemeMaxMb", "default": 3, "default_text": "3"},

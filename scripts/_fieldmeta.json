@@ -919,6 +919,16 @@
    "default": 0.0,
    "default_text": "0.0"
   },
+  "private_meme_auto_detect": {
+   "label": "私聊自动配表情包",
+   "desc": "模型没标「[表情:x]」时，要不要靠情绪猜着补一张。默认关 —— 开着时每次回话都可能跟一张莫名其妙的图",
+   "ctl": "bool",
+   "panel": "tuning",
+   "unit": "",
+   "id": "sPrivateMemeAuto",
+   "default": false,
+   "default_text": "关闭"
+  },
   "meme_save_lookback_sec": {
    "label": "存图回看窗口（秒）",
    "desc": "发完图隔一会儿才说「存表情包」时，往前找多久内的上一轮图片；0 = 只认本轮",

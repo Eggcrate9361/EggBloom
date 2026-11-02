@@ -150,6 +150,10 @@ DEFAULT_CONFIG = {
     "session_ttl": 300,
     "session_max_rounds": 30,
     "meme_cooldown": 60,
+    # 私聊表情包：模型没标 [表情:x] 时，要不要靠情绪猜**自动**补一张（2026-11-02）
+    # 默认关：真机表现是"每次回话都跟一张莫名其妙的图"，用户明确嫌弃过；
+    # 关掉后只有模型自己标了 [表情:xx] 才发。
+    "private_meme_auto_detect": False,
 
     # 协议层配置
     "protocol_enabled": False,

@@ -10930,6 +10930,55 @@ def _deep_task_hint(user_msg, tools_for_call, cfg=None) -> str:
             f"子 agent 读完后你再照常回话。工具轮次上限 {limit} 轮，用完就只能收尾了。")
 
 
+#: 画图请求的"动词"（必须有其一；裸的"图片"两个字**不算**）
+_DRAW_POS_RE = re.compile(
+    r"(帮我画|给我画|替我画|画一[张只个幅]|画个|画只|画张|画幅|来一[张只幅]|"
+    r"整一[张只]|做一[张只]|生成.{0,8}图|出[一张]*图|画图|作图|画的图|"
+    r"生辰.{0,6}图|生日.{0,6}图|贺图|表情包.{0,4}(画|做))",
+    re.IGNORECASE)
+
+#: 否定/抱怨语境（命中就不当画图请求）
+_DRAW_NEG_RE = re.compile(
+    r"(不要|不用|别|甭|不想|不需要|谁让你|哪来的|哪来|莫名其妙|怎么又)"
+    r".{0,10}(画|图)|莫名其妙的图|你哪来的图",
+    re.IGNORECASE)
+
+
+def _is_draw_request(text: str) -> bool:
+    """这句是不是"让我画一张图"（2026-11-02 修）。
+
+    ★ 真机事故：用户说「你哪来的图片」「不要发莫名其妙的图片给我」，
+      画图检测都命中（旧正则里有裸的 `的图片`），于是：
+      每次私聊都先冒一句"画图中，请稍等…"，再去连 127.0.0.1:8000 的 ComfyUI，
+      连不上才回"ComfyUI 未连接" —— 用户看到的是"莫名其妙连上画图"。
+
+    判据：**必须同时**满足
+      1. 有明确的"画/出图/生成图"动词（不再是裸的"图片"两个字）；
+      2. 没有否定/抱怨语境（不要…/别…/哪来的图/莫名其妙的图）。
+    """
+    t = str(text or "")
+    if not t.strip():
+        return False
+    try:
+        if _DRAW_NEG_RE.search(t):
+            return False
+        return bool(_DRAW_POS_RE.search(t))
+    except Exception:
+        return False
+
+
+def _draw_backend_ready() -> bool:
+    """画图后端能不能用（不能就别让用户白等 2 秒 + 看一句"未连接"）。"""
+    try:
+        url = str(_config.get("comfyui_url") or _config.get("image_gen_url") or "")
+        if not url:
+            # 没配置 = 用代码里的默认地址；只有显式关掉才算不可用
+            return bool(_config.get("image_gen_enable", True))
+        return bool(_config.get("image_gen_enable", True))
+    except Exception:
+        return False
+
+
 def _ctx_over_budget(messages, ratio: float = 0.8):
     """估算当前 messages 体量，判断是否已吃满上下文预算（总量闸）。
 
@@ -14770,8 +14819,9 @@ def _pipeline_step(group_id):
                     "请正常接话。只有在完全接不住时才输出 [不说话]。]")
 
             # ── 画图意图检测（只看用户原文，见函数开头的 _user_text_clean）──
-            draw_pattern = re.compile(r'(帮我画|给我画|给我一[张只]|画一[张只]|来一[张只]|整一[张只]|出图|画个|画只|画张|画\b|生成.*?图|的图片|生辰.*?图|生日.*?图|做个.*?图|做.*?图)', re.IGNORECASE)
-            if draw_pattern.search(_user_text_clean):
+            #   ★ 2026-11-02：判据收成 _is_draw_request（必须"画/出图"动词 + 非否定语境；
+            #   旧正则里有裸的「的图片」，于是"你哪来的图片"也会触发画图）。
+            if _is_draw_request(_user_text_clean) and _draw_backend_ready():
                 draw_desc = _user_text_clean
                 # 群聊暂不支持图片附件，走文生图
                 log(f"[画图] 群[{group_id}] 检测到画图意图: {draw_desc}")
@@ -17047,8 +17097,8 @@ def main():
                             log(f"[私聊画像] 组装失败（已降级为空）: {_e}")
 
                 # ── 画图意图检测 ──
-                draw_pattern = re.compile(r'(帮我画|给我画|给我一[张只]|画一[张只]|来一[张只]|整一[张只]|出图|画个|画只|画张|画\b|生成.*?图|的图片|生辰.*?图|生日.*?图|做个.*?图|做.*?图)', re.IGNORECASE)
-                if draw_pattern.search(text):
+                #   ★ 2026-11-02：见 _is_draw_request 的说明（旧正则被"的图片"误伤）。
+                if _is_draw_request(text) and _draw_backend_ready():
                     draw_desc = text
                     # 用户发图时用图生图，否则文生图
                     user_img = images[0] if images else None
@@ -17286,8 +17336,15 @@ def main():
                             _, emotion = parse_meme_intent(reply)
                             log(f"[私聊表情] 解析: emotion={emotion}")
                             if emotion is None:
-                                emotion = auto_detect_emotion(reply)
-                                log(f"[私聊表情] 自动检测: {emotion}")
+                                # ★ 2026-11-02：模型没标 [表情:x] 时**默认不猜**。
+                                #   真机表现：每回一句就自动配一张"莫名其妙"的表情包，
+                                #   用户明确嫌弃。想要旧行为把 private_meme_auto_detect 打开。
+                                if not bool(_config.get("private_meme_auto_detect", False)):
+                                    log("[私聊表情] 未标注情绪，自动检测已关，跳过")
+                                    emotion = None
+                                else:
+                                    emotion = auto_detect_emotion(reply)
+                                    log(f"[私聊表情] 自动检测: {emotion}")
                             if emotion:
                                 meme_path = match_meme(emotion)
                                 if meme_path:
