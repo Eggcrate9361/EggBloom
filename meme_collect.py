@@ -580,9 +580,11 @@ def maybe_collect(path: str, *, tags=None, source: str = "auto",
         return _skip(src, f"图太小（{sz}B，下限 {_lo // 1024}KB）")
     if sz > _hi:
         return _skip(src, f"图太大（{sz / 1024 / 1024:.1f}MB，上限 {_hi // 1024 // 1024}MB）")
-    # ★ 2026-11-02：只收"像表情包"的图 —— 群里随手发的照片/截图别进库。
-    if bool(cfg.get("meme_collect_require_pure_image", True)) and pure_image is False:
-        return _skip(src, "这条消息带文字，按普通图片处理（不收进表情库）")
+    # ★ 2026-11-02（用户纠正）：**不能因为消息里字多就拒收**。
+    #   表情包经常是"一张图 + 一句吐槽"发出来的；按文字多少判断会把好的挡在门外。
+    #   现在一律先收进**审核区**（`status=pending`），由人看图和文字决定去留。
+    #   文字量只作为审核区里的一条提示（`with_text`），不参与收不收。
+    _with_text = (pure_image is False)
     _bad = _looks_like_meme(src, cfg)
     if _bad:
         return _skip(src, _bad)
@@ -642,6 +644,7 @@ def maybe_collect(path: str, *, tags=None, source: str = "auto",
                     "ts": time.time(), "src": str(source or "")[:40],
                     "from_group": str(from_group or "")[:24],
                     "status": STATUS_PENDING if _need_review else STATUS_APPROVED,
+                    "with_text": bool(_with_text),
                     "phash": _ph if _ph is not None else _dhash(dst)}
         _save_index(idx)
 

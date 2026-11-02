@@ -269,7 +269,7 @@
   "meme_save_lookback_sec": 300,
   "meme_collect_min_kb": 2,
   "meme_collect_max_mb": 3,
-  "meme_collect_require_pure_image": true,
+  "meme_collect_require_pure_image": false,
   "meme_collect_max_dim": 1600,
   "meme_require_approval": true,
   "meme_collect_landscape_ratio": 1.35,

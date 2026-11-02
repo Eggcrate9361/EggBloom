@@ -649,9 +649,9 @@ DEFAULT_CONFIG = {
     # 配置中心 → 功能 → 阈值。全部即时生效，0 一般表示"关"。
     "meme_save_lookback_sec": 300,     # 说「存表情包」时往前找多久内的上一轮图片    "meme_collect_min_kb": 2,          # 表情库单张下限
     "meme_collect_max_mb": 3,
-    # 2026-11-02：只收「像表情包」的图 —— 群里的手机照片/长截图别进库。
-    # require_pure_image：消息里除图之外超过 12 字，就当普通图片（不收）。
-    "meme_collect_require_pure_image": True,
+    # 2026-11-02（用户纠正）：**不再按消息文字多少拒收** —— 表情包常带一句吐槽。
+    # 带文字的图照样收，只标 `with_text` 进审核区，由人决定去留。
+    "meme_collect_require_pure_image": False,
     "meme_collect_max_dim": 1600,
     # 2026-11-02：新收的先进「审核区」，通过后才进发送池（用户："不直接用"）。
     # 关掉 = 老行为（收了就能发）。

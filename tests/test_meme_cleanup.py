@@ -66,8 +66,13 @@ try:
 
     r1 = mc.maybe_collect(photo, pure_image=True, source="test")
     check("★ 采集：照片被跳过", r1 == "", r1)
+    # 2026-11-02（用户纠正）：**不能因为消息字多就拒收**
     r2 = mc.maybe_collect(ok, pure_image=False, source="test")
-    check("★ 采集：带文字的图被跳过", r2 == "", r2)
+    check("★ 采集：带文字的图照样收", r2 != "", r2)
+    check("★ 带文字只作审核提示（with_text）",
+          mc.status_of(r2) == mc.STATUS_PENDING and
+          any(bool(v.get("with_text")) for v in mc._index().values()
+              if isinstance(v, dict) and v.get("path") == r2), mc._index())
 finally:
     mc.COLLECT_DIR, mc.INDEX_FILE = OLD_COLLECT, OLD_INDEX
     shutil.rmtree(tmpdir, ignore_errors=True)
@@ -112,7 +117,7 @@ finally:
 import config as cfg  # noqa: E402
 
 D = cfg.DEFAULT_CONFIG
-check("默认只收纯图", D.get("meme_collect_require_pure_image") is True,
+check("★ 默认不按文字多少拒收", D.get("meme_collect_require_pure_image") is False,
       D.get("meme_collect_require_pure_image"))
 check("默认尺寸上限 1600", int(D.get("meme_collect_max_dim") or 0) == 1600,
       D.get("meme_collect_max_dim"))
