@@ -200,6 +200,11 @@ DEFAULT_CONFIG = {
     # 群管理指令白名单（空 = 仅 Bot 本人 + command_admins + target_qqs）
     "admin_qqs": [],
     "admin_commands_enable": True,
+    # 主人 / 主要管理员（2026-11-02）：Bot 该认得的"东家"。
+    # 决定 prompt 里怎么认人（该叫「老大」还是当普通群友），与权限判定共用一份名单。
+    # 空 = 退回 admin_qqs（兼容老配置，别让升级后"突然不认主"）。
+    "owner_qqs": [],
+    "owner_titles": ["老大"],
     # 能力清单（1.5.9）：把「这轮给了什么工具」与「我会什么」分开。
     # 关掉即回到 1.5.8 的旧文案（只列本轮工具，名单外一律否认）。
     "capability_view_enable": True,

@@ -8899,6 +8899,42 @@ def _is_authorized(sender: str) -> bool:
     return sender in _get_admin_qqs()
 
 
+def _owner_qq_set() -> set:
+    """主人/主要管理员的 QQ 集合。
+
+    ★ 2026-11-02 真机：私聊里 Bot 把**东家**当普通群友（甚至反过来说"你爹是谁
+      我还没见着呢"）。配置里 `command_admins` 是别人、`admin_qqs`/白名单才是东家，
+      三份名单各管一段，prompt 里**一个字都没说**"对方是主人"。
+      这里统一一份名单：`owner_qqs` 优先，空则退回 `admin_qqs`（老配置不掉）。
+    """
+    def _clean(v):
+        if isinstance(v, str):
+            v = [v]
+        try:
+            return {str(q).strip() for q in (v or []) if str(q).strip()}
+        except Exception:
+            return set()
+
+    owner = _clean(_config.get("owner_qqs"))
+    return owner or _clean(_config.get("admin_qqs"))
+
+
+def _owner_identity_line(sender) -> str:
+    """对方是主人时返回一句身份说明，否则空串（零 token）。"""
+    qq = str(sender or "").strip()
+    if not qq or qq not in _owner_qq_set():
+        return ""
+    try:
+        titles = [str(t).strip() for t in (_config.get("owner_titles") or []) if str(t).strip()]
+    except Exception:
+        titles = []
+    titles = titles[:3] or ["老大"]
+    how = "」「".join(titles)
+    return (f"【身份】你现在是在跟这台机器的主人（主要管理员）说话，QQ {qq}。"
+            f"他让你叫他「{how}」。他的话优先照办，别推诿、别装不熟；"
+            "但别把「主人」这套挂嘴上，除非他自己提起。")
+
+
 def _auto_accept_cfg() -> dict:
     cfg = _config.get("auto_accept")
     if isinstance(cfg, dict):
@@ -11776,6 +11812,10 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
     # EGO 人格/记忆/风格/节奏注入 → system 级上下文（独立于群聊/私聊钩子，提升指令权重）
     if ego_inject_context:
         _inject_ego_context(dynamic_parts, ego_inject_context)
+    # ★ 2026-11-02：跟主人（主要管理员）说话时，先把"这是谁"说清楚。
+    #   此前三份名单各管一段、prompt 里一个字都没说，Bot 把东家当普通群友，
+    #   甚至回"你爹是谁我还没见着呢"。只对名单内的人生效，别人零 token。
+    _add("identity", _owner_identity_line(_pl_sender))
     # 现场资料（群聊近况/当前局面/决策结论）走 system，而不是拼在用户消息里。
     # 放进用户消息时模型会把它当成"对方发来的简报"逐条回应，实测出现
     # 「我这边收到的原文长这样」「我账上…」这种后台汇报腔（2026-10-25）。

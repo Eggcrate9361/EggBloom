@@ -2283,6 +2283,12 @@ function renderPermPanel(root){
     <div class="field"><div class="field-label">群管理白名单 QQ（每行一个）</div>
       <div class="field-desc">可在群里 @Bot 执行踢人/禁言/改名片等管理指令的 QQ；留空 = 仅 Bot 本人 + 上方管理员</div>
       <textarea class="input" id="sAdminQqs" rows="3" placeholder="123456789&#10;987654321"></textarea></div>
+    <div class="field"><div class="field-label">主人 / 主要管理员 QQ（每行一个）</div>
+      <div class="field-desc">Bot 该认得的"东家"：跟他说话时会知道对方是主人，不推诿、不装不熟。留空 = 沿用上方群管理白名单</div>
+      <textarea class="input" id="sOwnerQqs" rows="2" placeholder="123456789"></textarea></div>
+    <div class="field"><div class="field-label">该怎么称呼主人（逗号分隔）</div>
+      <div class="field-desc">例：老大,爹 —— 进 prompt 的「他让你叫他…」；留空默认「老大」</div>
+      <input class="input" id="sOwnerTitles" type="text" placeholder="老大,爹"></div>
     <div class="field" style="display:flex;align-items:center;gap:20px">
       <input type="checkbox" class="toggle-input" id="sAdminCmdsEnable">
       <div class="field-label" style="margin:0;flex-shrink:0">启用群管理指令</div></div>
@@ -2608,6 +2614,8 @@ async function loadSettingsData(){
     s('sCmdPermMode', c.command_permission || 'strict');
     s('sCmdAdmins', (c.command_admins||[]).join('\n'));
     s('sAdminQqs', (c.admin_qqs||[]).join('\n'));
+    s('sOwnerQqs', (c.owner_qqs||[]).join('\n'));
+    s('sOwnerTitles', (c.owner_titles||[]).join(','));
     t('sAdminCmdsEnable', c.admin_commands_enable !== false);
     t('sAutoAcceptEnabled', (c.auto_accept&&c.auto_accept.enabled)!==false);
     t('sAutoAcceptFriend', (c.auto_accept&&c.auto_accept.friend)!==false);
@@ -2760,6 +2768,8 @@ function collectSettings(){
     command_permission: val('sCmdPermMode') || 'strict',
     command_admins: splitLines('sCmdAdmins'),
     admin_qqs: splitLines('sAdminQqs'),
+    owner_qqs: splitLines('sOwnerQqs'),
+    owner_titles: (val('sOwnerTitles') || '').split(/[,，\s]+/).filter(Boolean),
     admin_commands_enable: chk('sAdminCmdsEnable'),
     auto_accept: {
       enabled: chk('sAutoAcceptEnabled'), friend: chk('sAutoAcceptFriend'),

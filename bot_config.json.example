@@ -74,6 +74,8 @@
   },
   "admin_qqs": [],
   "admin_commands_enable": true,
+  "owner_qqs": [],
+  "owner_titles": ["老大"],
   "capability_view_enable": true,
   "capability_show_disabled": true,
   "group_role_cache_sec": 600,

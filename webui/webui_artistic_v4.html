@@ -4884,6 +4884,8 @@ window.FIELD_META = {
     "command_permission": {"label": "权限模式", "desc": "", "ctl": "select", "panel": "perm", "unit": "", "id": "sCmdPermMode"},
     "command_admins": {"label": "额外管理员 QQ（每行一个）", "desc": "除 target_qqs（私聊白名单）与 Bot 本人外，追加可执行管理员指令的 QQ", "ctl": "lines", "panel": "perm", "unit": "", "id": "sCmdAdmins"},
     "admin_qqs": {"label": "群管理白名单 QQ（每行一个）", "desc": "可在群里 @Bot 执行踢人/禁言/改名片等管理指令的 QQ；留空 = 仅 Bot 本人 + 上方管理员", "ctl": "lines", "panel": "perm", "unit": "", "id": "sAdminQqs", "default": [], "default_text": "空"},
+    "owner_qqs": {"label": "主人 / 主要管理员 QQ（每行一个）", "desc": "Bot 该认得的\"东家\"：跟他说话时会知道对方是主人，不推诿、不装不熟。留空 = 沿用上方群管理白名单", "ctl": "lines", "panel": "perm", "unit": "", "id": "sOwnerQqs", "default": [], "default_text": "空"},
+    "owner_titles": {"label": "该怎么称呼主人（逗号分隔）", "desc": "例：老大,爹 —— 进 prompt 的「他让你叫他…」；留空默认「老大」", "ctl": "text", "panel": "perm", "unit": "", "id": "sOwnerTitles", "default": ["老大"], "default_text": "老大"},
     "admin_commands_enable": {"label": "启用群管理指令", "desc": "", "ctl": "bool", "panel": "perm", "unit": "", "id": "sAdminCmdsEnable", "default": true, "default_text": "开启"},
     "auto_accept.enabled": {"label": "总开关（自动同意）", "desc": "", "ctl": "bool", "panel": "autoaccept", "unit": "", "id": "sAutoAcceptEnabled", "nested": "auto_accept", "sub": "enabled"},
     "auto_accept.friend": {"label": "自动同意好友申请", "desc": "", "ctl": "bool", "panel": "autoaccept", "unit": "", "id": "sAutoAcceptFriend", "nested": "auto_accept", "sub": "friend"},

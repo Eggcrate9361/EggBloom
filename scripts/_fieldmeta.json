@@ -1104,6 +1104,28 @@
    "default": [],
    "default_text": "空"
   },
+  "owner_qqs": {
+   "label": "主人 / 主要管理员 QQ（每行一个）",
+   "desc": "Bot 该认得的\"东家\"：跟他说话时会知道对方是主人，不推诿、不装不熟。留空 = 沿用上方群管理白名单",
+   "ctl": "lines",
+   "panel": "perm",
+   "unit": "",
+   "id": "sOwnerQqs",
+   "default": [],
+   "default_text": "空"
+  },
+  "owner_titles": {
+   "label": "该怎么称呼主人（逗号分隔）",
+   "desc": "例：老大,爹 —— 进 prompt 的「他让你叫他…」；留空默认「老大」",
+   "ctl": "text",
+   "panel": "perm",
+   "unit": "",
+   "id": "sOwnerTitles",
+   "default": [
+    "老大"
+   ],
+   "default_text": "老大"
+  },
   "admin_commands_enable": {
    "label": "启用群管理指令",
    "desc": "",
