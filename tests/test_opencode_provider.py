@@ -70,6 +70,21 @@ other = providers.make_provider(api_url=URL, api_key="k", model="x", provider="d
 check("别的 provider 不受影响", other.__class__.__name__ == "OpenAIProvider"
       and not (other.extra_headers() or {}))
 
+
+# ── 5. 拉模型不许用 urllib 默认 UA（Cloudflare 1010）────────────────
+web = io.open(os.path.join(ROOT, "webui", "webui_server.py"), encoding="utf-8").read()
+check("★ 拉模型带正常 UA", "EggBloom/1.6 (+https://github.com/Eggcrate9361/EggBloom)" in web)
+check("★ opencode 域名带会话头", 'x-opencode-session"] = "eggbloom-models"' in web)
+
+# ── 6. Console（按量）卡片独立存在 ───────────────────────────────
+console = (config.API_PROVIDERS or {}).get("opencode") or {}
+check("★ 有 Console 端点条目", bool(console), console)
+check("Console 端点 URL 正确",
+      console.get("url") == "https://opencode.ai/inference/openai/v1/chat/completions",
+      console.get("url"))
+cards2 = json.load(io.open(os.path.join(ROOT, "webui", "providers.json"), encoding="utf-8"))
+check("★ UI 有 Console 卡片", any(c.get("id") == "opencode" for c in cards2))
+
 print(f"\n通过 {len(PASS)} / 失败 {len(FAIL)}")
 for n in FAIL:
     print(f"  FAIL  {n}")
