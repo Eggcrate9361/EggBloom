@@ -129,13 +129,16 @@ def capture(is_group=False, **cfg):
 # ── 1. 生成 / 比对 golden ────────────────────────────────────────────
 import config as _cfgmod  # noqa: E402
 
-check("默认关：DEFAULT_CONFIG 里 life_context_enable=False",
-      _cfgmod.DEFAULT_CONFIG.get("life_context_enable") is False,
+# 2026-11-02 灰度 24h 结论：**保留（默认开）** —— 判据见交接 §73。
+check("默认开：DEFAULT_CONFIG 里 life_context_enable=True",
+      _cfgmod.DEFAULT_CONFIG.get("life_context_enable") is True,
       _cfgmod.DEFAULT_CONFIG.get("life_context_enable"))
 check("默认预算 8000", _cfgmod.DEFAULT_CONFIG.get("life_context_budget") == 8000,
       _cfgmod.DEFAULT_CONFIG.get("life_context_budget"))
 
-captured = capture()
+# 基线对照必须在**开关关**下取：默认已经改成开（灰度结论），
+# 不显式关掉就会拿到合并后的 1 块，跟基线对不上。
+captured = capture(life_context_enable=False)
 
 if UPDATE:
     os.makedirs(os.path.dirname(FIXTURE), exist_ok=True)

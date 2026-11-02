@@ -599,7 +599,11 @@ DEFAULT_CONFIG = {
     # 交给 harness.life_context.merge() 合成一段注入，日志打「[生活上下文] 合并 N 块」。
     # 关（默认）：逐块注入 = 改造前的样子，逐字节相同（golden 钉在
     # tests/test_life_context_mainchain.py）。灰度通过再开。
-    "life_context_enable": False,
+    # 2026-11-02 灰度 24h 结论：**保留（默认开）**。证据见交接 §73：
+    #   · 真跑 79 轮（另有 16 条是测试进程写同一份日志，按判据只信真跑）；
+    #   · prompt 平均 +0.9%（<10% 判据），private −1.3% / group +7.2%；
+    #   · Traceback 12 → 0；合并块数 9.8 / 1739 字（每轮）。
+    "life_context_enable": True,
     # 合并后的字数上限；超了从尾部整块丢（不截半句）。0 = 不限。
     "life_context_budget": 8000,
 

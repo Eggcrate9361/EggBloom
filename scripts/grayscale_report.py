@@ -42,7 +42,9 @@ from typing import Dict, List, Optional, Tuple
 #: 日志行首时间戳
 TS_RE = re.compile(r"^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]")
 #: AI (1051 tokens, 0.002227 yuan)
-AI_RE = re.compile(r"AI \((\d+)\s*tokens,\s*([-\d.]+)\s*yuan\)")
+# 2026-11-02：日志真身是 `AI 回复 (8468 tokens, ￥0.001755, 缓存命中 …)`，
+# 旧正则只认 `AI (N tokens, X yuan)` → 一直统计成 0（灰度报告差点误判成"没真跑"）。
+AI_RE = re.compile(r"AI (?:回复\s*)?\((\d+)\s*tokens?,\s*[￥¥]?\s*([-\d.]+)")
 #: [记忆] uid=… scene=private 注入 3 段/209 字（称呼 63 / …）
 MEM_RE = re.compile(r"\[记忆\].*注入\s*(\d+)\s*段/(\d+)\s*字")
 #: [生活上下文] 合并 12 块 → 422 字（预算 8000…）

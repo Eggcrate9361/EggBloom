@@ -250,7 +250,7 @@
   "slang_injector_enable": true,
   "nsfw_enabled": true,
   "self_heal_enable": true,
-  "life_context_enable": false,
+  "life_context_enable": true,
   "life_context_budget": 8000,
   "agent_as_tool": false,
   "agent_legacy_entry": false,

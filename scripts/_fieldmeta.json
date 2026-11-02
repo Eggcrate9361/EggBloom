@@ -796,8 +796,8 @@
    "panel": "switches",
    "unit": "",
    "id": "sLifeContextEnable",
-   "default": false,
-   "default_text": "关闭"
+   "default": true,
+   "default_text": "开启"
   },
   "nsfw_enabled": {
    "label": "NSFW 内容",
