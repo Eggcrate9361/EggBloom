@@ -953,7 +953,7 @@ class SuperMemory:
             # 1. 高置信度事实（向量优先）
             raw_facts = []
             cur = conn.execute(
-                "SELECT category, content, confidence, last_used, embedding, tier FROM facts "
+                "SELECT category, content, confidence, last_used, embedding, tier, user_id FROM facts "
                 "WHERE scope_id=? AND confidence > 0.6 AND (? = 0 OR (embedding IS NOT NULL AND embedding != ''))"
                 + uf_sql +
                 " ORDER BY confidence DESC, last_used DESC LIMIT 100",
@@ -965,7 +965,7 @@ class SuperMemory:
             # 2. 重要事件（向量优先）
             raw_events = []
             cur = conn.execute(
-                "SELECT event_type, summary, emotion, importance, timestamp, embedding, tier FROM events "
+                "SELECT event_type, summary, emotion, importance, timestamp, embedding, tier, user_id FROM events "
                 "WHERE scope_id=? AND importance > 0.5 AND (? = 0 OR (embedding IS NOT NULL AND embedding != ''))"
                 + ev_sql +
                 " ORDER BY timestamp DESC LIMIT 100",
@@ -1005,6 +1005,7 @@ class SuperMemory:
                 facts.append({
                     "type": "fact",
                     "content": f"[{row[0]}] {row[1]}",
+                    "user_id": str(row[6] or "") if len(row) > 6 else "",
                     "confidence": row[2],
                     "last_used": row[3],
                     "importance": importance,
@@ -1021,6 +1022,7 @@ class SuperMemory:
                 events.append({
                     "type": "event",
                     "content": f"[{row[0]}] {row[1]}",
+                    "user_id": str(row[7] or "") if len(row) > 7 else "",
                     "emotion": row[2],
                     "importance": importance,
                     "timestamp": row[4],
@@ -1063,15 +1065,29 @@ class SuperMemory:
                                          focus_user=focus_user)
         if not memories:
             return ""
+        # ★ 2026-11-02（用户："他们做了什么、说了什么 bot 知道是谁做的"）：
+        #   每条记忆前面标上**是谁的**。没名字时退回 QQ 号，绝不匿名。
+        def _tag_of(uid):
+            u = str(uid or "").strip()
+            if not u:
+                return ""
+            try:
+                import people as _pp
+                return _pp.label(u, with_uid=False) or u
+            except Exception:
+                return u
+
         lines = []
         for m in memories:
+            _who = _tag_of(m.get("user_id"))
+            _pre = f"【{_who}】" if _who else ""
             if m["type"] == "fact":
-                lines.append(m["content"])
+                lines.append(_pre + m["content"])
             elif m["type"] == "event":
                 t = datetime.fromtimestamp(m.get("timestamp", time.time())).strftime("%m-%d %H:%M")
-                lines.append(f"[{t}] {m['content']}")
+                lines.append(f"[{t}] {_pre}{m['content']}")
             elif m["type"] == "affection":
-                lines.append(m["content"])
+                lines.append(_pre + m["content"])
         return "【核心记忆】以下记忆已按重要度筛选，请自然融入回复：\n" + "\n".join(lines)
 
     # ── 人格沉淀 ──

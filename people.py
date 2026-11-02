@@ -258,15 +258,12 @@ def roster_block(limit: int = 8, *, include_uids=(), skip=()) -> str:
     return "【你认识的人】" + "；".join(rows) + "。"
 
 
-def resolve(text) -> str:
-    """从一句话里认出说的是谁（别名/称号/名字 → uid）。认不出返回空串。
-
-    只做**唯一命中**：多个候选都命中就算模糊，不猜（记忆串人比记不住更糟）。
-    """
+def resolve_hit(text):
+    """`resolve` 的细版：返回 (uid, 命中的那个叫法)。认不出返回 ("", "")。"""
     t = str(text or "").strip()
     if not t:
-        return ""
-    hits = set()
+        return "", ""
+    hits = {}
     for uid in list(_extra_store().keys()) + list(_base_store().keys()):
         u = str(uid)
         p = get(u)
@@ -275,9 +272,23 @@ def resolve(text) -> str:
         for c in cands:
             c = str(c or "").strip()
             if c and len(c) >= 2 and c in t:
-                hits.add(canonical(u))
+                hits.setdefault(canonical(u), c)
                 break
-    return hits.pop() if len(hits) == 1 else ""
+    if len(hits) != 1:
+        return "", ""
+    uid = next(iter(hits))
+    return uid, hits[uid]
+
+
+def resolve(text) -> str:
+    """从一句话里认出说的是谁（别名/称号/名字 → uid）。认不出返回空串。
+
+    只做**唯一命中**：多个候选都命中就算模糊，不猜（记忆串人比记不住更糟）。
+    """
+    t = str(text or "").strip()
+    if not t:
+        return ""
+    return resolve_hit(t)[0]
 
 
 def add_fact(uid, key: str, value: str, *, scope: str = "global",

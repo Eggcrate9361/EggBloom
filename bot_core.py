@@ -9009,6 +9009,37 @@ def _owner_identity_line(sender) -> str:
             "但别把「主人」这套挂嘴上，除非他自己提起。")
 
 
+def _mention_identity_hint(text, sender="") -> str:
+    """消息里点到了谁 → 给一句「这人是谁」（2026-11-02）。
+
+    用户要的"bot 知道谁是谁"：他说「鸡蛋呢」，模型得知道鸡蛋就是老大，
+    不是另一个陌生人。只在**唯一命中**时给（`people.resolve` 不猜）。
+    """
+    t = str(text or "")
+    if not t or len(t) > 500:
+        return ""
+    try:
+        import people as _mp
+        uid, said = _mp.resolve_hit(t)
+        if not uid or uid == str(sender or "").strip():
+            return ""
+        who = _mp.label(uid, with_uid=False) or uid
+        role = ""
+        for f in (_mp.get(uid).get("facts") or []):
+            if isinstance(f, dict) and str(f.get("k")) in ("身份", "关系"):
+                role = str(f.get("v") or "").strip()[:20]
+                break
+        # 他说的是别名、和主称呼不一样时，把两个都点出来
+        said = str(said or "").strip()
+        if said and said not in who:
+            who = f"{who}（他刚才叫的是「{said}」）"
+        tail = f"，{role}" if role else ""
+        return (f"【谁是谁】{who} 是同一个人，QQ {uid}{tail}；"
+                "别当成新面孔，也别把他说的话安到别人头上。")
+    except Exception:
+        return ""
+
+
 def _owner_friend_prior(sender, is_group: bool = False) -> str:
     """不是主人时，给一句「这人一般是老大的朋友」的关系先验（2026-11-02）。
 
@@ -12026,6 +12057,8 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
     _add("identity", _owner_identity_line(_pl_sender))
     # 关系先验（2026-11-02）：不是主人时，默认按「老大的朋友」对待，熟了自己改。
     _add("relation_prior", _owner_friend_prior(_pl_sender, is_group))
+    # 谁是谁（2026-11-02）：他刚才点名的人，模型要知道对应哪个熟人。
+    _add("mention_id", _mention_identity_hint(user_msg, _pl_sender))
     # 谁是谁（2026-11-02）：鸡蛋/开发者/老大/爹 是同一个人；Texas 是朋友。
     # 只在私聊给（群里另有【群内人物】，且不该把别处的人名带进群）。
     if not is_group:

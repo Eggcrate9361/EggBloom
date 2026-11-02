@@ -124,6 +124,15 @@ def _super_mem_candidates(message, scope, scope_id, limit):
         text = str(m.get("content") or "").strip()
         if not text:
             continue
+        # ★ 2026-11-02：标上这是谁的记忆（people.label 取名字，不塞 QQ）
+        try:
+            _uid = str(m.get("user_id") or "").strip()
+            if _uid and not text.startswith("【"):
+                import people as _pp2
+                _tag = _pp2.label(_uid, with_uid=False) or _uid
+                text = f"【{_tag}】{text}"
+        except Exception:
+            pass
         try:
             sim = float(m.get("sim") or 0.0)
         except (TypeError, ValueError):
