@@ -4836,7 +4836,7 @@ window.FIELD_META = {
     "group_msg_buffer_window_trigger": {"label": "触发缓冲窗口（秒）", "desc": "被触发（@/小a）且还没有上下文时, 等多久再回。超过 8 无效——整批从第一条算起有 8 秒硬顶", "ctl": "number", "panel": "group", "unit": "秒", "id": "sGroupMsgBufferTrigger", "default": 2, "default_text": "2"},
     "agent_can_work": {"label": "可干活（多步任务）", "desc": "开：聊到需要连着查/读/跑/改的活时，它能调「多步任务工具」自己干完再回来接话 —— 多一双手，不是换人格。关：只聊不干。群里仍要求被 @ 或叫到名字；私聊仍要求在白名单里。原来是\"群聊内可派活/私聊内可派活\"两个开关，1.6.0 合并成这一个", "ctl": "bool", "panel": "group", "unit": "", "id": "sAgentCanWork", "default": false, "default_text": "关闭"},
     "meme_enable": {"label": "启用表情包", "desc": "", "ctl": "bool", "panel": "meme", "unit": "", "id": "sMemeEnable", "default": true, "default_text": "开启"},
-    "meme_cooldown": {"label": "冷却（秒）", "desc": "", "ctl": "number", "panel": "meme", "unit": "秒", "id": "sMemeCooldown", "default": 60, "default_text": "60"},
+    "meme_cooldown": {"label": "冷却（秒）", "desc": "", "ctl": "number", "panel": "meme", "unit": "秒", "id": "sMemeCooldown", "default": 180, "default_text": "180"},
     "meme_collect_phash_dedupe": {"label": "采集视觉去重（同图换编码不再收第二份）", "desc": "", "ctl": "bool", "panel": "meme", "unit": "", "id": "sMemePhashDedupe", "default": true, "default_text": "开启"},
     "meme_idle_exit_enable": {"label": "启用空闲退出", "desc": "", "ctl": "bool", "panel": "meme", "unit": "", "id": "sMemeIdleExitEnable", "default": true, "default_text": "开启"},
     "meme_auto_detect_emotion": {"label": "自动检测情绪", "desc": "", "ctl": "bool", "panel": "meme", "unit": "", "id": "sMemeAutoEmotion", "default": true, "default_text": "开启"},
