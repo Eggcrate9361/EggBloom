@@ -104,7 +104,24 @@ def adapt_kwargs(fn):
             d["_pos"] = args
         d.update(kw)
         allowed = {k: v for k, v in d.items() if k in sig.parameters}
-        return fn(**allowed)
+        # ★ 2026-11-02 真机：参数名对不上时这里会抛
+        #   `TypeError: meme_send() missing 1 required positional argument: 'meme_id'`，
+        #   模型拿到 traceback 后**改用原生调用格式**把标记吐进了正文。
+        #   工具层自己把"参数不对/怎么传"说清楚，比抛异常有用得多。
+        try:
+            return fn(**allowed)
+        except TypeError:
+            missing = [p.name for p in sig.parameters.values()
+                       if p.default is p.empty
+                       and p.kind in (p.POSITIONAL_OR_KEYWORD, p.KEYWORD_ONLY)
+                       and p.name not in allowed]
+            if not missing:
+                raise
+            return {"ok": False,
+                    "error": ("参数不对：缺少 " + "、".join(missing)
+                              + "。请按工具定义传参，例如 "
+                              + '{"' + missing[0] + '": "..."}'
+                              + "；不要把调用格式写进正文。")}
 
     _call.__name__ = getattr(fn, "__name__", "tool")
     _call.__doc__ = getattr(fn, "__doc__", None)

@@ -13358,6 +13358,30 @@ def _strip_context_marks(text: str) -> str:
 _SPEAKER_LABEL_RE = re.compile(r"[（(]\s*(?:QQ\s*[:：]?\s*)?\d{5,12}\s*[)）]", re.I)
 
 
+#: 模型的原生工具调用文本（DeepSeek DSML）。它该走 tool_calls，绝不该出现在正文里。
+_DSML_BLOCK_RE = re.compile(r"<｜｜DSML｜｜.*?(?:</｜｜DSML｜｜\s*calls>|$)", re.S)
+_DSML_ANY_RE = re.compile(r"^.*｜｜DSML｜｜.*$", re.M)
+
+
+def _strip_dsml(text):
+    """剥掉正文里泄漏的 DSML 工具调用文本，返回 (干净文本, 是否命中)。
+
+    ★ 2026-11-02 真机（16:31 私聊）：`meme_send` 参数没对上 → 工具报错 →
+      模型下一轮把原生调用格式当正文吐了出来，5 条气泡全是 DSML 标记。
+      这条链上**任何**一条都不该发出去。
+    """
+    if not text:
+        return text, False
+    t = str(text)
+    hit = False
+    if "｜｜DSML｜｜" in t or "<|DSML|" in t:
+        hit = True
+        t = _DSML_BLOCK_RE.sub("", t)
+        t = _DSML_ANY_RE.sub("", t)
+        t = re.sub(r"\n{3,}", "\n\n", t).strip()
+    return t, hit
+
+
 def _strip_speaker_labels(text, *names) -> str:
     """剥掉模型从历史里抄来的发言标签（2026-11-02 真机）。
 
@@ -15136,6 +15160,10 @@ def _pipeline_step(group_id):
             #   当成回复格式照抄（真机发出过「[18:46] 别戳」）。
             #   prompt 里已经写了格式说明，这里是兜底 —— 改过的文本一律删。
             sent_text = _strip_speaker_labels(_strip_context_marks(sent_text), sender)
+            _no_dsml, _had_dsml = _strip_dsml(sent_text)
+            if _had_dsml:
+                log(f"[DSML] 丢弃正文里的工具调用文本（{len(sent_text)} 字 → {len(_no_dsml)} 字）")
+                sent_text = _no_dsml or "（我这边工具调用没走通，重新说一句？）"
             # ── 去AI味：规则级后处理（发送前清理破折号/套话/客服口吻等）──
             try:
                 from de_ai import de_ai_post_process
@@ -17292,6 +17320,10 @@ def main():
                     sent_text = _trim_incomplete(sent_text, getattr(reply, "truncated", False))
                     # ── 剥掉模型模仿来的上下文标记（2026-10-27，与群聊一致）──
                     sent_text = _strip_speaker_labels(_strip_context_marks(sent_text), sender)
+                    _no_dsml, _had_dsml = _strip_dsml(sent_text)
+                    if _had_dsml:
+                        log(f"[DSML] 丢弃正文里的工具调用文本（{len(sent_text)} 字 → {len(_no_dsml)} 字）")
+                        sent_text = _no_dsml or "（我这边工具调用没走通，重新说一句？）"
                     # ── 去AI味：规则级后处理（私聊同样生效）──
                     try:
                         from de_ai import de_ai_post_process

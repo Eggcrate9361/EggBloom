@@ -203,7 +203,22 @@ def _resolve(meme_id: str) -> str:
     return full if os.path.isfile(full) else ""
 
 
-def meme_send(meme_id: str) -> Dict[str, Any]:
+def meme_send(meme_id: str = "", **kw) -> Dict[str, Any]:
+    # ★ 2026-11-02 真机：模型把参数叫成 id / name / file / path，
+    #   适配器只认签名里的键 → 传进来是空的 → TypeError: missing 'meme_id'，
+    #   工具失败后它还把原生调用格式（<｜｜DSML｜｜...）当正文吐了出来。
+    #   这里做一层别名容错，并且**缺参不再抛异常**（抛异常会让模型乱试格式）。
+    if not str(meme_id or "").strip():
+        for _k in ("id", "meme", "name", "file", "path", "image", "meme_path"):
+            _v = kw.get(_k)
+            if isinstance(_v, str) and _v.strip():
+                meme_id = _v
+                break
+    meme_id = str(meme_id or "").strip()
+    if not meme_id:
+        return {"ok": False,
+                "error": "缺少 meme_id（例：meme_send 传 {\"meme_id\": \"collected/xxx.jpg\"}）。"
+                         "先用 meme_find 查 id，别自己拼。"}
     full = _resolve(meme_id)
     if not full:
         return {"ok": False, "error": "没这张图（id 不对或不在图库里）"}
