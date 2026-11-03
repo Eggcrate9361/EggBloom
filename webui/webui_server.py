@@ -853,6 +853,26 @@ _bot_process = None
 _bot_lock = threading.Lock()
 
 
+def _llm_headers(api_key: str, url: str = "", provider_id: str = "") -> dict:
+    """调 LLM 端点时的请求头（2026-11-02）。
+
+    两个坑都在这一个函数里收口：
+      ① Cloudflare 会按 User-Agent 拦（默认 `Python-urllib/3.x` → 403/1010）；
+      ② OpenCode 的网关要求 `x-opencode-session`，缺了直接 400 MissingSessionID。
+    """
+    h = {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer " + str(api_key or ""),
+        "Accept": "application/json",
+        "User-Agent": "EggBloom/1.6 (+https://github.com/Eggcrate9361/EggBloom)",
+        "Accept-Language": "zh-CN,zh;q=0.9",
+    }
+    low = (str(url or "") + " " + str(provider_id or "")).lower()
+    if "opencode" in low:
+        h["x-opencode-session"] = "eggbloom-webui"
+    return h
+
+
 def _detect_provider_type(base_url, provider_id):
     pid = (provider_id or '').lower()
     # 所有 OpenAI 兼容服务商(国产官方/聚合)直接按其 id 返回,模型探测统一走 /v1/models
@@ -1421,7 +1441,7 @@ _RND_DECISION = re.compile(r"\[(跳过|观察|决策放行|不参与)\]|暂不�
 _RND_OBSERVE = re.compile(r"\[观察\]")
 _RND_DEC_GO = re.compile(r"^群\[([^\]]+)\]\s*\[决策放行\].*?:\s*(.*)$", re.S)
 _RND_DEC_SKIP = re.compile(r"^群\[([^\]]+)\]\s*\[跳过\].*?:\s*(.*)$", re.S)
-# `私聊AI回复(Texas(2011257385)): 10-31 16:31｜我改什么口了`（2026-10 起的真机格式）
+# `私聊AI回复(Texas(1000000002)): 10-31 16:31｜我改什么口了`（2026-10 起的真机格式）
 # 老格式带方括号（`私聊[xxx] AI回复(...)`），两种都要认 —— 只认带括号的那种时，
 # 私聊回复全靠后面的 `[发送]` 行兜底，AI 回复正文（含多行）反而丢了。
 _RND_REPLY_PM = re.compile(r"^(?:私聊|群)(?:\[[^\]]*\])?\s*AI回复\((.+?)\):\s*(.+)$", re.S)
@@ -4086,13 +4106,8 @@ class Handler(BaseHTTPRequestHandler):
                         #   urllib 默认 UA 是 `Python-urllib/3.x` —— Cloudflare 直接
                         #   回 `HTTP 403: ERROR CODE: 1010`（banned user agent）。
                         #   拉模型列表也要带正常 UA；opencode 还要会话头。
-                        _h = {"Authorization": "Bearer " + api_key,
-                              "Accept": "application/json",
-                              "User-Agent": "EggBloom/1.6 (+https://github.com/Eggcrate9361/EggBloom)",
-                              "Accept-Language": "zh-CN,zh;q=0.9"}
-                        if "opencode" in (provider_id or "").lower() or "opencode.ai" in (url or ""):
-                            _h["x-opencode-session"] = "eggbloom-models"
-                        req = urllib.request.Request(url, headers=_h)
+                        req = urllib.request.Request(
+                            url, headers=_llm_headers(api_key, url, provider_id))
                         with urllib.request.urlopen(req, timeout=per_timeout) as r:
                             data = json.loads(r.read().decode("utf-8"))
                             raw = data.get("data") or data.get("models") or []
@@ -4441,10 +4456,13 @@ class Handler(BaseHTTPRequestHandler):
             # 注意：do_POST 是巨型函数，禁止在函数内局部 import urllib.request——
             # 那会让 urllib 变成整个函数的局部变量，导致其它分支（如模型列表拉取）
             # 报 UnboundLocalError。模块顶部已有全局 import。
-            # 推理模型会先消耗 reasoning tokens：预算给足 64，避免 content 空返回被误判为失败
-            payload = {"model": model, "messages": [{"role": "user", "content": "你好"}], "max_tokens": 64}
-            req = urllib.request.Request(api_url, data=json.dumps(payload).encode("utf-8"),
-                headers={"Content-Type": "application/json", "Authorization": "Bearer " + api_key})
+            # 推理模型会先消耗 reasoning tokens：Go 上的模型是**推理型**，64 tokens
+            # 会全被 reasoning 吃掉，正文空返回会被误判成"连上了但没回话"。
+            payload = {"model": model, "messages": [{"role": "user", "content": "你好"}],
+                       "max_tokens": 300}
+            req = urllib.request.Request(
+                api_url, data=json.dumps(payload).encode("utf-8"),
+                headers=_llm_headers(api_key, api_url, provider_id))
             try:
                 with urllib.request.urlopen(req, timeout=20) as r:
                     resp = json.loads(r.read().decode("utf-8"))

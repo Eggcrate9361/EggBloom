@@ -74,7 +74,9 @@ check("别的 provider 不受影响", other.__class__.__name__ == "OpenAIProvide
 # ── 5. 拉模型不许用 urllib 默认 UA（Cloudflare 1010）────────────────
 web = io.open(os.path.join(ROOT, "webui", "webui_server.py"), encoding="utf-8").read()
 check("★ 拉模型带正常 UA", "EggBloom/1.6 (+https://github.com/Eggcrate9361/EggBloom)" in web)
-check("★ opencode 域名带会话头", 'x-opencode-session"] = "eggbloom-models"' in web)
+check("★ 统一请求头里有会话头", "x-opencode-session" in web)
+check("★ 测试连接也走同一套头", "headers=_llm_headers(api_key, api_url, provider_id)" in web)
+check("★ 拉模型也走同一套头", "headers=_llm_headers(api_key, url, provider_id)" in web)
 
 # ── 6. Console（按量）卡片独立存在 ───────────────────────────────
 console = (config.API_PROVIDERS or {}).get("opencode") or {}
