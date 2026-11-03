@@ -6,9 +6,11 @@
   "author": "EggBloom",
   "priority": 80,
   "default_enabled": false,
-  "provides": ["proactive.poke"],
+  "provides": [
+    "proactive.poke"
+  ],
   "requires": [],
-  "scope": [],
+  "scope": "global",
   "ui": {
     "group": "触达"
   }

@@ -60,6 +60,9 @@ def main():
     check("反问只留两种情况", "怼人" in raw and "澄清" in raw)
     # 原来的"一句话里最多一个问题"必须还在（别把好的规则一起删了）
     check("保留“最多一个问题”", "最多一个问题" in raw)
+    # 2026-11-04 真机：四分钟前说”刚翻了两页小说“，被问”看什么小说“时先答”哪在看“
+    check("★ 不许自己反口", "别下一句就反口" in raw)
+    check("★ 同一条回复内要一致", "几行要一致" in raw)
 
     print("\n[C] 主动说话：别像查岗")
     pro = open(os.path.join(ROOT, "plugins", "proactive_talk", "__init__.py"),
