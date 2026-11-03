@@ -101,7 +101,12 @@ def main():
     check("无 log_bot_reply 直接调用", "log_bot_reply" not in src)
     check("无 extract_decision_particles 直接调用", "extract_decision_particles" not in src)
     feed_calls = len(re.findall(r"memory_feed\(", src))
-    check("memory_feed 调用点 == 4", feed_calls == 4, f"实际 {feed_calls}")
+    # 2026-11-04：4 -> 5。新增的一路是**退场语**（_record_exit_into_context）——
+    #   用户指出"空闲退场没进上下文/记忆"：它走 smart_send_group 独立路径，
+    #   既不进 group_chat_history 也没喂沙漏。这是第四类**发送路径**，
+    #   不是同一条消息重复喂（守卫要防的是后者）。五路：
+    #   群消息入口 / 群回复侧 / 私聊消息入口 / 私聊回复侧 / 退场语
+    check("memory_feed 调用点 == 5（五条互斥路径）", feed_calls == 5, f"实际 {feed_calls}")
     # 收敛后：群聊用户侧不再有"先 memory_feed 再重复 resolve_qq_nick"的冗余
     # 旧代码在 GROUP_TIMELINE 前又解析一次 nick，现已删除
     check("GROUP_TIMELINE 前无重复 resolve_qq_nick",

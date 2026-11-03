@@ -3481,6 +3481,32 @@ def _match_own_reply(group_id: str, quoted_text: str) -> bool:
     return False
 
 
+def _record_exit_into_context(gid, phrase):
+    """退场语也要进上下文与长期记忆（2026-11-04）。
+
+    用户指出：没有引用的情况下，撤回反馈/空闲退场都不在上下文里。
+    撤回反馈走 `_plugin_send_text`（上一笔已补）；空闲退场走 `smart_send_group`
+    这条**独立**发送路径，此前只记了 `_record_bot_group_msg`（用于重复检测），
+    既没进 `group_chat_history`、也没喂沙漏 ——
+    于是"我上周在群里说过没人理我"这种事，模型永远想不起来。
+
+    只补 Bot 那一行：退场语没有对应用户发言，硬塞用户行会污染统计。
+    """
+    try:
+        gh = globals()["group_chat_history"].setdefault(str(gid), [])
+        gh.append({"role": "assistant", "content": str(phrase)[:globals()["_hist_chars"]()],
+                   "ts": time.time()})
+        globals()["group_chat_history"][str(gid)] = gh[-globals()["_history_cap"]():]
+    except Exception:
+        pass
+    try:
+        from sandglass_bridge import memory_feed
+        memory_feed({"text": "", "group_id": str(gid), "reply": str(phrase),
+                     "user_pre_logged": True})
+    except Exception:
+        pass
+
+
 def _record_bot_group_msg(group_id, text):
     """Bot 主动发的群消息（退场语/空闲碎碎念等）统一登记：
     ① track_bot_reply（去重 + 自引用兜底的数据源）
@@ -16669,6 +16695,7 @@ def main():
                                 try:
                                     smart_send_group(gid, exit_phrase)
                                     _record_bot_group_msg(gid, exit_phrase)
+                                    _record_exit_into_context(gid, exit_phrase)
                                     send_idle_exit_meme(gid)
                                     GROUP_LAST_EXIT[gid] = now
                                     log(f"群[{gid}] 全局扫描空闲超时退场: {exit_phrase}")
@@ -16691,6 +16718,7 @@ def main():
                             try:
                                 smart_send_group(gid, exit_phrase)
                                 _record_bot_group_msg(gid, exit_phrase)
+                                _record_exit_into_context(gid, exit_phrase)
                                 send_idle_exit_meme(gid)
                                 GROUP_LAST_EXIT[gid] = now
                                 log(f"群[{gid}] 空闲超时退场(无会话): {exit_phrase}")
