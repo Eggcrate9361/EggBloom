@@ -728,6 +728,20 @@ DEFAULT_CONFIG = {
     "embed_dll": "",
     "embed_model": "bge-small-zh",
     "embed_url": "http://127.0.0.1:8083/v1/embeddings",
+
+    # ── AIGC 全模态（1.6.0 P1.5）──────────────────────────────
+    # ★ 总开关默认**关**：关掉时一个请求都不发（连后端函数都不调用），
+    #   见 harness/aigc_task.py 的 submit()。这是验收第 6 条。
+    "aigc_enable": False,
+    "aigc_image_backend": "comfyui",     # comfyui / 空=不接
+    "aigc_tts_backend": "piper",         # piper / 空=不接
+    "aigc_tts_voice": "",                # piper 的音色名（models/<family>/ 下的文件）
+    "aigc_asr_backend": "faster-whisper",
+    "aigc_asr_model": "small",
+    "aigc_out_dir": "",                  # 空=默认 <app>/data/media
+    # 每日配额（0 = 不限）。按本地日期滚动，跨零点自动重置。
+    "aigc_daily_image_quota": 50,
+    "aigc_daily_tts_seconds": 600,
 }
 
 _config_cache = None
