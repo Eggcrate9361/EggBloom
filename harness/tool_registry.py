@@ -205,6 +205,28 @@ def groups_of(name):
         return set(e["groups"]) if e else set()
 
 
+def source_of(name) -> str:
+    """工具来源标签（builtin / plugin:<id> / mcp:<server> / skill:<name>）。"""
+    with _LOCK:
+        e = _TOOLS.get(name)
+        return str((e or {}).get("source") or "")
+
+
+def info_of(name) -> dict:
+    """诊断 / 手册渲染用：某个工具的注册信息（**不含可调用对象**，可 json 化）。"""
+    with _LOCK:
+        e = _TOOLS.get(name)
+        if not e:
+            return {}
+        return {
+            "name": name,
+            "groups": set(e.get("groups") or ()),
+            "source": e.get("source") or "",
+            "has_fn": callable(e.get("fn")),
+            "lazy": bool(e.get("loader")) and not bool(e.get("schema")),
+        }
+
+
 def names_in(group):
     """该分组下所有已注册工具名（固定顺序）。"""
     with _LOCK:
