@@ -95,12 +95,15 @@ class Blackboard:
                 "notes": self.notes}
 
 
-def _planner_prompt(goal):
+def _planner_prompt(goal, tools=None):
+    names = [str(x) for x in (tools or []) if str(x).strip()]
+    tip = ("\n可用工具（只能从这些名字里选，选不到就留空 = 该步只是说明）：\n"
+           + ", ".join(names[:80]) + "\n") if names else ""
     return (
         "你是 Planner，只输出计划，不要执行、不要下结论。\n"
         "输出严格 JSON：{\"steps\":[{\"id\":\"s1\",\"goal\":\"...\",\"tool\":\"工具名或空\","
         "\"args\":{}}]}\n"
-        f"最多 {MAX_STEPS} 步。任务：{goal}\n"
+        f"最多 {MAX_STEPS} 步。任务：{goal}\n" + tip
     )
 
 
@@ -113,12 +116,14 @@ def _critic_prompt(goal, bb):
         "输出严格 JSON：{\"ok\":true/false,\"issues\":[\"...\"],\"fix\":\"给 Executor 的指示\"}\n"
         f"任务：{goal}\n计划：{json.dumps(bb.plan, ensure_ascii=False)}\n"
         f"实际执行事实：{json.dumps(facts, ensure_ascii=False)}\n"
+        f"无执行的计划步骤（只是说明，不算完成）："
+        f"{json.dumps([s.get('id') for s in bb.plan if not s.get('tool')], ensure_ascii=False)}\n"
     )
 
 
-def plan(llm, bb):
+def plan(llm, bb, tools=None):
     """Planner：出计划。解析失败返回 None，由调用方转人工。"""
-    out = llm(_planner_prompt(bb.goal), role=ROLE_PLANNER)
+    out = llm(_planner_prompt(bb.goal, tools), role=ROLE_PLANNER)
     obj = extract_json(out) or {}
     steps = obj.get("steps")
     if not isinstance(steps, list) or not steps:
@@ -140,9 +145,13 @@ def execute(bb, tool_runner, *, round_no=1):
     """Executor：逐步执行，每步必定留 trace（成功也留）。"""
     for step in bb.plan:
         if not step.get("tool"):
-            # 没有工具的步骤只登记"没有可执行动作" —— 它不能被当成已完成
-            bb.add_trace({"round": round_no, "step_id": step["id"], "tool": "",
-                          "ok": False, "output": "", "error": "该步骤没有可执行的工具"})
+            # 没有工具的步骤是**计划说明**（"先确认路径"、"整理输出"这类），
+            # 不是执行动作：不产生 trace，也不算完成。
+            # ★ 2026-11-03 真机修正：原先把它当"计划缺陷"直接判不合格 →
+            #   真实计划里几乎每份都带这种步骤，于是永远 needs_human。
+            #   正确的处理是让它进入 Critic 的视野（见 _critic_prompt 的"无执行步骤"），
+            #   由 Critic 判断它是不是在掩盖没做的事。
+            bb.notes.append(f"步骤 {step['id']} 无工具：{step.get('goal') or ''}".strip())
             continue
         try:
             out = tool_runner(step["tool"], dict(step.get("args") or {}))
@@ -158,18 +167,8 @@ def execute(bb, tool_runner, *, round_no=1):
 def missing_trace(bb):
     """哪些计划步骤一条 trace 都没有 —— 幻觉的直接证据。"""
     have = {t.get("step_id") for t in bb.trace}
-    return [s["id"] for s in bb.plan if s.get("id") not in have]
-
-
-def invalid_steps(bb):
-    """计划里"根本没有可执行动作"的步骤。
-
-    为什么单列：这种步骤会留下一条 ok=False 的 trace，但它既不是"执行失败"
-    （没有执行过），也不该被验收当成完成 —— 它是**计划本身的缺陷**。
-    早先只记 trace 就放行，结果 Critic 说 ok 时整轮就被判 done（冒烟时抓到）。
-    """
-    return [t.get("step_id") for t in bb.trace
-            if not t.get("ok") and not str(t.get("tool") or "").strip()]
+    # 只检查"应当执行"的步骤：没有工具的步骤是计划说明，不在此列
+    return [s["id"] for s in bb.plan if s.get("tool") and s.get("id") not in have]
 
 
 def critique(llm, bb):
@@ -183,7 +182,7 @@ def critique(llm, bb):
             "fix": str(obj.get("fix") or "")}
 
 
-def run(llm, goal, *, tool_runner=None, max_rounds=MAX_ROUNDS, require_trace=True):
+def run(llm, goal, *, tool_runner=None, max_rounds=MAX_ROUNDS, require_trace=True, tools=None):
     """跑一轮三角色。返回 report（含黑板书），任何异常都不往外抛。"""
     bb = Blackboard(goal)
     if not bb.goal:
@@ -191,7 +190,7 @@ def run(llm, goal, *, tool_runner=None, max_rounds=MAX_ROUNDS, require_trace=Tru
 
     # ① 计划
     try:
-        steps = plan(llm, bb)
+        steps = plan(llm, bb, tools)
     except Exception as e:
         steps = None
         bb.notes.append(f"Planner 异常: {type(e).__name__}: {e}")
@@ -219,13 +218,6 @@ def run(llm, goal, *, tool_runner=None, max_rounds=MAX_ROUNDS, require_trace=Tru
                 bb.issues = [f"步骤 {','.join(miss)} 没有任何执行 trace"]
                 verdict = {"ok": False, "issues": bb.issues, "fix": "补执行缺失步骤"}
                 bb.notes.append(f"第 {r} 轮：{verdict['issues'][0]}（判为幻觉，不送审）")
-                continue
-            # 计划里存在"没有可执行动作"的步骤：计划缺陷，同样不送审
-            bad = invalid_steps(bb)
-            if bad:
-                bb.issues = [f"步骤 {','.join(bad)} 没有可执行动作（计划缺陷）"]
-                verdict = {"ok": False, "issues": bb.issues, "fix": "补上工具或删掉该步骤"}
-                bb.notes.append(f"第 {r} 轮：{verdict['issues'][0]}（不送审）")
                 continue
 
         # ③ 验收

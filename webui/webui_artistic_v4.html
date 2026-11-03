@@ -3771,6 +3771,20 @@ async function pageAgent(el) {
     +   '<span class="dim" id="agForgeN" style="margin-left:var(--s2)"></span>'
     +   '<button class="btn sm" id="agForgeRefresh" style="margin-left:auto">刷新</button></div>'
     + '<div id="agForge"><div class="empty">暂无创作记录</div></div>'
+    /* ── 三角色编排（P2）：Planner 出计划 / Executor 执行 / Critic 对 trace 验收 ──
+       · 与下面的对话区**并列**，不是二选一：对话是「随手使唤」，这里是「看它怎么想」
+       · 结果区直接渲染黑板书（计划 / 每步 trace / 否决意见），没有 trace 的步骤会被
+         后端判为幻觉并转人工，前端照实显示，不做美化。 */
+    + '<div class="hd" style="margin-top:var(--s5)"><span class="lab">三角色编排</span><i class="rule"></i>'
+    +   '<span class="dim" id="ocBadge" style="margin-left:auto"></span></div>'
+    + '<div class="fld"><label>目标（Planner 只出计划，不执行）</label>'
+    +   '<textarea id="ocGoal" rows="3" spellcheck="false" placeholder="例如：把 data/media 下今天的图按日期归类" style="width:100%;background:transparent"></textarea></div>'
+    + '<div style="display:flex;gap:var(--s2);margin-top:var(--s2);align-items:center;flex-wrap:wrap">'
+    +   '<button class="btn primary" id="ocRun">运行</button>'
+    +   '<label class="dim" style="display:flex;gap:6px;align-items:center">轮数'
+    +     '<input id="ocRounds" type="number" min="1" max="4" value="2" style="width:56px;background:transparent;border:1px solid var(--line);border-radius:6px;padding:2px 6px"></label>'
+    +   '<span class="dim" id="ocMsg"></span></div>'
+    + '<div id="ocOut" class="stats" style="margin-top:var(--s3)"><div class="empty">还没跑过</div></div>'
     + '<div class="ag-wrap" style="margin-top:var(--s6)">'
     +   '<aside class="ag-sess">'
     +     '<div class="cf-lab" style="margin-bottom:var(--s2)">会话'
@@ -4412,6 +4426,59 @@ async function pageAgent(el) {
     } catch (e) { sayHint('审批失败：' + e.message); }
     loadForge();
   }
+  /* ── 三角色编排：POST /agent/orchestra → 渲染黑板书 ── */
+  function ocEsc(s) { return String(s == null ? '' : s).replace(/[&<>]/g, c =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c])); }
+  function ocRender(r) {
+    const out = $('ocOut'); if (!out) return;
+    const bb = (r && r.blackboard) || {};
+    const st = (r && r.status) || '?', ok = !!(r && r.ok);
+    const plan = bb.plan || [], trace = bb.trace || [], issues = (r && r.issues) || bb.issues || [];
+    let h = '<div class="rowline" style="margin-bottom:var(--s2)">'
+      + '<b style="color:' + (ok ? 'var(--ok)' : 'var(--warn)') + '">' + ocEsc(st) + '</b>'
+      + ' <span class="dim">轮次 ' + ocEsc(r && r.rounds || bb.rounds || 0) + ' · 计划 ' + plan.length
+      + ' 步 · trace ' + trace.length + ' 条</span></div>';
+    if (!plan.length && !trace.length) { out.innerHTML = h + '<div class="empty">没有产出</div>'; return; }
+    h += '<div class="lab" style="margin-top:var(--s2)">计划</div>';
+    plan.forEach((s, i) => {
+      h += '<div class="rowline dim" style="font-family:var(--f-m);font-size:var(--z1)">'
+        + (i + 1) + '. [' + ocEsc(s.id) + '] ' + ocEsc(s.goal || '') 
+        + (s.tool ? ' <span style="opacity:.7">→ ' + ocEsc(s.tool) + '</span>' : ' <span style="color:var(--warn)">（没有工具）</span>')
+        + '</div>';
+    });
+    h += '<div class="lab" style="margin-top:var(--s3)">执行 trace</div>';
+    if (!trace.length) h += '<div class="empty">没有任何执行记录（判为幻觉）</div>';
+    trace.forEach(t => {
+      const bad = !t.ok;
+      h += '<div class="rowline" style="font-family:var(--f-m);font-size:var(--z1);color:' + (bad ? 'var(--err)' : 'inherit') + '">'
+        + ocEsc(t.tid) + ' · 第' + ocEsc(t.round) + '轮 · ' + ocEsc(t.step_id)
+        + (t.tool ? ' · ' + ocEsc(t.tool) : ' · （无工具）')
+        + (bad ? ' · ✗ ' + ocEsc(t.error || '失败') : ' · ✓ ' + ocEsc(String(t.output || '').slice(0, 60)))
+        + '</div>';
+    });
+    if (issues.length) {
+      h += '<div class="lab" style="margin-top:var(--s3);color:var(--warn)">Critic 否决</div>';
+      issues.forEach(x => { h += '<div class="rowline" style="color:var(--warn)">· ' + ocEsc(x) + '</div>'; });
+    }
+    if (st === 'needs_human') h += '<div class="dim" style="margin-top:var(--s2)">需要人工接手（轮数用尽仍不通过）</div>';
+    out.innerHTML = h;
+  }
+  const ocBtn = $('ocRun');
+  if (ocBtn) ocBtn.onclick = async () => {
+    const goal = (($('ocGoal') || {}).value || '').trim();
+    const msg = $('ocMsg');
+    if (!goal) { if (msg) msg.textContent = '先写个目标'; return; }
+    ocBtn.disabled = true; if (msg) msg.textContent = '运行中…（会真的调用模型与工具）';
+    try {
+      const rounds = Math.max(1, Math.min(4, parseInt((($('ocRounds') || {}).value) || '2', 10) || 2));
+      const r = await API('/agent/orchestra', { method: 'POST',
+        body: JSON.stringify({ goal: goal, max_rounds: rounds }) });
+      ocRender(r || {});
+      const b = $('ocBadge'); if (b) b.textContent = (r && r.ok) ? '通过' : '未通过';
+      if (msg) msg.textContent = '';
+    } catch (e) { if (msg) msg.textContent = '失败：' + e.message; }
+    finally { ocBtn.disabled = false; }
+  };
   const agForgeBtn = $('agForgeRefresh');
   if (agForgeBtn) agForgeBtn.onclick = loadForge;
   await loadForge();

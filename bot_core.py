@@ -1646,6 +1646,68 @@ def start_event_server():
                         max_steps=req.get("max_steps"),
                         use_memory=bool(req.get("use_memory", True)),
                     )
+                elif _p == "/api/agent/orchestra":
+                    # ★ 2026-11-03（1.6.0 P2）：三角色编排入口（Agent 页的「三角色」卡片）。
+                    #   为什么放在 bot_core 而不是 webui：工具函数 TOOL_FUNCTIONS 与模型
+                    #   通道都在这个进程里，放 webui 就得再复制一份调用协议（今天已经因为
+                    #   "两条链路各有一套请求头"踩过一次，不再重复）。
+                    #   编排层本身是纯逻辑（harness/orchestra.py），这里只做两件事：
+                    #   把 LLM 包装成"给 prompt 回文本"，把工具表包装成 runner。
+                    from harness import orchestra as _orch
+                    _oc_goal = str(req.get("goal") or req.get("input") or "").strip()
+
+                    _OC_SYS = {
+                        "planner": "你是 Planner。只输出计划 JSON，不要执行、不要下结论。",
+                        "critic": ("你是 Critic。只根据给定的事实挑毛病；"
+                                   "任何没有事实支撑的完成声明都要否决。"),
+                    }
+
+                    def _oc_llm(prompt, role=""):
+                        _sys = _OC_SYS.get(str(role or ""), "你是助手。")
+                        _msg, _u = _call_chat_sync(
+                            [{"role": "system", "content": _sys},
+                             {"role": "user", "content": str(prompt or "")}],
+                            with_tools=False, max_tokens=1200)
+                        return str((_msg or {}).get("content") or "")
+
+                    def _oc_tool(name, args):
+                        _fn = TOOL_FUNCTIONS.get(str(name or ""))
+                        if not callable(_fn):
+                            raise RuntimeError(f"没有这个工具: {name}")
+                        try:
+                            return _fn(**(args or {}))
+                        except TypeError:
+                            return _fn(args)
+
+                    try:
+                        _max_r = int(req.get("max_rounds") or 2)
+                    except Exception:
+                        _max_r = 2
+                    # ★ 交给 Planner 的必须是"工具名 + 参数名"，光给名字不够：
+                    #   实机第二次它用了 search_files 却传 path（该工具要 query）→
+                    #   Executor 直接 KeyError。带 * 的是必填参数。
+                    def _oc_tool_brief():
+                        _out = []
+                        try:
+                            from harness import tool_registry as _tr
+                            for _sch in _tr.resolve(sorted(TOOL_FUNCTIONS.keys())):
+                                _fn = (_sch or {}).get("function") or {}
+                                _nm = str(_fn.get("name") or "")
+                                if not _nm:
+                                    continue
+                                _ps = (_fn.get("parameters") or {})
+                                _props = list((_ps.get("properties") or {}).keys())
+                                _req = set(_ps.get("required") or [])
+                                _sig = ",".join(str(k) + ("*" if k in _req else "")
+                                                for k in _props[:8])
+                                _out.append(f"{_nm}({_sig})")
+                        except Exception:
+                            _out = []
+                        return _out or sorted(str(k) for k in TOOL_FUNCTIONS.keys())
+
+                    res = _orch.run(_oc_llm, _oc_goal, tool_runner=_oc_tool,
+                                    max_rounds=max(1, min(4, _max_r)),
+                                    tools=_oc_tool_brief())
                 elif _p == "/api/agent/permission":
                     # 前端弹窗点了「允许/拒绝」→ 唤醒正在阻塞的 plugin_call。
                     # remember=True（勾了"不再询问该插件"）→ 写进信任表，以后不再问。

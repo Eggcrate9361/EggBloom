@@ -103,35 +103,30 @@ def main():
     check("★ 状态 needs_human", r3.get("status") == "needs_human", r3.get("status"))
     check("带上了意见", bool(r3.get("issues")), r3.get("issues"))
 
-    print("\n[E] trace 强制：没执行过的步骤不能被算完成")
-    # Planner 给了两步，但 Executor 只执行第一步（模拟"跳步"）
-    llm4 = FakeLLM(
-        planner='{"steps":[{"id":"s1","goal":"a","tool":"t1","args":{}},'
-                '{"id":"s2","goal":"b","tool":"t2","args":{}}]}',
-        critic='{"ok":true,"issues":[]}')
-
-    def half_runner(tool, args):
-        return "ok"
-
-    bb = O.Blackboard("x")
-    bb.plan = O.plan(llm4, bb)
-    O.execute(bb, lambda t, a: O.run.__self__ if False else half_runner, round_no=1)
-    # 手工删掉第二步的 trace，等价于"它声称做了但没做"
-    bb.trace = [t for t in bb.trace if t["step_id"] != "s2"]
-    check("★ 能识别出缺 trace 的步骤", O.missing_trace(bb) == ["s2"], O.missing_trace(bb))
-
-    # 走完整流程：缺 trace 时不送 Critic，直接判无效
+    print("\n[E] trace 强制：该执行的步骤没执行，不能被算完成")
+    # ① 没有工具的步骤是"计划说明"，不产生 trace、不算完成，但也不该让整轮必挂
     llm5 = FakeLLM(
-        planner='{"steps":[{"id":"s1","goal":"a","tool":"","args":{}}]}',
+        planner='{"steps":[{"id":"s1","goal":"先确认路径","tool":"","args":{}},'
+                '{"id":"s2","goal":"列目录","tool":"list_dir","args":{"path":"d"}}]}',
         critic='{"ok":true,"issues":[]}')
-    r5 = O.run(llm5, "跳过执行", tool_runner=lambda t, a: "ok")
-    check("★ 没工具的空步骤不算完成", r5.get("ok") is False, r5.get("status"))
-    check("★ 被判为需要人工", r5.get("status") == "needs_human", r5.get("status"))
-    check("★ 没有把所有步骤当真（未误判为 done）",
-          any("trace" in n or "没有可执行" in n for n in r5["blackboard"]["notes"])
-          or not r5["blackboard"]["trace"] or
-          all(not t["ok"] for t in r5["blackboard"]["trace"]),
+    r5 = O.run(llm5, "列目录", tool_runner=lambda t, a: "a.txt")
+    check("★ 说明性步骤不挡通过", r5.get("ok") is True, r5.get("status"))
+    check("★ 它被记成 note 而不是 trace",
+          any("无工具" in n for n in r5["blackboard"]["notes"]), r5["blackboard"]["notes"])
+    check("★ 只有可执行步骤留下 trace",
+          [t["step_id"] for t in r5["blackboard"]["trace"]] == ["s2"],
           r5["blackboard"]["trace"])
+    # ② 该执行的步骤一条 trace 都没有 → 判为幻觉，不送审
+    bb = O.Blackboard("x")
+    bb.plan = [{"id": "s1", "goal": "a", "tool": "t1", "args": {}}]
+    check("★ 缺 trace 能被识别", O.missing_trace(bb) == ["s1"], O.missing_trace(bb))
+    # ③ 执行器中途抛错不应把整轮炸掉（trace 记 error，Critic 看得到）
+    llm6 = FakeLLM(planner='{"steps":[{"id":"s1","goal":"x","tool":"boom","args":{}}]}',
+                   critic='{"ok":false,"issues":["工具报错"]}')
+    r6 = O.run(llm6, "会失败", tool_runner=lambda t, a: (_ for _ in ()).throw(RuntimeError("炸了")),
+               max_rounds=1)
+    check("★ 工具异常进 trace", r6["blackboard"]["trace"][0]["ok"] is False)
+    check("★ 仍能给出结论", r6.get("status") == "needs_human", r6.get("status"))
 
     print("\n[F] Planner 乱输出不崩，转人工")
     for bad in ('我不是 JSON', '{"steps": []}', '{"nothing": 1}', ''):
