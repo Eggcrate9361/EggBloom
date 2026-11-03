@@ -11654,10 +11654,36 @@ def _is_json_remote_failure(body: bytes) -> bool:
         return False
 
 
-def _post_chat(url, payload, api_key="", timeout=60):
-    headers = {"Content-Type": "application/json"}
+def _llm_request_headers(api_key="", url="") -> dict:
+    """模型请求头（2026-11-03）。
+
+    和 webui 的 `_llm_headers` 是同一套要求，但**这是两条独立的链路** ——
+    今早只修了 webui 那条，bot 主链这条一直裸着，于是每条回复都：
+        AI 失败: HTTP Error 403: Forbidden | error code: 1010
+
+    两个必带的东西：
+      · `User-Agent`：urllib 默认自报 `Python-urllib/3.x`，Cloudflare 见一个拦一个；
+      · `x-opencode-session`：OpenCode Go 网关按会话路由，缺了直接拒。
+    """
+    h = {
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "User-Agent": "EggBloom/1.6 (QQ bot; https://github.com/Eggcrate9361/EggBloom)",
+        "Accept-Language": "zh-CN,zh;q=0.9",
+    }
     if api_key:
-        headers["Authorization"] = f"Bearer {api_key}"
+        h["Authorization"] = f"Bearer {api_key}"
+    if "opencode" in str(url or "").lower():
+        try:
+            from providers import _OC_SESSION as _sess
+            h["x-opencode-session"] = _sess
+        except Exception:
+            h["x-opencode-session"] = "eggbloom-bot"
+    return h
+
+
+def _post_chat(url, payload, api_key="", timeout=60):
+    headers = _llm_request_headers(api_key, url)
     data = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(url, data=data, headers=headers)
     with urllib.request.urlopen(req, timeout=timeout, context=CTX) as r:
@@ -11670,9 +11696,7 @@ def _post_chat(url, payload, api_key="", timeout=60):
 
 
 def _post_chat_stream(url, payload, api_key="", timeout=60):
-    headers = {"Content-Type": "application/json"}
-    if api_key:
-        headers["Authorization"] = f"Bearer {api_key}"
+    headers = _llm_request_headers(api_key, url)
     data = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(url, data=data, headers=headers)
     return urllib.request.urlopen(req, timeout=timeout, context=CTX)
