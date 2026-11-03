@@ -181,6 +181,29 @@ def _plugin_send_text(text, target=None, group_id=None) -> bool:
                                         text, is_group=bool(group_id))
         except Exception:
             pass
+        # ★ 2026-11-03（用户问"主动说话不进记忆吗"）：落盘 ≠ 进上下文。
+        #   此前插件发出去的话只写 chat_logs（给人看），**不进 chat_history**
+        #   （给模型看）—— 于是下次对话时 AI 完全不知道自己主动说过什么：
+        #   容易重复开口、或者被质问"你不是说过…"时反过来否认。
+        #   修在所有插件发送的唯一出口上，一处覆盖 active_talk / recall_manager 等。
+        try:
+            if _ok:
+                _hs = globals()
+                _entry = {"role": "assistant", "content": text[:500], "ts": time.time()}
+                if group_id:
+                    _gh = _hs.get("group_chat_history")
+                    if isinstance(_gh, dict):
+                        with _hs["_session_lock"]:
+                            _lst = list(_gh.get(str(group_id)) or []) + [_entry]
+                            _gh[str(group_id)] = _lst[-_hs["_history_cap"]():]
+                elif target:
+                    _ch = _hs.get("chat_history")
+                    if isinstance(_ch, dict):
+                        with _hs["_session_lock"]:
+                            _lst = list(_ch.get(str(target)) or []) + [_entry]
+                            _ch[str(target)] = _lst[-24:]
+        except Exception:
+            pass
         return _ok
     except Exception as e:
         try:
