@@ -110,6 +110,19 @@ def main():
         check("message_id 转成字符串", r.get("message_id") == "12345", r.get("message_id"))
         check("operator = 撤回的人", r.get("operator") == USER, r.get("operator"))
 
+        print("\n[C2] user_id 是『昵称(QQ号)』形态时必须给纯号")
+        events.clear()
+        bot_core._handle_recall_event({
+            "notice_type": "friend_recall",
+            "user_id": "某昵称(1000000002)", "message_id": 777,
+        })
+        r3 = last("notice.recall")
+        # 2026-11-03 真机：PRIVATE_SESSION 用纯号做键，事件里带昵称 →
+        # session_active 恒 false → 插件整条静默跳过（主链让位了也没人回）。
+        check("★ operator 是纯 QQ 号", r3.get("operator") == "1000000002", r3.get("operator"))
+        check("原始展示形态另存 operator_display",
+              r3.get("operator_display") == "某昵称(1000000002)", r3.get("operator_display"))
+
         print("\n[D] 私聊撤回：group_id 是空串")
         events.clear()
         bot_core._handle_recall_event({

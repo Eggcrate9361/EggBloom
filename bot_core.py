@@ -2104,6 +2104,25 @@ def start_event_server():
                 length = int(self.headers.get("Content-Length", 0))
                 if length > 0 and length < 65536:
                     body = json.loads(self.rfile.read(length).decode("utf-8"))
+                    # ★ 2026-11-03：私聊会话登记必须在这里做，不能等主循环处理。
+                    #   主循里登记在"合并缓冲"之后，而用户"发一句立刻撤回"时，
+                    #   撤回事件会抢在登记之前到达 → session_active 恒 false →
+                    #   撤回反馈整条静默跳过（真机日志：撤回行在"入缓冲"之前）。
+                    #   收件即登记，语义也更准：他刚说过话 = 会话活跃。
+                    try:
+                        if (body.get("post_type") == "message"
+                                and body.get("message_type") == "private"):
+                            _ru0 = str(body.get("user_id") or "").strip()
+                            if "(" in _ru0 and ")" in _ru0:
+                                import re as _re_inbox
+                                _m0 = _re_inbox.search(r"\((\d+)\)", _ru0)
+                                if _m0:
+                                    _ru0 = _m0.group(1)
+                            if _ru0 and _ru0 not in ("None", "0"):
+                                with _session_lock:
+                                    PRIVATE_SESSION[_ru0] = {"last_msg_time": time.time()}
+                    except Exception:
+                        pass
                     # 将原始事件放入队列，由主循环统一处理
                     MSG_QUEUE.put(body)
                     log(f"[事件] 收到: post_type={body.get('post_type')} "
@@ -9874,40 +9893,55 @@ def _handle_recall_event(ev):
         except Exception:
             _last_bot = 0.0
     _p_active, _p_idle = False, 0.0
+    # ★ 撤回事件里的 user_id 可能是 "昵称(QQ号)" 这种展示形态，而
+    #   PRIVATE_SESSION / GROUP_RECENT_MSGS 一律用纯 QQ 号做键。
+    #   2026-11-03 真机踩到：拿原串查会话永远查不到 → session_active 恒为 false
+    #   → 插件判定"无活跃会话"整条静默跳过（主链让位了、插件也没回，表现成"哑掉"）。
+    _ru_raw = str(recall_uid or "")
+    _ru_bare = _ru_raw
+    if "(" in _ru_raw and ")" in _ru_raw:
+        # 注意：`import re as _re` 在几百行之后才执行，不能借用，
+        # 否则 NameError 会被 except 吞成"查不到"。
+        import re as _re_bare
+        _mb = _re_bare.search(r"\((\d+)\)", _ru_raw)
+        if _mb:
+            _ru_bare = _mb.group(1)
     # 主链的"已读反馈"还有一道门槛：得真的在最近 15 条里看到过撤回者说话
     # （见下面 `user_recent_msg_time > 0`）。插件侧拿不到 GROUP_RECENT_MSGS，
     # 必须把结论一起送出去 —— 否则插件会比主链更话痨。
     _user_recent = False
     if is_grp_recall and recall_gid and not _peek_cancelled:
         try:
-            _ru = str(recall_uid or "")
-            _ru_digits = _ru
-            if "(" in _ru and ")" in _ru:
-                # 注意：这里的 `import re as _re` 在几百行之后才执行，
-                # 不能借用 —— 必须自己导一次，否则 NameError 会被 except 吞成 False。
-                import re as _re_peek
-                _mm = _re_peek.search(r"\((\d+)\)", _ru)
-                if _mm:
-                    _ru_digits = _mm.group(1)
             for _entry in reversed(GROUP_RECENT_MSGS.get(str(recall_gid), [])[-15:]):
                 if isinstance(_entry, (list, tuple)) and len(_entry) > 1:
                     _es = str(_entry[1])
-                    if _es == _ru or _es == _ru_digits:
+                    if _es == _ru_raw or _es == _ru_bare:
                         _user_recent = True
                         break
         except Exception:
             _user_recent = False
     if not is_grp_recall:
         try:
-            _ps = PRIVATE_SESSION.get(str(recall_uid))
+            _ps = PRIVATE_SESSION.get(_ru_bare)
             if _ps:
                 _p_active = True
                 _p_idle = max(0.0, time.time() - float(_ps.get("last_msg_time", 0) or 0))
+            elif _ru_bare in PRIVATE_MSG_BUFFER:
+                # ★ 2026-11-03 真机：私聊消息先过合并缓冲（默认 5s），而 PRIVATE_SESSION
+                #   的登记在缓冲之后 —— 于是"发一句立刻撤回"这种最常见的操作，
+                #   撤回事件到达时会话登记还不存在，session_active 恒 false，
+                #   插件判定"无活跃会话"整条静默跳过。
+                #   缓冲里有他未处理的批次，就等价于"正在对话"。
+                _p_active = True
+                _p_idle = 0.0
         except Exception:
             pass
     _emit_plugin_event("notice.recall", {
         "group_id": str(recall_gid or ""),
-        "operator": str(ev.get("user_id", "") or ""),
+        # operator 给**纯 QQ 号**：订阅方要拿它当发送目标，展示形态
+        # （"昵称(QQ号)"）发不出去。原始形态另放 operator_display。
+        "operator": _ru_bare,
+        "operator_display": _ru_raw,
         "message_id": str(recall_msg_id or ""),
         "ts": time.time(),
         # 事件名是 notice.recall，但"群撤回还是私聊撤回"只在 notice_type 里 ——
