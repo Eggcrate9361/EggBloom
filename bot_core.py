@@ -9670,6 +9670,16 @@ def _handle_poke_event(ev):
     """notice.notify.poke 事件：群戳 → 进群回复流水线；私戳 → AI 回复 + 登记私聊活跃会话。"""
     poke_uid = str(ev.get("user_id", ""))
     poke_gid = ev.get("group_id")
+    # ★ 2026-11-03（1.6.0 P1，§8.1 #5）：notice.poke 进事件总线。
+    #   发在下面"目标是不是 Bot"的过滤**之前** —— 群友互戳同样是事实，
+    #   插件要靠它判断"没人在戳我"（主动戳一戳的冷却就依赖这条）。
+    #   载荷字段固定：group_id / operator / target / ts。
+    _emit_plugin_event("notice.poke", {
+        "group_id": str(poke_gid or ""),
+        "operator": str(ev.get("user_id", "") or ""),
+        "target": str(ev.get("target_id", "") or ""),
+        "ts": time.time(),
+    })
     # 防御：若事件带 target_id 且目标不是 Bot，忽略（群友互戳不触发）
     _poke_target = ev.get("target_id")
     if _poke_target is not None and str(_poke_target) != "" and str(_poke_target) != str(BOT_QQ):
@@ -9844,6 +9854,16 @@ def _handle_recall_event(ev):
     recall_msg_id = ev.get("message_id", 0)
     is_grp_recall = ev.get("notice_type") == "group_recall"
     log(f"[事件] 撤回: type={ev.get('notice_type')} user_id={recall_uid} group_id={recall_gid or '私聊'} msg_id={recall_msg_id}")
+    # ★ 2026-11-03（1.6.0 P1，§8.1 #5）：notice.recall 进事件总线。
+    #   载荷：group_id / operator / message_id / ts。
+    #   operator 取**原始** user_id —— 下一行会把空值归一成 None，那是给反馈逻辑用的，
+    #   插件拿到的应该是事件里真实的值。
+    _emit_plugin_event("notice.recall", {
+        "group_id": str(recall_gid or ""),
+        "operator": str(ev.get("user_id", "") or ""),
+        "message_id": str(recall_msg_id or ""),
+        "ts": time.time(),
+    })
     # 撤回反馈：复用已有逻辑
     recall_uid = recall_uid if recall_uid and recall_uid != 'None' and recall_uid != '0' else None
     recall_key = f"group_{recall_gid}" if is_grp_recall else f"private_{recall_uid}"
