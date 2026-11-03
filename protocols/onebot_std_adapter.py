@@ -86,6 +86,7 @@ class OneBotStdAdapter(ProtocolAdapter):
         self._watchdog_stop = threading.Event()
         self._bridge_stop = threading.Event()
         self._bridge_state = "idle"
+        self._bridge_thread = None
         self._launch_env = None
         self._guard = LoginGuard(self.driver_key or self.name)
 
@@ -349,9 +350,18 @@ class OneBotStdAdapter(ProtocolAdapter):
 
     # ── WebSocket 事件桥（框架 WS Server → bot_core 3005） ──
     def _start_event_bridge(self):
+        # ★ 2026-11-03：同一实例只允许一条桥。
+        #   此前 start() 被调两次就起两条，两条都在转发 → 下游每条事件收两遍
+        #   （真机：反戳两次、撤回反馈两条）。桥是"每事件一份"的东西，
+        #   多一条不是多一份保险，是多一份重复。
+        _t = getattr(self, "_bridge_thread", None)
+        if _t is not None and _t.is_alive():
+            return
         self._bridge_stop.clear()
         self._bridge_state = "connecting"
-        threading.Thread(target=self._bridge_loop, daemon=True, name=f"{self.name}-ws-bridge").start()
+        self._bridge_thread = threading.Thread(
+            target=self._bridge_loop, daemon=True, name=f"{self.name}-ws-bridge")
+        self._bridge_thread.start()
 
     def _bridge_loop(self):
         disconnect_notified = False

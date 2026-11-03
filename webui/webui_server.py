@@ -4529,6 +4529,19 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/protocol/start":
             try:
+                # ★ 2026-11-03：幂等。此前每调一次就新建一个 ProtocolManager，
+                #   旧的既没 stop 也不再被引用 —— 它的事件桥却仍在跑，于是**每条
+                #   事件被投递多遍**。真机表现：戳一戳反戳两次、撤回反馈发两条、
+                #   日志里每条 [事件] 收到 都成对出现（message 有 message_id 去重
+                #   挡着看不出来，notice 类没有，就全暴露了）。
+                _existing = getattr(S, "_protocol_manager", None)
+                try:
+                    if _existing is not None and _existing.is_running():
+                        self._send_json(200, {"success": True,
+                                              "output": "协议层已在运行（未重复启动）"})
+                        return
+                except Exception:
+                    pass
                 from protocol_manager import ProtocolManager
                 mgr = ProtocolManager()
 
