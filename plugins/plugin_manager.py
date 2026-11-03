@@ -151,6 +151,8 @@ class PluginManager:
         self._manifests: Dict[str, dict] = {}
         self._manifest_errors: Dict[str, list] = {}
         self._manifest_conflicts: dict = {}
+        # 2026-11-03：清单强制的计划（拓扑序 / 拒载 / standby / 能力主），由 load_all 算
+        self._manifest_plan: dict = {}
         self._ai_client: Any = None
         self._host_api: Dict[str, Any] = {}            # ABI v2：宿主注入的能力（api_call 等）
         self._emit_depth: int = 0                      # 事件总线递归保护
@@ -274,14 +276,55 @@ class PluginManager:
             return False
 
     def load_all(self) -> int:
-        """发现并加载所有插件。返回成功加载的数量。"""
+        """发现并加载所有插件。返回成功加载的数量。
+
+        ★ 2026-11-03：清单从"只警告"改成**启动期强制**（执行总表 P1-3 / §8.1 #1）。
+        四条判据在 `plugin_manifest.plan()` 里一次算完，这里只照单执行：
+
+          ① 拓扑排序：被依赖的先上线；
+          ② 能力冲突：同一 capability 多提供者 → 按 priority 选主，其余标 standby；
+          ③ 缺依赖 / 依赖环 / 提供者全被拒 → **拒载**，原因挂在 /api/plugins 上可见；
+          ④ 同一 hook 多订阅 → 只报告（`hook_report()`），调用方必须走 `execute_hook_chain`。
+
+        **没有 `plugin.json` 的老插件照常加载**（兼容层）：它们不参与排序，也不被清单挡。
+        判定只有一处 —— 别在别处再加一套"谁能加载"的判断。
+        """
         self._reload_manifests()
+        try:
+            from plugins import plugin_manifest as _pmf
+            self._manifest_plan = _pmf.plan(self._manifests)
+            lay = _pmf.load_order(self.discover(), self._manifest_plan)
+        except Exception as e:
+            print(f"[PluginManifest] 计划算不出来（退回全量加载，不因此停服）: {e}")
+            self._manifest_plan = {}
+            lay = {"order": self.discover(), "skip": {}}
+
+        for pid, why in (lay.get("skip") or {}).items():
+            if pid in self._plugins:
+                continue
+            self._plugins[pid] = {
+                "module": None,
+                "meta": {"name": pid, "version": "?", "enabled": False,
+                         "description": f"清单拒载：{why}"},
+                "hooks": {},
+                "error": f"清单拒载：{why}",
+            }
+            # 日志统一由 _check_manifest_conflicts() 打，别在这儿再打一遍
+
         count = 0
-        for name in self.discover():
-            ok = self.load(name)
-            if ok:
+        for name in (lay.get("order") or []):
+            if self.load(name):
                 count += 1
         self._check_manifest_conflicts()
+        # ④ 多订阅钩子：启动时就点名。这类钩子**必须**走 execute_hook_chain，
+        #    拿 execute_hook（首个非 None 即返回）跑等于让后面的订阅方永远不执行。
+        try:
+            _multi = self.hook_report().get("multi") or []
+            if _multi:
+                print(f"[PluginManifest] 多订阅钩子 {len(_multi)} 个"
+                      f"（必须链式，不能用 execute_hook 短路）：{_multi}")
+        except Exception:
+            pass
         return count
 
     # ── 插件清单（1.5.10 H1/H2，只读）──────────────────────────
@@ -305,7 +348,28 @@ class PluginManager:
                   f"{sorted(self._manifests)}")
 
     def _check_manifest_conflicts(self) -> None:
-        """provides/requires 冲突检查：**只警告不拒绝**（1.6.0 才改成拒绝加载）。"""
+        """清单冲突**报告**（真正的拒绝已经在 `load_all` 里执行完了）。
+
+        2026-11-03：这里从"唯一动作"降级成"打日志"。判据只有 `plugin_manifest.plan()`
+        一份，避免页面显示的和实际加载的两套。
+        """
+        pl = getattr(self, "_manifest_plan", None) or {}
+        if pl:
+            self._manifest_conflicts = {
+                "duplicate_provides": dict(pl.get("duplicate_provides") or {}),
+                "missing_requires": list(pl.get("missing_requires") or []),
+                "cycles": list(pl.get("cycles") or []),
+            }
+            for msg in (pl.get("warnings") or []):
+                print(f"[PluginManifest] {msg}")
+            ref = pl.get("refused") or {}
+            st = pl.get("standby") or {}
+            if ref:
+                print(f"[PluginManifest] 拒载 {len(ref)} 个：{sorted(ref)}")
+            if st:
+                print(f"[PluginManifest] standby {len(st)} 个：{sorted(st)}")
+            return
+        # 兼容旧路径（计划算不出来时）
         try:
             from plugins import plugin_manifest as _pmf
             self._manifest_conflicts = _pmf.check(self._manifests)
@@ -320,6 +384,33 @@ class PluginManager:
         for cyc in (c.get("cycles") or []):
             print(f"[PluginManifest] 依赖环：{' → '.join(cyc)}")
 
+    def hook_report(self) -> dict:
+        """各钩子有几家订阅、按什么顺序串（判据④）。
+
+        多订阅的钩子**必须**用 `execute_hook_chain`。`execute_hook()` 是
+        "首个非 None 就返回"，拿它跑多订阅等于让 priority 靠后的订阅方永不执行。
+        这里只报事实，不改派发行为 —— 迁移调用方是下一步的事。
+        """
+        subs: Dict[str, list] = {}
+        prio: Dict[str, int] = {}
+        for name, entry in self._plugins.items():
+            if not entry.get("module"):
+                continue
+            try:
+                prio[name] = int(entry.get("meta", {}).get("priority", 50) or 50)
+            except (TypeError, ValueError):
+                prio[name] = 50
+            for hook in (entry.get("hooks") or {}):
+                subs.setdefault(str(hook), []).append(name)
+        try:
+            from plugins import plugin_manifest as _pmf
+            chains = _pmf.hook_chains(subs, prio)
+        except Exception:
+            chains = {h: {"chain": sorted(ids), "multi": len(ids) > 1}
+                      for h, ids in subs.items()}
+        return {"hooks": chains,
+                "multi": sorted([h for h, v in chains.items() if v.get("multi")])}
+
     def get_manifests(self) -> Dict[str, dict]:
         return dict(self._manifests)
 
@@ -328,6 +419,7 @@ class PluginManager:
             "manifests": dict(self._manifests),
             "errors": dict(self._manifest_errors),
             "conflicts": dict(self._manifest_conflicts),
+            "plan": dict(getattr(self, "_manifest_plan", None) or {}),
         }
 
     # ── 真插件 ABI（PLUGIN_SPEC=1）────────────────────────
@@ -563,6 +655,11 @@ class PluginManager:
             meta["_budget"] = dict((_mf or {}).get("budget") or {})
             meta["_permissions"] = list((_mf or {}).get("permissions") or [])
             meta["_scope"] = (_mf or {}).get("scope")
+            # 2026-11-03：清单强制的判定结果（拒载原因 / 哪些能力上只是 standby / 拥有哪些能力）
+            _pl = getattr(self, "_manifest_plan", None) or {}
+            meta["_refused"] = str(((_pl.get("refused") or {}).get(name)) or "")
+            meta["_standby"] = list((_pl.get("standby") or {}).get(name) or [])
+            meta["_owns"] = [c for c, o in (_pl.get("owners") or {}).items() if o == name]
             # 1.5.10：中文显示名（插件页按这个渲染，id 仍是英文）
             meta["display_name"] = display_name_of(name, _mf, meta.get("name") or name)
             meta["id"] = name
