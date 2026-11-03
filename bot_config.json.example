@@ -251,6 +251,7 @@
   "slang_injector_enable": true,
   "nsfw_enabled": true,
   "self_heal_enable": true,
+  "self_heal_r3_enable": false,
   "life_context_enable": true,
   "life_context_budget": 8000,
   "agent_as_tool": false,
