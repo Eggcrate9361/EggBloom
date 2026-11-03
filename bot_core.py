@@ -204,6 +204,23 @@ def _plugin_send_text(text, target=None, group_id=None) -> bool:
                             _ch[str(target)] = _lst[-24:]
         except Exception:
             pass
+        # ★ 2026-11-03 二修：短期历史只活 24 条，**长期记忆（沙漏）也要补**。
+        #   主链回复在 15443（群）/ 17782（私聊）各自 memory_feed 一次；
+        #   插件发送这条路径此前完全没接 → 主动说的话第二天就不在记忆里了。
+        #   只补 Bot 那一行：text 留空 + user_pre_logged=True，用户侧不进沙
+        #   （主动消息没有"用户说的话"可记，硬塞会让统计多出一堆空用户行）。
+        try:
+            if _ok:
+                from sandglass_bridge import memory_feed as _mfeed
+                _mfeed({
+                    "text": "",
+                    "group_id": str(group_id or ""),
+                    "sender": str(target or ""),
+                    "reply": text,
+                    "user_pre_logged": True,
+                })
+        except Exception:
+            pass
         return _ok
     except Exception as e:
         try:

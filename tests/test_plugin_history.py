@@ -101,6 +101,33 @@ def main():
         bot_core._plugin_send_text("   ", target="999004")
         check("★ 空文本不进历史", not (bot_core.chat_history.get("999004") or []))
 
+        print("\n[E2] 长期记忆（沙漏）也要补：主动说的话不能第二天就忘")
+        import types
+        fed = []
+        fake = types.ModuleType("sandglass_bridge")
+        fake.memory_feed = lambda msg, scope="group": fed.append(dict(msg)) or {"sandglass": True}
+        old_mod = sys.modules.get("sandglass_bridge")
+        sys.modules["sandglass_bridge"] = fake
+        try:
+            state["ok"] = True
+            bot_core._plugin_send_text("这句要进长期记忆", target="999006")
+            check("★ 调了 memory_feed", len(fed) == 1, fed)
+            m = fed[0] if fed else {}
+            check("★ 只补 Bot 那一行（text 空 + user_pre_logged）",
+                  m.get("text") == "" and m.get("user_pre_logged") is True, m)
+            check("★ reply 是发出去的话", m.get("reply") == "这句要进长期记忆", m)
+            check("★ 私聊 group_id 为空", m.get("group_id") == "", m)
+            fed.clear()
+            bot_core._plugin_send_text("群里的主动话", group_id="888002")
+            check("群消息带 group_id", fed and fed[0].get("group_id") == "888002", fed)
+        finally:
+            if old_mod is not None:
+                sys.modules["sandglass_bridge"] = old_mod
+            else:
+                sys.modules.pop("sandglass_bridge", None)
+            bot_core.chat_history.pop("999006", None)
+            bot_core.group_chat_history.pop("888002", None)
+
         print("\n[F] 主链已有的历史不能被冲掉")
         bot_core.chat_history["999005"] = [{"role": "user", "content": "之前说的话", "ts": time.time()}]
         state["ok"] = True
