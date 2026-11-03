@@ -34,6 +34,15 @@ sys.path.insert(0, ROOT)
 
 import meme_collect as mc  # noqa: E402
 
+# ★ 2026-11-03：**注入桩，别让用例去调真模型**。
+#   `meme_collect` 在没被注入时会 `import bot_core` 拿真实的画面描述器/分类器 ——
+#   以前 bot 的模型请求被 Cloudflare 403（秒级失败），这条用例"看起来很快"；
+#   把请求头修好之后（`bot_core._llm_request_headers`），它开始**真的调模型**：
+#   单跑从 1.8s 变成 29.7s，在整套里偶发超过 180s 超时，还花真钱。
+#   用例要验的是采集/删除逻辑，不是模型，桩掉即可。
+mc.set_describer(lambda path: "（桩）白底图片")
+mc.set_classifier(lambda paths: "嫌弃")
+
 PASS, FAIL = [], []
 
 
