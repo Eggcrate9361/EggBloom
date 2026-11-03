@@ -23,6 +23,7 @@
 """
 from __future__ import annotations
 
+import threading
 import time
 
 PLUGIN_SPEC = 1
@@ -41,6 +42,15 @@ PLUGIN_MANIFEST = {
 
 #: get_state/set_state 的键名
 STATE_KEY = "recall_state"
+
+#: ★ 2026-11-03：内存里的"刚处理过"占位。
+#   为什么需要：发送改成后台线程之后，"读状态 → 判冷却 → 写状态"全在线程里，
+#   两个重复事件（协议层会把同一条撤回推两遍）会在同毫秒都读到旧状态、
+#   都判定该回 → 各发一条（实测 17:31 连发两条）。
+#   占位必须**同步**做（主线程里、加锁），只有真正的投递进线程。
+_INST_LOCK = threading.Lock()
+_INST_RECENT: dict = {}
+_INST_TTL = 180.0
 
 _ctx = None
 
@@ -95,6 +105,12 @@ def on_event(ctx, event_name: str = "", payload: dict = None, **kwargs):
     now = time.time()
     d = policy.decide(p, cfg=_cfg(ctx), now=now, state=_state(ctx))
     if d.get("act") != policy.ACT_SAY:
+        # 跳过也要留痕：静默跳过等于把"为什么不回"变成不可观测，
+        # 2026-11-03 真机就是因为插件一声不吭，排查方向被带偏了三轮。
+        try:
+            ctx.log(f"[撤回/跳过] {d.get('reason') or '未给原因'}")
+        except Exception:
+            pass
         return None
 
     text = policy.pick(d.get("texts") or [])
@@ -103,28 +119,61 @@ def on_event(ctx, event_name: str = "", payload: dict = None, **kwargs):
 
     gid = str(p.get("group_id") or "")
     op = str(p.get("operator") or "")
-    try:
-        if gid:
-            ok = bool(ctx.send_text(text, group_id=gid))
-        elif op:
-            ok = bool(ctx.send_text(text, target=op))
-        else:
+    # 兜底：万一上游给的是"昵称(QQ号)"这种展示形态，发送前必须取纯号 ——
+    # 拿展示串当 target 是发不出去的（2026-11-03 真机踩到）。
+    if "(" in op and ")" in op:
+        import re as _re
+        _m = _re.search(r"\((\d+)\)", op)
+        if _m:
+            op = _m.group(1)
+    if not gid and not op:
+        return None
+
+    # 同步占位：同一条撤回（含协议层重复推送）只允许一个线程去投递。
+    _dedupe = "%s:%s" % (d.get("key") or "", str(p.get("message_id") or ""))
+    with _INST_LOCK:
+        _now_chk = time.time()
+        for _k in [k for k, t in _INST_RECENT.items() if _now_chk - t > _INST_TTL]:
+            _INST_RECENT.pop(_k, None)
+        if _dedupe in _INST_RECENT:
+            try:
+                ctx.log(f"[撤回/跳过] 重复事件（同一条撤回已处理）")
+            except Exception:
+                pass
             return None
-    except Exception as e:
-        ctx.log(f"撤回反馈发送异常: {e}", "warn")
-        return None
+        _INST_RECENT[_dedupe] = _now_chk
 
-    if not ok:
-        # 发送失败不吃冷却 —— 否则一次网络抖动就让这个群沉默一分钟
-        return None
+    # ★ 2026-11-03（真机教训）：发送**绝不能阻塞主循环**。
+    #   on_event 是在 bot_core 的主循环线程里被调用的，而 ctx.send_text 要
+    #   走出站队列（限频/HTTP），实测阻塞 6 秒。那 6 秒里同一条消息的"入缓冲"
+    #   被推迟，等它进缓冲时撤回事件早已处理完（取消的是空缓冲）→
+    #   bot 照样回复了一条用户已撤回的消息。
+    #   判定照旧同步做（要立刻决定要不要回），投递丢后台线程。
+    def _deliver():
+        try:
+            ok = (bool(ctx.send_text(text, group_id=gid)) if gid
+                  else bool(ctx.send_text(text, target=op)))
+        except Exception as e:
+            try:
+                ctx.log(f"撤回反馈发送异常: {e}", "warn")
+            except Exception:
+                pass
+            return
+        if not ok:
+            # 发送失败不吃冷却 —— 否则一次网络抖动就让这个群沉默一分钟
+            return
+        try:
+            ctx.set_state(STATE_KEY, policy.remember(
+                _state(ctx), d.get("key") or "", now=now,
+                message_id=str(p.get("message_id") or "")))
+        except Exception:
+            pass
+        try:
+            ctx.log(f"[撤回/{d.get('kind')}] {gid or op}: {text[:30]}")
+        except Exception:
+            pass
 
-    try:
-        ctx.set_state(STATE_KEY, policy.remember(
-            _state(ctx), d.get("key") or "", now=now,
-            message_id=str(p.get("message_id") or "")))
-    except Exception:
-        pass
-    ctx.log(f"[撤回/{d.get('kind')}] {gid or op}: {text[:30]}")
+    threading.Thread(target=_deliver, daemon=True, name="recall-deliver").start()
     return None
 
 
@@ -148,3 +197,15 @@ def get_api_status():
         "cooldown_keys": len((st.get("last_fire") or {})),
         "seen": len((st.get("seen") or {})),
     }
+
+
+#: ★ ABI v1 要求：钩子必须显式登记在 PLUGIN_HOOKS 里，光定义函数不算。
+#:   漏了这一步的表现很隐蔽 —— 插件"加载成功"（_loaded: true），但 `_hooks` 是空表，
+#:   事件一条也收不到，面板上也不报错。2026-11-03 真机验证时踩到。
+PLUGIN_HOOKS = {
+    "on_load": on_load,
+    "on_enable": on_enable,
+    "on_disable": on_disable,
+    "on_unload": on_unload,
+    "on_event": on_event,
+}

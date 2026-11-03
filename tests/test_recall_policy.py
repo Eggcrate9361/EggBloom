@@ -148,6 +148,27 @@ def main():
     check("pick 可注入 rng", P.pick(["a", "b"], rng=lambda pool: pool[1]) == "b")
     check("空池 pick 返回空串", P.pick([]) == "")
 
+    # ★ 真机配置的形状：结构化条目 + disabled 开关（不是纯字符串）。
+    #   2026-11-03 线上：直接 str() 把字典当文案发了，还被 smart_send 拆成两条。
+    cfg_dict = {"recall_feedback_post_messages": [
+        {"text": "看到了 晚了", "disabled": False},
+        {"text": "这条停用了", "disabled": True},
+        {"text": "  ", "disabled": False},
+        {"text": "也看到了", "disabled": False},
+    ]}
+    check("★ 结构化条目取 text，停用的跳过",
+          P.texts_for(P.KIND_SEEN, cfg_dict) == ["看到了 晚了", "也看到了"],
+          P.texts_for(P.KIND_SEEN, cfg_dict))
+    check("★ 不会把字典字面量当文案",
+          all(not t.startswith("{") for t in P.texts_for(P.KIND_SEEN, cfg_dict)),
+          P.texts_for(P.KIND_SEEN, cfg_dict))
+    check("混着纯字符串也认",
+          P.texts_for(P.KIND_SEEN, {"recall_feedback_post_messages": ["纯字符串", {"text": "条目"}]})
+          == ["纯字符串", "条目"])
+    check("全是停用 → 回落到预置",
+          P.texts_for(P.KIND_SEEN, {"recall_feedback_post_messages": [{"text": "x", "disabled": True}]})
+          == list(P.PRESET_SEEN))
+
     print("\n[E] remember：写冷却 + 去重，且不改入参")
     st0 = {}
     st1 = P.remember(st0, "group_1", now=NOW, message_id="m1")

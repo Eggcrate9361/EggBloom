@@ -89,14 +89,28 @@ def _num(v, default: float) -> float:
 
 
 def _texts(raw) -> List[str]:
-    """把配置里的文案列表规整成非空字符串列表（空/非列表 → []）。"""
+    """把配置里的文案列表规整成非空字符串列表。
+
+    ★ 配置里的文案是**结构化条目**：`[{"text": "...", "disabled": false}, ...]`
+      （面板上可以直接停用某一条）。直接 `str(x)` 会得到字典字面量，
+      发出去就是把 `{'text': '什么情况 手滑了？', 'disabled': False}` 当消息发——
+      2026-11-03 真机就是这样，而且 smart_send 按换行拆成了**两条**。
+      主链的 `bot_core._recall_texts` 是同一套语义，两边必须一致。
+    """
     if isinstance(raw, str):
         raw = [raw]
     if not isinstance(raw, (list, tuple)):
         return []
     out = []
     for x in raw:
-        s = str(x or "").strip()
+        if isinstance(x, str):
+            s = x.strip()
+        elif isinstance(x, dict):
+            if x.get("disabled"):
+                continue
+            s = str(x.get("text") or "").strip()
+        else:
+            s = ""
         if s:
             out.append(s)
     return out
