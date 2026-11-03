@@ -99,7 +99,14 @@ def main():
         names = [n for n, _ in events]
         check("群撤回发 notice.recall", "notice.recall" in names, names)
         r = last("notice.recall")
-        check("★ 字段正好四个", set(r) == {"group_id", "operator", "message_id", "ts"}, r)
+        # 四个必填字段只增不改；刀 2 又补了四个给插件判定用的事实
+        check("★ 四个必填字段都在", {"group_id", "operator", "message_id", "ts"} <= set(r), r)
+        check("★ 刀 2 补了判定事实",
+              {"buffer_cancelled", "last_bot_msg", "session_active", "idle_seconds"} <= set(r), r)
+        check("buffer_cancelled 是布尔", isinstance(r.get("buffer_cancelled"), bool))
+        check("last_bot_msg 是数字", isinstance(r.get("last_bot_msg"), (int, float)))
+        check("★ 带 notice_type（订阅方靠它分群/私聊）",
+              r.get("notice_type") == "group_recall", r.get("notice_type"))
         check("message_id 转成字符串", r.get("message_id") == "12345", r.get("message_id"))
         check("operator = 撤回的人", r.get("operator") == USER, r.get("operator"))
 

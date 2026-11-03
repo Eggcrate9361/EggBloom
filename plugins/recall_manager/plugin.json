@@ -1,0 +1,14 @@
+{
+  "id": "recall_manager",
+  "version": "0.1.0",
+  "description": "撤回反馈：订阅 notice.recall，按策略层判定后回一句（默认关闭，开启前先把 recall_feedback_by 改成 plugin）",
+  "provides": ["recall.feedback"],
+  "requires": [],
+  "budget": {
+    "max_chars": 40,
+    "max_parts": 1
+  },
+  "permissions": [],
+  "scope": "global",
+  "title": "撤回反馈"
+}

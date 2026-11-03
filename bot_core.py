@@ -9855,14 +9855,46 @@ def _handle_recall_event(ev):
     is_grp_recall = ev.get("notice_type") == "group_recall"
     log(f"[事件] 撤回: type={ev.get('notice_type')} user_id={recall_uid} group_id={recall_gid or '私聊'} msg_id={recall_msg_id}")
     # ★ 2026-11-03（1.6.0 P1，§8.1 #5）：notice.recall 进事件总线。
-    #   载荷：group_id / operator / message_id / ts。
+    #   四个**必填**字段：group_id / operator / message_id / ts。
     #   operator 取**原始** user_id —— 下一行会把空值归一成 None，那是给反馈逻辑用的，
     #   插件拿到的应该是事件里真实的值。
+    #   刀 2（recall_manager 接线）再补四个**给插件判定用的事实**：插件拿不到主链内存，
+    #   "值不值得回"要靠这些。这里是**只读窥视**，不取消任何缓冲区 ——
+    #   真正的取消仍在下面各自的临界区里做，顺序不能挪。
+    _peek_cancelled = False
+    _last_bot = 0.0
+    if is_grp_recall and recall_gid:
+        try:
+            with _buffer_lock:
+                _peek_cancelled = bool(GROUP_MSG_BUFFER.get(str(recall_gid)))
+        except Exception:
+            _peek_cancelled = False
+        try:
+            _last_bot = float(GROUP_LAST_BOT_MSG.get(str(recall_gid), 0) or 0)
+        except Exception:
+            _last_bot = 0.0
+    _p_active, _p_idle = False, 0.0
+    if not is_grp_recall:
+        try:
+            _ps = PRIVATE_SESSION.get(str(recall_uid))
+            if _ps:
+                _p_active = True
+                _p_idle = max(0.0, time.time() - float(_ps.get("last_msg_time", 0) or 0))
+        except Exception:
+            pass
     _emit_plugin_event("notice.recall", {
         "group_id": str(recall_gid or ""),
         "operator": str(ev.get("user_id", "") or ""),
         "message_id": str(recall_msg_id or ""),
         "ts": time.time(),
+        # 事件名是 notice.recall，但"群撤回还是私聊撤回"只在 notice_type 里 ——
+        # 不带上它，订阅方只能靠 group_id 是否为空去猜。
+        "notice_type": str(ev.get("notice_type")
+                           or ("group_recall" if recall_gid else "friend_recall")),
+        "buffer_cancelled": _peek_cancelled,
+        "last_bot_msg": _last_bot,
+        "session_active": _p_active,
+        "idle_seconds": _p_idle,
     })
     # 撤回反馈：复用已有逻辑
     recall_uid = recall_uid if recall_uid and recall_uid != 'None' and recall_uid != '0' else None
@@ -9881,6 +9913,13 @@ def _handle_recall_event(ev):
                 GROUP_MSG_BUFFER.pop(str(recall_gid), None)
                 log(f"[撤回] 群[{recall_gid}] 已取消未处理缓冲区，截断AI回复")
         buffer_cancelled = bool(pending_buf)
+
+        # ★ 2026-11-03（刀 2）：撤回反馈交给 recall_manager 插件时，主链不再自己回。
+        #   位置很关键 —— 必须在**取消缓冲区之后**：截断未发出的回复是安全动作，
+        #   跟"要不要回一句"是两回事，不能因为换了执行者就不截断。
+        if str(_config.get("recall_feedback_by", "core")).lower() == "plugin":
+            log("[撤回反馈] 交给 recall_manager 插件，主链不再回")
+            return
 
         # 2026-10-30：不再要求"活跃会话"——用户撤回了就该有反应。
         gs = GROUP_SESSION.get(str(recall_gid))
@@ -10022,6 +10061,12 @@ def _handle_recall_event(ev):
         # 用户会收到"对已撤回内容的回复"+"撤回了？我还没看到"两条自相矛盾的话。
         # 放在会话门槛之前 —— 门不通过也要丢掉，撤回就是不想让这条被处理。
         _cancel_private_buffer(_pkey)
+
+        # ★ 2026-11-03（刀 2）：同上 —— 取消私聊合并批次之后才让位给插件。
+        if str(_config.get("recall_feedback_by", "core")).lower() == "plugin":
+            log("[撤回反馈] 交给 recall_manager 插件，主链不再回")
+            return
+
         _p_session = PRIVATE_SESSION.get(_pkey)
         if not _p_session:
             log(f"[调试] 私聊撤回反馈跳过: 无活跃会话 ({recall_uid})")

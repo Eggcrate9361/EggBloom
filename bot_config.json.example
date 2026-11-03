@@ -233,6 +233,7 @@
     "太迟了 消息已送达我脑子里"
   ],
   "recall_feedback_cooldown": 60,
+  "recall_feedback_by": "core",
   "recall_private_enable": true,
   "recall_private_cooldown": 60,
   "recall_private_post_messages": [],

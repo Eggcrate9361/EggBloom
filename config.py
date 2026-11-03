@@ -538,6 +538,10 @@ DEFAULT_CONFIG = {
         "太迟了 消息已送达我脑子里",
     ],
     "recall_feedback_cooldown": 60,
+    # ★ 2026-11-03：撤回反馈由谁执行 —— "core" = 主链（默认，行为不变）；
+    #   "plugin" = 让位给 recall_manager 插件（插件页还要同时启用它，
+    #   否则主链不回了、也没人接）。只改一边都是错的。
+    "recall_feedback_by": "core",
 
     # 撤回反馈（私聊）：独立开关/冷却/文案，与群聊撤回互不影响
     "recall_private_enable": True,
