@@ -216,9 +216,54 @@ def _apply_embed_config(cfg):
     _embedder.model = str(cfg.get("embed_model") or base.get("embed_model") or "bge-small-zh")
 
 
+# ── 向量口径：自检 + 标识（2026-11-03，P1-1 / P1-2）───────────
+# 换 embedding 模型或引擎时，旧向量与新向量**不在同一个空间**：
+#   · 512 → 768 换模型 → 维度不一致，旧向量直接算 0 分，再被 sim_floor 筛掉，
+#     表现为"记忆突然全忘了"，而日志里一个字都没有；
+#   · DLL 加载失败会静默降级到 HTTP，两者同文余弦只有 0.891（不是 1.0），
+#     混在一个库里排序会莫名抖动，且降级不留痕迹。
+# 对策：维度不一致**计数并告警一次**；每条向量带 `embed_sig`（引擎:模型:维度），
+# 召回时跨口径的旧向量只降权（×0.8），不再直接归零。
+_DIM_MISMATCH = {"count": 0, "pairs": set()}
+
+
+def _current_embed_prefix() -> str:
+    """当前口径的前缀 `引擎:模型:`（维度不带，因为维度由向量本身决定）。"""
+    try:
+        eng = "ligguf" if _embedder._init_dll() else "http"
+    except Exception:
+        eng = "unknown"
+    try:
+        model = str(_embedder.model or "unknown")
+    except Exception:
+        model = "unknown"
+    return f"{eng}:{model}:"
+
+
+def _embed_sig(vec) -> str:
+    """一条向量的口径签名：`引擎:模型:维度`。三者任一变化，向量就不在同一空间。"""
+    try:
+        n = len(vec) if vec else 0
+    except Exception:
+        n = 0
+    return _current_embed_prefix() + str(n)
+
+
 def _vec_sim(a, b):
-    """余弦相似度，a/b 为等长 float 列表。"""
-    if not a or not b or len(a) != len(b):
+    """余弦相似度，a/b 为等长 float 列表。
+
+    维度不一致时**归零并计数**（返回值不变，所以调用方行为不变）——
+    以前这里是静默 `return 0.0`，于是"换过模型"这件事在日志里查不出来。
+    """
+    if not a or not b:
+        return 0.0
+    if len(a) != len(b):
+        _DIM_MISMATCH["count"] += 1
+        key = (len(a), len(b))
+        if key not in _DIM_MISMATCH["pairs"]:
+            _DIM_MISMATCH["pairs"].add(key)
+            print(f"[SuperMemory] 向量维度不一致 {len(a)} vs {len(b)}："
+                  f"极可能是换过 embedding 模型，需执行 reembed_all()")
         return 0.0
     try:
         import math
@@ -587,6 +632,19 @@ class SuperMemory:
                 conn.commit()
             except Exception:
                 pass
+            # 迁移：向量口径标识 embed_sig（2026-11-03，P1-2）
+            #   值形如 `ligguf:bge-small-zh:512`；空串 = 改动前写入的旧向量，
+            #   召回时按"跨口径"降权处理（不直接丢）。
+            try:
+                fcols = [r[1] for r in conn.execute('PRAGMA table_info(facts)').fetchall()]
+                if 'embed_sig' not in fcols:
+                    conn.execute('ALTER TABLE facts ADD COLUMN embed_sig TEXT DEFAULT ""')
+                ecols = [r[1] for r in conn.execute('PRAGMA table_info(events)').fetchall()]
+                if 'embed_sig' not in ecols:
+                    conn.execute('ALTER TABLE events ADD COLUMN embed_sig TEXT DEFAULT ""')
+                conn.commit()
+            except Exception:
+                pass
             # 迁移：分层字段 tier（permanent 永久 / long 长期 / short 短期）
             try:
                 fcols = [r[1] for r in conn.execute('PRAGMA table_info(facts)').fetchall()]
@@ -742,16 +800,25 @@ class SuperMemory:
                 (new_conf, new_count, now, source_msg[:200], tier, row[0]),
             )
         else:
-            emb = ""
+            # ★ 2026-11-03（P0-1 / P0-2）：
+            #   ① 嵌**带类别前缀**的文本 —— 与读侧展示形态 `[category] content` 对齐
+            #      （实测 LiGGUF 上 Top-1 0.833→0.867、Top-3 0.900→0.967，仅此一处改动）；
+            #   ② **只嵌一次**：原来"条件判断一次、取值再一次"，每条内容嵌两遍；
+            #      单条 67ms（llama-server 只要 5.9ms），一条事实白烧 70ms，还在 after_reply 热路径上。
+            #   顺带修掉一个隐性 bug：原写法"第一次成功、第二次失败"时会写进字符串 `"null"`，
+            #   读侧 json.loads("null") 得到 None → 这条记忆从此永远召回不到。
+            emb, sig = "", ""
             try:
-                if _embedder.embed(content):
-                    emb = json.dumps(_embedder.embed(content))
+                _v = _embedder.embed(f"[{category}] {content}")
+                if _v:
+                    emb = json.dumps(_v)
+                    sig = _embed_sig(_v)
             except Exception:
                 pass
             tier = self._classify_tier(confidence, 1, category)
             conn.execute(
-                "INSERT INTO facts (scope_id, user_id, category, content, confidence, source_msg, created_at, last_used, embedding, tier) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (str(scope_id), str(user_id), category, content, confidence, source_msg[:200], now, now, emb, tier),
+                "INSERT INTO facts (scope_id, user_id, category, content, confidence, source_msg, created_at, last_used, embedding, tier, embed_sig) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (str(scope_id), str(user_id), category, content, confidence, source_msg[:200], now, now, emb, tier, sig),
             )
 
     def _queue_fact(self, conn, scope_id: str, user_id: str, category: str,
@@ -897,23 +964,69 @@ class SuperMemory:
             conn = sqlite3.connect(DB_PATH)
             now = time.time()
             for event in events:
-                emb = ""
+                # ★ 2026-11-03（P0-1 / P0-2）：事件同 facts —— 嵌 `[事件] summary`，且只嵌一次。
+                emb, sig = "", ""
                 try:
-                    if _embedder.embed(event["summary"]):
-                        emb = json.dumps(_embedder.embed(event["summary"]))
+                    _v = _embedder.embed(f"[事件] {event['summary']}")
+                    if _v:
+                        emb = json.dumps(_v)
+                        sig = _embed_sig(_v)
                 except Exception:
                     pass
                 conn.execute(
-                    "INSERT INTO events (scope_id, user_id, event_type, summary, participants, emotion, timestamp, importance, embedding, tier) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "INSERT INTO events (scope_id, user_id, event_type, summary, participants, emotion, timestamp, importance, embedding, tier, embed_sig) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (str(scope_id), str(event.get("user_id") or user_id or ""),
                      event["event_type"], event["summary"], "", event.get("emotion", ""),
                      now, event.get("importance", 0.5), emb,
-                     self._classify_tier(event.get("importance", 0.5), 1)),
+                     self._classify_tier(event.get("importance", 0.5), 1), sig),
                 )
             conn.commit()
             conn.close()
         except Exception as e:
             print(f"[SuperMemory] 存储事件失败: {e}")
+
+    def reembed_all(self, scope_id: str = "", dry_run: bool = False) -> Dict[str, Any]:
+        """按**当前口径**重算 facts/events 的向量（2026-11-03，P0-3）。
+
+        幂等，可重复执行；只重算 `embedding` / `embed_sig`，不动 content / confidence / tier。
+        `scope_id` 为空时处理全库。
+
+        为什么必须做：P0-1 把嵌入文本改成了 `[category] content`，新旧向量混存时
+        同一批记忆会被两套口径打分，排序出现不可解释的抖动。重算成本随库增大，
+        做完就该做 —— 现在跑一遍是秒级，拖一个月就是分钟级。
+
+        用法：先 `dry_run=True` 看计数对不对，再实跑。
+        """
+        stat = {"facts": 0, "events": 0, "failed": 0}
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            where, args = ("WHERE scope_id=?", (str(scope_id),)) if scope_id else ("", ())
+            jobs = (
+                ("facts", f"SELECT id, category, content FROM facts {where}",
+                 lambda r: f"[{r[1]}] {r[2]}"),
+                ("events", f"SELECT id, summary FROM events {where}",
+                 lambda r: f"[事件] {r[1]}"),
+            )
+            for table, select_sql, build in jobs:
+                for row in conn.execute(select_sql, args).fetchall():
+                    try:
+                        v = _embedder.embed(build(row))     # 与写入路径同一口径
+                    except Exception:
+                        v = None
+                    if not v:
+                        stat["failed"] += 1
+                        continue
+                    if not dry_run:
+                        conn.execute(
+                            f"UPDATE {table} SET embedding=?, embed_sig=? WHERE id=?",
+                            (json.dumps(v), _embed_sig(v), row[0]))
+                    stat[table] += 1
+            if not dry_run:
+                conn.commit()
+            conn.close()
+        except Exception as e:
+            return {"ok": False, "error": str(e), "dry_run": dry_run, **stat}
+        return {"ok": True, "dry_run": dry_run, "scope_id": str(scope_id), **stat}
 
     # ── 关键记忆召回 ──
 
@@ -941,31 +1054,42 @@ class SuperMemory:
             uf_sql, uf_args = _user_scope_filter(scope, focus_user)
             ev_sql, ev_args = _event_scope_filter(scope, focus_user)
 
-            def _sim(emb_text):
+            def _sim(emb_text, sig=""):
+                """向量相似度。
+
+                ★ 2026-11-03（P1-2）：`embed_sig` 与当前口径不符的旧向量**降权不全丢**
+                （×0.8）。这样即便忘了跑 `reembed_all()`，也不会一夜之间失忆，而是平滑退化。
+                """
                 if not use_vec or not emb_text:
                     return 0.0
                 try:
                     ev = json.loads(emb_text)
-                    return _vec_sim(qvec, ev)
                 except Exception:
                     return 0.0
+                if not isinstance(ev, list):
+                    # 旧代码可能写进字符串 `"null"`（见写侧注释），当没向量处理
+                    return 0.0
+                sim = _vec_sim(qvec, ev)
+                if sim and sig and not str(sig).startswith(_current_embed_prefix()):
+                    sim *= 0.8
+                return sim
 
             # 1. 高置信度事实（向量优先）
             raw_facts = []
             cur = conn.execute(
-                "SELECT category, content, confidence, last_used, embedding, tier, user_id FROM facts "
+                "SELECT category, content, confidence, last_used, embedding, tier, user_id, embed_sig FROM facts "
                 "WHERE scope_id=? AND confidence > 0.6 AND (? = 0 OR (embedding IS NOT NULL AND embedding != ''))"
                 + uf_sql +
                 " ORDER BY confidence DESC, last_used DESC LIMIT 100",
                 (str(scope_id), 1 if use_vec else 0) + uf_args,
             )
             for row in cur.fetchall():
-                raw_facts.append((row, _sim(row[4])))
+                raw_facts.append((row, _sim(row[4], row[7] if len(row) > 7 else "")))
 
             # 2. 重要事件（向量优先）
             raw_events = []
             cur = conn.execute(
-                "SELECT event_type, summary, emotion, importance, timestamp, embedding, tier, user_id FROM events "
+                "SELECT event_type, summary, emotion, importance, timestamp, embedding, tier, user_id, embed_sig FROM events "
                 "WHERE scope_id=? AND importance > 0.5 AND (? = 0 OR (embedding IS NOT NULL AND embedding != ''))"
                 + ev_sql +
                 " ORDER BY timestamp DESC LIMIT 100",
@@ -978,7 +1102,7 @@ class SuperMemory:
                 decayed = row[3] * max(0.0, (decay_sec - age) / decay_sec)
                 if decayed <= 0.3:
                     continue
-                raw_events.append((row, decayed, _sim(row[5])))
+                raw_events.append((row, decayed, _sim(row[5], row[8] if len(row) > 8 else "")))
 
             # 向量阈值动态放宽：严格阈值下不足 limit 条时，逐级下调 0.35→0.25→0.15→0
             sim_floor = min_sim
@@ -1412,6 +1536,14 @@ def set_tier(scope_id: str = "default", table: str = "facts", item_id: int = 0, 
         return {"ok": False, "error": str(e)}
 
 
+def reembed_all(scope_id: str = "", dry_run: bool = False) -> dict:
+    """模块级薄封装：按当前口径重算向量（2026-11-03，P0-3）。
+
+    与 `set_tier` 同一种转发写法 —— 插件侧只 import 函数名，不自己摸 `_memory`。
+    """
+    return _memory.reembed_all(scope_id=scope_id, dry_run=dry_run)
+
+
 def get_vector_stats():
     """向量化统计：unembedded 表示尚未生成 embedding 的记忆条目数（供 UI 标注）"""
     try:
@@ -1425,6 +1557,10 @@ def get_vector_stats():
             "facts_total": total_f, "facts_unembedded": unemb_f,
             "events_total": total_e, "events_unembedded": unemb_e,
             "embed_service": _embedder._available() and _embedder.embed("test") is not None,
+            # ★ 2026-11-03（P1-1 / P1-2）：换模型/换引擎的证据，不再只活在日志里
+            "embed_sig": _current_embed_prefix().rstrip(":"),
+            "dim_mismatch": int(_DIM_MISMATCH["count"]),
+            "dim_seen": sorted(list(_DIM_MISMATCH["pairs"])),
         }
     except Exception:
         return {"facts_total": 0, "facts_unembedded": 0, "events_total": 0, "events_unembedded": 0, "embed_service": False}

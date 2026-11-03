@@ -108,6 +108,20 @@ def _do_set_tier(params=None):
     )
 
 
+def _do_reembed(params=None):
+    """按当前口径重算 facts/events 的向量（2026-11-03，P0-3）。
+
+    params: {scope_id?: str, dry_run?: bool}
+    幂等；先 dry_run 看计数，再实跑。
+    """
+    params = params or {}
+    from plugins.ego.super_memory import reembed_all as _re
+    return _re(
+        scope_id=str(params.get("scope_id") or ""),
+        dry_run=bool(params.get("dry_run")),
+    )
+
+
 PLUGIN_ACTIONS = {
     "get_config": lambda params: _get_config(),
     "set_config": lambda params: _set_config(params or {}),
@@ -116,4 +130,5 @@ PLUGIN_ACTIONS = {
     "recall": _do_recall,
     "tier_stats": _do_tier_stats,
     "set_tier": _do_set_tier,
+    "reembed_all": _do_reembed,
 }
