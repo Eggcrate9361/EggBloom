@@ -304,6 +304,27 @@ def _fetch_mood(cfg: dict) -> str:
     return _MOOD_LABELS.get(label, "") if best_abs >= 1 else ""
 
 
+#: 明确的收尾语（2026-11-04 用户要求）：说了这些就代表话题结束，别再主动开口。
+#  只列**明确语义**的，不含「嗯」「哦」这类——那些只是没接话，不是结束。
+_CLOSERS = (
+    "晚安", "睡了", "睡觉了", "我睡了", "拜拜", "88", "886", "再见", "去忙",
+    "先这样", "就这样吧", "不聊了", "下了", "离线", "回头聊", "改天聊",
+    "我走了", "撤了", "忙去了", "上班了", "到点", "收工",
+)
+
+
+def looks_finished(text: str) -> bool:
+    """这句话是不是一个明确的收尾。空/未识别都返回 False（= 不算结束）。"""
+    s = str(text or "").strip().lower()
+    if not s:
+        return False
+    # 长句里带收尾词往往只是**提到**（「他跟我说晚安的时候…」），不是自己在收尾。
+    # 阈值取 12：「先这样吧我去洗澡了」这类还认，「他跟我说晚安…」这种就不算。
+    if len(s) > 12:
+        return False
+    return any(k in s for k in _CLOSERS)
+
+
 def _fetch_memory_rounds(cfg: dict, qq: str) -> list:
     """super_memory 私聊历史（WebUI /api/memory/detail），取最近 N 轮。"""
     if not cfg.get("use_memory"):
@@ -434,7 +455,9 @@ def _build_messages(cfg: dict, state: dict, target: str) -> list:
         # ★ 2026-11-03：用户反馈"几乎每轮都在反问"。主动找人说话最容易变成查岗。
         "- 【别用问句】默认陈述句收尾。主动说话不该像查岗：不许「你干嘛呢」「吃了吗」"
         "「到底啥意思」这种一问一答；真要问，整条最多一个问号，且必须是真需要他回答的事\n"
-        "- 语气偏冷：不撒娇、不讨欢心、不反复催（「别装死」「等着验收」这种催法不许用）"
+        "- 语气偏冷：不撒娇、不讨欢心、不反复催（「别装死」「等着验收」这种催法不许用）\n"
+        "- 没人接话时开口：说自己的状态、有点失落但别卖惨，也不用问「还聊不聊」"
+        " —— 问这句等于把压力甩给对方；自己把话说完，或者干脆只留一句就停。"
     )
     try:
         import people as _people
@@ -611,6 +634,22 @@ def _proactive_once(force: bool = False, target: str = "") -> dict:
         # 轮转公平：按上次和这个人说话的时间排，最久的优先
         by = state.get("last_proactive_by") or {}
         chosen = sorted(candidates, key=lambda t: float((by.get(t) if isinstance(by, dict) else 0) or 0))[0]
+
+        # ★ 2026-11-04（用户）：没有明确语义结束才开口；说了「晚安/睡了/先这样」
+        #   这类收尾语，就别再过几小时冒出来问「还聊不聊」—— 那是打扰，不是主动。
+        #   只拦**明确收尾**；「嗯」「哦」这种只是没接话，仍然算可以开口。
+        if not force:
+            try:
+                rounds = _fetch_memory_rounds(cfg, chosen)
+                last_user = ""
+                if rounds:
+                    last_user = str((rounds[-1] or {}).get("user_msg") or "")
+                if looks_finished(last_user):
+                    _log(f"主动开口跳过 {chosen}：上次明确收尾（{last_user[:20]}）")
+                    return {"ok": False, "skipped": True, "target": chosen,
+                            "reason": "上次已明确收尾"}
+            except Exception:
+                pass
 
         # ★ 2026-11-03 Decision 层：`mode=auto`（或候选不来自配置/点名）时**只记录不执行**
         #   —— 心跳照常评估、照常留日志，但不生成也不发送。默认 mode="live"，
