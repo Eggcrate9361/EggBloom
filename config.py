@@ -610,6 +610,14 @@ DEFAULT_CONFIG = {
     # 默认**关**：它会在你机器上自动提交代码，风险等级和 R1/R2 完全不同。
     "self_heal_r3_enable": False,
 
+    # ── 主动戳一戳（1.6.0 §4.1.1）────────────────────────────
+    # 默认关：它会在你不在场时以你的名义戳别人。开启要同时配好目标。
+    "poke_proactive_enable": False,
+    "poke_proactive_targets": [],          # 空 = 回落到 proactive_talk 的 target_qqs
+    "poke_proactive_min_silence": 14400,   # 4 小时没互动才考虑
+    "poke_proactive_daily_cap": 3,         # 每天最多戳几个人
+    "poke_proactive_heartbeat_sec": 900,
+
     # ── 生活上下文单出口（1.6.0 刀 2，2026-11-01）────────────────────
     # 开：`_call_deepseek_sync` 的动态上下文（记忆/时间/群况/工具清单…）
     # 交给 harness.life_context.merge() 合成一段注入，日志打「[生活上下文] 合并 N 块」。

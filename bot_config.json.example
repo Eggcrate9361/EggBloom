@@ -252,6 +252,12 @@
   "nsfw_enabled": true,
   "self_heal_enable": true,
   "self_heal_r3_enable": false,
+
+  "poke_proactive_enable": false,
+  "poke_proactive_targets": [],
+  "poke_proactive_min_silence": 14400,
+  "poke_proactive_daily_cap": 3,
+  "poke_proactive_heartbeat_sec": 900,
   "life_context_enable": true,
   "life_context_budget": 8000,
   "agent_as_tool": false,

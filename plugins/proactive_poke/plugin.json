@@ -1,0 +1,15 @@
+{
+  "id": "proactive_poke",
+  "name": "主动戳一戳",
+  "version": "1.0.0",
+  "description": "久未互动时按闸门主动戳一下（默认关闭；需 poke_proactive_enable + 目标）",
+  "author": "EggBloom",
+  "priority": 80,
+  "default_enabled": false,
+  "provides": ["proactive.poke"],
+  "requires": [],
+  "scope": [],
+  "ui": {
+    "group": "触达"
+  }
+}
