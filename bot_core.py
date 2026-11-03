@@ -9874,6 +9874,29 @@ def _handle_recall_event(ev):
         except Exception:
             _last_bot = 0.0
     _p_active, _p_idle = False, 0.0
+    # 主链的"已读反馈"还有一道门槛：得真的在最近 15 条里看到过撤回者说话
+    # （见下面 `user_recent_msg_time > 0`）。插件侧拿不到 GROUP_RECENT_MSGS，
+    # 必须把结论一起送出去 —— 否则插件会比主链更话痨。
+    _user_recent = False
+    if is_grp_recall and recall_gid and not _peek_cancelled:
+        try:
+            _ru = str(recall_uid or "")
+            _ru_digits = _ru
+            if "(" in _ru and ")" in _ru:
+                # 注意：这里的 `import re as _re` 在几百行之后才执行，
+                # 不能借用 —— 必须自己导一次，否则 NameError 会被 except 吞成 False。
+                import re as _re_peek
+                _mm = _re_peek.search(r"\((\d+)\)", _ru)
+                if _mm:
+                    _ru_digits = _mm.group(1)
+            for _entry in reversed(GROUP_RECENT_MSGS.get(str(recall_gid), [])[-15:]):
+                if isinstance(_entry, (list, tuple)) and len(_entry) > 1:
+                    _es = str(_entry[1])
+                    if _es == _ru or _es == _ru_digits:
+                        _user_recent = True
+                        break
+        except Exception:
+            _user_recent = False
     if not is_grp_recall:
         try:
             _ps = PRIVATE_SESSION.get(str(recall_uid))
@@ -9893,6 +9916,7 @@ def _handle_recall_event(ev):
                            or ("group_recall" if recall_gid else "friend_recall")),
         "buffer_cancelled": _peek_cancelled,
         "last_bot_msg": _last_bot,
+        "user_recent": _user_recent,
         "session_active": _p_active,
         "idle_seconds": _p_idle,
     })

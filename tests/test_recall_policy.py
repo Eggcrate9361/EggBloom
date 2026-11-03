@@ -43,7 +43,8 @@ def check(name, cond, extra=""):
 
 def grp(**kw):
     ev = {"notice_type": "group_recall", "group_id": GID, "operator": UID,
-          "message_id": "m1", "buffer_cancelled": False, "last_bot_msg": NOW - 30}
+          "message_id": "m1", "buffer_cancelled": False, "last_bot_msg": NOW - 30,
+          "user_recent": True}
     ev.update(kw)
     return ev
 
@@ -64,6 +65,12 @@ def main():
 
     d = P.decide(grp(buffer_cancelled=True), cfg={}, now=NOW)
     check("★ 截断场景 → 截断反馈", d["kind"] == P.KIND_TRUNCATED, d["kind"])
+
+    # 主链还有一道门槛：真的看到过撤回者最近的消息才接话（截断场景不需要）
+    d = P.decide(grp(user_recent=False), cfg={}, now=NOW)
+    check("★ 没看到用户最近的消息 → 不接话", d["act"] == P.ACT_SKIP and "没看到" in d["reason"], d)
+    check("截断场景不受这条限制",
+          P.decide(grp(buffer_cancelled=True, user_recent=False), cfg={}, now=NOW)["act"] == P.ACT_SAY)
 
     check("① 开关关掉就不回",
           P.decide(grp(), cfg={"recall_feedback_enable": False}, now=NOW)["act"] == P.ACT_SKIP)

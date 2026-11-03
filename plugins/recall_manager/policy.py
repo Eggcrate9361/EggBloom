@@ -180,6 +180,11 @@ def decide(event: dict, *, cfg: dict, now: float, state: Optional[dict] = None) 
             return out
 
         kind = KIND_TRUNCATED if ev.get("buffer_cancelled") else KIND_SEEN
+        if kind == KIND_SEEN and not ev.get("user_recent", False):
+            # 主链的"已读反馈"要求真的在最近消息里看到过撤回者 ——
+            # 没看到就只是"某人撤了条我没见过的消息"，不该接话。
+            out["reason"] = "没看到用户最近的消息，不接话"
+            return out
         out.update(act=ACT_SAY, reason="", kind=kind, texts=texts_for(kind, c))
         return out
 

@@ -80,7 +80,8 @@ class FailSendCtx(FakeCtx):
 def recall_ev(**kw):
     ev = {"group_id": GID, "operator": UID, "message_id": "m1",
           "buffer_cancelled": False, "last_bot_msg": NOW_BASE - 30,
-          "session_active": True, "idle_seconds": 10, "ts": NOW_BASE}
+          "session_active": True, "idle_seconds": 10, "user_recent": True,
+          "ts": NOW_BASE}
     ev.update(kw)
     return ev
 
