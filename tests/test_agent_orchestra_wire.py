@@ -74,6 +74,16 @@ def main():
     for key in ("plan", "trace", "issues", "rounds", "status"):
         check(f"★ 黑板书含 {key}", key in bb, sorted(bb))
 
+    print("\n[D] 状态栏口径：不许读不存在的字段")
+    # 2026-11-03 真机：Agent 页读 st2.bot.status，而 /api/status 返回 {data:{bot_running}}
+    # → "Bot 未在运行"警告永远显示，和顶部"运行 39 分 52 秒"自相矛盾。
+    i_warn = html.find("Agent 的对话/会话都依赖 Bot 进程")
+    seg_warn = html[max(0, i_warn - 900):i_warn + 200] if i_warn > 0 else ""
+    check("★ 先取 data 再回落", "st2.data || st2" in seg_warn, seg_warn[-120:])
+    check("★ 认 bot_running", "bot_running" in seg_warn)
+    check("★ 用 running2 判定", "const running2" in seg_warn and "if (!running2)" in seg_warn,
+          "running2" in seg_warn)
+
     print("\n" + "=" * 60)
     print(f"通过 {PASS} / 失败 {FAIL}")
     if FAILURES:

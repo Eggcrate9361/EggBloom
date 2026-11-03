@@ -4767,7 +4767,16 @@ async function pageAgent(el) {
      Bot 没跑就明说，别让用户在输入框里白等。*/
   try {
     const st2 = await API('/status');
-    if (!(st2 && st2.bot && st2.bot.status === 'running')) {
+    /* ★ 2026-11-03 真机：这里原来读 `st2.bot.status`，而 /api/status 实际返回的是
+       {data:{bot_running,...}} —— 字段路径根本不存在，于是"Bot 未在运行"这条警告
+       **永远显示**（顶部状态栏同时显示"运行 39 分 52 秒"，自相矛盾）。
+       页面其它地方（侧栏/状态栏）早就做了两种形状的兼容，只有这里漏了。
+       统一口径：先取 data，再按 bot_running / running / bot.status 依次回落。*/
+    const d2 = (st2 && (st2.data || st2)) || {};
+    const running2 = !!(d2.bot_running ?? d2.running
+      ?? (d2.bot && d2.bot.status === 'running')
+      ?? (st2 && st2.bot && st2.bot.status === 'running'));
+    if (!running2) {
       const w = document.createElement('div');
       w.className = 'warnbox';
       w.style.marginBottom = 'var(--s4)';
