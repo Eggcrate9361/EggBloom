@@ -37,6 +37,7 @@
 | active_cooldown_min | 30 | 用户说话后不打扰的冷却 |
 | speak_chance | 0.35 | 每次心跳开口概率 |
 | quiet_hours | 空 | 静默时段如 `2:00-7:00`，空 = 凌晨也会开口 |
+| mode | `live` | `live` 真发；`auto` 只记录不执行（心跳照常评估、写日志，但不生成不发） |
 | max_bubbles | 4 | 一次最多气泡数 |
 | persona_extra | 空 | 追加人设 |
 | nickname | 空 | 怎么称呼对方 |

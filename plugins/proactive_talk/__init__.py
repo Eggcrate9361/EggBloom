@@ -57,6 +57,11 @@ DEFAULT_CONFIG = {
     "heartbeat_sec": 900,       # 心跳间隔（秒），每次心跳评估一次要不要开口
     "min_interval_min": 180,    # 两次主动开口的最小间隔（分钟）
     "active_cooldown_min": 30,  # 用户最近发言后多久内不打扰（分钟）
+    # ★ 2026-11-03：Decision 层模式（实现在 harness/proactive_gate.py）。
+    #   "live" = 真发（默认，行为与改造前逐字节一致）；
+    #   "auto" = 只记录不执行 —— 心跳照常评估、照常写日志，但不生成也不发送，
+    #   用来观察"它到底想什么时候开口"，也对应执行总表 §7.2 的「推断候选只记录不执行」。
+    "mode": "live",
     "speak_chance": 0.35,       # 每次心跳通过闸门的概率 0~1
     "quiet_hours": "",          # 静默时段，如 "2:00-7:00"；空 = 不静默（凌晨也会说话）
     # ★ 2026-10-24 作息乘子总开关（harness.bio_rhythm，一般精度）。
@@ -520,69 +525,39 @@ def _update_pending_topic(bubbles: list, target: str = ""):
 # ── 决策闸门 ──────────────────────────────────────────────
 
 
+def _gate_mod():
+    """惰性取到三段式模块 —— 插件不在 import 期就把 harness 拉起来。"""
+    from harness import proactive_gate
+    return proactive_gate
+
+
 def _evaluate(cfg: dict, state: dict, force: bool = False, target: str = "") -> dict:
-    """返回 {'ok': bool, 'target': str, 'blocked_by': str}。force=True 跳过全部闸门。"""
-    now = time.time()
-    targets = _resolve_targets(cfg)
-    target = str(target or "").strip()
-    if target and target not in targets:
-        targets = [target] + targets
-    if not targets:
-        return {"ok": False, "blocked_by": "未配置目标 QQ（插件 target_qqs/target_qq 与主配置 target_qqs 均为空）"}
-    target = target or targets[0]
-    if force:
-        return {"ok": True, "target": target, "blocked_by": ""}
+    """决策闸门（2026-11-03：判据搬到 `harness/proactive_gate.py`，这里只转发）。
 
-    # ★ 2026-11-01：最小间隔改成**按人**算（`last_proactive_by`），这样
-    #   A 刚被搭话不影响 B；旧状态没有这个字典时退回全局 `last_proactive_ts`。
-    by = state.get("last_proactive_by") or {}
-    last_pro = float((by.get(target) if isinstance(by, dict) else 0) or 0)
-    if not last_pro:
-        last_pro = float(state.get("last_proactive_ts") or 0)
-    if last_pro and now - last_pro < float(cfg.get("min_interval_min") or 180) * 60:
-        left = int((float(cfg.get("min_interval_min") or 180) * 60 - (now - last_pro)) // 60)
-        return {"ok": False, "target": target, "blocked_by": f"距上次和 TA 说话不足最小间隔（还需 {left} 分钟）"}
+    返回仍是旧形状 `{'ok', 'target', 'blocked_by'}`；`force=True` 跳过全部闸门。
+    判据**顺序**与**中文文案**由 `proactive_gate.evaluate()` 逐条保持：
+    目标 → force → 按人最小间隔 → 该人发言冷却 → 静默时段 → 概率（含作息乘子）→ AI 就绪。
 
-    # ★ 2026-11-02：冷却按**这个人**算 —— 旧版看全局 last_user_ts，
-    #   B 刚说完话就把对 A 的主动开口也一起挡了（反过来也会误放行）。
-    last_user = _last_ts_for(state, target)
-    if last_user and now - last_user < float(cfg.get("active_cooldown_min") or 30) * 60:
-        left = int((float(cfg.get("active_cooldown_min") or 30) * 60 - (now - last_user)) // 60)
-        return {"ok": False, "target": target, "blocked_by": f"用户刚说过话，冷却中（还需 {left} 分钟）"}
+    顺序里有两条不能动：
+      · **静默时段是硬闸、作息乘子是软闸**，乘法排在硬闸之后，永远绕不过硬闸；
+      · **AI 可用性检查排在概率之后** —— 放在前面等于每次心跳都探测一遍模型状态；
+        只有"本来就要开口"的那一部分才该付这个成本。顺序反了会表现成
+        「心跳开口失败: AI 未产出可用消息」，看着像模型抽风，实际是根本没配。
 
-    if _in_quiet_hours(cfg.get("quiet_hours"), datetime.now()):
-        return {"ok": False, "target": target, "blocked_by": f"处于静默时段 {cfg.get('quiet_hours')}"}
-
-    chance = float(cfg.get("speak_chance") or 0.35)
-    # ★ 2026-10-24 作息乘子（harness.bio_rhythm，一般精度）：
-    #   quiet_hours 是**硬闸**（配了就完全不开口），但它默认为空 —— 意思是
-    #   "凌晨也照样说话"，这不符合任何人的作息。加一个**软闸**：按时段给
-    #   概率乘子，凌晨 ×0.15、晚上 ×1.2。这样不配 quiet_hours 也有合理形状，
-    #   配了则硬闸仍然优先（乘法在硬闸之后，永不被绕过）。
-    #   乘子已夹在 [0.05, 1.25]，所以 speak_chance=0.9 时也不会乘过 1。
-    #   关掉（bio_rhythm=False）→ 退回"全天一个概率"的旧行为。
-    _bio = 1.0
-    if cfg.get("bio_rhythm", True):
-        try:
-            from harness.bio_rhythm import proactivity_factor
-            _bio = proactivity_factor()
-            chance = min(1.0, chance * _bio)
-        except Exception:
-            _bio = 1.0
-    if random.random() >= chance:
-        return {"ok": False, "target": target,
-                "blocked_by": f"概率闸门未通过（chance={chance:.3f}"
-                              + (f"，作息乘子={_bio:.2f}）" if _bio != 1.0 else "）")}
-
-    # ★ 2026-10-21：AI 不可用时要**先挡住**，不要放行到 _ai_text 再失败。
-    #   概率闸门在上、AI 检查在下，顺序有讲究：若先查 AI，等于每次心跳都去
-    #   探测一遍模型状态；放在概率之后，只有"本来就要开口"的那 35% 才付这个成本。
-    #   没有这道检查时，AI 未配好会表现为「心跳开口失败: AI 未产出可用消息」，
-    #   看起来像模型抽风，实际是根本没配。
-    if not _ai_ready():
-        return {"ok": False, "target": target, "blocked_by": "AI 未配置，暂不主动开口"}
-
-    return {"ok": True, "target": target, "blocked_by": ""}
+    等价性由 `tests/test_proactive_gate.py` 对着改造前那份实现逐字段比对。
+    """
+    pg = _gate_mod()
+    ev = pg.evaluate(
+        pg.make_trigger(pg.TRIGGER_MANUAL if force else pg.TRIGGER_HEARTBEAT,
+                        target=target, source="proactive_talk._evaluate"),
+        cfg, state,
+        force=force,
+        resolve=_resolve_targets,
+        last_user=_last_ts_for,
+        quiet_hours=_in_quiet_hours,
+        ai_ready=_ai_ready,
+    )
+    return pg.project(ev)
 
 
 def _ai_ready() -> bool:
@@ -632,6 +607,22 @@ def _proactive_once(force: bool = False, target: str = "") -> dict:
         # 轮转公平：按上次和这个人说话的时间排，最久的优先
         by = state.get("last_proactive_by") or {}
         chosen = sorted(candidates, key=lambda t: float((by.get(t) if isinstance(by, dict) else 0) or 0))[0]
+
+        # ★ 2026-11-03 Decision 层：`mode=auto`（或候选不来自配置/点名）时**只记录不执行**
+        #   —— 心跳照常评估、照常留日志，但不生成也不发送。默认 mode="live"，
+        #   所以这一层今天不改变任何既有行为。
+        pg = _gate_mod()
+        _dec = pg.decide(
+            {"ok": True, "target": chosen,
+             "admission": pg.admission(chosen, targets=_resolve_targets(cfg),
+                                       explicit=bool(target))},
+            mode=str(cfg.get("mode") or pg.MODE_LIVE),
+            waits_for_person=pg.waits_for_person(state, chosen),
+        )
+        if _dec.get("act") != "say":
+            _log(f"主动开口只记录不执行（{_dec.get('reason')}）→ {chosen}")
+            return {"ok": False, "skipped": True, "target": chosen, "recorded": True,
+                    "mode": _dec.get("mode"), "reason": _dec.get("reason")}
 
         text = _ai_text(_build_messages(cfg, state, chosen), max_tokens=300)
         bubbles = _clean_bubbles(text, cfg.get("max_bubbles"))

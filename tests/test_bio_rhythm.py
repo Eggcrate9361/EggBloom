@@ -138,21 +138,29 @@ def main():
     print("\n[8] proactive_talk 接进去了")
     pt = open(os.path.join(ROOT, "plugins", "proactive_talk", "__init__.py"),
               encoding="utf-8").read()
+    # 2026-11-03：概率闸整块搬到 harness/proactive_gate.py（Trigger→Eval→Decision），
+    # 插件只做转发。所以"乘子在哪、顺序如何"要到新模块里看；
+    # 插件这侧钉的是"确实把判据交给它了"，不是"代码还躺在这个文件里"。
+    gate = open(os.path.join(ROOT, "harness", "proactive_gate.py"),
+                encoding="utf-8").read()
+    check("插件把判据交给了 proactive_gate",
+          "harness import proactive_gate" in pt and "pg.evaluate(" in pt)
     check("概率闸处 import 了 proactivity_factor",
-          "proactivity_factor" in pt)
+          "proactivity_factor" in gate)
     check("乘法在硬闸（quiet_hours）之后",
-          pt.index("_in_quiet_hours(cfg.get") < pt.index("proactivity_factor"))
-    check("乘后夹到 1.0", "min(1.0, chance * _bio)" in pt)
+          gate.index('qh(cfg.get("quiet_hours")')
+          < gate.index("probability_factor or _default_probability_factor"))
+    check("乘后夹到 1.0", "min(1.0, chance * _bio)" in gate)
     # 2026-11-01：test_decision 改成多目标后局部变量从 d 改名 out，
     # 判据放宽到"某个变量上写了 bio"，意图（可观测）不变。
     check("test_decision 暴露 bio 状态（可观测）",
           '["bio"] = _b' in pt and '["bio"] = {"error"' in pt)
-    check("bio 缺失时降级为 1.0（不炸）", "except Exception:" in pt)
+    check("bio 缺失时降级为 1.0（不炸）", "except Exception:" in gate)
 
     print("\n[9] 开关：能退回旧行为（一般精度不是不可回退）")
     check("默认开启", '"bio_rhythm": True' in pt)
     check("关掉时不乘（cfg.get 默认 True，显式 False 才跳过）",
-          'if cfg.get("bio_rhythm", True):' in pt)
+          'if cfg.get("bio_rhythm", True):' in gate)
     check("关掉时 test_decision 的 hint 说明原因",
           "作息乘子已关闭" in pt)
     # 2026-10-31：插件 UI 在 1.5.10 换成 kit v2 动态渲染，写死的 `id="pt-bio"` 表单没了。
@@ -166,7 +174,8 @@ def main():
 
     print("\n[10] 硬闸仍然优先（作息是软闸，不能绕过 quiet_hours）")
     check("乘法出现在 quiet_hours 判断之后（顺序即优先级）",
-          pt.index("if _in_quiet_hours(") < pt.index("if cfg.get(\"bio_rhythm\""))
+          gate.index('qh(cfg.get("quiet_hours")')
+          < gate.index('if cfg.get("bio_rhythm", True):'))
 
     print("\n" + "=" * 56)
     print(f"通过 {PASS} / 失败 {FAIL}")
