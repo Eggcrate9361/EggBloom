@@ -4,8 +4,8 @@
 ## 事故
 
 用户：「私聊 315，记忆混乱，把我的事记到 Texas 头上了」。
-查库：facts 里 2011257385（Texas）名下有"我在上课""我在上语文课""晚上别叫我"
-—— 这些**确实是 Texas 在私聊里说的**（messages 表 scope=private/2011257385），
+查库：facts 里 1000000002（Texas）名下有"我在上课""我在上语文课""晚上别叫我"
+—— 这些**确实是 Texas 在私聊里说的**（messages 表 scope=private/1000000002），
 归属没错。错的是**私聊 315 时把它们召回**：
 
 - 沙漏 `sandglass.txt` 是所有会话共用一份，且**只写群聊**（`[群:gid]` 前缀），
@@ -24,6 +24,7 @@
 
 运行：python tests/test_memory_scope_private.py
 """
+import datetime
 import io
 import os
 import sys
@@ -45,22 +46,25 @@ def check(name, cond, extra=""):
 # ── 1. 造一份"混合沙漏"给用例用 ────────────────────────────────────
 OLD_VAULT = sb._vault_file()
 tmp = tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".txt", delete=False)
+# ★ 2026-11-03：日期**不能写死**。用例问的是「昨天」，写死 2026-11-01 后
+#   一跨零点就全红（实测 00:19 跑出两条 FAIL）。这里按运行时算昨天。
+_Y = (datetime.date.today() - datetime.timedelta(days=1)).isoformat()
 tmp.write(
-    "2026-11-01 10:00:00 | user | [群:829854136] 我在上语文课\n"
-    "2026-11-01 10:05:00 | user | [群:829854136] [Texas(2011257385)] 我在玩明日方舟\n"
-    "2026-11-01 11:00:00 | user | [群:991461217] 别的群的人说的话\n"
-    "2026-11-01 12:00:00 | user | 无标记的老记录\n"
+    f"{_Y} 10:00:00 | user | [群:1000000003] 我在上语文课\n"
+    f"{_Y} 10:05:00 | user | [群:1000000003] [Texas(1000000002)] 我在玩明日方舟\n"
+    f"{_Y} 11:00:00 | user | [群:1000000004] 别的群的人说的话\n"
+    f"{_Y} 12:00:00 | user | 无标记的老记录\n"
 )
 tmp.close()
 
 sb._vault_file = lambda: tmp.name
 try:
     # ── 2. 私聊：不串群记录 ───────────────────────────────────────
-    got = sb.recall_by_date("昨天我干了什么", scope=("private", "3150007406"))
+    got = sb.recall_by_date("昨天我干了什么", scope=("private", "1000000001"))
     check("★ 私聊不召回群聊记录", got == "", got[:80])
 
     # ── 3. 群：只取本群，且排除无标记老行 ─────────────────────────
-    g = sb.recall_by_date("昨天群里说了什么", scope=("group", "829854136"))
+    g = sb.recall_by_date("昨天群里说了什么", scope=("group", "1000000003"))
     check("群召回有内容", bool(g), g[:60])
     check("★ 群召回不含别的群", "别的群的人说的话" not in g, g[:120])
     check("★ 群召回不含来源不明的老行", "无标记的老记录" not in g, g[:120])
@@ -72,12 +76,12 @@ try:
 
     # ── 5. 私聊不注入「群内人物」──────────────────────────────────
     blk_private = sb.get_memory_prompt_block("昨天", light=False, skip_search=True,
-                                             scope=("private", "3150007406"))
+                                             scope=("private", "1000000001"))
     check("★ 私聊画像块里没有【群内人物】", "【群内人物】" not in blk_private,
           blk_private[:80])
     blk_group = sb.get_memory_prompt_block("昨天", light=False, skip_search=True,
-                                           scope=("group", "829854136"),
-                                           group_id="829854136")
+                                           scope=("group", "1000000003"),
+                                           group_id="1000000003")
     check("群聊仍然可以有【群内人物】（有数据时）",
           ("【群内人物】" in blk_group) or True, "")
 finally:

@@ -20,6 +20,7 @@
 
 运行：python tests/test_memory_scope_isolation.py
 """
+import datetime
 import io
 import os
 import sys
@@ -54,27 +55,29 @@ OLD = sb._vault_file
 import tempfile  # noqa: E402
 
 tmp = tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".txt", delete=False)
+# ★ 2026-11-03：日期不能写死（问的是"昨天"，跨零点必红）。按运行时算。
+_Y = (datetime.date.today() - datetime.timedelta(days=1)).isoformat()
 tmp.write(
-    "2026-11-01 10:00:00 | user | [群:111] 群里A说的话\n"
-    "2026-11-01 10:01:00 | user | [群:222] 群里B说的话\n"
-    "2026-11-01 10:02:00 | user | 无标记老行\n"
+    f"{_Y} 10:00:00 | user | [群:111] 群里A说的话\n"
+    f"{_Y} 10:01:00 | user | [群:222] 群里B说的话\n"
+    f"{_Y} 10:02:00 | user | 无标记老行\n"
 )
 tmp.close()
 sb._vault_file = lambda: tmp.name
 try:
     check("★ 私聊问日期 → 空", sb.recall_by_date("昨天我干了什么",
-                                                 scope=("private", "3150007406")) == "")
+                                                 scope=("private", "1000000001")) == "")
     g = sb.recall_by_date("昨天群里说了什么", scope=("group", "111"))
     check("★ 群聊只取本群", "群里A说的话" in g and "群里B说的话" not in g, g[:80])
     check("群聊不取无标记老行", "无标记老行" not in g, g[:80])
 
     from harness import memory_api as ma
-    blk = ma.recall("3150007406", scene="private", query="昨天我干了什么", private=True)
+    blk = ma.recall("1000000001", scene="private", query="昨天我干了什么", private=True)
     check("★ memory_api 私聊不注入群聊记录",
           "群里A说的话" not in blk and "群里B说的话" not in blk, blk[:100])
 
     from harness import memory_context as mc
-    b2 = mc.build_block("昨天我干了什么", scope="private", scope_id="3150007406",
+    b2 = mc.build_block("昨天我干了什么", scope="private", scope_id="1000000001",
                         sources=("sand",))
     check("★ build_block 私聊不注入群聊记录",
           "群里A说的话" not in b2 and "群里B说的话" not in b2, b2[:100])
