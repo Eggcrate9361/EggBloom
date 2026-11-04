@@ -11613,7 +11613,13 @@ def _build_cached_messages(history: List[Dict], cache_key: str,
                 _win = 1800.0
             if not _own_ts or _win <= 0 or time.time() - _own_ts < _win:
                 messages.append({"role": "system", "content":
-                                 "【你上一条说的（原文，被追问时以这个为准，别改口）】\n"
+                                 # ★ 2026-11-04：真机——bot 把自己说的「我记性别这么短」
+                                 #   说成是用户骂它。原文喂进去时归属本来就清楚
+                                 #   （assistant 角色），所以只强化措辞、不改结构。
+                                 #   旧串「你上一条说的」必须保留：
+                                 #   tests/test_self_consistency.py 依赖它。
+                                 "【你上一条说的（原文，被追问时以这个为准，别改口；"
+                                 "注意这是**你自己**说的，不是对方说的，别算到对方头上）】\n"
                                  + _clip_for_history(_own_txt, 160)})
 
     # 动态上下文（时间/记忆等，放最后面——不影响前面的缓存）
