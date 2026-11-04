@@ -145,7 +145,10 @@ def main():
     PP.on_event(ctx, "message.in", {"user_id": "555"})
     st = ctx.get_state(PP.STATE_KEY, {})
     check("★ 记下最后互动", "555" in (st.get("last_interact") or {}), st)
-    ctx.set_state(PP.STATE_KEY, {"last_poked": {"555": NOON - 2 * HOUR}})
+    # ★ on_event 内部用真实 time.time()，所以这里的"刚戳过"必须相对**现在**算，
+    #   不能用固定的 NOON —— 否则跑在次日就成了 22 小时前，测试随钟表漂移。
+    _real_now = time.time()
+    ctx.set_state(PP.STATE_KEY, {"last_poked": {"555": _real_now - 2 * HOUR}})
     PP.on_event(ctx, "notice.poke", {"operator": "555", "target": "bot"})
     st = ctx.get_state(PP.STATE_KEY, {})
     check("★ 被戳且之前戳过他 → 记为无视", (st.get("ignored") or {}).get("555") is True, st.get("ignored"))
