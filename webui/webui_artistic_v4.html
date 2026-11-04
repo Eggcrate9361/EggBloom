@@ -4175,6 +4175,8 @@ async function pageAgent(el) {
     const rid = (req && req.request_id) || '';
     if (!rid || _askedReq[rid]) return;
     _askedReq[rid] = true;
+    /* ★ 2026-11-04（P2 文件管理）：文件操作的确认单独一套文案 */
+    if (req && req.kind === 'filesafe') return askFilePermission(req);
     const plugin = (req && req.plugin) || '';
     const action = (req && req.action) || '';
     /* ★ 人话优先：先讲"要干什么"，再给细节。
@@ -4219,6 +4221,52 @@ async function pageAgent(el) {
     ov.onclick = (e) => { if (e.target === ov) done(false, false); };   /* 点遮罩 = 取消 */
     try { ov.querySelector('#pmAllow').focus(); } catch (e) {}
   }
+
+/* ★ 文件操作确认（1.6.0 P2，2026-11-04）
+   跟插件权限共用 /agent/permission 端点，靠 request_id 的 "file:" 前缀分派后端。
+   刻意**不给**"不再询问"：文件是破坏性操作，每次都要人点一下才动。 */
+function askFilePermission(req) {
+const rid = (req && req.request_id) || '';
+const op = (req && req.op) || '';
+const src = (req && req.src) || '';
+const dst = (req && req.dst) || '';
+const plan = (req && req.plan) || (op + ' ' + src);
+const verb = op === 'delete' ? '删' : (op === 'move' ? '移动' : op);
+const ov = document.createElement('div');
+ov.className = 'modal-ov';
+ov.innerHTML = '<div class="modal" style="max-width:600px">'
++ '<div class="modal-t"><h3>本体想动你的文件</h3></div>'
++ '<div style="font-size:var(--z3);line-height:1.9;margin-bottom:var(--s4)">'
++   '<div style="color:var(--ink)">要干什么：' + esc(plan) + '</div>'
++   ((req && req.will_overwrite) ? '<div style="margin-top:var(--s2);font-size:var(--z2);color:#c0392b">目标已存在，确认后会覆盖（覆盖前会先备份）。</div>' : '')
++   '<div class="dim" style="margin-top:var(--s2);font-size:var(--z2);word-break:break-all">源：' + esc(src)
++     (dst ? '<br>目标：' + esc(dst) : '') + '</div>'
++   (op === 'delete' ? '<div class="dim" style="margin-top:var(--s2);font-size:var(--z2)">删除 = 移进回收站，之后能恢复。</div>' : '')
++   '<div class="dim" style="margin-top:var(--s2);font-size:var(--z2)">允许 = 现在执行；不 = 取消这次操作（文件一个字节都不动）。</div>'
++   ((req && req.timeout) ? '<div class="dim" style="margin-top:var(--s2);font-size:var(--z2)">' + esc(String(req.timeout)) + ' 秒内不点，自动取消。</div>' : '')
++ '</div>'
++ '<div style="display:flex;gap:var(--s2)">'
++   '<button class="btn primary" id="pmfAllow">允许</button>'
++   '<button class="btn" id="pmfDeny">不，别动</button></div></div>';
+document.body.appendChild(ov);
+let settled = false;
+const done = async (allow) => {
+if (settled) return;
+settled = true;
+ov.remove();
+document.removeEventListener('keydown', onKey, true);
+try { await API('/agent/permission', { method: 'POST',
+body: JSON.stringify({ request_id: rid, allow: allow }) }); } catch (e) {}
+sayHint(allow ? ('已允许，正在' + verb + '…') : '已取消，文件没动');
+};
+const onKey = (e) => { if (e.key === 'Escape') { e.stopPropagation(); done(false); } };
+document.addEventListener('keydown', onKey, true);
+ov.querySelector('#pmfAllow').onclick = () => done(true);
+ov.querySelector('#pmfDeny').onclick = () => done(false);
+ov.onclick = (e) => { if (e.target === ov) done(false); };
+try { ov.querySelector('#pmfAllow').focus(); } catch (e) {}
+}
+
 
   /* ③ 流式执行：GET /agent/stream?session_id=（NDJSON，每行一个 JSON 事件）*/
   function stopStream() {

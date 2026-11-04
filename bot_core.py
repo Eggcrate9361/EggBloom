@@ -1749,15 +1749,22 @@ def start_event_server():
                                     max_rounds=max(1, min(4, _max_r)),
                                     tools=_oc_tool_brief())
                 elif _p == "/api/agent/permission":
-                    # 前端弹窗点了「允许/拒绝」→ 唤醒正在阻塞的 plugin_call。
-                    # remember=True（勾了"不再询问该插件"）→ 写进信任表，以后不再问。
-                    from harness import plugin_tools as _pt3
-                    res = {"ok": _pt3.resolve_permission(
-                        str(req.get("request_id") or ""),
-                        bool(req.get("allow", req.get("允许", False))),
-                        remember=bool(req.get("remember", False))),
-                        "pending": _pt3.pending_permissions(),
-                        "trusted": _pt3.trusted_plugins()}
+                    # 前端弹窗点了「允许/拒绝」→ 唤醒正在阻塞的调用。
+                    # 两类请求共用这个端点，靠 request_id 前缀分派：
+                    #   file:<token> → 文件操作闸（不记信任，每次都问）
+                    #   其它         → 插件权限（可勾"不再询问"）
+                    _rid3 = str(req.get("request_id") or "")
+                    _allow3 = bool(req.get("allow", req.get("允许", False)))
+                    if _rid3.startswith("file:"):
+                        res = {"ok": resolve_file_permission(_rid3, _allow3),
+                               "kind": "filesafe"}
+                    else:
+                        from harness import plugin_tools as _pt3
+                        res = {"ok": _pt3.resolve_permission(
+                            _rid3, _allow3,
+                            remember=bool(req.get("remember", False))),
+                            "pending": _pt3.pending_permissions(),
+                            "trusted": _pt3.trusted_plugins()}
                 elif _p == "/api/agent/forge":
                     # 插件创作历史 + 待审批（Agent 页轮询兜底，不依赖事件流）
                     from harness import plugin_forge as _pfg1
@@ -6801,6 +6808,37 @@ TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "fs_move",
+            "description": ("把文件或目录移动到新位置（整理文件用）。会弹窗请主人确认，"
+                            "确认后才动手；目标目录必须已存在。"),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "src": {"type": "string", "description": "源路径（文件或目录）"},
+                    "dst": {"type": "string", "description": "目标路径（含文件名）"}
+                },
+                "required": ["src", "dst"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "fs_delete",
+            "description": ("删除文件或目录。会弹窗请主人确认，且只移进回收站（可恢复），"
+                            "不会真删。"),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "src": {"type": "string", "description": "要删除的路径"}
+                },
+                "required": ["src"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "get_system_info",
             "description": "获取CPU/GPU/内存/系统版本/运行时长等实时信息。",
             "parameters": {
@@ -7032,6 +7070,121 @@ def _spoken_tool(fn, args=(), kwargs=None, *, fail_msg=""):
     return _tool_fail(fail_msg or "操作失败")
 
 
+# ── 文件操作的人工确认闸（1.6.0 P2，2026-11-04）────────────────────
+# 红线：文件管理必须**人工确认**。`harness/filesafe.py` 保证"没 token 动不了文件"，
+# 这里负责"token 得由人点一下才发"：
+#   prepare() → 发 permission_request（前端弹窗）→ 阻塞等
+#   → 允许：confirm() 执行（内部还会备份/进回收站）
+#   → 拒绝或超时：cancel()，**绝不动文件**
+_FILE_PENDING: Dict[str, Dict[str, Any]] = {}
+_FILE_PENDING_LOCK = Lock()
+#: 等人点按钮的上限。比插件权限短：文件操作本来就该快速决定，拖太久大概率没人看
+FILE_CONFIRM_TIMEOUT = 180.0
+
+
+def resolve_file_permission(request_id: str, allow: bool) -> bool:
+    """前端点「允许/拒绝」后调用。返回是否找到这个请求。"""
+    rid = str(request_id or "")
+    with _FILE_PENDING_LOCK:
+        rec = _FILE_PENDING.get(rid)
+    if not rec:
+        return False
+    rec["allow"] = bool(allow)
+    rec["ev"].set()
+    return True
+
+
+def _filesafe_roots():
+    """允许操作的根目录。配置里没写 = 不限制（但仍然要确认 + 备份 + 回收站）。"""
+    v = _config.get("filesafe_allowed_roots")
+    if isinstance(v, str) and v.strip():
+        return [x.strip() for x in v.split(";") if x.strip()]
+    if isinstance(v, (list, tuple)):
+        return [str(x) for x in v if str(x).strip()]
+    return None
+
+
+def _ask_file_permission(op: str, src: str, dst: Optional[str] = None,
+                         timeout: float = FILE_CONFIRM_TIMEOUT) -> Dict[str, Any]:
+    """先申请、再确认、后执行。任何一个环节失败都不动文件。"""
+    try:
+        from harness import filesafe as _fs
+    except Exception as e:
+        return {"ok": False, "error": f"filesafe 不可用: {e}"}
+    try:
+        plan = _fs.prepare(op, src, dst, allowed_roots=_filesafe_roots())
+    except _fs.FileSafeError as e:
+        return {"ok": False, "error": str(e)}
+    except Exception as e:
+        return {"ok": False, "error": f"准备失败: {e}"}
+
+    rid = "file:" + plan["token"]
+    ev = threading.Event()
+    with _FILE_PENDING_LOCK:
+        _FILE_PENDING[rid] = {"token": plan["token"], "ev": ev, "allow": False}
+
+    # 走既有的权限询问通道（/api/agent/chat 时注入的那个）
+    try:
+        from harness import plugin_tools as _pt
+        notify = getattr(_pt, "_PERM_NOTIFIER", None)
+        if notify:
+            notify({"request_id": rid, "kind": "filesafe", "op": op,
+                    "src": plan["src"], "dst": plan.get("dst") or "",
+                    "plan": plan["summary"], "timeout": int(timeout),
+                    "will_overwrite": bool(plan.get("will_overwrite"))})
+        else:
+            log("[文件确认] 没有权限通道（agent 页可能没连上），拒绝执行")
+            with _FILE_PENDING_LOCK:
+                _FILE_PENDING.pop(rid, None)
+            _fs.cancel(plan["token"])
+            return {"ok": False, "denied": True,
+                    "reason": "没有可用的确认通道，已取消（不会在无人确认时动文件）"}
+    except Exception as e:
+        with _FILE_PENDING_LOCK:
+            _FILE_PENDING.pop(rid, None)
+        _fs.cancel(plan["token"])
+        return {"ok": False, "error": f"询问失败: {e}"}
+
+    log(f"[文件确认] 等确认：{plan['summary']}")
+    got = ev.wait(timeout)
+    with _FILE_PENDING_LOCK:
+        rec = _FILE_PENDING.pop(rid, None) or {}
+    if not got:
+        _fs.cancel(plan["token"])
+        log(f"[文件确认] 超时未确认，已取消：{plan['summary']}")
+        return {"ok": False, "denied": True, "reason": "等确认超时，已取消"}
+    if not rec.get("allow"):
+        _fs.cancel(plan["token"])
+        log(f"[文件确认] 主人拒绝，已取消：{plan['summary']}")
+        return {"ok": False, "denied": True, "reason": "主人拒绝了这次操作"}
+    try:
+        out = _fs.confirm(plan["token"])
+        log(f"[文件确认] 已执行：{plan['summary']}")
+        return out
+    except _fs.FileSafeError as e:
+        log(f"[文件确认] 执行失败：{e}")
+        return {"ok": False, "error": str(e)}
+
+
+def tool_fs_move(args: dict) -> dict:
+    """把文件/目录移动到新位置。**会弹窗要主人确认**，确认后才动手。"""
+    a = args or {}
+    src = str(a.get("src") or a.get("from") or "").strip()
+    dst = str(a.get("dst") or a.get("to") or "").strip()
+    if not src or not dst:
+        return {"ok": False, "error": "需要 src 和 dst 两个参数"}
+    return _ask_file_permission("move", src, dst)
+
+
+def tool_fs_delete(args: dict) -> dict:
+    """删除文件/目录 —— 实际是移进回收站。**会弹窗要主人确认**。"""
+    a = args or {}
+    src = str(a.get("src") or a.get("path") or "").strip()
+    if not src:
+        return {"ok": False, "error": "需要 src 参数"}
+    return _ask_file_permission("delete", src, None)
+
+
 TOOL_FUNCTIONS = {
     "search_web": lambda args: _tool_web(args["query"]),
     # ★ 2026-10-22：以下工具统一 speak=False —— 工具只「做事 + 把结果 return 给模型」，
@@ -7041,6 +7194,10 @@ TOOL_FUNCTIONS = {
     "open_app": lambda args: _spoken_tool(
         handle_open, (args["name"],), {"speak": False},
         fail_msg=f"打开 {args['name']} 失败（程序没起来或路径不对）"),
+    # ★ 2026-11-04（P2 文件管理）：破坏性文件操作走人工确认闸。
+    #   没有确认通道时**拒绝执行**，不会"悄悄改文件"。
+    "fs_move": tool_fs_move,
+    "fs_delete": tool_fs_delete,
     "take_screenshot": lambda args: (_tool_ok("截图已截好并发给对方了") if handle_screenshot()
                                      else _tool_fail("截图失败（截屏库不可用或发送出错）")),
     "get_system_info": lambda args: _spoken_tool(
