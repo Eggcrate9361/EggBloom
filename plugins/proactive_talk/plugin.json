@@ -1,0 +1,7 @@
+{
+  "id": "proactive_talk",
+  "title": "proactive_talk",
+  "description": "主动消息引擎：私聊无人触发时按状态主动开口（拟人化，人设可配）",
+  "priority": 90,
+  "default_enabled": true
+}

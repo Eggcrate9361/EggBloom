@@ -1,0 +1,7 @@
+{
+  "id": "chat_style",
+  "title": "chat_style",
+  "description": "chat_style 插件",
+  "priority": 50,
+  "default_enabled": true
+}

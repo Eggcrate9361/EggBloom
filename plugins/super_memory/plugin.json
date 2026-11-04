@@ -1,0 +1,7 @@
+{
+  "id": "super_memory",
+  "title": "super_memory",
+  "description": "super_memory 插件",
+  "priority": 50,
+  "default_enabled": true
+}

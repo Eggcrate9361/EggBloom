@@ -73,7 +73,22 @@ print("\n[3] 兼容层：仓库里的真实清单")
 real = pmf.read_all(os.path.join(ROOT, "plugins"))
 check("★ web_search 有清单且能力声明正确",
       real.get("web_search", {}).get("provides") == ["web.search"], real.get("web_search"))
-check("无清单的旧插件不在 read_all 里（照常加载）", "proactive_talk" not in real, sorted(real))
+# 2026-11-04：所有插件都补了清单（P1-4 收尾），"仓库里有旧插件没好清单"这个前提
+#   已经不成立。兼容层的判据改为**用临时目录**验：没有 plugin.json 的目录
+#   不应出现在 read_all 里，也不该被清单挡（load_all 照常加载它）。
+import tempfile as _tf
+_tmp = _tf.mkdtemp(prefix="pmf_compat_")
+try:
+    _d = os.path.join(_tmp, "legacy_no_manifest")
+    os.makedirs(_d)
+    io.open(os.path.join(_d, "__init__.py"), "w", encoding="utf-8").write("PLUGIN_SPEC=1\n")
+    _loaded = pmf.read_all(_tmp)
+    check("★ 无清单的旧插件不在 read_all 里（照常加载）",
+          "legacy_no_manifest" not in _loaded, sorted(_loaded))
+finally:
+    import shutil as _sh
+    _sh.rmtree(_tmp, ignore_errors=True)
+check("★ 补清单后仓库里 23 个插件全部可见", len(real) >= 20, len(real))
 
 
 print("\n[4] 中文显示名（1.5.10）")

@@ -1,0 +1,7 @@
+{
+  "id": "这样脆弱的东西",
+  "title": "这样脆弱的东西",
+  "description": "人格蒸馏：从多数据源提取人格模型，按数据量分级（L0-L4），人工审核后保存，伦理合规",
+  "priority": 30,
+  "default_enabled": false
+}

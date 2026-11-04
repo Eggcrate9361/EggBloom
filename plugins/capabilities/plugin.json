@@ -1,0 +1,7 @@
+{
+  "id": "capabilities",
+  "title": "capabilities",
+  "description": "统一能力面板：闲置 OneBot 扩展动作（签名/在线状态/昵称/群签到/群待办/群相册）手动触发，显示原始返回",
+  "priority": 45,
+  "default_enabled": false
+}

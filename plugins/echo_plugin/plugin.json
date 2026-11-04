@@ -1,0 +1,7 @@
+{
+  "id": "echo_plugin",
+  "title": "echo_plugin",
+  "description": "示例插件：回复 !echo <内容>（演示真插件 ABI）",
+  "priority": 100,
+  "default_enabled": false
+}

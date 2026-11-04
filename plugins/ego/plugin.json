@@ -1,0 +1,7 @@
+{
+  "id": "ego",
+  "title": "ego",
+  "description": "ego 插件",
+  "priority": 50,
+  "default_enabled": true
+}

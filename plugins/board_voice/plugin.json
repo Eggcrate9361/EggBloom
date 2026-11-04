@@ -1,0 +1,7 @@
+{
+  "id": "board_voice",
+  "title": "board_voice",
+  "description": "board_voice 插件",
+  "priority": 50,
+  "default_enabled": true
+}

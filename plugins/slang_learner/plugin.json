@@ -1,0 +1,7 @@
+{
+  "id": "slang_learner",
+  "title": "slang_learner",
+  "description": "slang_learner 插件",
+  "priority": 50,
+  "default_enabled": true
+}
