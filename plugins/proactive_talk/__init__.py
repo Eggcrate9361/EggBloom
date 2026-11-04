@@ -458,6 +458,9 @@ def _build_messages(cfg: dict, state: dict, target: str) -> list:
         "- 语气偏冷：不撒娇、不讨欢心、不反复催（「别装死」「等着验收」这种催法不许用）\n"
         "- 没人接话时开口：说自己的状态、有点失落但别卖惨，也不用问「还聊不聊」"
         " —— 问这句等于把压力甩给对方；自己把话说完，或者干脆只留一句就停。"
+        "- 你只有文字和图片：不许编「听到你那边的声响」「看见你在干嘛」，"
+        "也不许说「你刚说……」然后把没出现过的算到他头上 —— 拿不准就不提。"
+        
     )
     try:
         import people as _people
@@ -671,6 +674,35 @@ def _proactive_once(force: bool = False, target: str = "") -> dict:
         bubbles = _clean_bubbles(text, cfg.get("max_bubbles"))
         if not bubbles:
             return {"ok": False, "error": "AI 未产出可用消息"}
+
+        # ── 事实围栏（2026-11-04）：无据的句子不发 ──────────────────
+        #   证据只能用"模型这一轮真能看到的东西"，否则围栏本身就在放水。
+        try:
+            from harness import grounding as _gr
+            _ev = []
+            for _m in ((state.get("recent_msgs") or {}).get(chosen) or [])[-5:]:
+                _ev.append(str(_m.get("text") or ""))
+            for _r in _fetch_memory_rounds(cfg, chosen):
+                _ev.append(str(_r.get("user") or ""))
+                _ev.append(str(_r.get("bot") or ""))
+            _hist = (state.get("history_map") or {}).get(chosen) or []
+            if _hist:
+                _ev.append(str(_hist[-1].get("text") or ""))
+            _kept = []
+            for _b in bubbles:
+                _nb, _dropped = _gr.sanitize(_b, _ev)
+                if _dropped:
+                    _log(f"事实围栏删句 → {chosen}: {_dropped}")
+                if _nb.strip():
+                    _kept.append(_nb.strip())
+            if _kept != bubbles:
+                bubbles = _kept
+            if not bubbles:
+                _log(f"事实围栏把整条都删了，本轮不发 → {chosen}")
+                return {"ok": False, "skipped": True, "target": chosen,
+                        "reason": "全部内容都无据（事实围栏）"}
+        except Exception as _ge:
+            _log(f"事实围栏跳过（不影响发送）: {_ge}")
 
         sent = _send_bubbles(chosen, bubbles)
         if sent == 0:

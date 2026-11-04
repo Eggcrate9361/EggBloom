@@ -1,0 +1,132 @@
+# -*- coding: utf-8 -*-
+"""tests/test_grounding.py —— 事实围栏（2026-11-04）
+
+用例全部取自**真机日志**，不是编的：
+  16:28 「刚还骂我记性短呢」        —— 那句是它自己说的
+  16:45 「刚说别找你」              —— 前面根本没有
+  16:45 「一直没听到你那边的声响」  —— 纯文字 bot 声称能听见
+  15:35 「十五个小时了」            —— 时间对不上（这类不归本题管，只在注释里记）
+
+同时必须证明**不误杀**：「没听到」「听不见」是诚实表达，
+普通闲聊（「今天好累」「吃了吗」）一句都不能删。
+"""
+import os
+import sys
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(HERE)
+sys.path.insert(0, ROOT)
+
+from harness import grounding as G  # noqa: E402
+
+PASS = 0
+FAIL = 0
+FAILURES = []
+
+
+def check(name, cond, extra=""):
+    global PASS, FAIL
+    if cond:
+        PASS += 1
+        print(f"  [OK]   {name}")
+    else:
+        FAIL += 1
+        FAILURES.append(name + (f"  → {extra}" if extra else ""))
+        print(f"  [FAIL] {name}  {extra}")
+
+
+def main():
+    print("[A] 捏造感官：一律删（你没有耳朵）")
+    ev = ["上课呢高数", "讲微分呢", "不跟你说这个"]
+    out, dropped = G.sanitize("我躺下没多久又醒了，一直没听到你那边的声响", ev)
+    check("★ 感官句被删", out == "" and dropped, (out, dropped))
+
+    out2, dropped2 = G.sanitize("我听到你那边有声音了\n行吧我去睡了", ev)
+    check("★ 只删那一句，别的留下", "行吧我去睡了" in out2 and "听到" not in out2, out2)
+
+    print("\n[B] 诚实表达不许删")
+    # 诚实 = 否认**能力**：「听不到」「收不到」
+    for s in ("听不到你说话", "看不见图", "收不到语音", "我哪听得见"):
+        out3, d3 = G.sanitize(s, ev)
+        check(f"「{s}」原样保留", out3 == s and not d3, (out3, d3))
+    # 「我没听到」不带对象 → 判据不介入（宁可漏，不可误杀）。
+    #   真正露馅的形态是「没听到你那边的声响」，见 [A]。
+    out3b, _d3b = G.sanitize("我没听到", ev)
+    check("「我没听到」（无对象）不判", out3b == "我没听到", out3b)
+
+    print("\n[C] 指认对方说过什么：证据里没有就删")
+    ev2 = ["没有吧", "我没听到", "啥声响？"]
+    out4, d4 = G.sanitize("装，接着装\n刚说别找你，这会儿又听不到了", ev2)
+    check("★ 捏造的「刚说别找你」被删", "别找你" not in out4, out4)
+    check("保留「装，接着装」", "装，接着装" in out4, out4)
+
+    ev3 = ["别找我了，我要睡了"]
+    out5, d5 = G.sanitize("你刚说别找你，怎么又来了", ev3)
+    check("★ 真有依据就不删", "别找你" in out5 and not d5, (out5, d5))
+
+    print("\n[D] 指认自己：证据里没有也删")
+    ev4 = ["今天好累", "上班呢"]
+    out6, _ = G.sanitize("我昨天说了要给你看个东西", ev4)
+    check("★ 无据的自我主张被删", "昨天" not in out6, out6)
+    ev5 = ["我昨天说了给你看个东西", "好啊"]
+    out7, d7 = G.sanitize("我昨天说了给你看个东西", ev5)
+    check("★ 有依据就保留", "昨天" in out7 and not d7, (out7, d7))
+
+    print("\n[E] 不误杀：普通闲聊一句都不动")
+    for s in ("今天好累啊", "吃了吗", "我刚看完一集动画", "你那个游戏打到哪了",
+              "行，闭嘴", "微分啊，dy 跟 dx 一除就完事"):
+        out8, d8 = G.sanitize(s, ["随便什么"])
+        check(f"「{s[:12]}」不动", out8 == s and not d8, (out8, d8))
+
+    print("\n[F] 边界")
+    check("空串安全", G.sanitize("", ev)[0] == "")
+    check("None 安全", G.sanitize(None, ev)[0] in ("", "None"))
+    check("证据为空时，指认类会被删",
+          G.sanitize("你刚说你好", [])[0] == "", G.sanitize("你刚说你好", [])[0])
+    # 感官永远无据：即使证据里真出现了"声音"也不放行
+    out9, d9 = G.sanitize("我听到你那边有声音", ["我这边有声音啊"])
+    check("★ 感官不看证据（没耳朵）", out9 == "" and d9, (out9, d9))
+
+    print("\n[H] 偏好挪用：把对方的喜好挂自己身上")
+    own = ["下班了", "毁灭完了谁陪你喝"]
+    usr = ["我最喜欢喝酒了", "周末去喝一杯"]
+    bad = G.ungrounded("我就想安静喝口酒", own + usr, user_texts=usr, own_texts=own)
+    check("★ 「我就想安静喝口酒」判为挪用",
+          any(c["kind"] == "pref" for c in bad), bad)
+    out_h, dropped_h = G.sanitize("毁灭完了谁陪你喝\n我就想安静喝口酒",
+                                  own + usr, user_texts=usr, own_texts=own)
+    check("★ 只删挪用那句", "我就想安静喝口酒" not in out_h and "谁陪你喝" in out_h,
+          (out_h, dropped_h))
+    # 自己真说过就不用删
+    own2 = ["我就想安静喝口酒"]
+    bad2 = G.ungrounded("我就想安静喝口酒", own2 + usr, user_texts=usr, own_texts=own2)
+    check("★ 自己说过就不删", not bad2, bad2)
+    # 对方没说过、自己也没说过 → 不算挪用（可能是新的偏好，不判）
+    bad3 = G.ungrounded("我爱吃火锅", ["今天累"], user_texts=["喜欢喝酒"], own_texts=["今天累"])
+    check("★ 无对照时不误判", not bad3, bad3)
+
+    print("\n[G] 接线：主动说话真的过围栏")
+    import inspect
+    try:
+        import plugins.proactive_talk as PT
+        src = inspect.getsource(PT._proactive_once)
+        check("★ 主动说话里有事实围栏", "事实围栏" in src)
+        check("★ 用的是 grounding.sanitize", "grounding" in src and "sanitize" in src)
+        check("★ 证据来自 recent_msgs / 记忆轮次 / 上次主动",
+              "recent_msgs" in src and "_fetch_memory_rounds" in src)
+        check("★ 删到空就不发", "全部内容都无据" in src)
+        check("★ 围栏异常不影响发送", "不影响发送" in src)
+    except Exception as e:
+        check("能导入 proactive_talk", False, e)
+
+    print("\n" + "=" * 60)
+    print(f"通过 {PASS} / 失败 {FAIL}")
+    if FAILURES:
+        print("失败项：")
+        for x in FAILURES:
+            print("  -", x)
+    return 0 if FAIL == 0 else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

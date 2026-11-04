@@ -149,8 +149,13 @@ def _stub_env():
         seen["ai"].append((user_msg, images)) or "好图！")
     bot_core.smart_send_group = lambda gid, text, *a, **kw: (
         seen["sent_text"].append(text) or True)
-    bot_core.send_group_image = lambda gid, path: (
-        seen["meme_img"].append(path) or True)
+    # ★ 2026-11-04：send_group_image 多了 sub_type 参数（表情包=1），桩要跟上；
+    #   同时记下 sub_type，好断言"表情包确实按表情发"。
+    def _fake_send_group_image(gid, path, sub_type=0):
+        seen.setdefault("sub_type", []).append(sub_type)
+        seen["meme_img"].append(path)
+        return True
+    bot_core.send_group_image = _fake_send_group_image
     bot_core.match_meme = lambda emo: os.path.join(TMP, "a.gif")
     bot_core.describe_image = lambda ref, prompt="": "一张猫猫表情包（桩描述）"
     bot_core.startup_time = time.time() - 10 ** 6

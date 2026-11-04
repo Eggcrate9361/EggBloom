@@ -829,10 +829,6 @@ _HUD_STATS: Dict[str, Any] = {"messages": 0, "groups": set()}
 #   每来一轮窗口头部掉一条 → 指纹变 → 摘要整段重建 → 文本逐字节对不上 → 缓存断在 static 之后。
 #   新实现：摘要是 **append-only 账本**（每条历史只入账一次，行永不清除/不重排），
 #   窗口滑动只是往账本尾部追加新行 —— 前缀逐字节稳定，DeepSeek 缓存能一路命中到摘要末尾。
-_HISTORY_SUMMARY_LINES: Dict[str, List[str]] = {}  # key → 摘要行账本（append-only）
-_HISTORY_SUMMARY_TEXT: Dict[str, str] = {}         # key → 拼好的摘要文本（账本变了才重拼）
-_HISTORY_LAST_WINDOW: Dict[str, List[tuple]] = {}  # key → 上次处理的窗口 [(fp, line), ...]
-_HISTORY_SUMMARY_LINE_CAP = 300                    # 账本行数上限：超了裁头（罕见，接受一次 miss）
 
 # D: save_state 节流计数（累计20轮或60s落盘一次）
 _state_write_count: int = 0
@@ -3488,6 +3484,35 @@ def _match_own_reply(group_id: str, quoted_text: str) -> bool:
     return False
 
 
+def _apply_grounding_guard(text: str, evidence, *, where: str = "",
+                           user_texts=None, own_texts=None) -> str:
+    """发出去之前核对"编出来"的句子（harness/grounding.py）。
+
+    模式 `grounding_guard`：
+      off  —— 不做
+      log  —— 只记日志，照常发（观察期用）
+      drop —— 删掉无据的句子（默认）
+
+    删到空时返回空串，由调用方决定退什么；**绝不静默**。
+    """
+    mode = str(_config.get("grounding_guard", "drop") or "drop").strip().lower()
+    if mode in ("off", "0", "false", "no", ""):
+        return text
+    try:
+        from harness import grounding as _gr
+        new, dropped = _gr.sanitize(text, evidence,
+                                    user_texts=user_texts,
+                                    own_texts=own_texts)
+        if dropped:
+            log(f"[事实围栏]{where} 删句: {dropped}")
+        if mode == "log":
+            return text
+        return new if str(new or "").strip() else ""
+    except Exception as e:
+        log(f"[事实围栏]{where} 跳过（不影响发送）: {e}")
+        return text
+
+
 def _record_exit_into_context(gid, phrase):
     """退场语也要进上下文与长期记忆（2026-11-04）。
 
@@ -3797,8 +3822,12 @@ def _prepare_image_for_send(file_path):
         return None, False
 
 
-def send_image(file_path, target_qq=None):
-    """发送图片到 QQ，使用 base64 方式。target_qq 默认发送给列表第一个"""
+def send_image(file_path, target_qq=None, sub_type=0):
+    """发送图片到 QQ，使用 base64 方式。target_qq 默认发送给列表第一个。
+
+    sub_type：0=普通图片，1=表情包（OneBot v11 image 段的字段）。
+    不带这个字段时 QQ 客户端自己猜，会出现"同一批表情包时而表情、时而图片"。
+    """
     if target_qq is None:
         target_qq = TARGET_QQS[0]
     try:
@@ -3809,7 +3838,10 @@ def send_image(file_path, target_qq=None):
         try:
             with open(send_path, "rb") as f:
                 b64 = base64.b64encode(f.read()).decode()
-            msg = [{"type": "image", "data": {"file": f"base64://{b64}"}}]
+            _seg = {"file": f"base64://{b64}"}
+            if sub_type:
+                _seg["sub_type"] = int(sub_type)
+            msg = [{"type": "image", "data": _seg}]
             _ok_img, resp = _ob_send_msg(msg, target_qq, kind="image")
             retcode = 0 if _ok_img else (resp.get("retcode", -1) or -1)
             if retcode == 0:
@@ -3828,8 +3860,11 @@ def send_image(file_path, target_qq=None):
         return False
 
 
-def send_group_image(group_id, file_path):
-    """发送图片到群聊，使用 base64 方式"""
+def send_group_image(group_id, file_path, sub_type=0):
+    """发送图片到群聊，使用 base64 方式。
+
+    sub_type：0=普通图片，1=表情包。见 send_image 的说明。
+    """
     send_path, is_temp = _prepare_image_for_send(file_path)
     if not send_path:
         log(f"群[{group_id}] 发图失败: {os.path.basename(file_path)} 过大且无法压缩，跳过")
@@ -3837,7 +3872,10 @@ def send_group_image(group_id, file_path):
     try:
         with open(send_path, "rb") as f:
             b64 = base64.b64encode(f.read()).decode()
-        msg = [{"type": "image", "data": {"file": f"base64://{b64}"}}]
+        _seg = {"file": f"base64://{b64}"}
+        if sub_type:
+            _seg["sub_type"] = int(sub_type)
+        msg = [{"type": "image", "data": _seg}]
         ok, resp = _ob_send_msg(msg, group_id, is_group=True, kind="image")
         if ok:
             log(f"群[{group_id}] 已发图: {os.path.basename(file_path)}")
@@ -3923,7 +3961,7 @@ def try_send_meme(group_id, reply_text, prob_bonus=0.0):
     
     meme_path = match_meme(emotion)
     log(f"[表情] 匹配路径: {meme_path}")
-    if meme_path and send_group_image(group_id, meme_path):
+    if meme_path and send_group_image(group_id, meme_path, sub_type=1):
         MEME_LAST_SENT[key] = now
         # P1-3：记进群 history，模型下一轮才知道自己发了哪张图
         _note_sent_meme(meme_path, group_id=group_id)
@@ -4017,7 +4055,8 @@ def _meme_back_send(target, is_group: bool, images=None):
         path = match_meme(reply_emotion)
         if not path:
             return None
-        ok = send_group_image(target, path) if is_group else send_image(path, target)
+        ok = (send_group_image(target, path, sub_type=1) if is_group
+              else send_image(path, target, sub_type=1))
         if ok:
             MEME_LAST_SENT[key] = now
             # P1-3：回敬的表情包同样要记（否则下一轮它认不出自己发的图）
@@ -4309,7 +4348,7 @@ def send_idle_exit_meme(group_id):
             return None
         emotion = random.choice(IDLE_EXIT_EMOTIONS)
         meme_path = match_meme(emotion)
-        if meme_path and send_group_image(group_id, meme_path):
+        if meme_path and send_group_image(group_id, meme_path, sub_type=1):
             MEME_LAST_SENT[key] = now
             log(f"[表情] 空闲退场表情发送成功: {emotion} → {os.path.basename(meme_path)}")
             return os.path.basename(meme_path)
@@ -11605,139 +11644,37 @@ def _build_cached_messages(history: List[Dict], cache_key: str,
       （实测命中额钉死 ~3200）。账本模式下每条历史只入账一次、行永不
       清除/重排，窗口滑动只是尾部追加 → 命中区从 3.2K 扩到"static+全部摘要"。
     """
-    # 最近几轮保留原文（其余压成摘要账本）
-    # ★ 2026-10-27 改成可配，默认 2 轮（1.5.9 §C.3.5）：
-    #   方案要求历史原文 4 轮 → 2 轮。这里原来是硬编码 4 轮。
-    #   单位是**轮**，不是条数 —— history 是 [user, assistant, user, assistant…]，
-    #   一轮两条，所以下面要 ×2 换成条数。
-    #   成本靠"有界窗口 + 摘要账本"控制：轮数越少，后面那段的缓存命中率越高
-    #   （每轮都变 → 排在它后面的块永远不可命中）。
-    try:
-        # ★ 不能用 `or 2`：配 0（全部压成摘要）时 0 是 falsy → `0 or 2` = 2，
-        #   "配了就等于没配"。要显式判 None。
-        _rt = _config.get("history_recent_turns", 2)
-        RECENT_TURNS = 2 if _rt is None else int(_rt)
-    except (TypeError, ValueError):
-        RECENT_TURNS = 2
-    RECENT_TURNS = max(0, min(8, RECENT_TURNS))   # 0=全压成摘要；封顶防手滑
-    _RECENT_ENTRIES = RECENT_TURNS * 2
-    #: 自己说过的话放宽到 100 字（立场句通常在开头，30/60 字会被砍掉）
-    _OWN_LIMIT = 100
-
     messages = [{"role": "system", "content": static_prompt}]
 
-    # 准静态块（群身份/粗时间/表达模式/档位…）：放在摘要账本之前 —— 变化最慢的
-    # 块排最前。它们"一天变不了几次"，绝不能排在每轮滑动的近轮之后（那里=每轮
-    # 必 miss 区，22:00 时段实测 miss 仍 ~2K/次的主因）。
+    # 准静态块（群身份/粗时间/表达模式/档位…）：变化最慢的排最前，
+    # 它们后面的原文窗口每轮都在滑动，排前面才不会每轮整段失效。
     for part in (stable_parts or []):
         if part:
             messages.append({"role": "system", "content": part})
 
-    # 历史处理：旧轮次进 append-only 摘要账本，最近几轮保留原文
-    if len(history) > _RECENT_ENTRIES:
-        # ★ 用显式下标，不用 history[:-N]：
-        #   N=0 时 `[:-0]` 等于 `[:0]` → 空列表（不是"去掉最后 0 个"），
-        #   同理 `[-0:]` 等于 `[0:]` → 全部。
-        #   近轮数允许配到 0（全部压成摘要），这两个坑会直接让历史丢失。
-        old = history[:len(history) - _RECENT_ENTRIES]
-
-        _limit = 40   # 别人的话：一行 40 字（摘要用，够看出在聊什么）
-        _own_limit = _OWN_LIMIT   # 自己的话：100 字（立场/态度要能对上）
-
-        def _entry_line(h):
-            _tp = _hist_time_prefix(h)
-            _body = h.get("content") or ""
-            if cache_key.startswith("g_"):
-                # 群聊：user 行 content 已含「[昵称(QQ号)] 文本」前缀，直接保留说话人。
-                # ★ assistant 行**没有前缀**，必须补 `我:` —— 否则超过最近几轮后，
-                #   模型认不出"这句是我说的"，每轮重建立场 → 上下矛盾（2026-10-21 修）。
-                if h.get("role") == "assistant":
-                    return _tp + "我: " + _body[:_own_limit]
-                return _tp + _body[:_limit]
-            role = "我" if h.get("role") == "assistant" else "对方"
-            if h.get("role") == "assistant":
-                return _tp + f"{role}: " + _body[:_own_limit]
-            return _tp + f"{role}: {_body[:_limit]}"
-
-        def _entry_fp(h):
-            src = ((h.get("role") or "") + "|" + str(h.get("ts") or "")
-                   + "|" + (h.get("content") or ""))
-            return hashlib.md5(src.encode("utf-8", "ignore")).hexdigest()
-
-        window = [(_entry_fp(h), _entry_line(h)) for h in old]
-        ledger = _HISTORY_SUMMARY_LINES.setdefault(cache_key, [])
-        last = _HISTORY_LAST_WINDOW.get(cache_key) or []
-        # 窗口只会"头部掉、尾部加"：找上次窗口的最长后缀 == 本次窗口的最长前缀，
-        # 重叠之后的条目才是本轮第一次进 old 区的 → 追加进账本。
-        # 完全对不上（历史被压缩重建/重启换血）→ overlap=0 → 账本整本重建，
-        # 代价是一次 miss，罕见且不可避免。
-        overlap = 0
-        for s in range(len(last) + 1):
-            tail = last[s:]
-            if tail == window[:len(tail)]:
-                overlap = len(tail)
-                break
-        changed = False
-        if last and window and overlap == 0 and last[-1] != window[0]:
-            # 真·断代（历史被压缩重建/重启换血）：旧账本对应的轮次已经不在了，
-            # 追加会重复入账 → 整本重建（接受一次 miss，罕见且不可避免）
-            ledger = [ln for _fp, ln in window]
-            _HISTORY_SUMMARY_LINES[cache_key] = ledger
-            changed = True
-        else:
-            for _fp, line in window[overlap:]:
-                ledger.append(line)
-                changed = True
-        if len(ledger) > _HISTORY_SUMMARY_LINE_CAP:
-            ledger = ledger[-_HISTORY_SUMMARY_LINE_CAP:]
-            _HISTORY_SUMMARY_LINES[cache_key] = ledger
-            changed = True
-        # ★ 2026-10-23：再加一道**字符**预算。
-        #   只按行数封顶是不够的：300 行 × 100 字 = 30000 字 ≈ 18750 token，
-        #   这是每轮都要重发的量。行数相同、字数可能差十倍（一行「嗯」vs 一行长回复）。
-        #   从头部裁 —— 账本是 append-only，裁头只影响一次，尾部追加照旧。
-        _ledger_budget = int(_config.get("history_ledger_budget_chars") or 4000)
-        if _ledger_budget > 0:
-            _lchars = sum(len(x) for x in ledger)
-            _cut = 0
-            while _lchars > _ledger_budget and len(ledger) > 20:
-                _lchars -= len(ledger[0])
-                ledger = ledger[1:]
-                _cut += 1
-            if _cut:
-                _HISTORY_SUMMARY_LINES[cache_key] = ledger
-                changed = True
-                log(f"[账本预算] 摘要账本超出 {_ledger_budget} 字符，裁掉最旧 {_cut} 行")
-        if changed or cache_key not in _HISTORY_SUMMARY_TEXT:
-            _HISTORY_SUMMARY_TEXT[cache_key] = (
-                "【之前对话摘要】\n" + "\n".join(ledger))
-        _HISTORY_LAST_WINDOW[cache_key] = window
-        messages.append({"role": "system",
-                         "content": _HISTORY_SUMMARY_TEXT[cache_key]})
-
-    # 最近几轮保留原文（每轮滑动 → 从这里开始就是必 miss 区）
-    # ★ 2026-10-23：这里原来是无条件全量塞进去，一条长回复能把最近区撑到 7500 token。
-    #   现在两道闸：
-    #     ① 单条按句截断到 HISTORY_RECENT_CHARS_PER_ENTRY（保句子完整，见 _clip_for_history）
-    #     ② 整段按总预算从最旧的开始丢整条（_budget_recent_history）
-    #   注意截断**不能改变角色顺序**，也不能把 assistant/user 配错 —— 所以只截内容，
-    #   不删中间条目。
-    if len(history) > _RECENT_ENTRIES:
-        _recent = history[len(history) - _RECENT_ENTRIES:]
+    # ── 历史窗口（2026-11-04 · 记忆收敛）──────────────────────────────
+    #   旧实现是两套记忆：最近 N 轮原文 + **append-only 摘要账本**（每行 40/100 字）。
+    #   账本是幻觉的温床 —— 模型把压缩过的句子当事实，在上面自由补全
+    #   （真机「刚说别找你」「没听到你那边的声响」都出自这里）。
+    #   现在只留**一个真相源**：原文窗口。更早的事交给长期记忆（沙漏/记忆轮次），
+    #   那是有明确来源的摘要，而不是我们每轮现编的账本。
+    _raw_cap = _cfg_int("history_raw_entries", 40, 4, 80)
+    if len(history) > _raw_cap:
+        log(f"[历史窗口] 只保留最近 {_raw_cap} 条原文（更早的交给长期记忆）")
+        _raw = history[-_raw_cap:]
     else:
-        _recent = history
+        _raw = history
 
     _recent_clipped = []
-    for h in _recent:
+    for h in _raw:
         _c = str(h.get("content") or "")
-        # 原文区一律用 HISTORY_RECENT_CHARS_PER_ENTRY。
-        # 不要在这里套账本摘要的 100 字口径（见 _entry_line 的 _own_limit）——
-        # 原文区的意义就是"最近几轮说完整"，砍到 100 字就退化成摘要了。
-        _recent_clipped.append({"role": h["role"],
-                                "content": _hist_time_prefix(h)
-                                + _clip_for_history(_c, HISTORY_RECENT_CHARS_PER_ENTRY)})
+        _recent_clipped.append({
+            "role": h["role"],
+            "content": (_hist_time_prefix(h)
+                        + _clip_for_history(_c, HISTORY_RECENT_CHARS_PER_ENTRY)),
+        })
 
-    _recent_budget = int(_config.get("history_recent_budget_chars") or 6000)
+    _recent_budget = _cfg_int("history_recent_budget_chars", 8000, 0, 40000)
     if _recent_budget > 0:
         _recent_clipped, _dropped = _budget_recent_history(_recent_clipped, _recent_budget)
         if _dropped:
@@ -11746,6 +11683,7 @@ def _build_cached_messages(history: List[Dict], cache_key: str,
 
     for h in _recent_clipped:
         messages.append({"role": h["role"], "content": h["content"]})
+
 
     # ── 最近一次「我说过的话」原文（2026-10-31）────────────────────────
     #   真机：被追问「你不是说还有一张吗」，它回「哪来的第二张，我瞎说的？」
@@ -13173,10 +13111,10 @@ def _meme_tool_send(path: str, ctx=None) -> bool:
     c = dict(ctx or {})
     try:
         if c.get("is_group") and c.get("group_id"):
-            return bool(send_group_image(str(c["group_id"]), path))
+            return bool(send_group_image(str(c["group_id"]), path, sub_type=1))
         sender = str(c.get("sender") or "")
         if sender:
-            return bool(send_image(path, sender))
+            return bool(send_image(path, sender, sub_type=1))
     except Exception as e:
         log(f"[表情检索] 发送失败: {e}")
     return False
@@ -15885,6 +15823,29 @@ def _pipeline_step(group_id):
                 # 从这一刻起算"发送中"：去重闸、分条发送、表情包、纯图兜底都在这段里。
                 _phase_set(group_id, "sending")
 
+                # ── 事实围栏（2026-11-04）────────────────────────────
+                #  放在去重闸之前：去重要比的是**真正会发出去的**那一版。
+                #  证据 = 这个群最近的 history（user 行自带说话人前缀）。
+                try:
+                    _ev_g = [str(h.get("content") or "")
+                             for h in (group_chat_history.get(group_id) or [])][-14:]
+                    _ev_g.append(str(merged_text or ""))
+                    _gh = group_chat_history.get(group_id) or []
+                    _g_g = _apply_grounding_guard(
+                        sent_text, _ev_g, where=f"群[{group_id}]",
+                        user_texts=[str(h.get("content") or "") for h in _gh
+                                    if h.get("role") == "user"][-10:],
+                        own_texts=[str(h.get("content") or "") for h in _gh
+                                   if h.get("role") == "assistant"][-8:])
+                    if _g_g != sent_text:
+                        if _g_g:
+                            sent_text = _g_g
+                        else:
+                            sent_text = "嗯"
+                            log(f"群[{group_id}] [事实围栏] 整条无据，退成「嗯」")
+                except Exception as _ge_g:
+                    log(f"[事实围栏] 群校验跳过: {_ge_g}")
+
                 def _rough(s):
                     return "".join(ch for ch in str(s or "") if ch.strip())
                 _dup = ""
@@ -17957,6 +17918,29 @@ def main():
                                 log(f"私聊[{sender}] [认账闸] 拦下否认：{_old[:36]} → {sent_text[:36]}")
                         except Exception as e:
                             log(f"[consistency] 校验跳过: {e}")
+                        # ── 事实围栏（2026-11-04）────────────────────
+                        #  证据 = 这一段私聊 history 的全部内容 + 这一轮用户消息。
+                        #  模型只能知道这些，之外的细节（"你刚说…"、"我听到…"）就是编的。
+                        try:
+                            _ev_p = [str(h.get("content") or "")
+                                     for h in (chat_history.get(sender) or [])][-12:]
+                            _ev_p.append(str(text or ""))
+                            _ph = chat_history.get(sender) or []
+                            _g_p = _apply_grounding_guard(
+                                sent_text, _ev_p, where=f"私聊[{sender}]",
+                                user_texts=[str(h.get("content") or "") for h in _ph
+                                            if h.get("role") == "user"][-8:],
+                                own_texts=[str(h.get("content") or "") for h in _ph
+                                           if h.get("role") == "assistant"][-8:])
+                            if _g_p != sent_text:
+                                if _g_p:
+                                    sent_text = _g_p
+                                else:
+                                    # 全删了：退一句短的，别静默
+                                    sent_text = "嗯"
+                                    log(f"私聊[{sender}] [事实围栏] 整条无据，退成「嗯」")
+                        except Exception as _ge:
+                            log(f"[事实围栏] 私聊校验跳过: {_ge}")
                         ok = smart_send(sent_text, sender)
                     else:
                         log("私聊 仅表情标记，跳过文本发送")
@@ -18072,10 +18056,6 @@ def main():
                 # F: 定期清理上下文缓存（摘要/时间注入/历史账本），
                 #    只在群超过 24h 无消息或私聊历史已清时回收，防 dict 无限增长
                 _ctx_ttl = 24 * 3600
-                def _drop_history_ledger(ck):
-                    _HISTORY_SUMMARY_LINES.pop(ck, None)
-                    _HISTORY_LAST_WINDOW.pop(ck, None)
-                    _HISTORY_SUMMARY_TEXT.pop(ck, None)
                 for gid in list(GROUP_SUMMARY.keys()):
                     _last = _GROUP_SUMMARY_AT.get(gid) or _GROUP_SUMMARY_INJECT_AT.get(gid) or 0
                     if not isinstance(_last, (int, float)) or now - _last > _ctx_ttl:
@@ -18085,11 +18065,6 @@ def main():
                         _GROUP_SUMMARY_LEN.pop(gid, None)
                         _GROUP_TIME_INJECT_AT.pop(gid, None)
                         _GROUP_SUMMARY_INJECT_AT.pop(gid, None)
-                        _drop_history_ledger(f"g_{gid}")
-                # 私聊历史缓存的 key 跟随 chat_history 是否已清（保留活跃 QQ 的缓存）
-                for qq in [k[2:] for k in list(_HISTORY_SUMMARY_LINES.keys()) if k.startswith("p_")]:
-                    if qq not in chat_history or not chat_history.get(qq):
-                        _drop_history_ledger(f"p_{qq}")
                 # 定期保存状态（防止崩溃丢失记忆；D 节流已生效，此处 force 兜底）
                 save_state(force=True)
             except Exception:
