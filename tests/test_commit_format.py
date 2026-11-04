@@ -87,10 +87,36 @@ def main():
           not bad, bad[:5])
     check("提交数够多（少于 10 个说明 --since 没生效）",
           len(subjects) >= 10, len(subjects))
-    # 文档得说清边界，不能让人对着规范核对历史还对不上
-    check("说明了更早的提交格式不一", "格式不一" in contrib)
 
-    print("\n[3] 发布清单的示例命令同一格式")
+    # ── [3] 正文不写转述（2026-11-05 起）──────────────────────
+    #  现象要写"看到的东西"（日志/报错/代码现状），不写「用户说……」。
+    #  更早的提交已在远端，按 §6.3 不重写历史，所以按日期切。
+    print("\n[3] 正文写现象，不写转述（2026-11-05 起）")
+    # ★ 必须带具体时刻：--since=2026-11-05 这种纯日期会被 approxidate 解释成
+    #   别的东西，实测返回 0 条 —— 那等于这条检查从来没生效过（假绿）。
+    BODY_SINCE = "2026-11-05 00:00"
+    rb = subprocess.run(["git", "log", "--format=%H\x1f%B\x1e", "--since=" + BODY_SINCE],
+                        capture_output=True, text=True, encoding="utf-8", cwd=ROOT)
+    raw = [x for x in rb.stdout.split("\x1e") if x.strip()]
+    BAD_PHRASES = ("用户：「", "用户说", "用户表示", "用户要求", "用户原话", "用户反馈")
+    offenders = []
+    for chunk in raw:
+        if "\x1f" not in chunk:
+            continue
+        sha, body = chunk.split("\x1f", 1)
+        # 只看**行首**：转述的特征是整行以它开头（「用户：…」当作现象）
+        # 正文里为了说明问题而引用一两个词，不算违规
+        hit = [p for p in BAD_PHRASES
+               if any(l.strip().startswith(p) for l in body.splitlines())]
+        if hit:
+            offenders.append((sha.strip()[:7], hit[0],
+                              body.strip().splitlines()[0][:40] if body.strip() else ""))
+    check(f"{BODY_SINCE} 起的 {len(raw)} 个提交正文没有转述句式",
+          not offenders, offenders[:5])
+    check("能扫到提交（0 条说明 --since 没生效）", len(raw) >= 1, len(raw))
+    check("规范里写明了这条", "正文写现象，不写转述" in contrib)
+
+    print("\n[4] 发布清单的示例命令同一格式")
     chk = io.open(os.path.join(ROOT, "docs", "RELEASE_CHECKLIST.md"),
                   encoding="utf-8").read()
     check("chore(release) 示例带日期",
