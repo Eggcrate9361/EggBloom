@@ -70,16 +70,21 @@ def main():
 
         print("\n[E] 接线：私聊与群聊都调了")
         srcf = open(os.path.join(ROOT, "bot_core.py"), encoding="utf-8", errors="replace").read()
+        # 2026-11-04：接线收敛成 _guard_outbound 之后，_apply_grounding_guard
+        # 只剩定义 + 统一入口里那一次调用；三处业务（私聊/群聊/插件）都走 _guard_outbound
         n = srcf.count("_apply_grounding_guard(")
-        check("★ 至少 3 处（定义 + 私聊 + 群聊）", n >= 3, n)
+        check("定义 + 统一入口里各一次", n >= 1, n)
+        n2 = srcf.count("_guard_outbound(")
+        check("★ 至少 3 处走统一出口", n2 >= 3, n2)
         check("私聊在 smart_send 之前",
               srcf.find("_apply_grounding_guard(sent_text, _ev_p") < srcf.find("ok = smart_send(sent_text, sender)"))
         check("群聊在去重闸之前",
               srcf.find("_apply_grounding_guard(sent_text, _ev_g") < srcf.find("def _rough(s):"))
         check("★ 私聊删空退「嗯」", "整条无据，退成「嗯」" in srcf)
         check("★ 群聊删空退「嗯」", "整条无据，退成「嗯」" in srcf)
-        check("私聊证据用 chat_history", "_ev_p = [str(h.get(\"content\")" in srcf)
-        check("群聊证据用 group_chat_history", "_ev_g = [str(h.get(\"content\")" in srcf)
+        # 2026-11-04：证据拼装搬进 _guard_outbound（按 scene 取 history）
+        check("★ 统一出口按场景取 history",
+              "group_chat_history" in srcf and "chat_history" in srcf)
 
         print("\n[F] 默认是 drop（不是关着）")
         bc._config.pop("grounding_guard", None)

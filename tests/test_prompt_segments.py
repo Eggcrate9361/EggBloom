@@ -84,10 +84,8 @@ class TestPromptSegments(unittest.TestCase):
     # ── 2. 注册表本身 ──
     def test_segments_registered_in_order(self):
         names = bot_core.prompt_segment_names()
-        self.assertEqual(names, ["回答多样性", "去AI味铁律", "表情包", "诚实铁律",
-                                 "别怕不体面", "别露后台", "怎么接话", "表态",
-                                 "降级", "群聊规则"],
-                         f"段顺序变了：{names}")
+        # ★ 2026-11-04：人格注入改成"文件即真相"，段只剩两个
+        self.assertEqual(names, ["人格规则", "去AI味铁律"])
 
     def test_scope_filtering(self):
         """scope=group 的段不得出现在私聊渲染里（反之亦然）。"""

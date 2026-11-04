@@ -433,12 +433,22 @@ def _build_messages(cfg: dict, state: dict, target: str) -> list:
     max_bubbles = int(cfg.get("max_bubbles") or 4)
 
     # 联动：人设 / 情绪 / 私聊记忆（任一失败自动降级，不影响主流程）
-    persona_raw = _fetch_personality(cfg)
+    # ★ 2026-11-04（一条 prompt 路径）：优先用主链拼好的静态提示词 ——
+    #   人格、能力边界、【没有耳朵】这些只在 bot_core 里维护一份。
+    #   拿不到再退回插件原始人设（老行为）：
+    persona_raw = ""
+    try:
+        import bot_core as _bcx
+        persona_raw = str(_bcx._build_static_prompt(False) or "").strip()
+    except Exception:
+        persona_raw = ""
+    if not persona_raw:
+        persona_raw = _fetch_personality(cfg)
     mood = _fetch_mood(cfg)
     memory_rounds = _fetch_memory_rounds(cfg, target)
 
     sys_prompt = (
-        "你在 QQ 上和人私聊。你是他熟悉的那只 AI——有自己的小情绪和惦记的事，不是客服。\n"
+        "你在 QQ 上和人私聊，是你自己想开口说点什么。\n"
         "现在没有人发消息给你，是你自己想开口说点什么。\n"
     )
     if persona_raw:

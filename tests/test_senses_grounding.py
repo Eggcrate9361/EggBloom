@@ -56,11 +56,10 @@ def main():
     check("★ 禁止「听到/听见」", "「听到」「听见」" in raw)
 
     print("\n[B] 它在会被注入的段里（防死文字）")
-    segs = {}
-    for n in bc.prompt_segment_names():
-        segs[n] = bc._persona_rule_segment(n) or ""
-    hit = [n for n, s in segs.items() if "【没有耳朵】" in s]
-    check("★ 出现在注入段里", bool(hit), sorted(segs))
+    # ★ 2026-11-04：段注册表只剩「人格规则」，块名来自文件 —— 直接查块
+    blocks = bc._persona_rule_blocks()
+    hit = [n for n, s in blocks.items() if "【没有耳朵】" in s]
+    check("★ 出现在会被注入的块里", bool(hit), sorted(blocks))
     # 静态提示词里必须真的能看到
     try:
         prompt = bc._build_static_prompt(False) or ""

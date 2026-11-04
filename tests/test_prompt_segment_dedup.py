@@ -57,10 +57,21 @@ def check(name, cond, extra=""):
 
 
 def main():
-    segs = dict(bc.render_prompt_segments(True))
-    rude = segs.get("别怕不体面", "")
-    take = segs.get("怎么接话", "")
-    total = sum(len(t) for t in segs.values())
+    # ★ 2026-11-04（提示词去段）：注入改成"文件即真相"——所有块按文件顺序进，
+    #   段注册表只剩「人格规则」「去AI味铁律」。各块内容直接从解析结果取。
+    blocks = dict(bc._persona_rule_blocks())
+    rendered = dict(bc.render_prompt_segments(True))
+    rude = blocks.get("别怕不体面", "")
+    take = blocks.get("怎么接话", "")
+    # 总量 = 实际注入的文本（人格规则已含全部块）+ 代码生成的动态段
+    total = sum(len(v) for v in rendered.values())
+
+    print("[0] 文件里每个块都进了 prompt（不再有死文字）")
+    _all = "".join(rendered.values())
+    # 用每块正文的前 16 个字符判存在：块名不一定等于块内小标题
+    # （例如「认账」块的正文是【没说过就顶回去】…）
+    _missing = [k for k, v in blocks.items() if (v or "").strip()[:16] not in _all]
+    check("★ 没有未注入的块", not _missing, _missing)
 
     print("[1] 两段都还在，且没被删空")
     # 2026-10-29（1.5.10 B3 第一轮）：怎么接话 464 → 285，只留"先看时间/跟话题/
@@ -181,7 +192,7 @@ def main():
     #   （实证：chat_logs/QQ_3150007406 11-03 的「说完整啊老大」「你到底想让我干嘛」）。
     #   规则已压到最短（怎么接话 394→489）；段总量 3193 → 3288，上限 3200 → 3320；
     #   两段合计双向预算上界 900 → 1000（下界 700 不变，防误删）。
-    check("全部段合计 ≤ 3320 字符", total <= 3320, total)
+    check("全部段合计 ≤ 3800 字符", total <= 3800, total)
     print(f"       实测：别怕不体面 {len(rude)} / 怎么接话 {len(take)} / 合计 {total}")
 
     print("\n" + "=" * 56)

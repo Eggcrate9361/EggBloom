@@ -169,6 +169,23 @@ def _plugin_send_text(text, target=None, group_id=None) -> bool:
     text = str(text or "").strip()
     if not text:
         return False
+    # ★ 2026-11-04：插件发出的话也过事实围栏（主动说话漏在外面过 —— 真机出了
+    #   「刚说别找你」「我就想安静喝口酒」）。围栏在运行时才可用，所以用 globals()。
+    try:
+        _go = globals().get("_guard_outbound")
+        if callable(_go):
+            _sc = "group" if group_id else "private"
+            _guarded = _go(text, scene=_sc, target=str(group_id or target or ""),
+                           where=f"插件[{_sc}]")
+            if _guarded != text:
+                if _guarded:
+                    text = _guarded
+                else:
+                    log(f"[事实围栏] 插件整条无据，不发: {text[:40]}")
+                    return False
+    except Exception as _ge:
+        log(f"[事实围栏] 插件校验跳过（不影响发送）: {_ge}")
+
     try:
         if group_id:
             _ok = bool(globals()["smart_send_group"](str(group_id), text))
@@ -3513,6 +3530,28 @@ def _apply_grounding_guard(text: str, evidence, *, where: str = "",
         return text
 
 
+def _guard_outbound(text: str, *, scene: str, target: str = "", where: str = "") -> str:
+    """唯一的出口闸：任何要发出去的话都从这里过一遍。
+
+    scene: "private" / "group"。证据取自对应 history（模型这一轮能看到的全部）。
+    返回要发的文本（可能为空 → 调用方决定退一句什么，**不许静默**）。
+    """
+    try:
+        _hs = globals()
+        if scene == "group":
+            _hist = (_hs.get("group_chat_history") or {}).get(str(target)) or []
+        else:
+            _hist = (_hs.get("chat_history") or {}).get(str(target)) or []
+        _ev = [str(h.get("content") or "") for h in _hist][-14:]
+        _users = [str(h.get("content") or "") for h in _hist if h.get("role") == "user"][-10:]
+        _owns = [str(h.get("content") or "") for h in _hist if h.get("role") == "assistant"][-8:]
+        return _apply_grounding_guard(text, _ev, where=(where or f"{scene}[{target}]"),
+                                      user_texts=_users, own_texts=_owns)
+    except Exception as e:
+        log(f"[事实围栏]{where} 跳过（不影响发送）: {e}")
+        return text
+
+
 def _record_exit_into_context(gid, phrase):
     """退场语也要进上下文与长期记忆（2026-11-04）。
 
@@ -4667,6 +4706,37 @@ def persona_rule_orphans():
 _MISSING_RULE_LOGGED = set()
 
 
+#: 块头：`### 名称` 或 `### 名称 | scope=group`
+_BLOCK_HEAD_RE = re.compile(r"(?m)^###\s*([^\n|]+?)\s*(?:\|\s*scope\s*=\s*(\w+))?\s*$")
+
+
+def _persona_blocks_ordered():
+    """按**文件顺序**返回人格规则块：[(name, text, scope)]。
+
+    ★ 2026-11-04（提示词去段）：以前注入靠 `register_prompt_segment` 白名单，
+      文件里多出来的块（【认账】【睡觉】）永远进不了 prompt —— 写了等于没写。
+      现在以**文件**为准：文件里有什么就注入什么，scope 写在块头里。
+    """
+    try:
+        with io.open(PERSONA_CANONICAL, encoding="utf-8") as _f:
+            raw = _f.read()
+    except Exception:
+        raw = ""
+    out = []
+    hits = list(_BLOCK_HEAD_RE.finditer(raw or ""))
+    for i, m in enumerate(hits):
+        name = (m.group(1) or "").strip()
+        scope = (m.group(2) or "both").strip().lower()
+        if scope not in ("both", "group", "private"):
+            scope = "both"
+        start = m.end()
+        end = hits[i + 1].start() if i + 1 < len(hits) else len(raw)
+        body = (raw[start:end] or "").strip()
+        if name and body:
+            out.append((name, body, scope))
+    return out
+
+
 def _persona_rule_segment(name):
     """取一段规则，补上前导分隔符（历史契约：段返回值自带 \n\n）。"""
     try:
@@ -4684,13 +4754,21 @@ def _persona_rule_segment(name):
     return "\n\n" + body
 
 
-@register_prompt_segment("回答多样性", order=10)
-def _seg_variety(is_group):
-    """规则文本已搬到 plugins/personality.txt【不许】段（2026-10-29 B1）。
+@register_prompt_segment("人格规则", order=10)
+def _seg_persona_rules(is_group):
+    """人格文件的**全部规则块**（按文件顺序，按 scope 过滤）。
 
-    改文字去改人格文件，不用动这里；本函数只负责取块并补上前导分隔符。
+    2026-11-04：以前是 8 个独立注册项，各自按名字取块 —— 文件里没注册的块
+    就成了死文字（【认账】【睡觉】各 260/75 字，从没进过 prompt）。
+    现在文件是唯一依据。
     """
-    return _persona_rule_segment("回答多样性")
+    scope = "group" if is_group else "private"
+    parts = []
+    for _name, _text, _sc in _persona_blocks_ordered():
+        if _sc not in ("both", scope):
+            continue
+        parts.append("\n\n" + _text)
+    return "".join(parts)
 
 
 @register_prompt_segment("去AI味铁律", order=20)
@@ -4703,83 +4781,6 @@ def _seg_deai(is_group):
     _b = de_ai_rule_block(_config) or ""
     return ("\n\n" + _b) if _b else ""
 
-
-@register_prompt_segment("表情包", order=30)
-def _seg_meme(is_group):
-    """规则文本已搬到 plugins/personality.txt【不许】段（2026-10-29 B1）。
-
-    改文字去改人格文件，不用动这里；本函数只负责取块并补上前导分隔符。
-    """
-    return _persona_rule_segment("表情包")
-
-
-@register_prompt_segment("诚实铁律", order=40)
-def _seg_honesty(is_group):
-    """规则文本已搬到 plugins/personality.txt【不许】段（2026-10-29 B1）。
-
-    改文字去改人格文件，不用动这里；本函数只负责取块并补上前导分隔符。
-    """
-    return _persona_rule_segment("诚实铁律")
-
-
-@register_prompt_segment("怎么接话", order=45, scope="both")
-def _seg_take_over(is_group):
-    """规则文本已搬到 plugins/personality.txt【不许】段（2026-10-29 B1）。
-
-    改文字去改人格文件，不用动这里；本函数只负责取块并补上前导分隔符。
-    """
-    return _persona_rule_segment("怎么接话")
-
-
-@register_prompt_segment("别怕不体面", order=42, scope="both")
-def _seg_allow_rude(is_group):
-    """规则文本已搬到 plugins/personality.txt【不许】段（2026-10-29 B1）。
-
-    改文字去改人格文件，不用动这里；本函数只负责取块并补上前导分隔符。
-    """
-    return _persona_rule_segment("别怕不体面")
-
-
-@register_prompt_segment("别露后台", order=44, scope="both")
-def _seg_no_backstage(is_group):
-    """【别露后台】/ 能力边界 / 不许编状态 / 收不到≠没发生（2026-10-30 真机复盘）。
-
-    ★ 这条原来埋在【群聊规则 | scope=group】里的一条 bullet 里，私聊整段被过滤掉 →
-      私聊没有任何"别露后台"约束。真机后果（10-29 私聊）：
-        "我这边就显示个图，看不到里面是啥"、"我这边就一个[图片]占位"、
-        "那些不是我挑的…图是系统自己配的"。
-    私聊一对一才是最容易露后台的场景，所以提成 both 独立段。
-    """
-    return _persona_rule_segment("别露后台")
-
-
-@register_prompt_segment("表态", order=48, scope="both")
-def _seg_stance(is_group):
-    """表态铁律（2026-10-30 真机复盘）：被问判断必须给判断，且不许无新信息改口。
-
-    10-28 23:45 起连续 11 轮只捧哏，用户爆"你就不能有些主见吗"，
-    给了立场 67 秒后又收回（"放不放你自己定"）。
-    """
-    return _persona_rule_segment("表态")
-
-
-@register_prompt_segment("降级", order=49, scope="both")
-def _seg_soften(is_group):
-    """降级通道（2026-10-30 真机复盘）：对方示弱/收场时闭嘴，不许加倍。
-
-    10-29 17:38 用户说"我对你这么好，你还骂我"，bot 加倍顶回去，
-    12 分钟后用户只回了一句"算了"。
-    """
-    return _persona_rule_segment("降级")
-
-
-@register_prompt_segment("群聊规则", order=50, scope="group")
-def _seg_group_rules(is_group):
-    """规则文本已搬到 plugins/personality.txt【不许】段（2026-10-29 B1）。
-
-    改文字去改人格文件，不用动这里；本函数只负责取块并补上前导分隔符。
-    """
-    return _persona_rule_segment("群聊规则")
 
 
 def _build_static_prompt(is_group: bool) -> str:
@@ -15827,16 +15828,8 @@ def _pipeline_step(group_id):
                 #  放在去重闸之前：去重要比的是**真正会发出去的**那一版。
                 #  证据 = 这个群最近的 history（user 行自带说话人前缀）。
                 try:
-                    _ev_g = [str(h.get("content") or "")
-                             for h in (group_chat_history.get(group_id) or [])][-14:]
-                    _ev_g.append(str(merged_text or ""))
-                    _gh = group_chat_history.get(group_id) or []
-                    _g_g = _apply_grounding_guard(
-                        sent_text, _ev_g, where=f"群[{group_id}]",
-                        user_texts=[str(h.get("content") or "") for h in _gh
-                                    if h.get("role") == "user"][-10:],
-                        own_texts=[str(h.get("content") or "") for h in _gh
-                                   if h.get("role") == "assistant"][-8:])
+                    _g_g = _guard_outbound(sent_text, scene="group",
+                                           target=str(group_id), where=f"群[{group_id}]")
                     if _g_g != sent_text:
                         if _g_g:
                             sent_text = _g_g
@@ -17922,16 +17915,8 @@ def main():
                         #  证据 = 这一段私聊 history 的全部内容 + 这一轮用户消息。
                         #  模型只能知道这些，之外的细节（"你刚说…"、"我听到…"）就是编的。
                         try:
-                            _ev_p = [str(h.get("content") or "")
-                                     for h in (chat_history.get(sender) or [])][-12:]
-                            _ev_p.append(str(text or ""))
-                            _ph = chat_history.get(sender) or []
-                            _g_p = _apply_grounding_guard(
-                                sent_text, _ev_p, where=f"私聊[{sender}]",
-                                user_texts=[str(h.get("content") or "") for h in _ph
-                                            if h.get("role") == "user"][-8:],
-                                own_texts=[str(h.get("content") or "") for h in _ph
-                                           if h.get("role") == "assistant"][-8:])
+                            _g_p = _guard_outbound(sent_text, scene="private",
+                                                   target=sender, where=f"私聊[{sender}]")
                             if _g_p != sent_text:
                                 if _g_p:
                                     sent_text = _g_p

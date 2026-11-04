@@ -57,7 +57,9 @@ def main():
     for name in bot_core.prompt_segment_names():
         if name in _EXTERNAL_SEGMENTS:
             continue
-        check(f"段「{name}」在文件里有 ### 块", name in blocks, sorted(blocks))
+        # ★ 2026-11-04：注入改成"文件即真相"，段名「人格规则」不再等于块名。
+        #   这里改成：文件里至少要有块可注入（块名来自文件本身）。
+        check(f"段「{name}」有块可注入", bool(blocks), sorted(blocks))
 
     print("\n[C] 块名不重复")
     import io

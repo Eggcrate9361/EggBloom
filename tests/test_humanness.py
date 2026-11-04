@@ -196,7 +196,8 @@ class TestWiring(unittest.TestCase):
                          "现场资料又被拼回用户消息")
 
     def test_permission_present(self):
-        blk = bc._seg_group_rules(True)
+        # ★ 2026-11-04：段函数随提示词去段合并，群聊规则改为从块里取
+        blk = bc._persona_rule_segment("群聊规则") or ""
         self.assertIn("说话许可", blk)
         self.assertIn("可以不给答案", blk)
 
