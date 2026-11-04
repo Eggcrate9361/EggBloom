@@ -51,6 +51,11 @@ def sandbox_neurobase(prefix="eggbloom_test_nb_") -> str:
     # 插件注入预算账本：测试跑 `_plan_plugin_inject` 会真的记账，写生产账本一天
     # 就能把 ego 刷满（实测 594/600），之后注入被预算丢掉 → 别的测试假红。
     os.environ["EGGBLOOM_PLUGIN_BUDGET"] = os.path.join(td, "plugin_budget.json")
+    # ★ 2026-11-04：数据目录（日志/状态/配置）也指到临时目录。
+    #   不这么做，测试的报错会写进真机的 qq_bot.log —— 用户翻日志会以为真出故障
+    #   （实测见到 FakePM / 磁盘已满（模拟） / 注册表炸了 这类测试桩的报错）。
+    os.environ["EGGBLOOM_USER_DATA"] = os.path.join(td, "userdata")
+    os.makedirs(os.environ["EGGBLOOM_USER_DATA"], exist_ok=True)
 
     # 2. 若模块已导入，改写其路径常量
     #    （正常情况下本函数在 import 之前调用，这一步是兜底）
@@ -73,6 +78,30 @@ def _repatch(td: str) -> None:
     idx = os.path.join(td, "sandglass.idx")
     shadow = os.path.join(td, "shadow_sand.db")
     particles = os.path.join(td, "decision_particles.txt")
+
+    # ★ 2026-11-04：bot_core 的日志/状态/指令文件也要改。
+    #   有些测试先 import bot_core 再调沙箱，import 时路径已定死 ——
+    #   不改会导致测试报错写进用户的 qq_bot.log（真的污染过）。
+    _bc = sys.modules.get("bot_core")
+    if _bc is not None:
+        _ud = os.path.join(td, "userdata")
+        try:
+            os.makedirs(_ud, exist_ok=True)
+        except Exception:
+            pass
+        for attr, name in (("LOG_FILE", "qq_bot.log"),
+                           ("STATE_FILE", "qq_bot_state.json"),
+                           ("INSTRUCTION_FILE", "qq_instructions.json"),
+                           ("TEMP_DIR", "temp"),
+                           ("IMAGE_CACHE", "image_cache")):
+            if hasattr(_bc, attr):
+                p = os.path.join(_ud, name)
+                try:
+                    if name in ("temp", "image_cache"):
+                        os.makedirs(p, exist_ok=True)
+                except Exception:
+                    pass
+                setattr(_bc, attr, p)
 
     for modname in ("sandglass_lite",):
         m = sys.modules.get(modname)
