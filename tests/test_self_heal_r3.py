@@ -183,6 +183,57 @@ def main():
     finally:
         shutil.rmtree(repo, ignore_errors=True)
 
+    print("\n[I] 观察模式：failure_top 只记账，不动手")
+    repo2 = make_repo()
+    try:
+        # 开关关着 → 什么都不做
+        r = R3.watch(repo2, [{"channel": "reply", "count": 9, "samples": ["x"]}],
+                     cfg_getter=lambda: {}, now=NOW)
+        check("开关关时跳过", r["skipped"] and not r["candidates"], r)
+
+        en2 = {"self_heal_r3_enable": True}
+        # 次数不够 → 不进候选
+        r = R3.watch(repo2, [{"channel": "reply", "count": 1, "samples": ["x"]}],
+                     cfg_getter=lambda: en2, now=NOW)
+        check("★ 次数未达阈值不进候选", not r["candidates"], r)
+
+        # 达到阈值 → 进候选 + 写一条观察账本，但**不建 worktree、不提交**
+        head0 = _git(repo2, "rev-parse", "--short", "HEAD").stdout.strip()
+        r = R3.watch(repo2, [{"channel": "reply", "count": 9, "samples": ["boom"]}],
+                     cfg_getter=lambda: en2, now=NOW)
+        check("★ 达到阈值进候选", [c["issue"] for c in r["candidates"]] == ["reply"], r)
+        check("★ 记为 dry（没真修）", r["acted"] and r["acted"][0].get("dry") is True, r["acted"])
+        check("★ 没有新提交",
+              _git(repo2, "rev-parse", "--short", "HEAD").stdout.strip() == head0)
+        led = [x for x in R3.read_ledger(repo2) if x.get("issue") == "reply"]
+        check("★ 账本记了观察条目", led and "观察模式" in str(led[-1].get("reason")), led[-1:])
+        check("账本带次数", led and int(led[-1].get("opens") or 0) == 9, led[-1:])
+
+        # 没有 patcher 时，就算 dry_run=False 也只记账（不假装修过）
+        r = R3.watch(repo2, [{"channel": "reply", "count": 9, "samples": ["boom"]}],
+                     cfg_getter=lambda: en2, now=NOW + 600, dry_run=False)
+        check("★ 缺 patcher 不假装修", r["acted"] and r["acted"][0].get("dry") is True, r["acted"])
+        led = [x for x in R3.read_ledger(repo2) if x.get("issue") == "reply"]
+        check("★ 原因写明缺少 patcher", "缺少 patcher" in str(led[-1].get("reason")), led[-1:])
+
+        # 熔断中的问题不再进候选
+        R3.append_ledger(repo2, {"ts": NOW, "kind": "code", "issue": "bj", "ok": False})
+        R3.append_ledger(repo2, {"ts": NOW + 1, "kind": "code", "issue": "bj", "ok": False})
+        r = R3.watch(repo2, [{"channel": "bj", "count": 9, "samples": ["x"]}],
+                     cfg_getter=lambda: en2, now=NOW + 60)
+        check("★ 熔断中的问题被跳过", not r["candidates"] and r["skipped"], r)
+    finally:
+        shutil.rmtree(repo2, ignore_errors=True)
+
+    print("\n[J] 接线：主循环真的会调它")
+    src = open(os.path.join(ROOT, "bot_core.py"), encoding="utf-8", errors="replace").read()
+    check("★ 主循环里有 R3 观察块", "自愈 R3 观察" in src)
+    check("★ 调用了 watch(", "self_heal_r3 as _r3w" in src and "_r3w.watch(" in src)
+    check("★ 数据源是 failure_top", "trace_tools as _ttw" in src and "_ttw.failure_top(" in src)
+    check("★ 现在是观察模式（dry_run=True）", "dry_run=True" in src)
+    check("★ 开关关着不跑", 'if bool(_config.get("self_heal_r3_enable", False)):' in src)
+    check("低频：30 分钟一次", "_sh_watch_at" in src and "> 1800" in src)
+
     print("\n" + "=" * 60)
     print(f"通过 {PASS} / 失败 {FAIL}")
     if FAILURES:

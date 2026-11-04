@@ -16731,6 +16731,32 @@ def main():
                             except Exception as e:
                                 log(f"群[{gid}] 空闲退场语发送失败: {e}")
 
+            # ── 自愈 R3 观察（P2.5，默认关）：把 failure_top 接进触发链路 ──
+            #   每 30 分钟看一次「最近 24 小时哪些链路在反复失败」，达到阈值就写账本。
+            #   **dry_run=True**：现在还没有可靠的 patcher（模型产补丁），
+            #   所以这一步只做"该不该修"的判定，绝不建 worktree、不提交。
+            #   开关关着时一次都不跑（cost 为零）。
+            if time.time() - getattr(main, "_sh_watch_at", 0) > 1800:
+                main._sh_watch_at = time.time()
+                try:
+                    if bool(_config.get("self_heal_r3_enable", False)):
+                        from harness import self_heal_r3 as _r3w
+                        from harness import trace_tools as _ttw
+                        _rep_w = _r3w.watch(
+                            os.path.dirname(os.path.abspath(__file__)),
+                            _ttw.failure_top(hours=24, n=5),
+                            cfg_getter=lambda: _config,
+                            dry_run=True,
+                        )
+                        if _rep_w.get("candidates"):
+                            log("[自愈R3] 候选 %d 个：%s" % (
+                                len(_rep_w["candidates"]),
+                                "、".join(str(c.get("issue")) for c in _rep_w["candidates"])))
+                        elif _rep_w.get("skipped"):
+                            log(f"[自愈R3] 本轮无候选（{len(_rep_w['skipped'])} 条被跳过）")
+                except Exception as _r3e:
+                    log(f"[自愈R3] 观察失败（已忽略）: {_r3e}")
+
             for msg in new_msgs:
                 # ── 真插件 ABI：on_message（只调 spec 插件；返回文本即作为插件回复，跳过 AI）──
                 if PLUGIN_OK:

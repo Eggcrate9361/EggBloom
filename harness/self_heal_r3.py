@@ -311,6 +311,57 @@ def _run_full_tests(worktree):
         return False, f"{type(e).__name__}: {e}"
 
 
+def watch(root, failures, *, threshold=3, cfg_getter=None, now=None,
+          dry_run=True, patcher=None, runner=None, hours=24) -> dict:
+    """观察模式：把 failure_top 的输出接进 R3，决定"该不该修"。
+
+    failures: `trace_tools.failure_top()` 的返回 —— [{channel, count, samples}]
+    返回 {"candidates": [...], "acted": [...], "skipped": [...]}
+
+    默认 dry_run=True：只记账、不建 worktree。
+    真修需要 patcher（模型产补丁）；没有 patcher 时即使 dry_run=False 也只会记账 ——
+    这一层永远不假装"修过了"。
+    """
+    ts = _now(now)
+    cfg = {}
+    if cfg_getter:
+        try:
+            cfg = dict(cfg_getter() or {})
+        except Exception:
+            cfg = {}
+    if not cfg.get("self_heal_r3_enable", False):
+        return {"skipped": [{"reason": "self_heal_r3_enable 关闭"}], "candidates": [], "acted": []}
+
+    out = {"candidates": [], "acted": [], "skipped": []}
+    for f in (failures or []):
+        ch = str((f or {}).get("channel") or "").strip()
+        cnt = int((f or {}).get("count") or 0)
+        if not ch:
+            continue
+        if cnt < int(threshold or 3):
+            out["skipped"].append({"issue": ch, "reason": f"次数未达阈值（{cnt} < {threshold}）"})
+            continue
+        # 熔断优先：连续失败过的问题别再碰
+        blocked, why = breaker_blocked(root, ch, now=ts)
+        if blocked:
+            out["skipped"].append({"issue": ch, "reason": why})
+            continue
+        out["candidates"].append({"issue": ch, "count": cnt,
+                                  "sample": ((f or {}).get("samples") or [""])[0][:120]})
+        if dry_run or patcher is None:
+            append_ledger(root, {
+                "ts": ts, "kind": "code", "issue": ch, "ok": False,
+                "reason": ("观察模式：命中候选但未自动修" if dry_run
+                           else "缺少 patcher：只记账，不修"),
+                "opens": cnt,
+            })
+            out["acted"].append({"issue": ch, "dry": True})
+            continue
+        r = run(ch, patcher, root=root, runner=runner, cfg_getter=cfg_getter, now=now)
+        out["acted"].append({"issue": ch, "ok": bool(r.get("ok")), "reason": r.get("reason", "")})
+    return out
+
+
 def status(root) -> dict:
     """给 WebUI/诊断用：开关、最近账本、熔断状态。"""
     led = read_ledger(root)
