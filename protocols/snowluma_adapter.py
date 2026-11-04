@@ -116,8 +116,24 @@ class SnowLumaAdapter(OneBotStdAdapter):
 
     def _build_env(self) -> dict:
         env = super()._build_env()
-        # 禁止自动注入所有已发现 QQ（避免误注入其他 QQ），由用户从 WebUI 手动选择登录
-        env["SNOWLUMA_HOOK_AUTOLOAD"] = "0"
+        # 是否自动注入已发现的 QQ。
+        # 默认 0（保持上游意图：避免误注入其它 QQ，由用户在 WebUI 手动选账号）。
+        # 2026-11-04 真机：写死 0 的后果是——EggBloom 拉起的 SnowLuma 不注入 QQ，
+        #   没有登录态，OneBot 3000/3001 永不监听，用户看到的就是「找不到 QQ 进程」。
+        #   所以改成配置项，单机单账号的用户可以打开：
+        #     protocol_drivers.snowluma.hook_autoload = true
+        # ★ 别直接 bool()：配置写成字符串 "0" 时 bool("0") 是 True（Python 老坑），
+        #   会在用户明确写了"关"的时候反而打开。字符串按白名单认，其余按真假。
+        _auto = False
+        try:
+            _v = (self._cfg or {}).get("hook_autoload", False)
+            if isinstance(_v, str):
+                _auto = _v.strip().lower() in ("1", "true", "yes", "on")
+            else:
+                _auto = bool(_v)
+        except Exception:
+            _auto = False
+        env["SNOWLUMA_HOOK_AUTOLOAD"] = "1" if _auto else "0"
         return env
 
     def _kill_stale(self):
