@@ -300,7 +300,6 @@ DEFAULT_CONFIG = {
     # 摘要账本的字符预算。行数上限（300 行）管不住体积：
     # 300 行 × 100 字 = 18750 token，是每轮都要重发的量。
     # 从头部裁，账本仍是 append-only，尾部追加不受影响。
-    "history_ledger_budget_chars": 4000,
 
     # 去AI味
     "de_ai": {
@@ -362,7 +361,9 @@ DEFAULT_CONFIG = {
     # 最近几轮保留原文（其余压成摘要账本）。单位=轮。
     # 1.5.9 §C.3.5：4 轮 → 2 轮。近轮每轮都变，排在它后面的块永远不可命中，
     # 少一轮就多一段能吃到缓存的静态前缀。
-    "history_recent_turns": 2,
+    # 2026-11-04 记忆收敛：摘要账本已删除，只保留原文窗口。
+    # 40 条 ≈ 20 轮；更早的内容交给长期记忆（沙漏），不再每轮现编摘要。
+    "history_raw_entries": 40,
     "reply_max_chars": 16,
     "reply_max_parts": 3,
     "reply_max_total": 80,

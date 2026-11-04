@@ -49,9 +49,6 @@ def check(name, cond, extra=""):
 
 
 def _build(history, key):
-    bot_core._HISTORY_SUMMARY_LINES.pop(key, None)
-    bot_core._HISTORY_SUMMARY_TEXT.pop(key, None)
-    bot_core._HISTORY_LAST_WINDOW.pop(key, None)
     return bot_core._build_cached_messages(
         history, key, "STATIC", [], "本来就只有一张图片，你唐的吧")
 
