@@ -66,8 +66,14 @@ h = ra.find_capability_claims("今天没人陪我吃饭，我自己吃的", NO_C
 check("『没人陪我吃饭』不误伤（不是收消息）", h == [], h)
 
 # ── 4. 改写 ─────────────────────────────────────────────────────
+# 2026-11-05：`rewrite_capability_claims` 加了 `had_media` —— 这一条样本本身
+#   就是「[图片]占位」，属于"真有图"的情形，所以显式给 True。
+#   没图时 mechanism 会换成中性话术（不许提"图"），见 test_reply_audit 的
+#   TestCapability.test_text_chat_never_gets_an_image_line。
 out = ra.rewrite_capability_claims(
-    "我这边就一个[图片]占位，里面是猪是猫全靠你说", [("mechanism", "我这边就一个[图片]占位，里面是猪是猫全靠你说")])
+    "我这边就一个[图片]占位，里面是猪是猫全靠你说",
+    [("mechanism", "我这边就一个[图片]占位，里面是猪是猫全靠你说")],
+    had_media=True)
 check("露后台 → 固定话术", "占位" not in out and "没取到" in out, out)
 
 out = ra.rewrite_capability_claims("我这边没谁戳我", [("negative", "我这边没谁戳我")])

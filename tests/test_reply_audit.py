@@ -124,6 +124,58 @@ class TestRewrite(unittest.TestCase):
         self.assertEqual(ra.rewrite_unsupported(r, []), r)
 
 
+class TestCapability(unittest.TestCase):
+    """能力自述校验：拦「我看不到/模糊」这类谎报。
+
+    2026-11-05 新增 —— 真机 11:53 私聊：
+      用户「你吃的是token？」→ 回「吃的饭，token 哪够塞牙」
+      → 被判 mechanism，替换成「图我这儿没取到，你说是啥」
+    纯文字聊天里突然冒出"图"。两个根因，各锁一条。
+    """
+
+    def test_echoing_user_word_is_not_leaking(self):
+        """用户自己先说了那个词，顺着接话不算"露后台"。"""
+        r = "吃的饭，token 哪够塞牙"
+        hits = ra.find_capability_claims(r, [], had_media=False,
+                                         user_msg="你吃的是token？")
+        self.assertEqual(hits, [], "接用户的话不算露后台")
+        self.assertEqual(ra.rewrite_capability_claims(r, hits, had_media=False), r)
+
+    def test_leaking_without_echo_still_caught(self):
+        """用户没提，自己端出来的照旧拦。"""
+        r = "吃的饭，token 哪够塞牙"
+        hits = ra.find_capability_claims(r, [], had_media=False, user_msg="在吗")
+        self.assertTrue(hits)
+        self.assertEqual(hits[0][0], "mechanism_llm")
+
+    def test_text_chat_never_gets_an_image_line(self):
+        """★ 没图的时候，替换话术里不许出现"图" —— 那是回答没人问过的问题。"""
+        for r in ("这张是渲染出来的", "接口返回了个空", "prompt 太长了"):
+            with self.subTest(r=r):
+                hits = ra.find_capability_claims(r, [], had_media=False)
+                out = ra.rewrite_capability_claims(r, hits, had_media=False)
+                self.assertNotIn("图", out, f"没图却提到图: {r} → {out}")
+                self.assertTrue(out.strip())
+
+    def test_vision_leak_with_media_keeps_image_line(self):
+        """真有图时，原来的话术不动。"""
+        hits = ra.find_capability_claims("系统配的图，你看吧", [], had_media=True)
+        out = ra.rewrite_capability_claims("系统配的图，你看吧", hits, had_media=True)
+        self.assertEqual(out, "图我这儿没取到，你说是啥")
+
+    def test_vision_denial_unchanged(self):
+        """有图说看不到 —— 三态处置不变。"""
+        hits = ra.find_capability_claims("我看不到", [], had_media=True)
+        self.assertEqual(hits, [("vision_not_tried", "我看不到")])
+        hits2 = ra.find_capability_claims("我看不到", _calls("vision_describe"),
+                                          had_media=True)
+        self.assertEqual(hits2, [("vision_seen_but_denied", "我看不到")])
+
+    def test_no_media_no_vision_check(self):
+        """没图时「看不到」只是普通聊天，不判。"""
+        self.assertEqual(ra.find_capability_claims("我看不到", [], had_media=False), [])
+
+
 class TestLedger(unittest.TestCase):
     def setUp(self):
         from harness import tool_runner

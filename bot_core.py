@@ -15707,10 +15707,12 @@ def _pipeline_step(group_id):
                 #        一次没调 → 拦。没图时不判，那只是普通聊天。
                 try:
                     _cap = _ra.find_capability_claims(
-                        sent_text, _tr2.recent_tool_calls(), had_media=bool(images))
+                        sent_text, _tr2.recent_tool_calls(), had_media=bool(images),
+                        user_msg=merged_text)
                     if _cap:
                         _bc = sent_text
-                        sent_text = _ra.rewrite_capability_claims(sent_text, _cap)
+                        sent_text = _ra.rewrite_capability_claims(
+                            sent_text, _cap, had_media=bool(images))
                         log(f"群[{group_id}] [能力校验] {_cap[0][0]}: "
                             f"{_cap[0][1][:36]} → {sent_text[:36]}")
                         if not sent_text:
@@ -17898,10 +17900,11 @@ def main():
                         try:
                             _cap = _ra.find_capability_claims(
                                 sent_text, _tr2.recent_tool_calls(),
-                                had_media=bool(images))
+                                had_media=bool(images), user_msg=text)
                             if _cap:
                                 _bc = sent_text
-                                sent_text = _ra.rewrite_capability_claims(sent_text, _cap)
+                                sent_text = _ra.rewrite_capability_claims(
+                                    sent_text, _cap, had_media=bool(images))
                                 log(f"私聊[{sender}] [能力校验] {_cap[0][0]}: "
                                     f"{_cap[0][1][:36]} → {sent_text[:36]}")
                                 if not sent_text:

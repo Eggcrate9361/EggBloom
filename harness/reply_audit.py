@@ -223,11 +223,21 @@ _CAP_VISION_PHRASES = (
 
 #: 露后台：把实现细节端到用户面前。**窄列表**，宁可漏判也别误伤正常聊天
 #: （"模型"单独出现可能是手办，所以只认"视觉模型/语言模型"这种组合）。
-_CAP_MECH_PHRASES = (
+#:
+#: 分两族的理由是**替换话术**不一样：视觉/UI 族说出来通常意味着"那张图我没看成"，
+#: 换成指向图的话还算贴心；模型内部族跟图毫无关系，沿用那句就会凭空造图。
+#: 真机 2026-11-05 11:53：用户问「你吃的是token？」，回「吃的饭，token 哪够塞牙」
+#: ——一句玩笑，被判 mechanism，替换成「图我这儿没取到，你说是啥」，
+#: 纯文字私聊里突然冒出"图"。两族从此分开。
+_CAP_MECH_VISION = (
     "占位", "一个框", "一个空框", "渲染", "解析失败", "系统配的",
-    "系统自己配", "系统挑的", "视觉链", "视觉模型", "语言模型", "大模型那边",
-    "接口没返回", "接口返回", "prompt", "token",
+    "系统自己配", "系统挑的", "视觉链", "视觉模型",
 )
+_CAP_MECH_LLM = (
+    "语言模型", "大模型那边", "接口没返回", "接口返回", "prompt", "token",
+)
+#: 两族合并（兼容旧引用；判定时仍分族，见 find_capability_claims）
+_CAP_MECH_PHRASES = _CAP_MECH_VISION + _CAP_MECH_LLM
 
 #: 「收不到」被说成「没发生」。否定断言只能证明自己没看到，证明不了世界。
 #: 只认**带观察动词**的组合，避免把"我没有什么想说的"这种正常句子卷进来。
@@ -241,6 +251,7 @@ _CAP_NEGATIVE_RE = re.compile(
 #: "糊的""一个框""解析失败"全是自由发挥出来的。
 _REWRITE_CAP = {
     "mechanism": "图我这儿没取到，你说是啥",
+    "mechanism_llm": "这个不聊",
     "vision_seen_but_denied": "刚才那张我看到了",
     "vision_not_tried": "我这轮没去取，你说说是什么",
     "negative": "我这边没记录到",
@@ -264,15 +275,18 @@ def _calls_matching(calls, names):
     return ok_any, fail_any
 
 
-def find_capability_claims(reply, tool_calls, had_media=False):
+def find_capability_claims(reply, tool_calls, had_media=False, user_msg=""):
     """找出「能力自述」类的问题句。
 
     参数
       had_media  : 这一轮用户是不是**真的发了图**（调用方用 images 判断）。
                    没图时不判"看不到" —— 那只是普通聊天，不是谎报能力。
+      user_msg   : 用户这一轮的原话。**用户自己先说的词，不算"露后台"** ——
+                   他说 token，我顺着说 token，那是接话不是端后台
+                   （真机 2026-11-05 11:53 就是这么被误伤的）。
 
-    返回 [(kind, sentence), ...]，kind ∈ {mechanism, vision_seen_but_denied,
-    vision_not_tried, negative}。
+    返回 [(kind, sentence), ...]，kind ∈ {mechanism, mechanism_llm,
+    vision_seen_but_denied, vision_not_tried, negative}。
 
     三态处置（方案 v2 §5）：
       · 有成功的视觉调用却还说看不到 → vision_seen_but_denied（自相矛盾）
@@ -282,12 +296,17 @@ def find_capability_claims(reply, tool_calls, had_media=False):
     if not reply:
         return []
     calls = list(tool_calls or [])
+    um = str(user_msg or "")
     seen_ok, seen_fail = _calls_matching(calls, _VISION_TOOLS)
     hits = []
     for sent in _sentences(reply):
-        if any(p in sent for p in _CAP_MECH_PHRASES):
-            hits.append(("mechanism", sent))
-            continue
+        _vis = [p for p in _CAP_MECH_VISION if p in sent]
+        _llm = [p for p in _CAP_MECH_LLM if p in sent]
+        if _vis or _llm:
+            # 用户先说过同样的词 → 顺着接话，不算主动把后台端出来
+            if not any(p in um for p in (_vis + _llm)):
+                hits.append(("mechanism" if _vis else "mechanism_llm", sent))
+                continue
         if had_media and any(p in sent for p in _CAP_VISION_PHRASES):
             if seen_ok:
                 hits.append(("vision_seen_but_denied", sent))
@@ -299,12 +318,19 @@ def find_capability_claims(reply, tool_calls, had_media=False):
     return hits
 
 
-def rewrite_capability_claims(reply, hits):
-    """把能力自述的问题句换成固定话术。整句替换，不拼接。"""
+def rewrite_capability_claims(reply, hits, had_media=False):
+    """把能力自述的问题句换成固定话术。整句替换，不拼接。
+
+    `had_media` 决定 mechanism 换成哪一句：**这轮没图就不要说"图没取到"** ——
+    那是在回答一个没人问过的问题。
+    """
     if not hits:
         return reply
     out = str(reply or "")
     for kind, sent in hits:
-        out = out.replace(sent, _REWRITE_CAP.get(kind, "我这边没取到"))
+        k = kind
+        if k == "mechanism" and not had_media:
+            k = "mechanism_llm"
+        out = out.replace(sent, _REWRITE_CAP.get(k, "我这边没取到"))
     out = re.sub(r"\n{3,}", "\n\n", out).strip()
     return out
