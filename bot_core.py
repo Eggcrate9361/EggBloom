@@ -5158,10 +5158,132 @@ def extract_text(msg, _depth=0):
     return str(raw)
 
 
+#: 同一个 forward id 会被多处解析（插件 on_message 钩子、主流程、引用回抓各一次），
+#: 每次都打一遍 get_forward_msg。真机日志里同一个 id 的「获取到N条消息」成对出现，
+#: 17:41:39 引用旧转发时又来一次。转发内容是**不可变快照**，按 id 缓存是安全的。
+_FWD_CACHE = {}
+_FWD_CACHE_LOCK = Lock()
+_FWD_CACHE_TTL = 600.0
+_FWD_CACHE_MAX = 256
+#: 一个转发最多看几张图 / 整批最多花多久。真机那个转发正好 6 张；
+#: 再多就只给占位，别让一条消息卡住整条群聊流水线。
+_FWD_IMG_MAX = 6
+_FWD_IMG_BUDGET = 25.0
+#: 串行看 6 张实测 25.3s（单张约 4.2s），会把消息流水线卡住 —— 并发跑，
+#: 但结果仍按原顺序回填，超时没回来的如实降级成 [图片]。
+_FWD_IMG_WORKERS = 4
+
+
+def _fwd_describe_batch(items, deadline):
+    """并发描述多张图，返回与 items 等长、顺序一致的 desc 列表（失败为 ""）。"""
+    out = [""] * len(items)
+    if not items:
+        return out
+    try:
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        ex = ThreadPoolExecutor(max_workers=min(_FWD_IMG_WORKERS, len(items)))
+        futs = {ex.submit(_fwd_describe_image, sd, deadline): i
+                for i, sd in enumerate(items)}
+        try:
+            for fut in as_completed(futs, timeout=max(0.1, deadline - time.time())):
+                i = futs[fut]
+                try:
+                    out[i] = str(fut.result() or "").strip()
+                except Exception:
+                    out[i] = ""
+        except Exception as e:
+            log(f"[转发] 图片理解批次到时/异常: {type(e).__name__}: {e}")
+        finally:
+            # 不 join：超时的那些让它自己在后台收尾，别把消息流水线拖住
+            ex.shutdown(wait=False)
+    except Exception as e:
+        log(f"[转发] 图片理解并发失败，顺序降级: {type(e).__name__}: {e}")
+        for i, sd in enumerate(items):
+            out[i] = _fwd_describe_image(sd, deadline)
+    return out
+
+
+def _fwd_describe_image(sd, deadline):
+    """转发里的一张图 → 一句话字面描述。失败返回 ""（调用方降级成 [图片] 占位）。
+
+    复用生产同一条链，不另造一套：
+      extract_images（含 get_image 重签 rkey / data-URI / IMAGE_CACHE 落盘）
+      → describe_image（免费链默认关，直接走主模型多模态）
+    ★ 必须走 extract_images：QQ 图片 URL 的 rkey 会过期，直接拿转发里那条
+      data.url 下载经常 403 —— 这正是「别的 AI 能读图、我们读不到」的老根因。
+    """
+    if time.time() >= deadline:
+        return ""
+    try:
+        imgs = extract_images({"message": [{"type": "image", "data": sd}]})
+        if not imgs:
+            return ""
+        return str(describe_image(imgs[0], _IMG_DESC_PROMPT) or "").strip()[:160]
+    except Exception as e:
+        log(f"[转发] 图片理解失败: {type(e).__name__}: {e}")
+        return ""
+
+
+def _fwd_seg_placeholder(seg_type, data):
+    """非文本段的事实占位 —— 让模型知道「里面有什么」，而不是拿到一片空白。
+
+    和语音段的处理同一条原则（见 extract_text）：占位必须带上「你看不到」
+    这个事实，否则模型会把 `[图片]` 当成看过的画面开始瞎编。
+    """
+    t = str(seg_type or "").lower()
+    if t in ("image", "img"):
+        return str((data or {}).get("summary") or "[图片]")
+    if t in ("face", "mface", "emoji"):
+        return "[表情]"
+    if t == "at":
+        return "@" + str((data or {}).get("name") or (data or {}).get("qq") or "某人")
+    if t in ("record", "voice"):
+        return "[语音]"
+    if t == "video":
+        return "[视频]"
+    if t == "file":
+        return "[文件]" + (str((data or {}).get("name") or "")[:40])
+    if t in ("json", "xml"):
+        return "[卡片]"
+    if t == "reply":
+        return "[引用]"
+    if t in ("poke", "touch"):
+        return "[戳一戳]"
+    if t in ("dice", "rps", "shake", "music", "share", "location"):
+        return "[%s]" % t
+    return ""
+
+
 def _fetch_forward_content(forward_id, _depth=0):
-    """通过 OneBot API 获取合并转发消息的完整文本（支持嵌套转发）"""
+    """通过 OneBot API 获取合并转发消息的完整文本（支持嵌套转发）。
+
+    2026-11-05 真机：用户 @ 机器人看一个合并转发，里面是 **6 张图片**，
+    旧实现只认 text/forward 段 → 输出 0 字 → 模型只看到 `[合并转发消息]`
+    占位，只能回「转发的我这里看不到内容」。现在：
+      · 图片段走生产同一条 extract_images → describe_image 链真看图，
+        结果写成 `[图片：字面描述]`；取不到就降级 `[图片]` 并如实注记；
+      · 其它非文本段给事实占位（语音/视频/表情…），不丢信息；
+      · 结尾补一行「共几张、读到几张、别猜」的诚实注记；
+      · 按 forward id 缓存，消掉插件钩子 / 主流程 / 引用回抓的重复 API 请求。
+    开关 `forward_vision_enable`（默认开），单次最多 6 张、总预算 25 秒。
+    """
     if _depth > 3:
         return ""
+    fid = str(forward_id or "")
+    now = time.time()
+    vision_on = bool(_config.get("forward_vision_enable", True))
+    # 开关变了不能继续吃旧缓存（带图描述 vs 纯占位是两种结果）
+    cache_key = fid + ("|v" if vision_on else "|p")
+    with _FWD_CACHE_LOCK:
+        hit = _FWD_CACHE.get(cache_key)
+        if hit and hit[0] > now:
+            log(f"[转发] id={forward_id} 命中缓存（未重复请求）")
+            return hit[1]
+        if hit:
+            _FWD_CACHE.pop(cache_key, None)
+    deadline = now + _FWD_IMG_BUDGET
+    img_seen = 0
+    img_missed = 0
     try:
         resp = api_call("get_forward_msg", {"id": forward_id})
         retcode = resp.get("retcode")
@@ -5173,6 +5295,8 @@ def _fetch_forward_content(forward_id, _depth=0):
         texts = []
         text_count = 0
         non_text_count = 0
+        counts = {}
+        img_all = []
         for m in messages:
             if not m or not isinstance(m, dict):
                 continue
@@ -5184,36 +5308,104 @@ def _fetch_forward_content(forward_id, _depth=0):
             if not isinstance(msg_raw, list):
                 msg_raw = []
             line_parts = []
+            has_real_text = False
             for seg in msg_raw:
-                if isinstance(seg, dict):
-                    seg_type = seg.get("type", "")
-                    if seg_type == "text":
-                        t = (seg.get("data") or {}).get("text", "")[:100]
-                        if t:
-                            line_parts.append(t)
-                    elif seg_type == "forward":
-                        if _depth < 3:
-                            nested_id = (seg.get("data") or {}).get("id", "")
-                            if nested_id:
-                                try:
-                                    nested = _fetch_forward_content(nested_id, _depth + 1)
-                                    if nested:
-                                        line_parts.append(nested)
-                                except Exception as ne:
-                                    log(f"[转发] 嵌套获取失败: {ne}")
+                if not isinstance(seg, dict):
+                    continue
+                seg_type = str(seg.get("type", "") or "")
+                sd = seg.get("data") or {}
+                if not isinstance(sd, dict):
+                    sd = {}
+                if seg_type == "text":
+                    t = str(sd.get("text", "") or "")[:100]
+                    if t:
+                        line_parts.append(t)
+                        has_real_text = True
+                elif seg_type == "forward":
+                    if _depth < 3:
+                        nested_id = sd.get("id", "")
+                        if nested_id:
+                            try:
+                                nested = _fetch_forward_content(nested_id, _depth + 1)
+                                if nested:
+                                    line_parts.append(nested)
+                                    has_real_text = True
+                            except Exception as ne:
+                                log(f"[转发] 嵌套获取失败: {ne}")
+                elif seg_type in ("image", "img"):
+                    counts["image"] = counts.get("image", 0) + 1
+                    idx = len(img_all)
+                    img_all.append(sd)
+                    # 先埋占位符，等整批并发看完再按原位回填（顺序不乱）
+                    line_parts.append("\x00FWDIMG%d\x00" % idx)
+                else:
+                    ph = _fwd_seg_placeholder(seg_type, sd)
+                    if ph:
+                        line_parts.append(ph)
+                        counts[seg_type] = counts.get(seg_type, 0) + 1
             if line_parts:
                 line_text = "".join(line_parts)
-                if sender_name:
-                    texts.append(f"{sender_name}: {line_text}")
+                texts.append(f"{sender_name}: {line_text}" if sender_name else line_text)
+                if has_real_text:
+                    text_count += 1
                 else:
-                    texts.append(line_text)
-                text_count += 1
+                    non_text_count += 1
             else:
                 non_text_count += 1
-        log(f"[转发] id={forward_id} depth={_depth} 统计: 有文本{text_count}条, 无文本{non_text_count}条, 输出长度{sum(len(t) for t in texts)}字")
+        # 整批并发看图 → 按原位回填。超出上限 / 超时 / 失败的都降级成 [图片]。
+        if img_all:
+            descs = _fwd_describe_batch(img_all[:_FWD_IMG_MAX], deadline) if vision_on else []
+            repl = {}
+            for i, sd in enumerate(img_all):
+                d = descs[i] if i < len(descs) else ""
+                if d:
+                    repl["\x00FWDIMG%d\x00" % i] = "[图片：%s]" % d
+                    img_seen += 1
+                else:
+                    repl["\x00FWDIMG%d\x00" % i] = _fwd_seg_placeholder("image", sd)
+                    img_missed += 1
+            fixed = []
+            for line in texts:
+                for token, value in repl.items():
+                    line = line.replace(token, value)
+                fixed.append(line)
+            texts = fixed
+        # 事实注记：如实说「几张图 / 读到几张 / 还有几张没取到」。
+        # 读到画面的就把描述放在上面各行的 [图片：…] 里；没读到的绝不替模型猜。
+        if counts:
+            bits = []
+            img_n = counts.pop("image", 0)
+            if img_n:
+                if img_seen:
+                    bits.append(f"{img_n} 张图片（已读到 {img_seen} 张画面")
+                    bits[-1] += f"、{img_n - img_seen} 张没取到）" if img_n > img_seen else "）"
+                else:
+                    bits.append(f"{img_n} 张图片（都没取到画面）")
+            for k in sorted(counts):
+                bits.append(f"{counts[k]} 个{k}")
+            if img_seen and img_seen == img_n:
+                tail = "画面描述就在上面各行的 [图片：…] 里；别补没写出来的细节"
+            else:
+                tail = "没取到画面的别猜，直说看不到并让对方把事说出来"
+            # 混排（有正文）时不能说「没有可读取的文字」——那是假的
+            no_text = "" if text_count else "没有可读取的文字；"
+            texts.append("（转发里共 %s；%s%s）"
+                         % ("、".join(bits), no_text, tail))
+        log(f"[转发] id={forward_id} depth={_depth} 统计: 有文本{text_count}条, "
+            f"非文本{non_text_count}条, 图片读到{img_seen}/未取到{img_missed}, "
+            f"输出长度{sum(len(t) for t in texts)}字")
         result = "\n".join(texts)
         if result:
             log(f"[转发] 内容预览: {result[:200]}")
+        if retcode == 0 and messages:
+            with _FWD_CACHE_LOCK:
+                if len(_FWD_CACHE) >= _FWD_CACHE_MAX:
+                    _stale = [k for k, v in _FWD_CACHE.items() if v[0] <= now]
+                    for k in _stale:
+                        _FWD_CACHE.pop(k, None)
+                    if len(_FWD_CACHE) >= _FWD_CACHE_MAX:
+                        _FWD_CACHE.pop(next(iter(_FWD_CACHE)), None)
+                _FWD_CACHE[cache_key] = (now + _FWD_CACHE_TTL, result)
         return result
     except Exception as e:
         import traceback
