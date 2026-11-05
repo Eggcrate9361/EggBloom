@@ -206,14 +206,48 @@ class OneBotStdAdapter(ProtocolAdapter):
         实例导致端口占用冲突。接管 = 启动 WS 事件桥 + 等待就绪，进程由外部持有，
         因此不启动 watchdog（proc 为 None 时 watchdog 会误判进程死亡而重启）。
         """
-        if not self.probe_ready(timeout=2):
-            return False
+        ready = self.probe_ready(timeout=2)
+        if not ready:
+            # ★ 2026-11-05：API 不通不代表"没在跑" —— 框架可能正在启动中，
+            #   这时若直接返回 False，start() 会**再拉起一个实例**抢端口。
+            #   真机：09:23 已有一个在跑，09:27 又起了第二个，两个实例抢 5099，
+            #   用户打开 WebUI 看到的是注入不了 QQ 的那个。
+            #   判据补一条：框架自己的端口开着 = 有实例在启动/运行，先等它就绪。
+            if self._framework_port_open():
+                logger.info(f"[{self.name}] 框架端口已开但 API 未就绪，等待其完成启动…")
+                for _ in range(20):
+                    time.sleep(1.0)
+                    if self.probe_ready(timeout=1):
+                        ready = True
+                        break
+            if not ready:
+                return False
         self._running = True
         self._notify("attached",
-                     f"{self.display_name} 已在外部运行（API 就绪），直接接管事件桥，不重复启动")
+                     f"{self.display_name} 已在外部运行，直接接管事件桥，不重复启动")
         self._start_event_bridge()
         threading.Thread(target=self._wait_ready, daemon=True).start()
         return True
+
+    def _framework_port_open(self) -> bool:
+        """框架自己的 WebUI/管理端口是否开着（有实例在启动或已在跑）。"""
+        port = 0
+        for attr in ("webui_port", "default_webui_port"):
+            try:
+                v = getattr(self, attr, 0)
+                if v:
+                    port = int(v)
+                    break
+            except Exception:
+                continue
+        if not port:
+            return False
+        import socket as _s
+        try:
+            with _s.create_connection(("127.0.0.1", port), timeout=0.6):
+                return True
+        except Exception:
+            return False
 
     def _start(self):
         self._notify("starting", f"正在启动 {self.display_name}...")
