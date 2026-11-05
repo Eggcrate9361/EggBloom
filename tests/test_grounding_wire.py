@@ -91,6 +91,36 @@ def main():
         out7 = bc._apply_grounding_guard("我听到你那边有声响", ev, where="测")
         check("★ 缺配置时默认拦截", out7 == "", out7)
 
+        print("\n[G] 时长判据的尺子：统一出口从 history 的 ts 算")
+        check("★ 出口里读了 h['ts']", 'h.get("ts")' in srcf)
+        check("★ 出口把 now/since 传下去了",
+              "now=_now" in srcf and "since=_since" in srcf)
+        check("★ 只看最近 24 小时（不然永远不触发）", "24 * 3600" in srcf)
+
+        # 真机形态：私聊 6 小时前开始，「都十五个小时了」应当被删空
+        import time as _t
+        _hist_bak = getattr(bc, "chat_history", None)
+        try:
+            bc.chat_history = {"t_e2e": [
+                {"role": "user", "content": "在吗", "ts": _t.time() - 6 * 3600},
+                {"role": "assistant", "content": "在", "ts": _t.time() - 5.9 * 3600},
+            ]}
+            bc._config["grounding_guard"] = "drop"
+            out8 = bc._guard_outbound("都十五个小时了", scene="private", target="t_e2e",
+                                      where="测")
+            check("★ 6 小时说成 15 小时 → 删空", out8 == "", out8)
+            out9 = bc._guard_outbound("聊了一个小时，困", scene="private", target="t_e2e",
+                                      where="测")
+            check("★ 说 1 小时不误杀", out9 == "聊了一个小时，困", out9)
+        finally:
+            if _hist_bak is None:
+                try:
+                    del bc.chat_history
+                except Exception:
+                    pass
+            else:
+                bc.chat_history = _hist_bak
+
     finally:
         if old is None:
             bc._config.pop("grounding_guard", None)

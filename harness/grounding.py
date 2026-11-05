@@ -18,7 +18,11 @@
   · **感官**：听到/听见 + 声音/声响/动静 —— 你没有耳朵，一律无据
   · **指认对方**：你刚说/你之前说/你还骂我…… —— 后面那截要在证据里找得到
   · **指认自己**：我昨天说/我上次答应…… —— 同上
+  · **时长**：十五个小时/两天/三个钟头…… —— 超过"看得见的跨度 + 2 小时"就是拍脑袋
 证据 = 调用方给的**真实上下文**（最近消息、长期记忆轮次、自己上次说的）。
+
+时长类是**唯一需要时间戳**的一类：调用方得把「这段对话从什么时候开始」传进来
+（`since`，epoch 秒）。没传就**不判** —— 没有尺子就不要量。
 
 找不到证据的句子**整句删掉**（不做改写：改写容易造出更怪的句子）。
 全删光就返回空串，由调用方决定是"这条不发"还是"换个说法"。
@@ -28,6 +32,7 @@
   · 只在**短窗口**里判（主张后面 ≤12 字），长句覆盖不到就放过 —— 宁可漏，不可误杀
   · 否定式放过：「没听到」「听不见」「看不到」是诚实表达，不能删
   · 阈值取得高（默认 0.34 双字重合），普通闲聊几乎不会被碰
+  · 时长类只在**有锚点**时才判：跨度看不到半小时、主张不到一小时，都不碰
 """
 from __future__ import annotations
 
@@ -62,6 +67,42 @@ _WINDOW = 10
 MIN_OVERLAP = 0.25
 
 _SENT_SPLIT = re.compile(r"(?<=[。！？!?])|\n")
+
+# ── 时长类（2026-11-05）────────────────────────────────────────────
+#: 单位 → 秒。**长的写在前面**：正则按顺序匹配，「分钟」不能被「分」抢走。
+_UNIT_SEC = (
+    ("个星期", 604800), ("星期", 604800), ("礼拜", 604800),
+    ("个钟头", 3600), ("分钟", 60), ("小时", 3600), ("钟头", 3600),
+    ("个月", 2592000), ("秒钟", 1), ("周", 604800), ("秒", 1),
+    ("分", 60), ("天", 86400), ("日", 86400), ("月", 2592000), ("年", 31536000),
+)
+_UNIT_ALT = "|".join(u for u, _ in _UNIT_SEC)
+_UNIT_MAP = dict(_UNIT_SEC)
+
+#: 「十五个小时」「聊了两天」「一个半钟头」。
+#: 只认"数词(+个)(+半)+单位"，不认时刻（「三点」「十点半」没单位，落不进来）。
+_DUR_RE = re.compile(
+    r"(?P<num>\d{1,3}|[一二两三四五六七八九十百千]+|半)"
+    r"\s*(?:个)?\s*(?P<half>半)?\s*"
+    r"(?P<unit>" + _UNIT_ALT + r")"
+)
+#: 后面跟这些 = **时间点**不是时长（「一年前」「三天后」），放过
+_DUR_POINT = ("之前", "以前", "之后", "以后", "前", "后")
+#: 前面是这些 = 口语虚指（「过两天再说」），不是时长主张
+_DUR_IDIOM_PREV = ("过", "再", "改")
+
+_CN_DIGIT = {"零": 0, "〇": 0, "一": 1, "二": 2, "两": 2, "三": 3, "四": 4,
+             "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}
+_CN_UNIT = {"十": 10, "百": 100, "千": 1000}
+
+#: 主张小于一小时不判：十分钟、半小时这类差一点太正常，噪声大
+TIME_MIN_CLAIM_SEC = 3600
+#: 允许的向上取整余量：真过了 2 小时说「三个小时」不算编。
+#: 取 2 小时而不是 1 小时，是因为进程重启后 history 从头算，
+#: 跨度会突然变短 —— 留足余量，宁可漏判。
+TIME_SLACK_SEC = 7200
+#: 看得见的跨度不足半小时就不判 —— 没有尺子不要量
+TIME_MIN_SPAN_SEC = 1800
 
 
 def _bigrams(s: str) -> set:
@@ -115,6 +156,52 @@ def _quote_after(text: str, start: int) -> str:
     return seg.strip("，,。！？!? \t\n")
 
 
+def _cn_num(s: str):
+    """「十五」→15、「两」→2、「半」→0.5、「一百」→100。认不出返回 None。"""
+    s = str(s or "").strip()
+    if not s:
+        return None
+    if s.isdigit():
+        return float(int(s))
+    if s == "半":
+        return 0.5
+    total, cur = 0, 0
+    for ch in s:
+        if ch in _CN_DIGIT:
+            cur = _CN_DIGIT[ch]
+        elif ch in _CN_UNIT:
+            u = _CN_UNIT[ch]
+            total += (cur or 1) * u
+            cur = 0
+        else:
+            return None
+    return float(total + cur) if (total or cur) else None
+
+
+def _dur_claims(text: str) -> list:
+    """句子里声称的**时长**：[{quote, at, secs}]。时间点（一年前）不算。"""
+    out = []
+    s = str(text or "")
+    for m in _DUR_RE.finditer(s):
+        after = s[m.end():m.end() + 2]
+        if any(after.startswith(p) for p in _DUR_POINT):
+            continue                          # 「一年前」「三天后」是时间点
+        if m.start() > 0 and s[m.start() - 1] in _DUR_IDIOM_PREV:
+            continue                          # 「过两天再说」是虚指
+        n = _cn_num(m.group("num"))
+        if n is None:
+            continue
+        unit = m.group("unit")
+        secs = _UNIT_MAP.get(unit)
+        if not secs:
+            continue
+        if m.group("half"):
+            n += 0.5                          # 「一个半小时」
+        out.append({"kind": "time", "quote": m.group(0).strip(),
+                    "at": m.start(), "secs": n * secs})
+    return out
+
+
 def claims(text: str) -> list:
     """列出这句里"需要证据"的主张：[{kind, quote, at}]。"""
     out = []
@@ -141,17 +228,21 @@ def claims(text: str) -> list:
             out.append({"kind": "pref", "quote": obj, "at": m.start()})
     for m in _SELF.finditer(s):
         out.append({"kind": "self", "quote": _quote_after(s, m.end()), "at": m.start()})
+    out.extend(_dur_claims(s))
     return out
 
 
 def ungrounded(text: str, evidence_texts=None, min_overlap: float = MIN_OVERLAP,
-               user_texts=None, own_texts=None) -> list:
+               user_texts=None, own_texts=None,
+               now=None, since=None) -> list:
     """哪些主张在证据里找不到。evidence_texts 可传 str / list。
 
     `user_texts`：**对方**说过的话。给偏好类判据用：
       对象只出现在对方的话里、从没出现在自己的话里 → 这是把对方的喜好
       挂到了自己身上（真机：「我喜欢喝酒」→「我就想安静喝口酒」）。
     `own_texts`：**自己**说过的话（偏好判据的对照面；不传时退回 evidence）。
+    `now` / `since`：epoch 秒。`since` = **这段对话从什么时候开始**
+      （调用方给"看得见的最早时间戳"）。两个都给才核时长；缺一个就跳过时长类。
     """
     if isinstance(evidence_texts, (str, bytes)):
         evidence = str(evidence_texts)
@@ -177,6 +268,23 @@ def ungrounded(text: str, evidence_texts=None, min_overlap: float = MIN_OVERLAP,
         q = c["quote"]
         if not q:                               # 截不到内容，宁可不判
             continue
+        if c["kind"] == "time":
+            # 证据里原样出现过 = 复述，放行（「都十五个小时了」对上对方那句）
+            if _clean(q) and _clean(q) in _clean(evidence):
+                continue
+            if float(c.get("secs") or 0) < TIME_MIN_CLAIM_SEC:
+                continue                        # 十分钟 / 半小时，不判
+            if now is None or since is None:
+                continue                        # 没有尺子就不量
+            try:
+                span = float(now) - float(since)
+            except (TypeError, ValueError):
+                continue
+            if span < TIME_MIN_SPAN_SEC:
+                continue                        # 看不见半小时，就别拿小时数说事
+            if float(c.get("secs") or 0) > span + TIME_SLACK_SEC:
+                bad.append(c)                   # 比看得见的跨度还长 → 拍脑袋
+            continue
         if c["kind"] == "pref":
             # 自己的偏好：对象在"对方说过的话"里有重合、在自己能看到的东西里没有
             # → 这是把对方的喜好挂到了自己身上
@@ -189,13 +297,14 @@ def ungrounded(text: str, evidence_texts=None, min_overlap: float = MIN_OVERLAP,
 
 
 def sanitize(text: str, evidence_texts=None, min_overlap: float = MIN_OVERLAP,
-             user_texts=None, own_texts=None):
+             user_texts=None, own_texts=None, now=None, since=None):
     """删掉无据的句子。返回 (新文本, 被删的句子列表)。"""
     raw = str(text or "")
     if not raw.strip():
         return raw, []
     bad = ungrounded(raw, evidence_texts, min_overlap=min_overlap,
-                     user_texts=user_texts, own_texts=own_texts)
+                     user_texts=user_texts, own_texts=own_texts,
+                     now=now, since=since)
     if not bad:
         return raw, []
     spans = [(c["at"], c["at"] + max(len(c["quote"]), 1)) for c in bad]

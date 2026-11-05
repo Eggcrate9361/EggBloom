@@ -5,7 +5,7 @@
   16:28 「刚还骂我记性短呢」        —— 那句是它自己说的
   16:45 「刚说别找你」              —— 前面根本没有
   16:45 「一直没听到你那边的声响」  —— 纯文字 bot 声称能听见
-  15:35 「十五个小时了」            —— 时间对不上（这类不归本题管，只在注释里记）
+  15:35 「十五个小时了」            —— 时间对不上（2026-11-05 起归 [I] 管）
 
 同时必须证明**不误杀**：「没听到」「听不见」是诚实表达，
 普通闲聊（「今天好累」「吃了吗」）一句都不能删。
@@ -104,6 +104,44 @@ def main():
     # 对方没说过、自己也没说过 → 不算挪用（可能是新的偏好，不判）
     bad3 = G.ungrounded("我爱吃火锅", ["今天累"], user_texts=["喜欢喝酒"], own_texts=["今天累"])
     check("★ 无对照时不误判", not bad3, bad3)
+
+    print("\n[I] 时长对不上：比「看得见的跨度」还长就是拍脑袋（2026-11-05）")
+    # 真机 15:35「十五个小时了」，实际不到 12 小时。
+    #   尺子 = now - since，since 是这段对话**看得见的最早时间戳**。
+    NOW = 1_700_000_000.0
+    H = 3600.0
+    ev_t = ["上课呢高数", "不跟你说这个"]
+
+    out_i, d_i = G.sanitize("都十五个小时了", ev_t, now=NOW, since=NOW - 6 * H)
+    check("★ 只看得见 6 小时 → 「十五个小时」删掉",
+          out_i == "" and d_i, (out_i, d_i))
+
+    out_i2, d_i2 = G.sanitize("都十五个小时了", ev_t, now=NOW, since=NOW - 20 * H)
+    check("真有 20 小时就别删", out_i2 == "都十五个小时了" and not d_i2, (out_i2, d_i2))
+
+    out_i3, d_i3 = G.sanitize("跟你聊了两天，困了\n行吧我去睡了", ev_t,
+                              now=NOW, since=NOW - 6 * H)
+    check("★ 只删超长那句，别的留下",
+          "两天" not in out_i3 and "行吧我去睡了" in out_i3, (out_i3, d_i3))
+
+    out_i4, d_i4 = G.sanitize("跟你聊了两天", ev_t, now=NOW, since=NOW - 6 * H)
+    check("★ 「两天」对 6 小时也算编", out_i4 == "" and d_i4, (out_i4, d_i4))
+
+    out_i5, d_i5 = G.sanitize("聊了两个小时", ev_t, now=NOW, since=NOW - 6 * H)
+    check("向上取整不算编（2h 的活说 2h）", "两个小时" in out_i5 and not d_i5, (out_i5, d_i5))
+
+    for s in ("过两天再说", "一年前说过这个", "改天吧", "十分钟就好", "三点半了"):
+        out_i6, d_i6 = G.sanitize(s, ev_t, now=NOW, since=NOW - 6 * H)
+        check(f"「{s}」不归时长管", out_i6 == s and not d_i6, (out_i6, d_i6))
+
+    out_i7, d_i7 = G.sanitize("都十五个小时了", ev_t)          # 没给锚点
+    check("★ 没有时间戳就不判（没有尺子不量）",
+          out_i7 == "都十五个小时了" and not d_i7, (out_i7, d_i7))
+
+    out_i8, d_i8 = G.sanitize("都十五个小时了", ["他说十五个小时了", "嗯"],
+                              now=NOW, since=NOW - 6 * H)
+    check("证据里原样出现过 = 复述，放行", "十五个小时" in out_i8 and not d_i8,
+          (out_i8, d_i8))
 
     print("\n[G] 接线：主动说话真的过围栏")
     import inspect

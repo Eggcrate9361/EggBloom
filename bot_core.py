@@ -3502,13 +3502,17 @@ def _match_own_reply(group_id: str, quoted_text: str) -> bool:
 
 
 def _apply_grounding_guard(text: str, evidence, *, where: str = "",
-                           user_texts=None, own_texts=None) -> str:
+                           user_texts=None, own_texts=None,
+                           now=None, since=None) -> str:
     """发出去之前核对"编出来"的句子（harness/grounding.py）。
 
     模式 `grounding_guard`：
       off  —— 不做
       log  —— 只记日志，照常发（观察期用）
       drop —— 删掉无据的句子（默认）
+
+    `now` / `since`：时间锚点（epoch 秒），只给"时长"类判据用。
+    `since` = 这段对话**看得见的最早时间戳**。不给就核不了时长，那条判据自动跳过。
 
     删到空时返回空串，由调用方决定退什么；**绝不静默**。
     """
@@ -3519,7 +3523,8 @@ def _apply_grounding_guard(text: str, evidence, *, where: str = "",
         from harness import grounding as _gr
         new, dropped = _gr.sanitize(text, evidence,
                                     user_texts=user_texts,
-                                    own_texts=own_texts)
+                                    own_texts=own_texts,
+                                    now=now, since=since)
         if dropped:
             log(f"[事实围栏]{where} 删句: {dropped}")
         if mode == "log":
@@ -3545,8 +3550,22 @@ def _guard_outbound(text: str, *, scene: str, target: str = "", where: str = "")
         _ev = [str(h.get("content") or "") for h in _hist][-14:]
         _users = [str(h.get("content") or "") for h in _hist if h.get("role") == "user"][-10:]
         _owns = [str(h.get("content") or "") for h in _hist if h.get("role") == "assistant"][-8:]
+        # 时长类判据的尺子：这段对话**看得见的最早时间戳**。
+        # 只在最近 24 小时里取，否则老历史会把跨度撑到几天，判据永远不触发。
+        _now = time.time()
+        _since = None
+        try:
+            _ts = [float(h.get("ts")) for h in _hist
+                   if isinstance(h, dict) and h.get("ts")]
+            if _ts:
+                _since = max(min(_ts), _now - 24 * 3600)
+                if not (_since < _now):
+                    _since = None
+        except Exception:
+            _since = None
         return _apply_grounding_guard(text, _ev, where=(where or f"{scene}[{target}]"),
-                                      user_texts=_users, own_texts=_owns)
+                                      user_texts=_users, own_texts=_owns,
+                                      now=_now if _since else None, since=_since)
     except Exception as e:
         log(f"[事实围栏]{where} 跳过（不影响发送）: {e}")
         return text
