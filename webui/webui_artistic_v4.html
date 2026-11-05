@@ -7390,6 +7390,7 @@ async function pageProtocol(el) {
     + '<div class="hd" style="margin-top:var(--s6)"><span class="lab">操作</span><i class="rule"></i></div>'
     + '<div style="display:flex;gap:var(--s3);flex-wrap:wrap">'
     +   '<button class="btn primary" id="pStart"' + (running ? ' disabled' : '') + '>启动协议层</button>'
+    +   '<button class="btn" id="pStartAdmin" title="QQ 或协议层以管理员身份运行时用它">以管理员启动</button>'
     +   '<button class="btn" id="pStop"' + (running ? '' : ' disabled') + '>停止</button>'
     +   '<button class="btn" id="pCheck">启动前自检</button>'
     +   '<button class="btn" id="pAuto">自动检测驱动</button>'
@@ -7605,7 +7606,25 @@ async function pageProtocol(el) {
       say(!!r.success, r.output || ''); later(el, () => pageProtocol(el), 900);
     } catch (e) { say(false, e.message); $('pStart').disabled = false; $('pStart').textContent = '启动协议层'; }
   };
-  $('pStop').onclick = async () => {
+  /* 以管理员启动：QQ 是 High 完整性时，普通权限拉起的 SnowLuma 注入会静默失败。
+   后端用 Start-Process -Verb RunAs 拉起（弹 UAC），起来后自动调 start 连接。 */
+$('pStartAdmin').onclick = async () => {
+$('pStartAdmin').disabled = true; $('pStartAdmin').textContent = '请求提权…';
+say(true, '正在请求管理员权限 —— 请在 UAC 弹窗点「是」');
+try {
+const r = await API('/protocol/start_elevated', { method:'POST', body:'{}' });
+say(!!r.success, r.output || '');
+if (!r.success) { $('pStartAdmin').disabled = false; $('pStartAdmin').textContent = '以管理员启动'; return; }
+await new Promise(res => setTimeout(res, 15000));
+const r2 = await API('/protocol/start', { method:'POST', body:'{}' });
+say(!!r2.success, r2.output || '');
+later(el, () => pageProtocol(el), 1200);
+} catch (e) {
+say(false, e.message);
+$('pStartAdmin').disabled = false; $('pStartAdmin').textContent = '以管理员启动';
+}
+};
+$('pStop').onclick = async () => {
     $('pStop').disabled = true; $('pStop').textContent = '停止中…';
     try { const r = await API('/protocol/stop', { method:'POST', body:'{}' });
       say(!!r.success, r.output || ''); later(el, () => pageProtocol(el), 700);

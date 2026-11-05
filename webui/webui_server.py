@@ -781,6 +781,169 @@ def push_proto_log(text: str):
         _LOG_CLEARED = False
 
 
+def _port_open_local(port: int) -> bool:
+    import socket as _s
+    try:
+        with _s.create_connection(("127.0.0.1", int(port)), timeout=0.6):
+            return True
+    except Exception:
+        return False
+
+
+def _kill_runtime_processes(runtime: str) -> int:
+    """杀掉占着协议端口的旧实例 + 命令行里带该运行时的 node。
+
+    用 netstat/tasklist 而不是拼 PowerShell 引号 —— 后者转义一错就静默失败
+    （真机 2026-11-05 09:41：旧实例占着 5099，新实例绑不上直接退出）。
+    """
+    import subprocess as _sp
+    import re as _re
+    killed = 0
+    pids = set()
+
+    # ① 端口占用者（SnowLuma: 5099 webui / 3000 http / 3001 ws）
+    try:
+        out = _sp.run(["netstat", "-ano", "-p", "tcp"],
+                      capture_output=True, text=True, encoding="utf-8",
+                      errors="ignore", timeout=15).stdout
+        for line in (out or "").splitlines():
+            if "LISTENING" not in line.upper():
+                continue
+            m = _re.search(r":(5099|3000|3001)\s+\S+\s+LISTENING\s+(\d+)", line, _re.I)
+            if m:
+                pids.add(m.group(2))
+    except Exception:
+        pass
+
+    # ② 命令行里带运行时目录的 node（兜底：端口还没起来但进程在）
+    try:
+        out = _sp.run(["wmic", "process", "where", "name='node.exe'",
+                       "get", "processid,commandline"],
+                      capture_output=True, text=True, encoding="utf-8",
+                      errors="ignore", timeout=15).stdout
+        for line in (out or "").splitlines():
+            if runtime.lower() in line.lower():
+                m = _re.search(r"(\d+)\s*$", line.strip())
+                if m:
+                    pids.add(m.group(1))
+    except Exception:
+        pass
+
+    for pid in pids:
+        if not str(pid).isdigit() or int(pid) == 0:
+            continue
+        try:
+            _sp.run(["taskkill", "/PID", str(pid), "/F", "/T"],
+                    capture_output=True, timeout=10)
+            killed += 1
+        except Exception:
+            pass
+    return killed
+
+
+def _launch_snowluma_elevated():
+    """用 UAC 提权拉起 SnowLuma 运行时。返回 (ok, 人话说明)。
+
+    只启动进程，不做连接：连接由 /api/protocol/start 负责（它带链路诊断）。
+    """
+    import os as _os
+    import subprocess as _sp
+    try:
+        from config import load_config
+        cfg = load_config() or {}
+        drv = ((cfg.get("protocol_drivers") or {}).get("snowluma") or {})
+        exe = str(drv.get("exe_path") or "").strip()
+    except Exception as e:
+        return False, f"读配置失败: {e}"
+
+    if not exe:
+        return False, "先配置 SnowLuma 运行时（exe_path 指向 node.exe 或运行目录）"
+    node = exe
+    if _os.path.isdir(node):
+        node = _os.path.join(node, "node.exe")
+    elif _os.path.basename(node).lower() == "index.mjs":
+        node = _os.path.join(_os.path.dirname(node), "node.exe")
+    runtime = _os.path.dirname(node)
+    if not _os.path.isfile(node):
+        return False, f"node.exe 不存在: {node}"
+    if not _os.path.isfile(_os.path.join(runtime, "index.mjs")):
+        return False, f"index.mjs 不存在: {runtime}"
+
+    # ★ 先清掉"起来了但没注入"的旧实例：否则提权起来的那个绑不上 5099/3000，
+    #   用户看到的是两个实例抢端口（真机 2026-11-05 09:27 就是这么乱掉的）。
+    try:
+        _n = _kill_runtime_processes(runtime)
+        if _n:
+            import time as _t
+            _t.sleep(2.0)
+    except Exception:
+        pass
+
+    # Start-Process -Verb RunAs 会弹 UAC；工作目录必须是运行时目录
+    ps = (
+        "Start-Process -FilePath '{node}' -ArgumentList 'index.mjs' "
+        "-WorkingDirectory '{rt}' -Verb RunAs"
+    ).format(node=node.replace("'", "''"), rt=runtime.replace("'", "''"))
+    try:
+        _sp.Popen(["powershell", "-NoProfile", "-WindowStyle", "Hidden",
+                   "-Command", ps],
+                  stdout=_sp.DEVNULL, stderr=_sp.DEVNULL)
+    except Exception as e:
+        return False, f"发起提权失败: {e}"
+    return True, ("已请求管理员权限启动 SnowLuma —— 请在 UAC 弹窗点「是」。"
+                  "起来后页面会自动连接；若没连上，回来点一次「启动协议层」看诊断。")
+
+
+def _protocol_start_diagnosis(wait_s: float = 6.0) -> str:
+    """启动后按链路逐层验证，返回**人话结论**（不是"已启动"）。
+
+    链路：QQ ←注入— SnowLuma(5099) —OneBot— 3000/3001 ←— EggBloom
+    """
+    import time as _t
+    import urllib.request as _ur
+    import json as _json
+
+    def _port_ok(port: int) -> bool:
+        import socket as _s
+        try:
+            with _s.create_connection(("127.0.0.1", port), timeout=0.6):
+                return True
+        except Exception:
+            return False
+
+    def _login():
+        try:
+            with _ur.urlopen("http://127.0.0.1:3000/get_login_info", timeout=2) as r:
+                d = _json.loads(r.read().decode("utf-8", "ignore"))
+            if isinstance(d, dict) and d.get("retcode") == 0:
+                u = (d.get("data") or {})
+                return str(u.get("user_id") or "")
+        except Exception:
+            pass
+        return ""
+
+    deadline = _t.time() + max(2.0, float(wait_s))
+    uin = ""
+    while _t.time() < deadline:
+        if _port_ok(3000):
+            uin = _login()
+            if uin:
+                break
+        _t.sleep(1.0)
+
+    if uin:
+        return f"协议层已启动，OneBot 已连上（UIN {uin}）"
+    if _port_ok(5099):
+        # 典型：SnowLuma 起来了，但没注入 QQ
+        return ("SnowLuma 已启动，但**没有注入 QQ**（3000/3001 未监听）。"
+                "常见原因：QQ 是以管理员身份运行的，普通权限注入不进去。"
+                "点本页「以管理员启动」重试 —— 会弹一次 UAC，点「是」即可。")
+    if _port_ok(3000):
+        return "OneBot 端口已通，但取不到登录号（QQ 可能未登录）"
+    return ("协议层进程没起来：先看「协议日志」里的报错，"
+            "常见原因是 exe_path 指向的 node.exe/index.mjs 不对，或 QQ 没登录。")
+
+
 def _protocol_status_callback(status: str, detail: str = ""):
     """协议驱动状态回调：更新 S.protocol_running 并写入协议日志"""
     try:
@@ -4527,6 +4690,11 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(200, {"success": False, "output": f"保存失败: {e}"})
             return
 
+        if path == "/api/protocol/start_elevated":
+            _ok, _msg = _launch_snowluma_elevated()
+            self._send_json(200, {"success": bool(_ok), "output": _msg})
+            return
+
         if path == "/api/protocol/start":
             try:
                 # ★ 2026-11-03：幂等。此前每调一次就新建一个 ProtocolManager，
@@ -4538,7 +4706,7 @@ class Handler(BaseHTTPRequestHandler):
                 try:
                     if _existing is not None and _existing.is_running():
                         self._send_json(200, {"success": True,
-                                              "output": "协议层已在运行（未重复启动）"})
+                                              "output": "协议层已在运行（未重复启动）。" + _protocol_start_diagnosis(3.0)})
                         return
                 except Exception:
                     pass
@@ -4548,7 +4716,8 @@ class Handler(BaseHTTPRequestHandler):
                 mgr.set_status_callback(_protocol_status_callback)
                 mgr.start()
                 S._protocol_manager = mgr
-                self._send_json(200, {"success": True, "output": "协议层已启动"})
+                self._send_json(200, {"success": True,
+                                      "output": _protocol_start_diagnosis()} )
             except Exception as e:
                 self._send_json(200, {"success": False, "output": f"启动失败: {e}"})
             return
