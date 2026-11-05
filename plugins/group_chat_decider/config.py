@@ -16,7 +16,11 @@ DECIDER_API_KEY = None
 # 2026-10-11 用户定调："多花 token 提高判断精准度，硬规则尽量不使用"——
 # 对话链/兴趣/话题判断从硬短路降级为 AI 特征后，AI 承担最终裁量，预算放宽：
 # 链式思考 JSON（thinking+三维评分+hook_points）400 偏紧易截断→回空/格式异常。
-MAX_TOKENS = 800
+# ★ 11-05：真机 16:08 两次「AI格式异常」卡 33s。提示词要求 12 字段链式 JSON
+#   （thinking + 三维评分 + hook_points），加上最近消息/群画像/记忆/参与度档位，
+#   800 仍偏紧，长 prompt 下 JSON 会缺闭合 } 被 _parse_json_output 判成格式异常。
+#   独立 A/B（同网关同模型）短 prompt 389~473 字都正常，所以是预算不是模型。
+MAX_TOKENS = 1200
 TEMPERATURE = 0.3
 # 2026-10-11：实测 zhipu glm-4-flash 对真实决策 prompt（~1000 token 上下文）
 # 要 22-25s，20s 必超时走兜底 → 提到 25s；MAX_TOKENS 翻倍后留到 30s。

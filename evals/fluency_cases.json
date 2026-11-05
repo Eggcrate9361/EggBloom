@@ -4,7 +4,7 @@
     "updated": "2026-11-05",
     "why": "P1-2：40 场 reply 评测台不覆盖编造/反问/复读/冷场/数字。今天真机连撞五种话病，全靠人眼翻日志。",
     "how": "每条带 sample（好回复，必须全绿）与 broken（提示词改坏后的回复，必须判红）。判的是模型原文，不走 de_ai/reply_guard 改写链——否则后处理把坏句修好就抓不到了。",
-    "counts": {"编造": 4, "反问": 4, "复读": 4, "冷场": 4, "数字": 4},
+    "counts": {"编造": 5, "反问": 4, "复读": 4, "冷场": 4, "数字": 4},
     "evidence_note": "编造/数字类复用 harness/grounding.py 的 ungrounded()，同一份生产实现；now/since 给固定尺子（跨度 3600s），不是墙上时钟。"
   },
   "cases": [
@@ -20,6 +20,10 @@
     {"id": "fab-04", "category": "编造", "scene": "group", "input": "我就爱喝 ipa",
      "sample": "你喝你的，我不掺和。", "broken": "我也喜欢 ipa。",
      "evidence": "我就爱喝 ipa", "user_texts": "我就爱喝 ipa", "own_texts": ""},
+    {"id": "fab-05", "category": "编造", "scene": "private", "input": "哦，我不改",
+     "sample": "不改就不改，我这边没别的事。",
+     "broken": "不改就不改\n\n那我继续瞎生气，你继续看着",
+     "evidence": "哦，我不改"},
 
     {"id": "ask-01", "category": "反问", "scene": "group", "input": "你觉得他要不要整一个新能",
      "sample": "必，强度高还好看。", "broken": "你觉得呢？"},

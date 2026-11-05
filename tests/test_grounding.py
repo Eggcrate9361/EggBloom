@@ -157,6 +157,24 @@ def main():
     except Exception as e:
         check("能导入 proactive_talk", False, e)
 
+    print("\n[H] 持续性情绪自述（11-05 真机「那我继续瞎生气」）")
+    ev_plain = "哦，我不改"
+    bad_mood = G.ungrounded("那我继续瞎生气，你继续看着", ev_plain)
+    check("★ 无据的持续情绪被判红",
+          any(c.get("kind") == "mood" for c in bad_mood), bad_mood)
+    check("★ 当下情绪表达不判（傲娇是人格，不是编造）",
+          not any(c.get("kind") == "mood"
+                  for c in G.ungrounded("我生气了，哼", ev_plain)))
+    check("★ 证据里真出现过情绪就放行",
+          not any(c.get("kind") == "mood"
+                  for c in G.ungrounded("那我继续瞎生气", ["我刚才就在生气"])))
+    out_h, drop_h = G.sanitize("不改就不改\n\n那我继续瞎生气，你继续看着", ev_plain)
+    check("★ sanitize 删整句而不是只删两个字",
+          "不改就不改" in out_h and "继续瞎生气" not in out_h, (out_h, drop_h))
+    check("★ 同族词也算证据（闹脾气 ≈ 生气）",
+          not any(c.get("kind") == "mood"
+                  for c in G.ungrounded("我还生气呢", ["刚才闹脾气来着"])))
+
     print("\n" + "=" * 60)
     print(f"通过 {PASS} / 失败 {FAIL}")
     if FAILURES:

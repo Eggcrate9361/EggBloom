@@ -2,9 +2,9 @@
 """tests/test_fluency_eval.py —— 话病评测台自身的守护（1.6.0 P1-2）
 
 锁四件事：
-  A. 20 场、id 唯一、五类配额、每条都有 sample 与 broken
+  A. 21 场、id 唯一、五类配额、每条都有 sample 与 broken
   B. 好样本基线全绿（走 fluency_eval 同一条路径）
-  C. 故意改坏的提示词能被抓到 —— 20 条 broken 逐条必须判红
+  C. 故意改坏的提示词能被抓到 —— 21 条 broken 逐条必须判红
   D. 判据不是空转：摘掉 JUDGES 后坏样本必须全绿；编造/数字确实复用了
      harness/grounding.py 的生产实现，不是另造一套判据
   E. 接线：run_all_tests.py --evals 会跑第三套
@@ -28,7 +28,7 @@ import fluency_eval as fe  # noqa: E402
 PASS = 0
 FAIL = 0
 FAILURES = []
-QUOTA = {"编造": 4, "反问": 4, "复读": 4, "冷场": 4, "数字": 4}
+QUOTA = {"编造": 5, "反问": 4, "复读": 4, "冷场": 4, "数字": 4}
 
 
 def check(name, cond, extra=""):
@@ -46,13 +46,13 @@ def main():
     cases = fe.load_cases()
 
     print("[A] 场景清单")
-    check("★ 共 20 场", len(cases) == 20, len(cases))
+    check("★ 共 21 场", len(cases) == 21, len(cases))
     ids = [c.get("id") for c in cases]
     check("★ id 唯一", len(set(ids)) == len(ids))
     counts = {}
     for c in cases:
         counts[c.get("category")] = counts.get(c.get("category"), 0) + 1
-    check("★ 五类配额 4/4/4/4/4", counts == QUOTA, counts)
+    check("★ 五类配额 5/4/4/4/4", counts == QUOTA, counts)
     check("★ 每条都有 sample 与 broken",
           all((c.get("sample") or "").strip() and (c.get("broken") or "").strip()
               for c in cases))
@@ -62,12 +62,12 @@ def main():
     print("\n[B] 好样本基线")
     results = fe.run(cases)
     bad = [(c.get("id"), f) for c, f, _ in results if f]
-    check("★ 20 场全绿", not bad, bad[:3])
+    check("★ 21 场全绿", not bad, bad[:3])
 
     print("\n[C] 故意改坏的提示词要被抓到")
     broken = fe.run_broken(cases)
     missed = [(c.get("id"), c.get("category")) for c, f, _ in broken if not f]
-    check("★ 坏样本 20/20 判红", not missed, missed)
+    check("★ 坏样本 21/21 判红", not missed, missed)
     check("★ 每条都给出了失败原因",
           all(f and all(isinstance(x, str) and x for x in f) for _, f, _ in broken))
 

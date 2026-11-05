@@ -1045,6 +1045,19 @@ def _recall_atmosphere(group_id):
     return "未知", 0.0, False
 
 
+def _should_retry_decision(fail_kind: str, attempt: int, attempts: int) -> bool:
+    """决策 AI 这次失败值不值得再试一次。
+
+    ★ 2026-11-05 真机 16:08：`[AI格式异常]（第2次）`，从决策放行到插件注入
+      卡了 33 秒。格式异常不是偶发故障 —— 同样的 prompt、同样的 max_tokens，
+      第二次会**稳定地再截断一次**，白等一个 18s 的超时窗口。
+      超时 / 空 / 网络异常才是偶发，值得重试；格式异常直接降级 fail-open。
+    """
+    if attempt + 1 >= attempts:
+        return False
+    return "格式异常" not in str(fail_kind or "")
+
+
 def _degraded_decision(kind: str, group_id: str, base: dict, rule_allow: bool, detail: str,
                        rule_skip: bool = False, force_conservative: bool = False):
     """AI 不可用时的统一降级决策。
@@ -1567,8 +1580,18 @@ def decide(message: str, group_id: str, context: dict = None) -> Optional[Decisi
                 continue
             data = _parse_json_output(reply)
             if data is None:
-                result, _fail_kind = None, f"[AI格式异常]（第{_attempt + 1}次）"
-                print(f"[GroupDecider] 决策输出非 JSON（第{_attempt + 1}次）")
+                # ★ 诊断信息必须进 qq_bot.log：以前只 print 到 stdout（bot 进程的
+                #   stdout 只进 webui 协议日志），真机排查时看不到原始输出长什么样。
+                #   _fail_kind 会进降级 reason → 干预注入日志里能看到。
+                _raw = str(reply or "")
+                _diag = (f"len={len(_raw)} brace={'{' in _raw}/{'}' in _raw} "
+                         f"head={_raw[:80]!r}")
+                result, _fail_kind = None, (
+                    f"[AI格式异常]（第{_attempt + 1}次·{_diag[:110]}）")
+                print(f"[GroupDecider] 决策输出非 JSON（第{_attempt + 1}次）: {_diag}")
+                # 同一 prompt + 同一预算重试只会再截断一次 → 直接降级，省 16s
+                if not _should_retry_decision(_fail_kind, _attempt, _attempts):
+                    break
                 continue
             break
 

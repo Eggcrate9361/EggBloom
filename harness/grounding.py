@@ -18,6 +18,7 @@
   · **感官**：听到/听见 + 声音/声响/动静 —— 你没有耳朵，一律无据
   · **指认对方**：你刚说/你之前说/你还骂我…… —— 后面那截要在证据里找得到
   · **指认自己**：我昨天说/我上次答应…… —— 同上
+  · **持续情绪**：我继续瞎生气/我还委屈着…… —— 声称之前就有的状态，证据里得真出现过
   · **时长**：十五个小时/两天/三个钟头…… —— 超过"看得见的跨度 + 2 小时"就是拍脑袋
 证据 = 调用方给的**真实上下文**（最近消息、长期记忆轮次、自己上次说的）。
 
@@ -60,6 +61,26 @@ _PREF = re.compile(r"我(?:就|也|更|最)?(?:喜欢|想|爱喝|爱吃|爱看|�
 #: 指认自己说过/做过什么
 _SELF = re.compile(r"我(?:昨天|前天|刚才|刚刚|上次|上午|下午|早上|晚上)"
                    r"[^，。！？\n]{0,8}?(?:说|答应|讲过|去了|做了|提过)")
+#: 持续性情绪自述（2026-11-05 真机：「那我继续瞎生气，你继续看着」）。
+#: 「我生气了」是当下表达，人格里傲娇撒娇的一部分，**不判**；
+#: 只有「继续/还/一直/又 + 情绪」才声称了一个之前就存在、需要上下文支撑的状态。
+_MOOD = re.compile(
+    r"(?:我|人家|本小姐)?\s*(?:继续|还|一直|又|照旧|仍旧|仍然)\s*"
+    r"(?:在|瞎|偷偷|默默)?\s*"
+    r"(生气|赌气|委屈|吃醋|不高兴|不开心|难过|伤心|记仇|闹别扭)")
+#: 情绪词归一化：证据里出现同族词就算有依据（「闹脾气」≈「生气」）
+_MOOD_FAMILY = (
+    ("生气", ("生气", "发火", "恼", "闹脾气")),
+    ("赌气", ("赌气", "生气", "别扭")),
+    ("委屈", ("委屈", "冤")),
+    ("吃醋", ("吃醋", "醋", "酸")),
+    ("不高兴", ("不高兴", "不爽", "生气")),
+    ("不开心", ("不开心", "不高兴", "难过")),
+    ("难过", ("难过", "难受", "伤心")),
+    ("伤心", ("伤心", "难过", "哭")),
+    ("记仇", ("记仇", "记着", "记账")),
+    ("闹别扭", ("闹别扭", "别扭", "赌气")),
+)
 
 #: 主张后面截多长去比对（短窗口，避免误杀）
 _WINDOW = 10
@@ -228,6 +249,9 @@ def claims(text: str) -> list:
             out.append({"kind": "pref", "quote": obj, "at": m.start()})
     for m in _SELF.finditer(s):
         out.append({"kind": "self", "quote": _quote_after(s, m.end()), "at": m.start()})
+    for m in _MOOD.finditer(s):
+        out.append({"kind": "mood", "quote": m.group(1), "at": m.start(),
+                    "match": m.group(0)})
     out.extend(_dur_claims(s))
     return out
 
@@ -291,6 +315,13 @@ def ungrounded(text: str, evidence_texts=None, min_overlap: float = MIN_OVERLAP,
             if q and _char_rate(q, user_only) >= 0.4 and _char_rate(q, own_only) < 0.4:
                 bad.append(c)
             continue
+        if c["kind"] == "mood":
+            # 持续性情绪：证据里必须真的出现过同族情绪词。
+            # 不用双字重合率 —— 「生气」两个字太短，0.25 阈值会误杀/误放。
+            family = next((words for key, words in _MOOD_FAMILY if key == q), (q,))
+            if not any(w and w in evidence for w in family):
+                bad.append(c)
+            continue
         if not _grounded(q, evidence, min_overlap):
             bad.append(c)
     return bad
@@ -307,7 +338,9 @@ def sanitize(text: str, evidence_texts=None, min_overlap: float = MIN_OVERLAP,
                      now=now, since=since)
     if not bad:
         return raw, []
-    spans = [(c["at"], c["at"] + max(len(c["quote"]), 1)) for c in bad]
+    # mood 类的 quote 只是情绪词，span 要盖住整段「我继续瞎生气」才算命中
+    spans = [(c["at"], c["at"] + max(len(c.get("match") or c["quote"]), 1))
+             for c in bad]
 
     kept, dropped = [], []
     pos = 0

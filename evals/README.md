@@ -103,17 +103,18 @@ python evals/autonomy_eval.py     # RESULT: autonomy 13 场 / 13 过 / 0 红
 
 `run_all_tests.py --evals` 会把两套都跑，各打一行。
 
-## 第三套：话病评测（fluency，20 场，1.6.0 P1-2）
+## 第三套：话病评测（fluency，21 场，1.6.0 P1-2）
 
 reply 评测台不覆盖编造、反问、复读、冷场、数字。2026-11-05 一天里这五种
 全靠人眼翻 `qq_bot.log` 才撞到，所以单独开一套：
 
 ```bash
-python evals/fluency_eval.py        # RESULT: fluency 20 场 / 20 过 / 0 红 · 坏样本 20/20 抓到
+python evals/fluency_eval.py        # RESULT: fluency 21 场 / 21 过 / 0 红 · 坏样本 21/21 抓到
 python tests/test_fluency_eval.py    # 评测台自身的守护
 ```
 
-场景在 `fluency_cases.json`，五类各 4 条。**每条同时带 `sample`（好回复）与
+场景在 `fluency_cases.json`，五类共 21 条（编造 5，其余各 4；`fab-05` 是
+11-05 17:41 真机「那我继续瞎生气」补录）。**每条同时带 `sample`（好回复）与
 `broken`（提示词改坏后的回复）**：好样本必须全绿，坏样本必须逐条判红 —— 文档里
 「故意改坏提示词能被抓到」这条验收因此是每次跑分都在验的，不是一次性演示。
 
@@ -126,7 +127,7 @@ python tests/test_fluency_eval.py    # 评测台自身的守护
 ## 门槛
 
 - `python evals/run_eval.py` 必须 **40/40**；提交信息里贴一行 `RESULT: ...`
-- `python evals/fluency_eval.py` 必须 **20/20 绿 + 坏样本 20/20 抓到**
+- `python evals/fluency_eval.py` 必须 **21/21 绿 + 坏样本 21/21 抓到**
 - 机械项有红 → 拒绝合并，不看解释（FIXPLAN §2）
 - `tests/test_evals.py` 顺带证明判分器**真的会红**（喂 AI 自述/超长/缺关键词/露后台）
 

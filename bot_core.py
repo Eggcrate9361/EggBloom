@@ -5113,6 +5113,28 @@ def _forward_vision_allowed(msg, private=False):
     return bool(has_reply)
 
 
+def _should_skip_at_others(*, has_any_at, is_at_bot, has_xiao_a,
+                           quote_me=False, has_bot_nick=False,
+                           has_reply_seg=False, relax=True):
+    """@ 了别人时是否**硬跳过**（「别抢话」那道闸）。
+
+    旧实现：`has_any_at and not is_at_bot and not has_xiao_a` → 无条件 continue，
+    哪怕这条是在引用我说过的话、或引用别人来追问、或文本里点了我的名字。
+    真机 17:42:31「引用 DeepSeek 的话再 @ 别人」就是这样被整条吞掉的。
+
+    放宽后：只有**完全没有任何指向我的信号**才硬跳；有信号就放行给
+    缓冲区 + 决策器，由它们决定要不要开口 —— 不是直接回，所以不会变成
+    见人就插嘴。提示词里「别抢话」的引用注记也仍在，模型仍可输出 [不说话]。
+    """
+    if not (has_any_at and not is_at_bot and not has_xiao_a):
+        return False
+    if not relax:
+        return True
+    if quote_me or has_bot_nick or has_reply_seg:
+        return False
+    return True
+
+
 def extract_text(msg, _depth=0, with_vision=False):
     # 优先用 _raw_elements（原始消息段），回退到 message
     raw = msg.get("_raw_elements") or msg.get("message", "")
@@ -17734,10 +17756,22 @@ def main():
                     # 是否为会话模式消息（@触发后，非直接@消息的连续对话）
                     in_session = False
                     
-                    # QQ at 段指向他人 → 无条件跳过（不管文本里有没有 @）
-                    if has_any_at and not is_at_bot and not has_xiao_a:
+                    # @ 了别人：只有「完全没指向我」才硬跳；引用我 / 点到我 /
+                    # 引用别人来追问 → 放行给缓冲区与决策器（见 _should_skip_at_others）
+                    _has_reply_seg = any(
+                        isinstance(seg, dict) and seg.get("type") == "reply"
+                        for seg in msg.get("message", []))
+                    _relax_at_others = bool(_config.get("group_relax_at_others", True))
+                    if _should_skip_at_others(
+                            has_any_at=has_any_at, is_at_bot=is_at_bot,
+                            has_xiao_a=has_xiao_a, quote_me=quote_me,
+                            has_bot_nick=has_bot_nick,
+                            has_reply_seg=_has_reply_seg,
+                            relax=_relax_at_others):
                         log(f"群[{group_id}] 跳过 @他人 的消息")
                         continue
+                    if has_any_at and not is_at_bot and not has_xiao_a:
+                        log(f"群[{group_id}] [放宽抢话] @他人但有引用/点到我，交给决策器")
 
                     # 前置判断：没被 @、没叫「小a」、无文本 @、无引用 → 直接跳过
                     if not is_at_bot and not has_xiao_a and not has_text_at and not has_quote:
