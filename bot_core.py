@@ -4802,13 +4802,29 @@ def _seg_deai(is_group):
 
 
 
+def _persona_mtime() -> float:
+    """人格文件**当前**的 mtime（读不到返回 0）。
+
+    ★ 2026-11-05：缓存键以前读 `_personality_cache["mtime"]` —— 那是**上一次**
+      `load_personality()` 时的 mtime，而 `load_personality()` 只在缓存未命中
+      时才被调用。于是第一次构建之后键永远不变：改 `personality.txt` 不重启
+      就完全不生效，和 `load_personality` 文档里"纯 mtime 缓存，文件变化时
+      自动更新"的说法相反（真机：12:40 改完人格，12:43 的 prompt 还是旧的）。
+      改成每次直接 stat 文件：命中与否以磁盘上的现状为准。
+    """
+    try:
+        return os.path.getmtime(PERSONA_CANONICAL)
+    except Exception:
+        return 0.0
+
+
 def _build_static_prompt(is_group: bool) -> str:
     """构建 static_prompt（人格+规则+多样性+表情包+铁律），按 (is_group, static_fp, personality_mtime) 缓存。
 
     结果只依赖 is_group 与 static_prompt 真正用到的配置/人格文件，同一值下内容**逐字节一致**
     → 前缀稳定可命中 DeepSeek 硬盘缓存。**刻意不依赖 _CONFIG_REV**（见 _static_prompt_fingerprint）。
     """
-    key = (is_group, _static_prompt_fingerprint(is_group), _personality_cache.get("mtime", 0))
+    key = (is_group, _static_prompt_fingerprint(is_group), _persona_mtime())
     hit = _STATIC_PROMPT_CACHE.get(key)
     if hit is not None:
         return hit
