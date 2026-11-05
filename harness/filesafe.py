@@ -183,6 +183,21 @@ def pending() -> list:
         return [dict(v) for v in _PENDING.values()]
 
 
+def _priv_move(src, dst):
+    """通过高权限助手移动文件。助手不可用 → None（调用方照旧抛原异常）。"""
+    try:
+        from harness import privclient as _pc
+    except Exception:
+        try:
+            import privclient as _pc
+        except Exception:
+            return None
+    try:
+        return _pc.move(src, dst)
+    except Exception:
+        return None
+
+
 def confirm(token, *, now=None) -> dict:
     """凭 token 执行。没 token / 过期 / 源已消失 → 拒绝，**不执行任何写操作**。"""
     token = str(token or "").strip()
@@ -215,7 +230,14 @@ def confirm(token, *, now=None) -> dict:
         if op == "move":
             if dst_p and os.path.exists(dst_p):
                 _backup(dst_p, base_dir, ts)                  # 目标被覆盖也要能恢复
-            shutil.move(src_p, dst_p)
+            try:
+                shutil.move(src_p, dst_p)
+            except PermissionError:
+                # ★ 2026-11-05：本进程被系统限制（EggBloom 是 Medium）时，
+                #   交给高权限助手做；助手不在就照旧抛出去（不假装成功）。
+                _r = _priv_move(src_p, dst_p)
+                if not (_r and _r.get("ok")):
+                    raise
         elif op == "copy":
             if os.path.isdir(src_p):
                 shutil.copytree(src_p, dst_p, dirs_exist_ok=True)
