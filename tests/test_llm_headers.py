@@ -90,6 +90,55 @@ def main():
           "_llm_request_headers(" in inner, inner[:80])
     check("★ 摘要不再裸拼 Authorization", 'f"Bearer ' not in inner, inner[:80])
 
+    print("\n[F] 流式链路（第四条）—— 11-05 真机 17:27 三次 403 就是它")
+    #   前三条（主链 / webui / 摘要）都收口了，唯独 _agent_stream_chat 自己拼头。
+    #   后果：每轮 Agent 工具调用先吃一个 403，再退回同步，思维链实时展示全废。
+    j = src.find("def _agent_stream_chat")
+    stream_fn = src[j:src.find("\ndef ", j + 10)] if j >= 0 else ""
+    check("★ 流式用 _llm_request_headers",
+          "headers = _llm_request_headers(" in stream_fn, stream_fn[:80])
+    check("★ 流式不再裸拼 Authorization",
+          '"Authorization": "Bearer " + key' not in stream_fn, stream_fn[:80])
+    check("★ 但 Accept 仍是 text/event-stream",
+          'headers["Accept"] = "text/event-stream"' in stream_fn)
+
+    class _FakeSSE:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def __iter__(self):
+            return iter([b'data: {"choices":[{"delta":{"content":"ok"}}]}\n\n',
+                         b'data: [DONE]\n\n'])
+
+    captured = {}
+    _orig = (bot_core.urllib.request.urlopen, bot_core._llm_config,
+             bot_core._effective_temperature)
+
+    def _fake_urlopen(req, timeout=None):
+        captured.update({k.lower(): v for k, v in req.header_items()})
+        return _FakeSSE()
+
+    try:
+        bot_core.urllib.request.urlopen = _fake_urlopen
+        bot_core._llm_config = lambda *a, **k: {
+            "api_url": OC_URL, "api_key": "sk-test", "model_name": "m"}
+        bot_core._effective_temperature = lambda *a, **k: 0.7
+        out = bot_core._agent_stream_chat(
+            [{"role": "user", "content": "x"}], on_reasoning=lambda s: None)
+    finally:
+        (bot_core.urllib.request.urlopen, bot_core._llm_config,
+         bot_core._effective_temperature) = _orig
+    check("★ 实发请求带自己的 UA（不是 Python-urllib）",
+          "EggBloom" in str(captured.get("user-agent")), sorted(captured))
+    check("★ 实发请求带 x-opencode-session",
+          bool(captured.get("x-opencode-session")), sorted(captured))
+    check("★ 实发请求 Accept 是 SSE",
+          captured.get("accept") == "text/event-stream", captured.get("accept"))
+    check("★ SSE 解析没被改坏", out.get("content") == "ok", repr(out)[:120])
+
     print("\n" + "=" * 60)
     print(f"通过 {PASS} / 失败 {FAIL}")
     if FAILURES:

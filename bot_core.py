@@ -12081,11 +12081,17 @@ def _agent_stream_chat(messages, tools=None, max_tokens=800,
     if tools:
         body["tools"] = tools
         body["tool_choice"] = "auto"
+    # ★ 2026-11-05：这里原先自己拼了三个头（Content-Type / Authorization / Accept），
+    #   漏掉 User-Agent 与 x-opencode-session —— 和 11-03 主链、11-05 摘要支线
+    #   完全同一类坑，只是落在**流式**这条第四链路。真机 17:27 三次
+    #   「[Agent] 流式失败，退回同步: HTTP Error 403: Forbidden」即由此而来：
+    #   Cloudflare 返回 HTML 拦截页，思维链实时展示全程退化成同步兜底。
+    #   A/B 实测（发行目录真实 opencode_go 配置）：裸头 403 / 补齐全头 200。
+    headers = _llm_request_headers(key, api_url)
+    headers["Accept"] = "text/event-stream"   # SSE 专用，其余与同步链同一套
     req = urllib.request.Request(
         api_url, data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
-        headers={"Content-Type": "application/json",
-                 "Authorization": "Bearer " + key,
-                 "Accept": "text/event-stream"})
+        headers=headers)
     content = ""
     reasoning = ""
     tc_map = {}
