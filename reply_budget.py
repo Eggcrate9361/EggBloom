@@ -95,7 +95,7 @@ def prompt_line(b: Dict) -> str:
     per = int(b.get("max_chars") or HARD_MAX_CHARS)
     _n = f"{lo} 条" if lo == hi else f"{lo}–{hi} 条"
     _tail = "不要解释，不要总结。"
-    if b.get("name") == "A":
+    if b.get("name") == "A" or b.get("no_question"):
         _tail = "不要问，直接说完。不要解释，不要总结。"
     return f"这次最多说 {_n}，每条不超过 {per} 个字。{_tail}"
 
@@ -308,6 +308,31 @@ def regen_hint(reason: str, b: Dict) -> str:
     return f"（上一条{reason}，重写：最多 {b.get('parts_max', 1)} 条，每条 {b.get('max_chars', 8)} 字以内）"
 
 
+def ensure_statement_floor(b: Dict, need_statement: bool) -> Dict:
+    """被点名 / 会话追问 / 要表态的回合，至少给 B 档（1–2 条 ≤16 字）。
+
+    ★ 2026-11-05 真机：A 档「1 条 ≤8 字」抽中率约 45%，「你觉得他要不要
+      整一个新能」这种要表态的追问只回得出「嗯，我听着」「啧，必，强度高
+      还好看」——信息被字数挤成逗号碎片，比长更假。
+
+    ★ 为什么不直接把 A 档 8 字调大：A 档是「嗯/行/啧」这类真人附和的
+      来源，全局拉长会把每条都写成 16 字的完整句，那才是 AI 味。这里只在
+      **该表态的回合**抬档，闲聊附和仍原样保留 A 档分布。
+    ★ 抬档后仍然禁问：追问场景最容易冒出「你觉得呢？」式反问。
+      `no_question` 让 prompt_line 把 A 档那条约束带过来，不新增形容词。
+    ★ 只抬 A → B，不动 B/C：已经在长档的回合无需再加码。
+    """
+    if not need_statement or not isinstance(b, dict) or b.get("name") != "A":
+        return b
+    out = dict(b)
+    out["name"] = "B"
+    out["parts_min"], out["parts_max"] = 1, 2
+    out["max_chars"], out["max_total"] = 16, 32
+    out["no_question"] = True
+    out["statement_floor"] = True
+    return out
+
+
 #: 生病时最多压到这么短 —— 再短就不是人话了（"行"已经是极限）。
 FACTOR_MIN_CHARS = 6
 FACTOR_MIN_TOTAL = 8
@@ -358,4 +383,5 @@ def apply_factors(b: Dict, factors: Optional[Dict] = None) -> Dict:
 __all__ = ["BUDGETS", "HARD_MAX_CHARS", "HARD_MAX_PARTS", "HARD_MAX_TOTAL",
            "FACTOR_MIN_CHARS", "FACTOR_MIN_TOTAL",
            "pick", "prompt_line", "visible", "parts", "check", "fit",
-           "anchor_ok", "regen_hint", "strip_ctx_marks", "apply_factors"]
+           "anchor_ok", "regen_hint", "strip_ctx_marks", "apply_factors",
+           "ensure_statement_floor"]

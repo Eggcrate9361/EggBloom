@@ -11302,12 +11302,16 @@ def _summarize_group_history_inner(group_id, gh):
         "max_tokens": 256,
         "temperature": 0.3
     }
+    # ★ 2026-11-05：headers 一律走 _llm_request_headers，不自己拼。
+    #   原来只带 Content-Type + Authorization，漏了 OpenCode Go 网关必需的两个头：
+    #   User-Agent（urllib 默认 Python-urllib/3.x 被 Cloudflare 用 error 1010 拦）
+    #   与 x-opencode-session（网关按会话路由，缺了直接拒）。
+    #   真机表现：主链每轮 AI 回复都成功，摘要每轮 HTTP 403 Forbidden，
+    #   摘要事务永远提交不了。两个请求用同一份 headers 才不会各自踩坑。
     req = urllib.request.Request(_lc.get("api_url") or DEEPSEEK_URL,
         data=json.dumps(data).encode("utf-8"),
-        headers={
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {_lc.get('api_key') or ''}"
-        })
+        headers=_llm_request_headers(
+            _lc.get("api_key") or "", _lc.get("api_url") or DEEPSEEK_URL))
     with urllib.request.urlopen(req, timeout=15, context=CTX) as r:
         resp = json.loads(r.read().decode("utf-8"))
     choices = resp.get("choices", [])
@@ -14599,6 +14603,54 @@ def _pipeline_upsert(group_id, *, sender, text, images=None, flags=None,
     return "created"
 
 
+def _absorb_late_supplements(group_id, merged_text, since, origin_sender,
+                             max_age=10.0, max_chars=80):
+    """调模型之前最后一次收「同人短补充」，并进本批，避免同一段对话回两次。
+
+    ★ 2026-11-05 真机 15:29：批次 3 秒定稿就被 pop 进流水线，而反应延迟
+      + 插件注入 + AI 生成还要 5~15 秒。这期间到的「新约能天使」以前只能
+      另起一批，等本轮 _pipeline_release(again=True) 续跑 → 连着回两条。
+
+    只在**调模型之前**这一刻收一次，判据宁保守勿贪：
+      · 批次必须是本轮开始（since）之后才建的 —— 不动早就等着的旧批次
+      · 同一个人、短文本、不是新的 @/点名（那是新话题，让它自己回一轮）
+      · 命中后必须取消 Timer 并清 pending，否则那批仍会在 release 后续跑，
+        结果还是两条 —— 这是最容易漏的一步
+    返回 (补充文本, 行数)；没吸收时返回 ("", 0)。
+    """
+    now = time.time()
+    with _buffer_lock:
+        buf = GROUP_MSG_BUFFER.get(group_id)
+        if not buf:
+            return "", 0
+        first = float(buf.get("first_time") or 0)
+        if first < float(since or 0):
+            return "", 0
+        if (buf.get("is_at_bot") or buf.get("has_xiao_a")
+                or buf.get("has_bot_nick") or buf.get("has_quote")
+                or buf.get("forced")):
+            return "", 0
+        if str(buf.get("sender") or "") != str(origin_sender or ""):
+            return "", 0
+        txt = str(buf.get("text") or "").strip()
+        if not txt or len(txt) > max_chars or (now - first) > max_age:
+            return "", 0
+        try:
+            if buf.get("timer"):
+                buf["timer"].cancel()
+        except Exception:
+            pass
+        GROUP_MSG_BUFFER.pop(group_id, None)
+        extra = txt
+    with _pipeline_lock:
+        st = GROUP_PIPELINE.get(group_id)
+        if st is not None:
+            st["pending"] = False
+    n = len([ln for ln in extra.splitlines() if ln.strip()])
+    log(f"群[{group_id}] [合并] 生成前吸收 {n} 条同人补充，本批只回一次")
+    return extra, n
+
+
 def _batch_snapshot(group_id, batch):
     """本批可见的流水快照：(recent_msgs, bot_replies)，按批次截止时刻截断。
 
@@ -15431,6 +15483,16 @@ def _pipeline_step(group_id):
                     + ("（被点名）" if _extra >= 0.8 else ""))
                 time.sleep(_react)
 
+            # ── 生成前最后一次收补充（2026-11-05 真机话病：同人两句连着回两次）──
+            #   pop 之后到调模型之前还有反应延迟 / 插件注入等耗时，这期间到的
+            #   同人短补充并进本批，一次生成、只发一条。注入块已经拼好，
+            #   所以追加到 merged_text_for_ai 末尾而不重建（重建会丢插件注入）。
+            _supp, _supp_n = _absorb_late_supplements(
+                group_id, merged_text, _seq_ready, buffer.get("sender"))
+            if _supp_n:
+                merged_text = f"{merged_text}\n{_supp}"
+                merged_text_for_ai = f"{merged_text_for_ai}\n{_supp}"
+
             # 1.5.9 §B3：本轮回合预算。话术进 user 消息（dynamic），不进静态段 ——
             # 静态段会打断黄金哈希与前缀缓存。
             try:
@@ -15440,6 +15502,17 @@ def _pipeline_step(group_id):
             _budget = reply_budget.pick(
                 shift=_budget_shift(_form.get("budget_shift", 0), _tal),
                 long_ratio=_config.get("reply_long_ratio", 0.1))
+            # ── 表态回合抬档（2026-11-05）：被点名 / 会话追问至少要能说完一句 ──
+            #   只抬 A→B，闲聊附和仍走 A 档 8 字 —— 短附和本身就是活人感，
+            #   全局拉长反而写出"每条 16 字完整句"的 AI 腔。
+            _need_statement = bool(
+                buffer.get("is_at_bot") or buffer.get("has_xiao_a")
+                or buffer.get("has_bot_nick") or buffer.get("has_quote")
+                or buffer.get("has_text_at") or buffer.get("in_session"))
+            _budget = reply_budget.ensure_statement_floor(_budget, _need_statement)
+            if _budget.get("statement_floor"):
+                log(f"群[{group_id}] [预算] 表态回合 A→B（每条 ≤{_budget['max_chars']} 字；"
+                    f"闲聊附和仍走 A 档）")
             # ── vitals 的形式参数接进预算（1.5.10 F4 尾项，2026-10-30）──
             # 生病 = 说得更短 / 条数更少，方向只有向下（系数那边已夹到 0–1）。
             # 插件没启用就**完全不读**：没开的功能不该偷偷改回复长度。

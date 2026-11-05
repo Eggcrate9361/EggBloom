@@ -20,6 +20,7 @@ import io
 import os
 import re
 import sys
+import tempfile
 import time
 import unittest
 
@@ -67,6 +68,15 @@ class TestCompressTxn(unittest.TestCase):
     def setUp(self):
         self._orig_urlopen = bot_core.urllib.request.urlopen
         self._orig_cfg = bot_core._llm_config
+        # ★ 2026-11-05：本用例故意让摘要失败，失败文案会经 log() 写进
+        #   **真实的 qq_bot.log**（14:31 / 14:40 / 15:04 那几行
+        #   「群[testgroup] 历史压缩失败: 网络炸了」就是跑全量测试留下的）。
+        #   把 LOG_FILE 指到临时文件，测试进程绝不碰用户日志。
+        self._orig_log_file = bot_core.LOG_FILE
+        self._tmp_log = tempfile.NamedTemporaryFile(
+            prefix="eggbloom_compress_txn_", suffix=".log", delete=False)
+        self._tmp_log.close()
+        bot_core.LOG_FILE = self._tmp_log.name
         bot_core._llm_config = lambda *a, **k: {"model_name": "t", "api_url": "http://x",
                                                 "api_key": "k"}
         for d in (bot_core._GROUP_SUMMARY_START, bot_core._GROUP_SUMMARY_LEN,
@@ -78,6 +88,11 @@ class TestCompressTxn(unittest.TestCase):
     def tearDown(self):
         bot_core.urllib.request.urlopen = self._orig_urlopen
         bot_core._llm_config = self._orig_cfg
+        bot_core.LOG_FILE = self._orig_log_file
+        try:
+            os.remove(self._tmp_log.name)
+        except OSError:
+            pass
         bot_core.group_chat_history.pop(GID, None)
         for d in (bot_core._GROUP_SUMMARY_START, bot_core._GROUP_SUMMARY_LEN,
                   bot_core._GROUP_SUMMARY_AT, bot_core.GROUP_SUMMARY,

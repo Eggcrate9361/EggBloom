@@ -81,6 +81,15 @@ def main():
     check("★ 没有残留的裸 headers = {\"Content-Type\": \"application/json\"}",
           'headers = {"Content-Type": "application/json"}\n    if api_key' not in src)
 
+    print("\n[E] 摘要支线也必须走这套头（2026-11-05 第三条链路）")
+    #   主链和 webui 都修过 1010，摘要自己拼 headers 于是每轮 403 Forbidden。
+    #   [D] 当初只数了「两条发送路径」，漏了这条旁支 —— 这里补成三条。
+    i = src.find("def _summarize_group_history_inner")
+    inner = src[i:src.find("\ndef ", i + 10)] if i >= 0 else ""
+    check("★ 摘要用 _llm_request_headers",
+          "_llm_request_headers(" in inner, inner[:80])
+    check("★ 摘要不再裸拼 Authorization", 'f"Bearer ' not in inner, inner[:80])
+
     print("\n" + "=" * 60)
     print(f"通过 {PASS} / 失败 {FAIL}")
     if FAILURES:
