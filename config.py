@@ -664,6 +664,13 @@ DEFAULT_CONFIG = {
     # 消息长度
     "private_reply_max_length": 500,
     "group_reply_max_length": 800,
+    # 私聊气泡条数上限（2026-11-05）。
+    #   事故：19:42–19:44 用户发 4 条，bot 实际发出 10 条 —— smart_send 按句切分后
+    #   **没有条数闸**，一轮回复 3 句就连发 3 条；proactive_talk 同样按 max_bubbles=4
+    #   逐条发。用户视角就是"回了很多次"。
+    #   这里只限**条数**不限字数：文案一个字都不删，超出的句子并进末条。
+    #   0 = 不限（回到旧行为）。proactive_talk 也读这个键，取它与插件 max_bubbles 的较小值。
+    "private_bubble_max": 2,
 
     # 慢回填充（2026-10-31）：私聊生成超过这么多秒还没结果，先发一条"接住"
     # （"嗯/在/等下/我看下"）。0 = 关。

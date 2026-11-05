@@ -56,6 +56,13 @@ def sandbox_neurobase(prefix="eggbloom_test_nb_") -> str:
     #   （实测见到 FakePM / 磁盘已满（模拟） / 注册表炸了 这类测试桩的报错）。
     os.environ["EGGBLOOM_USER_DATA"] = os.path.join(td, "userdata")
     os.makedirs(os.environ["EGGBLOOM_USER_DATA"], exist_ok=True)
+    # ★ 2026-11-05：出站队列的落盘库也要隔离。
+    #   `harness/outbox.py` 默认写 `<app>/data/outbox.sqlite3`，本来就在仓库里、
+    #   全测试共享 —— 上一个用例落盘但没发出的任务，会被下一个用例
+    #   `_recover_from_disk()` 当成"重启恢复"再发一遍（实测 test_outbound
+    #   报「真的发出去了」失败，日志里多出 `[发送] 重启恢复 2 条未发出的消息`）。
+    #   这个键必须在 import harness.outbox 之前设好：_DEFAULT 是模块级常量。
+    os.environ["EGGBLOOM_OUTBOX_DB"] = os.path.join(td, "outbox.sqlite3")
 
     # 2. 若模块已导入，改写其路径常量
     #    （正常情况下本函数在 import 之前调用，这一步是兜底）
@@ -113,6 +120,15 @@ def _repatch(td: str) -> None:
                 setattr(m, attr, val)
         m._idx_cache = None
         m._idx_mtime = 0.0
+
+    # 出站队列库：模块已导入时改掉模块级常量，并丢掉已建好的单例连接
+    _obx = sys.modules.get("harness.outbox") or sys.modules.get("outbox")
+    if _obx is not None:
+        setattr(_obx, "_DEFAULT", os.path.join(td, "outbox.sqlite3"))
+        try:
+            _obx.reset_default()       # 让下一次 default() 用新路径重连
+        except Exception:
+            pass
 
 
 def temp_dir() -> str:

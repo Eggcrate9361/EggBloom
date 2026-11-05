@@ -520,7 +520,17 @@ import io
 import os
 CONFIG_FILE = os.path.join(SCRIPT_DIR, "bot_config.json")
 ENV_FILE = os.path.join(SCRIPT_DIR, ".env")
-_APPDATA_DIR = os.path.join(os.path.expanduser("~"), "AppData", "Local", "EggBloom_v3")
+# ★ 2026-11-05：数据根目录允许被环境变量覆盖。
+#   事故：`tests/_sandbox.py` 早就在设 `EGGBLOOM_USER_DATA` 想把日志/状态/指令台账
+#   指到临时目录，但这里三处（_APPDATA_DIR / _USER_DATA_DIR_FOR_PORTS /
+#   _USER_DATA_DIR）全是**写死**的 `%LOCALAPPDATA%\EggBloom_v3` —— 变量没人读，
+#   沙箱等于没设。后果是每跑一次全量回归就往用户的 qq_instructions.json 里
+#   追加一批 `[10086001]` / `[10086002]` 的假对话（当天实测 110 条，WebUI 里
+#   能直接看到），`qq_bot.log` 里也混进测试桩的报错。
+#   生产环境没有人设这个变量，所以这里对真机行为零影响。
+_USER_DATA_ROOT = (os.environ.get("EGGBLOOM_USER_DATA")
+                   or os.path.join(os.path.expanduser("~"), "AppData", "Local", "EggBloom_v3"))
+_APPDATA_DIR = _USER_DATA_ROOT
 _APPDATA_CONFIG = os.path.join(_APPDATA_DIR, "bot_config.json")
 _APPDATA_ENV = os.path.join(_APPDATA_DIR, ".env")
 
@@ -611,7 +621,7 @@ if _config.get("protocol_enabled", False):
     import socket as _sock
     import urllib.request as _urllib
     import json as _json
-    _USER_DATA_DIR_FOR_PORTS = os.path.join(os.path.expanduser("~"), "AppData", "Local", "EggBloom_v3")
+    _USER_DATA_DIR_FOR_PORTS = _USER_DATA_ROOT
     _ports_file = os.path.join(_USER_DATA_DIR_FOR_PORTS, "temp", "ports.json")
     _resolved = False
     if os.path.exists(_ports_file):
@@ -686,7 +696,8 @@ PERSONALITY_LEGACY_ROOT = os.path.join(SCRIPT_DIR, "personality.txt")
 #   现在兜底也先读 PLUGINS 那份，根目录那份只作为最后的历史兼容项。
 PERSONA_CANONICAL = os.path.join(SCRIPT_DIR, "plugins", "personality.txt")
 # 数据文件放在用户目录下，避免 PyInstaller dist 重建时丢失
-_USER_DATA_DIR = os.path.join(os.path.expanduser("~"), "AppData", "Local", "EggBloom_v3")
+# （根目录由 _USER_DATA_ROOT 决定，测试沙箱可用环境变量改到临时目录）
+_USER_DATA_DIR = _USER_DATA_ROOT
 os.makedirs(_USER_DATA_DIR, exist_ok=True)
 
 MEME_DIR = os.path.join(SCRIPT_DIR, "memes", "memes")
@@ -2777,6 +2788,19 @@ def smart_send(text, target_qq=None):
     if not sentences:
         return send_message(text, target_qq)
 
+    # ── 气泡条数上限（2026-11-05）──────────────────────────────────
+    #   事故：19:42–19:44 用户发 4 条，bot 实发 10 条。smart_send 按句切完就
+    #   逐条发，"一轮回复 3 句"在 QQ 里就是连弹 3 条 —— 用户读起来是"回了很多次"。
+    #   这里只**并条不删字**：超出上限的句子按原顺序并进最后一条，标点保持不变。
+    #   调 `private_bubble_max`（默认 2，0 = 不限 = 旧行为）。
+    try:
+        _bubble_cap = int(_config.get("private_bubble_max", 2) or 0)
+    except (TypeError, ValueError):
+        _bubble_cap = 2
+    if _bubble_cap > 0 and len(sentences) > _bubble_cap:
+        _tail = "".join(sentences[_bubble_cap - 1:])
+        sentences = sentences[:_bubble_cap - 1] + [_tail]
+
     # ── 打字延迟（2026-10-22）──
     #    句与句之间本来就有 0.3~1.0s 的节奏，但**第一句之前是 0**。
     #    真人是"想一下 → 开始敲 → 敲完发"，这里补上"开始敲"的那段时间，
@@ -2789,8 +2813,10 @@ def smart_send(text, target_qq=None):
             time.sleep(_type_delay)
 
     # 如果只有一句话 → 直接发
+    #   2026-11-05：发的是**并条之后**的那句。旧版发 `text`，条数闸收到 1 时
+    #   会把并进来的整段丢掉，只发第一句。
     if len(sentences) == 1:
-        return send_message(text, target_qq)
+        return send_message(sentences[0], target_qq)
     
     # 逐句发送（模拟真人节奏）—— 走统一出站队列（1.6.0 刀 5）
     for s in sentences:

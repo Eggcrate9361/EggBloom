@@ -59,6 +59,9 @@ _QUEUE: "queue.Queue[dict]" = queue.Queue()
 _INMEM_IDS: set = set()
 _WORKER: Optional[threading.Thread] = None
 _STARTED = False
+#: 停机信号（见 shutdown()）。哨兵对象要比任何 job 都唯一。
+_STOP = threading.Event()
+_SENTINEL = object()
 
 #: 每个 target 上次真正发出的时间（限频用）
 _LAST_SENT: Dict[str, float] = {}
@@ -173,6 +176,43 @@ def _ensure_worker() -> None:
         pass
     _WORKER = threading.Thread(target=_run, daemon=True, name="outbound-worker")
     _WORKER.start()
+    # 退出前把 worker 收干净（见 shutdown 的注释：不收会在 finalize 阶段崩进程）
+    try:
+        import atexit as _atexit
+        _atexit.register(shutdown)
+    except Exception:
+        pass
+
+
+def shutdown(timeout: float = 1.0) -> None:
+    """停掉 worker 并等它退出（atexit 自动调用，测试里也可手动调）。
+
+    为什么必须有这个：worker 是 daemon 线程，解释器 finalize 时如果它正好在写
+    stdout，CPython 会抛
+
+        Fatal Python error: _enter_buffered_busy:
+        could not acquire lock for <_io.BufferedWriter name='<stdout>'>
+
+    然后**进程直接崩**（Windows exit=0xC0000409）。测试里表现为「断言
+    10/10 全过，但退出码非零」，还会被误判成业务代码坏了。
+    在 atexit 里先 join 掉，finalize 阶段就没有线程还攥着 stdout。
+    """
+    _STOP.set()
+    try:
+        _QUEUE.put(_SENTINEL)          # 唤醒阻塞在 get() 上的 worker
+    except Exception:
+        pass
+    w = _WORKER
+    if w is not None and w.is_alive():
+        try:
+            w.join(timeout)
+        except Exception:
+            pass
+
+
+def is_stopped() -> bool:
+    """worker 是否已经停机（停机后再入队没有意义）。"""
+    return _STOP.is_set()
 
 
 def _label(kind: str, is_group: bool) -> str:
@@ -183,6 +223,12 @@ def _label(kind: str, is_group: bool) -> str:
 def _run() -> None:
     while True:
         job = _QUEUE.get()
+        if job is _SENTINEL:                 # shutdown() 放进来的一颗毒丸
+            try:
+                _QUEUE.task_done()
+            except Exception:
+                pass
+            break
         try:
             _do_job(job)
         except Exception as e:                       # worker 绝不能死
@@ -334,6 +380,14 @@ def submit(kind: str, target: str, payload: dict, *, is_group: bool = False,
             if len(_RECENT) > 500:
                 for k in list(_RECENT)[:250]:
                     _RECENT.pop(k, None)
+    # 已停机（进程正在退出）：不再入队。否则调用方会傻等满 timeout 才拿到 False，
+    # 而 worker 永远不会来处理这条。检查放在 _ensure_worker() 之前 —— 停机之后
+    # 也不该再把线程拉起来。
+    if _STOP.is_set():
+        job["ok"] = False
+        job["resp"] = {"retcode": -1, "msg": "outbound 已停机"}
+        job["done"].set()
+        return job
     _ensure_worker()
     with _LOCK:
         _STATS["queued"] += 1
@@ -390,4 +444,4 @@ def wait_idle(timeout: float = 5.0) -> bool:
 
 __all__ = ["set_sender", "set_logger", "set_config", "submit", "send",
            "send_job", "send_text", "send_segment", "stats", "reset_stats",
-           "wait_idle"]
+           "wait_idle", "shutdown", "is_stopped"]

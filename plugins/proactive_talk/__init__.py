@@ -35,7 +35,8 @@ PLUGIN_MANIFEST = {
     "priority": 90,
     # 2026-10-21：用户明确要求启用。原本默认 False 是"不配就别乱开口"的保守设置，
     # 现已配好 data/config.json（心跳 15 分钟、最小间隔 3 小时、
-    # 用户发言后 30 分钟内不打扰、1:00–7:00 静默、单次最多 4 个气泡）。
+    # 用户发言后 30 分钟内不打扰、1:00–7:00 静默、单次最多 2 个气泡）。
+    # 2026-11-05：气泡数 4 → 2。主配置 `private_bubble_max` 是总闸，这里只会更小。
     # 想关就改这里回 False，或在 WebUI 插件页关掉。
     "default_enabled": True,
 }
@@ -69,7 +70,7 @@ DEFAULT_CONFIG = {
     #   **软闸**：按时段给 speak_chance 乘子（凌晨 ×0.15、晚上 ×1.2）。
     #   想恢复"全天一个概率"就设 False。硬闸仍然优先，不受这个开关影响。
     "bio_rhythm": True,
-    "max_bubbles": 4,           # 一次最多发几个气泡
+    "max_bubbles": 2,           # 一次最多发几个气泡（2026-11-05 由 4 降到 2）
     "persona_extra": "",        # 追加人设（接在默认风格约束后面）
     "recent_window": 6,         # 记录最近几条用户消息作为上下文
     # ── 联动（经本机 HTTP，不 import 主程序）──
@@ -239,6 +240,31 @@ def _clean_bubbles(text, max_bubbles: int) -> list:
         if 2 <= len(s) <= 60:
             out.append(s)
     return out[: max(1, int(max_bubbles or 4))]
+
+
+def effective_bubble_cap(cfg: dict) -> int:
+    """本插件与主配置的气泡上限取小者（2026-11-05）。
+
+    事故：19:40 主动开口连发 3 条（「老大」/「礼物这事…」/「要不你许个愿…」），
+    每句之间还有 1~3 秒打字延时；叠上私聊回复自己拆的 2~3 条，用户十分钟里
+    收到十几条 —— 反馈是"还是回了很多次"。
+
+    主动开口和私聊回复是同一段对话里的两种发言，不该因为走了另一条代码路径
+    就多收几条。所以主配置 `private_bubble_max` 是总闸，插件 `max_bubbles`
+    只能比它更小（谁更克制听谁的）。读不到主配置就只用插件自己的值。
+    """
+    try:
+        cap = int(cfg.get("max_bubbles") or 4)
+    except (TypeError, ValueError):
+        cap = 4
+    try:
+        import bot_core as _bcx
+        main = int(_bcx._config.get("private_bubble_max", 0) or 0)
+        if main > 0:
+            cap = min(cap, main)
+    except Exception:
+        pass
+    return max(1, cap)
 
 
 # ── 联动：经 WebUI 通用通道 / 记忆 API 读 EggBloom 现有能力 ──
@@ -430,7 +456,7 @@ def _build_messages(cfg: dict, state: dict, target: str) -> list:
     # 2026-11-02：再加「叫我X」/ 他自己的网名，并且**多目标时不再用全局 nickname**。
     nickname = _resolved_call_name(cfg, target)
     extra = str(cfg.get("persona_extra") or "").strip()
-    max_bubbles = int(cfg.get("max_bubbles") or 4)
+    max_bubbles = effective_bubble_cap(cfg)
 
     # 联动：人设 / 情绪 / 私聊记忆（任一失败自动降级，不影响主流程）
     # ★ 2026-11-04（一条 prompt 路径）：优先用主链拼好的静态提示词 ——
@@ -681,7 +707,7 @@ def _proactive_once(force: bool = False, target: str = "") -> dict:
                     "mode": _dec.get("mode"), "reason": _dec.get("reason")}
 
         text = _ai_text(_build_messages(cfg, state, chosen), max_tokens=300)
-        bubbles = _clean_bubbles(text, cfg.get("max_bubbles"))
+        bubbles = _clean_bubbles(text, effective_bubble_cap(cfg))
         if not bubbles:
             return {"ok": False, "error": "AI 未产出可用消息"}
 

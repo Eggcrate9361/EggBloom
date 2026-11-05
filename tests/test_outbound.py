@@ -14,12 +14,21 @@
 """
 import os
 import sys
+import tempfile
 import threading
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, ROOT)
+
+# 落盘库必须隔离（★ 2026-11-05）：默认路径是 <app>/data/outbox.sqlite3，全测试
+# 共享同一个文件。上一个用例落盘但没发出去的任务，会被下一个用例的
+# `_recover_from_disk()` 当成"重启恢复"重新发一遍 —— 实测本文件报
+# 「真的发出去了」失败，日志里多出 `[发送] 重启恢复 2 条未发出的消息`。
+# 必须在 import harness.outbound 之前设：_DEFAULT 是模块级常量。
+os.environ.setdefault("EGGBLOOM_OUTBOX_DB",
+                      os.path.join(tempfile.mkdtemp(prefix="eggobx_"), "outbox.sqlite3"))
 
 from harness import outbound as ob  # noqa: E402
 
