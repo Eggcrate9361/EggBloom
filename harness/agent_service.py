@@ -210,6 +210,20 @@ def unsubscribe(session_id, q):
             _BUS.pop(str(session_id), None)
 
 
+def publish_event(session_id, ev_type, data):
+    """对外发布一条实时事件（权限闸等非 agent_loop 路径用）。
+
+    agent_loop 的事件走 _bus_emit → _publish；但文件确认 / 插件授权是在
+    ``plugin_tools`` 里阻塞发出的，不经过 agent_loop。若不显式调这里，
+    前端 SSE 订阅者收不到 permission_request，弹窗就不会出现
+    （2026-11-05 P1-1 真机端到端实证）。
+    """
+    try:
+        _publish(str(session_id), str(ev_type), dict(data or {}))
+    except Exception:
+        pass
+
+
 def _publish(session_id, ev_type, data):
     """把事件推给所有订阅者。**永不抛**（总线故障不能影响 agent 执行）。"""
     try:

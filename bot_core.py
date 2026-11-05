@@ -1546,6 +1546,23 @@ def start_event_server():
                     # 一旦 seen_activity=True（收到过任何事件），空闲就立即收尾。
                     grace_until = time.time() + 5.0
                     seen_activity = False
+                    # ★ 2026-11-05 P1-1：连流晚于 permission_request、或页面刷新重连时，
+                    #   实时总线里那条已经没了。把「仍在等确认」的从会话日志补发一次，
+                    #   否则后端阻塞 180s 而用户看不到任何弹窗。
+                    try:
+                        _replay = pending_permission_events(sid)
+                        for _ev in _replay:
+                            sent += 1
+                            # 不置 seen_activity：补发不代表本轮已开始，
+                            # 否则空闲判定会立刻吐 idle 把连接掐断。
+                            if sent <= cursor:
+                                continue
+                            self.wfile.write((json.dumps(_ev, ensure_ascii=False,
+                                                         default=str) + "\n").encode("utf-8"))
+                        if _replay:
+                            self.wfile.flush()
+                    except Exception:
+                        pass
                     try:
                         while time.time() < deadline:
                             _batch = _agent._drain(sid)
@@ -1679,17 +1696,25 @@ def start_event_server():
                 _p = path
 
                 if _p == "/api/agent/chat":
-                    # ★ 权限询问通道：插件没启用时，plugin_call 会**阻塞等待**主人授权。
-                    #   把询问写进 session_log（kind="agent"）—— 前端流式读到的就是它，
-                    #   和 agent 其它事件同一条通道，断线重连也不丢。
+                    # ★ 权限询问通道：插件没启用 / 文件操作要动手时，调用方会**阻塞等**主人授权。
+                    #   2026-11-05 P1-1 真机端到端撞出来的坑：这里原先只写 session_log，
+                    #   而前端只订阅 /api/agent/stream 的**实时总线**（agent_service._BUS），
+                    #   两者不是同一条通道 → 确认弹窗永远不弹，fs_move 干等 180s 超时。
+                    #   现在双写：日志负责回放/断线补，总线负责当场弹窗。
                     try:
                         from harness import plugin_tools as _pt2
                         from harness import session_log as _sl2
+                        from harness import agent_service as _as2
                         _sid2 = str(req.get("session_id") or ("desk-%d" % int(time.time() * 1000)))
 
                         def _perm_notify(_rq, _sid=_sid2):
+                            _payload = dict(_rq)
                             try:
-                                _sl2.append("agent", _sid, "permission_request", dict(_rq))
+                                _sl2.append("agent", _sid, "permission_request", _payload)
+                            except Exception:
+                                pass
+                            try:
+                                _as2.publish_event(_sid, "permission_request", _payload)
                             except Exception:
                                 pass
                         _pt2.set_permission_notifier(_perm_notify)
@@ -7164,6 +7189,36 @@ _FILE_PENDING: Dict[str, Dict[str, Any]] = {}
 _FILE_PENDING_LOCK = Lock()
 #: 等人点按钮的上限。比插件权限短：文件操作本来就该快速决定，拖太久大概率没人看
 FILE_CONFIRM_TIMEOUT = 180.0
+
+
+def pending_permission_events(session_id):
+    """仍在等人点按钮的 permission_request（供 SSE 晚连 / 断线重连补发）。
+
+    实时总线是「发过就没了」：页面在请求发出之后才连上流、或中途刷新，
+    弹窗就会丢，而后端仍在阻塞等待。这里从 session_log 回放，但**只认
+    日志里有、且当前确实 pending 的** —— 已允许的旧请求不会被重新弹一遍。
+    """
+    try:
+        from harness import session_log as _sl
+        from harness import plugin_tools as _pt
+        with _FILE_PENDING_LOCK:
+            ids = set(_FILE_PENDING.keys())
+        try:
+            ids |= set(_pt.pending_permissions() or [])
+        except Exception:
+            pass
+        if not ids:
+            return []
+        out = []
+        for ev in _sl.events_of("agent", str(session_id)):
+            payload = ev.get("payload") or {}
+            rid = str(payload.get("request_id") or "")
+            if ev.get("type") == "permission_request" and rid in ids:
+                out.append({"type": "permission_request", "data": dict(payload),
+                            "ts": ev.get("ts")})
+        return out
+    except Exception:
+        return []
 
 
 def resolve_file_permission(request_id: str, allow: bool) -> bool:
