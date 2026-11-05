@@ -78,9 +78,20 @@ def main():
     html2 = open(os.path.join(ROOT, "webui", "webui_artistic_v4.html"),
                  encoding="utf-8", errors="replace").read()
     check("★ 页面有「以管理员启动」按钮", "pStartAdmin" in html2 and "以管理员启动" in html2)
-    check("页面会提示 UAC", "UAC 弹窗点" in html2)
+    # 2026-11-05 起走 SYSTEM 助手（session 1 内启动），不需要 UAC 了
+    check("★ 页面提示走高权限助手", "高权限助手" in html2)
+    check("不再让用户点 UAC", "UAC 弹窗点" not in html2)
     check("★ 提权后自动连一次", "await new Promise(res => setTimeout(res, 15000))" in html2
           or "setTimeout(res, 15000)" in html2)
+
+    print("\n[F] 环境探测：UAC 关闭时提权是不可能的")
+    check("★ 有 _self_is_elevated", "def _self_is_elevated(" in src)
+    check("★ 有 _uac_disabled", "def _uac_disabled(" in src)
+    check("★ 读 EnableLUA", "EnableLUA" in src)
+    check("★ UAC 关闭时指向『以管理员身份运行 EggBloom』",
+          "以管理员身份运行」" in src or "以管理员身份运行" in src)
+    check("★ 已提权但仍失败时给另一条出路", "仍未注入" in src)
+    check("三种情况分开", src.count("没有注入 QQ") >= 3, src.count("没有注入 QQ"))
 
     print("\n[D] 前端把结论显示出来")
     html = open(os.path.join(ROOT, "webui", "webui_artistic_v4.html"),

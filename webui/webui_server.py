@@ -781,6 +781,41 @@ def push_proto_log(text: str):
         _LOG_CLEARED = False
 
 
+def _self_is_elevated() -> bool:
+    """当前进程是否以高完整性运行（Windows）。非 Windows / 探测失败按 False。"""
+    try:
+        import ctypes
+        from ctypes import wintypes
+        TOKEN_QUERY = 0x0008
+        TokenElevation = 20
+        adv = ctypes.windll.advapi32
+        k32 = ctypes.windll.kernel32
+        h = wintypes.HANDLE()
+        if not adv.OpenProcessToken(k32.GetCurrentProcess(), TOKEN_QUERY,
+                                    ctypes.byref(h)):
+            return False
+        buf = ctypes.c_ulong(0)
+        need = ctypes.c_ulong(0)
+        ok = adv.GetTokenInformation(h, TokenElevation, ctypes.byref(buf),
+                                     ctypes.sizeof(buf), ctypes.byref(need))
+        k32.CloseHandle(h)
+        return bool(ok and buf.value)
+    except Exception:
+        return False
+
+
+def _uac_disabled() -> bool:
+    """本机是否关闭了 UAC（EnableLUA=0）。关闭时 RunAs 无法提权。"""
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
+                            r"SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System") as k:
+            v, _ = winreg.QueryValueEx(k, "EnableLUA")
+            return int(v) == 0
+    except Exception:
+        return False
+
+
 def _port_open_local(port: int) -> bool:
     import socket as _s
     try:
@@ -858,6 +893,9 @@ def _launch_snowluma_elevated():
 
     if not exe:
         return False, "先配置 SnowLuma 运行时（exe_path 指向 node.exe 或运行目录）"
+
+    # ★ 先把运行时算出来：助手分支与 RunAs 分支都要用。
+    #   （曾经放在后面 → NameError 被 except 吞掉，助手永远走不到）
     node = exe
     if _os.path.isdir(node):
         node = _os.path.join(node, "node.exe")
@@ -868,6 +906,30 @@ def _launch_snowluma_elevated():
         return False, f"node.exe 不存在: {node}"
     if not _os.path.isfile(_os.path.join(runtime, "index.mjs")):
         return False, f"index.mjs 不存在: {runtime}"
+
+    # ★ 首选：高权限助手（SYSTEM）把进程送进用户会话 —— 对所有机器都一样，
+    #   不需要 UAC、不需要人工以管理员启动。真机 2026-11-05 验证过：
+    #   这样起来的 SnowLuma 在 session 1、Node=High、能注入 QQ。
+    try:
+        # 用显式路径加载，避免依赖 sys.path 里有没有 app 根目录
+        import importlib.util as _ilu
+        _pc_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                                "harness", "privclient.py")
+        _spec = _ilu.spec_from_file_location("eggb_privclient", _pc_path)
+        _pc = _ilu.module_from_spec(_spec)
+        _spec.loader.exec_module(_pc)
+        if _pc.available():
+            _r = _pc.spawn_session(node, ["index.mjs"], runtime)
+            if _r and _r.get("ok"):
+                return True, ("已通过高权限助手启动 SnowLuma（会话 %s，无需 UAC）。"
+                              "起来后页面会自动连接。" % _r.get("session", "?"))
+    except Exception:
+        pass
+
+    # 次选：UAC（UAC 关闭的机器上 RunAs 不提权 —— 直接说清楚，别让用户干等弹窗）
+    if _uac_disabled() and not _self_is_elevated():
+        return False, ("本机 UAC 已关闭，程序内无法提权。"
+                       "请**关闭 EggBloom** 后**以管理员身份启动**，再点「启动协议层」。")
 
     # ★ 先清掉"起来了但没注入"的旧实例：否则提权起来的那个绑不上 5099/3000，
     #   用户看到的是两个实例抢端口（真机 2026-11-05 09:27 就是这么乱掉的）。
@@ -892,6 +954,28 @@ def _launch_snowluma_elevated():
         return False, f"发起提权失败: {e}"
     return True, ("已请求管理员权限启动 SnowLuma —— 请在 UAC 弹窗点「是」。"
                   "起来后页面会自动连接；若没连上，回来点一次「启动协议层」看诊断。")
+
+
+def _no_injection_hint() -> str:
+    """SnowLuma 起来了但没注入 QQ 时，给用户的**下一步动作**。
+
+    按环境分三种 —— 关键是 UAC 关闭时不能让用户去点按钮（那不会生效）：
+      · UAC 关 & 非管理员：必须**关闭 EggBloom 后以管理员身份启动**
+      · UAC 关 & 已是管理员：注入仍失败，看日志（多半是 QQ 版本不匹配）
+      · UAC 开：点本页「以管理员启动」即可
+    """
+    if _uac_disabled() and not _self_is_elevated():
+        return ("SnowLuma 已启动，但**没有注入 QQ**（3000/3001 未监听）。\n"
+                "本机 UAC 已关闭（EnableLUA=0），程序内无法提权。"
+                "请**关闭 EggBloom**，然后**以管理员身份启动 EggBloom**"
+                "（右键 EggBloom Desktop.exe →「以管理员身份运行」），"
+                "再回来点「启动协议层」。")
+    if _uac_disabled():
+        return ("SnowLuma 已启动，但**没有注入 QQ**。已以管理员身份运行仍未注入 ——"
+                "看 SnowLuma 日志里的 [Hook] 段，可能是 QQ 版本与框架不匹配。")
+    return ("SnowLuma 已启动，但**没有注入 QQ**（3000/3001 未监听）。\n"
+            "常见原因：QQ 以高权限运行，普通权限注入不进去。"
+            "点本页「以管理员启动」—— 会弹一次 UAC，点「是」即可。")
 
 
 def _protocol_start_diagnosis(wait_s: float = 6.0) -> str:
@@ -934,10 +1018,7 @@ def _protocol_start_diagnosis(wait_s: float = 6.0) -> str:
     if uin:
         return f"协议层已启动，OneBot 已连上（UIN {uin}）"
     if _port_ok(5099):
-        # 典型：SnowLuma 起来了，但没注入 QQ
-        return ("SnowLuma 已启动，但**没有注入 QQ**（3000/3001 未监听）。"
-                "常见原因：QQ 是以管理员身份运行的，普通权限注入不进去。"
-                "点本页「以管理员启动」重试 —— 会弹一次 UAC，点「是」即可。")
+        return _no_injection_hint()
     if _port_ok(3000):
         return "OneBot 端口已通，但取不到登录号（QQ 可能未登录）"
     return ("协议层进程没起来：先看「协议日志」里的报错，"

@@ -7390,7 +7390,7 @@ async function pageProtocol(el) {
     + '<div class="hd" style="margin-top:var(--s6)"><span class="lab">操作</span><i class="rule"></i></div>'
     + '<div style="display:flex;gap:var(--s3);flex-wrap:wrap">'
     +   '<button class="btn primary" id="pStart"' + (running ? ' disabled' : '') + '>启动协议层</button>'
-    +   '<button class="btn" id="pStartAdmin" title="QQ 或协议层以管理员身份运行时用它">以管理员启动</button>'
+    +   '<button class="btn" id="pStartAdmin" title="通过高权限助手在用户会话里启动（推荐）">以高权限启动</button>'
     +   '<button class="btn" id="pStop"' + (running ? '' : ' disabled') + '>停止</button>'
     +   '<button class="btn" id="pCheck">启动前自检</button>'
     +   '<button class="btn" id="pAuto">自动检测驱动</button>'
@@ -7609,8 +7609,8 @@ async function pageProtocol(el) {
   /* 以管理员启动：QQ 是 High 完整性时，普通权限拉起的 SnowLuma 注入会静默失败。
    后端用 Start-Process -Verb RunAs 拉起（弹 UAC），起来后自动调 start 连接。 */
 $('pStartAdmin').onclick = async () => {
-$('pStartAdmin').disabled = true; $('pStartAdmin').textContent = '请求提权…';
-say(true, '正在请求管理员权限 —— 请在 UAC 弹窗点「是」');
+$('pStartAdmin').disabled = true; $('pStartAdmin').textContent = '启动中…';
+say(true, '正在通过高权限助手启动（不需要 UAC）…');
 try {
 const r = await API('/protocol/start_elevated', { method:'POST', body:'{}' });
 say(!!r.success, r.output || '');
