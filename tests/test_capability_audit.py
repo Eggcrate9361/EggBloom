@@ -93,6 +93,39 @@ check("能力自述不误吃操作完成态",
       ra.find_capability_claims("已经发给你了", NO_CALLS) == [],
       ra.find_capability_claims("已经发给你了", NO_CALLS))
 
+# ── 6. 自动读图不产生 tool call：事实要靠调用方给（2026-11-05 真机）──────
+# 事故：22:58 私聊，这轮图片理解**成功**了（日志「[图片理解] 主模型读到了」），
+#   但 find_capability_claims 只从 tool_calls 找视觉工具 —— 自动读图根本不产生
+#   tool call，于是 seen_ok 恒 False，把
+#       「反正别人怎么样我也看不见，只看你这边」
+#   整句换成「我这轮没去取，你说说是什么」，回出去前后接不上，用户读到语病。
+h = ra.find_capability_claims("图我这儿还是糊的", NO_CALLS, had_media=True, vision_ok=True)
+check("vision_ok=True（自动读图成功）→ 判矛盾，不判没去试",
+      [k for k, _ in h] == ["vision_seen_but_denied"], h)
+h = ra.find_capability_claims("图我这儿还是糊的", NO_CALLS, had_media=True, vision_ok=False)
+check("vision_ok=False（跳过读图/全失败）→ 放过，它说的是实话", h == [], h)
+h = ra.find_capability_claims("图我这儿还是糊的", NO_CALLS, had_media=True)
+check("vision_ok 不传 → 回落 tool_calls 老逻辑",
+      [k for k, _ in h] == ["vision_not_tried"], h)
+
+# 真机原句：说的是「别人的图我看不到」，不是「这张图我没看」
+LIVE = "反正别人怎么样我也看不见，只看你这边"
+h = ra.find_capability_claims(LIVE, NO_CALLS, had_media=True, vision_ok=True)
+check("★ 真机原句不再被误判", h == [], h)
+out = ra.rewrite_capability_claims(LIVE, h, had_media=True)
+check("★ 原句一字不改地发出去", out == LIVE, out)
+h = ra.find_capability_claims(LIVE, NO_CALLS, had_media=True, vision_ok=False)
+check("宾语是别人 → vision_ok=False 时同样放过", h == [], h)
+
+# 对照：宾语真的是这张图，仍然要拦
+h = ra.find_capability_claims("这张图我实在看不见", NO_CALLS, had_media=True, vision_ok=True)
+check("对照：宾语是图 → 照拦", [k for k, _ in h] == ["vision_seen_but_denied"], h)
+h = ra.find_capability_claims("其他人发的我也看不到", NO_CALLS, had_media=True, vision_ok=True)
+check("对照：『其他人…看不到』也放行", h == [], h)
+h = ra.find_capability_claims("我看不见这张图", NO_CALLS, had_media=True, vision_ok=True)
+check("对照：『我看不见这张图』照拦",
+      [k for k, _ in h] == ["vision_seen_but_denied"], h)
+
 print(f"通过 {len(PASS)} / 失败 {len(FAIL)}")
 for n in FAIL:
     print(f"  FAIL  {n}")

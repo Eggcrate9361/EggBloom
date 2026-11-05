@@ -239,6 +239,13 @@ _CAP_MECH_LLM = (
 #: 两族合并（兼容旧引用；判定时仍分族，见 find_capability_claims）
 _CAP_MECH_PHRASES = _CAP_MECH_VISION + _CAP_MECH_LLM
 
+#: 「看不见」的宾语是**别人**时不算谎报（2026-11-05 真机）。
+#:   「反正别人怎么样我也看不见，只看你这边」——说的是视野范围（我只看得见你这一路），
+#:   不是"这张图我没看成"。旧判据只看句子里有没有「看不见」，把它整句换成了
+#:   「我这轮没去取，你说说是什么」，回出去前后接不上，用户直接读到语病。
+_OTHERS_BLIND_RE = re.compile(
+    r"(别人|其他人|人家|别的|其他)[^，。！？\n]{0,10}(看不到|看不见|看不着)")
+
 #: 「收不到」被说成「没发生」。否定断言只能证明自己没看到，证明不了世界。
 #: 只认**带观察动词**的组合，避免把"我没有什么想说的"这种正常句子卷进来。
 _CAP_NEGATIVE_RE = re.compile(
@@ -275,7 +282,8 @@ def _calls_matching(calls, names):
     return ok_any, fail_any
 
 
-def find_capability_claims(reply, tool_calls, had_media=False, user_msg=""):
+def find_capability_claims(reply, tool_calls, had_media=False, user_msg="",
+                           vision_ok=None):
     """找出「能力自述」类的问题句。
 
     参数
@@ -284,6 +292,18 @@ def find_capability_claims(reply, tool_calls, had_media=False, user_msg=""):
       user_msg   : 用户这一轮的原话。**用户自己先说的词，不算"露后台"** ——
                    他说 token，我顺着说 token，那是接话不是端后台
                    （真机 2026-11-05 11:53 就是这么被误伤的）。
+      vision_ok  : 这一轮模型**到底有没有看到图**，三态：
+                     None = 调用方没给（回落 tool_calls 推断，老行为）
+                     True = 真看到了（native 直接给图 / describe 至少一张读到了）
+                     False = 有图但没看到（跳过读图 / 全部识别失败）
+
+                   ★ 2026-11-05 为什么必须加这个参数：
+                   `seen_ok` / `seen_fail` 原来只从 `tool_calls` 里找视觉工具，
+                   可**自动读图（build_image_context_block / native 传图）根本不
+                   产生 tool call**。于是无论读没读成功，`seen_ok` 恒 False，
+                   日志里明明写着「[图片理解] 主模型读到了」，这里照样判
+                   `vision_not_tried`，把一句正常的话换成"我这轮没去取"。
+                   事实源应该由**发起视觉的那一方**当场给出，而不是事后反推。
 
     返回 [(kind, sentence), ...]，kind ∈ {mechanism, mechanism_llm,
     vision_seen_but_denied, vision_not_tried, negative}。
@@ -298,6 +318,10 @@ def find_capability_claims(reply, tool_calls, had_media=False, user_msg=""):
     calls = list(tool_calls or [])
     um = str(user_msg or "")
     seen_ok, seen_fail = _calls_matching(calls, _VISION_TOOLS)
+    # 调用方给了事实就以它为准（自动读图不产生 tool call，反推必错）
+    if vision_ok is not None:
+        seen_ok = bool(vision_ok)
+        seen_fail = not bool(vision_ok)
     hits = []
     for sent in _sentences(reply):
         _vis = [p for p in _CAP_MECH_VISION if p in sent]
@@ -308,6 +332,9 @@ def find_capability_claims(reply, tool_calls, had_media=False, user_msg=""):
                 hits.append(("mechanism" if _vis else "mechanism_llm", sent))
                 continue
         if had_media and any(p in sent for p in _CAP_VISION_PHRASES):
+            # 「别人怎么样我看不见」说的是视野，不是这张图 —— 放行
+            if _OTHERS_BLIND_RE.search(sent):
+                continue
             if seen_ok:
                 hits.append(("vision_seen_but_denied", sent))
             elif not seen_fail:

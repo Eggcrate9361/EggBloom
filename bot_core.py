@@ -6230,7 +6230,7 @@ def build_video_context_block(videos, scene: str = "群聊") -> str:
     return head + "\n" + "\n".join(lines) + tail
 
 
-def build_image_context_block(images, scene: str = "群聊") -> str:
+def build_image_context_block(images, scene: str = "群聊", outcome: dict = None) -> str:
     """把若干张图转成可注入 prompt 的【图片内容】块（视觉描述）。
 
     三种结局都说清楚，**不许静默省略**：
@@ -6239,9 +6239,21 @@ def build_image_context_block(images, scene: str = "群聊") -> str:
         （旧版这里返回 ""，模型只看到消息里的 `[图片]` 占位、不知道发生了什么，
          只能瞎编或甩一句"引用图片解析失败"——线上截图实证。）
       · 部分成 → 块里带上成功的那几张，并说明其余失败。
+
+    `outcome`（2026-11-05）：可选出参字典，回填 `total / seen / failed` 三个计数。
+    能力校验（`reply_audit.find_capability_claims`）需要"这轮到底看到没"的**事实**，
+    而它以前只能从 `tool_calls` 反推 —— 自动读图不产生 tool call，于是永远推成
+    "没去试"。事实只有这里知道（成功几张、失败几张），就在这儿交出去。
     """
+    def _mark(total: int, seen: int, failed_n: int) -> None:
+        if outcome is not None:
+            outcome["total"] = total
+            outcome["seen"] = seen
+            outcome["failed"] = failed_n
+
     imgs = [p for p in list(images or [])[:6] if p]
     if not imgs:
+        _mark(0, 0, 0)
         return ""
     lines: List[str] = []
     failed: List[str] = []
@@ -6255,6 +6267,7 @@ def build_image_context_block(images, scene: str = "群聊") -> str:
             lines.append(f"- {d}")
         elif not any(os.path.basename(str(p)) in f for f in failed):
             failed.append(os.path.basename(str(p)))
+    _mark(len(imgs), len(lines), len(failed))
     # ★ 标语措辞刻意避开"的图片"等易被意图正则命中的串：画图意图正则里就有
     #   `的图片`，注入块若写成"【群聊里的图片内容】"会把普通消息误判成"帮我画图"
     #   并劫持去 ComfyUI（tests/test_image_understanding.py 实测抓到过）。
@@ -15512,6 +15525,11 @@ def _pipeline_step(group_id):
     #   —— 这个坑是 tests/test_image_understanding.py 第一次跑就抓到的。
     _imgs = []
     _need_img = True   # 图片要不要交给模型理解（默认要；下面按需关闭）
+    # ★ 2026-11-05：本轮视觉事实（None=没图 / True=真能看到 / False=有图但没看到）。
+    #   下游能力校验以前靠 tool_calls 反推，可自动读图不产生 tool call —— 推出来
+    #   永远是"没去试"，于是明明读到了还被改写成"我这轮没去取"。
+    _vision_ok = None
+    _vision_seen_n = 0
     try:
         _imgs = [p for p in (buffer.get("images") or []) if p and os.path.exists(p)]
         _mode = image_reply_mode()
@@ -15551,13 +15569,25 @@ def _pipeline_step(group_id):
                 _max = int(_config.get("reply_vision_max_images", 3) or 3)
             except Exception:
                 _max = 3
-            _blk = build_image_context_block(_imgs[:_max], scene="群聊")
+            _vo: dict = {}
+            _blk = build_image_context_block(_imgs[:_max], scene="群聊", outcome=_vo)
+            _vision_seen_n = int(_vo.get("seen") or 0)
             if _blk:
                 merged_text = merged_text + "\n" + _blk
                 merged_text_for_ai = _ai_text(merged_text)
                 log(f"群[{group_id}] [图片理解] {min(len(_imgs), _max)} 张 · {len(_blk)} 字")
             else:
                 log(f"群[{group_id}] [图片理解] {len(_imgs)} 张全部识别失败（按没看到图处理）")
+        # 三态结论：off / 明确跳过读图 = 没看到；native = 原图直接进 messages，
+        # 一定看到；describe = 至少一张读到才算看到（部分成功也算看到，
+        # 模型确实有东西可依）。四种模式都要分，别把 off 当成 native。
+        if _imgs:
+            if _mode == "off" or not _need_img:
+                _vision_ok = False
+            elif _mode == "native":
+                _vision_ok = True
+            else:
+                _vision_ok = _vision_seen_n > 0
     except Exception as e:
         log(f"群[{group_id}] [图片理解] 异常(忽略): {e}")
     _plugin_ctx = {}
@@ -16163,12 +16193,13 @@ def _pipeline_step(group_id):
                 #        一次没调 → 拦。没图时不判，那只是普通聊天。
                 try:
                     _cap = _ra.find_capability_claims(
-                        sent_text, _tr2.recent_tool_calls(), had_media=bool(images),
-                        user_msg=merged_text)
+                        sent_text, _tr2.recent_tool_calls(),
+                        had_media=bool(_imgs), user_msg=merged_text,
+                        vision_ok=_vision_ok)
                     if _cap:
                         _bc = sent_text
                         sent_text = _ra.rewrite_capability_claims(
-                            sent_text, _cap, had_media=bool(images))
+                            sent_text, _cap, had_media=bool(_imgs))
                         log(f"群[{group_id}] [能力校验] {_cap[0][0]}: "
                             f"{_cap[0][1][:36]} → {sent_text[:36]}")
                         if not sent_text:
@@ -18245,10 +18276,29 @@ def main():
                         log("私聊[%s] [图片理解] 跳过（%d 张连发斗图、无文字）"
                             % (sender, len(images)))
                 # 照片/截图不设门禁（与群聊同口径，见群聊分支注释）
+                # 读图方式只取一次：下面三处都要用，而它是一次配置读取
+                _pm_mode = image_reply_mode() if images else ""
                 _pm_call_images = (images if _pm_need_img else None) \
-                    if (images and image_reply_mode() == "native") else None
-                if images and _pm_need_img and image_reply_mode() == "describe":
-                    _pm_blk = build_image_context_block(images[:3], scene="私聊")
+                    if _pm_mode == "native" else None
+                # ★ 2026-11-05：本轮视觉事实，当场记，别让下游去猜。
+                #   None=这轮没图 / True=模型真能看到 / False=有图但没看到。
+                #   旧版能力校验靠 tool_calls 反推，而自动读图不产生 tool call，
+                #   于是「[图片理解] 主模型读到了」之后还被判成"没去试"，
+                #   把「反正别人怎么样我也看不见」整句换成了「我这轮没去取」。
+                #   三档都要分：off=根本没处理图 / 跳过读图=这批真没看到 /
+                #   native=原图直接进 messages，一定看到；describe 看下面 outcome。
+                _pm_vision_ok = None
+                if images:
+                    if _pm_mode == "off" or not _pm_need_img:
+                        _pm_vision_ok = False
+                    elif _pm_mode == "native":
+                        _pm_vision_ok = True
+                if images and _pm_need_img and _pm_mode == "describe":
+                    _pm_vo: dict = {}
+                    _pm_blk = build_image_context_block(images[:3], scene="私聊",
+                                                        outcome=_pm_vo)
+                    if _pm_vo.get("total"):
+                        _pm_vision_ok = int(_pm_vo.get("seen") or 0) > 0
                     if _pm_blk:
                         text = text + "\n" + _pm_blk
                         log(f"私聊[{sender}] [图片理解] {min(len(images), 3)} 张 · {len(_pm_blk)} 字")
@@ -18374,7 +18424,8 @@ def main():
                         try:
                             _cap = _ra.find_capability_claims(
                                 sent_text, _tr2.recent_tool_calls(),
-                                had_media=bool(images), user_msg=text)
+                                had_media=bool(images), user_msg=text,
+                                vision_ok=_pm_vision_ok)
                             if _cap:
                                 _bc = sent_text
                                 sent_text = _ra.rewrite_capability_claims(

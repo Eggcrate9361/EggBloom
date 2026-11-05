@@ -82,6 +82,41 @@ def test_describe_block_stubbed():
           bot_core.build_image_context_block([]) == "", "")
 
 
+def test_vision_outcome():
+    """outcome 出参：把「这轮看到几张」交给能力校验（2026-11-05）。
+
+    为什么需要：`reply_audit.find_capability_claims` 以前从 tool_calls 反推
+    视觉成没成，而自动读图不产生 tool call —— 明明读到了也判"没去试"。
+    事实只有这里知道，就在这里交出去；判据是三个计数，不猜。
+    """
+    print("\n=== 3b) 视觉结果回填 outcome（给能力校验用）===")
+    orig = bot_core.describe_image
+    try:
+        bot_core.describe_image = lambda ref, prompt="": "一张图（桩）"
+        vo = {}
+        bot_core.build_image_context_block([os.path.join(IMG, "发布打包.md")],
+                                           scene="私聊", outcome=vo)
+        check("成功：total=1", vo.get("total") == 1, vo)
+        check("成功：seen=1", vo.get("seen") == 1, vo)
+        check("成功：failed=0", vo.get("failed") == 0, vo)
+
+        bot_core.describe_image = lambda ref, prompt="": ""
+        vo2 = {}
+        blk2 = bot_core.build_image_context_block([os.path.join(IMG, "发布打包.md")],
+                                                  scene="私聊", outcome=vo2)
+        check("全失败：seen=0", vo2.get("seen") == 0, vo2)
+        check("全失败：failed=1", vo2.get("failed") == 1, vo2)
+        check("全失败仍有块（写明不许猜）", "解析失败" in blk2, blk2[:120])
+    finally:
+        bot_core.describe_image = orig
+
+    vo3 = {}
+    bot_core.build_image_context_block([], outcome=vo3)
+    check("没图：total=0 且不崩", vo3.get("total") == 0, vo3)
+    check("不传 outcome 也不崩",
+          isinstance(bot_core.build_image_context_block([]), str), "")
+
+
 def test_group_reply_carries_image():
     print("\n=== 4) 群聊回复链：图真的带到了，且 prompt 不含 URL ===")
     sent = {}
@@ -148,6 +183,7 @@ def main():
     test_cq_sanitize()
     test_extract_text_image()
     test_describe_block_stubbed()
+    test_vision_outcome()
     test_group_reply_carries_image()
     print("\n" + "=" * 56)
     print(f"通过 {PASS} / 失败 {FAIL}")
