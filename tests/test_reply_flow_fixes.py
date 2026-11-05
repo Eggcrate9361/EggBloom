@@ -127,6 +127,12 @@ def main():
     check("★ 摘要支线用统一请求头", "_llm_request_headers(" in inner)
     tc = io.open(os.path.join(HERE, "test_compress_txn.py"), encoding="utf-8").read()
     check("★ 压缩用例隔离了 LOG_FILE", "bot_core.LOG_FILE = self._tmp_log.name" in tc)
+    runner = io.open(os.path.join(ROOT, "run_all_tests.py"), encoding="utf-8").read()
+    check("★ 运行器对所有测试进程注入日志文件",
+          'EGGBLOOM_LOG_FILE=os.path.join(tmp, "qq_bot.log")' in runner
+          and 'EGGBLOOM_TEST_MODE="1"' in runner)
+    check("★ 重定向有测试模式闸门（生产设了同名变量也不受影响）",
+          'os.environ.get("EGGBLOOM_TEST_MODE") == "1"' in src)
 
     _cleanup()
     try:

@@ -108,7 +108,12 @@ def run_one(path, timeout):
                EGGBLOOM_SUPER_MEMORY_DB=os.path.join(tmp, "super_memory.db"),
                EGGBLOOM_PLUGIN_BUDGET=os.path.join(tmp, "plugin_budget.json"),
                EGGBLOOM_OUTBOX_DB=os.path.join(tmp, "outbox.sqlite3"),
-               EGGBLOOM_ALLOW_ACTION_EVENTS="1")
+               EGGBLOOM_ALLOW_ACTION_EVENTS="1",
+               # ★ 2026-11-05：日志也隔离。只给个别测试单独 patch LOG_FILE 挡不住
+               #   其余用例（_t_gate_ask / _test_observe_e2e_ 等）往真 qq_bot.log
+               #   里写行，排查时真假消息混在一起。这里一次性对所有子进程生效。
+               EGGBLOOM_LOG_FILE=os.path.join(tmp, "qq_bot.log"),
+               EGGBLOOM_TEST_MODE="1")
     try:
         r = subprocess.run([sys.executable, path], cwd=ROOT, timeout=timeout,
                            capture_output=True, text=True, env=env,

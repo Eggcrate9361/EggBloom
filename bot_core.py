@@ -692,7 +692,16 @@ os.makedirs(_USER_DATA_DIR, exist_ok=True)
 MEME_DIR = os.path.join(SCRIPT_DIR, "memes", "memes")
 
 INSTRUCTION_FILE = os.path.join(_USER_DATA_DIR, "qq_instructions.json")
-LOG_FILE = os.path.join(_USER_DATA_DIR, "qq_bot.log")
+# ★ 2026-11-05：只有测试运行器显式标记 EGGBLOOM_TEST_MODE=1 才重定向日志。
+#   EGGBLOOM_LOG_FILE 这个名字 harness/trace_tools.py 也在读，生产环境一旦设了它，
+#   不加闸门就会把 bot 日志也带跑。此前只给个别测试单独打补丁，
+#   其余用例（_t_gate_ask / _test_observe_e2e_ 等）仍把行写进真 qq_bot.log。
+#   生产无 TEST_MODE → 路径逐字节不变。
+if os.environ.get("EGGBLOOM_TEST_MODE") == "1":
+    LOG_FILE = (os.environ.get("EGGBLOOM_LOG_FILE")
+                or os.path.join(_USER_DATA_DIR, "qq_bot.log"))
+else:
+    LOG_FILE = os.path.join(_USER_DATA_DIR, "qq_bot.log")
 STATE_FILE = os.path.join(_USER_DATA_DIR, "qq_bot_state.json")
 TEMP_DIR = os.path.join(_USER_DATA_DIR, "temp")
 IMAGE_CACHE = os.path.join(_USER_DATA_DIR, "image_cache")
