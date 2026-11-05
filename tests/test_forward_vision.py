@@ -99,7 +99,7 @@ def main():
         print("\n[A] 6 张图全部读到")
         bc._FWD_CACHE.clear()
         calls.update(api=0, vision=0, extract=0)
-        out = bc._fetch_forward_content("fid-A")
+        out = bc._fetch_forward_content("fid-A", vision=True)
         check("★ 调了 get_forward_msg", calls["api"] == 1, calls)
         check("★ 6 张都走了图片理解", calls["vision"] == 6, calls)
         check("★ 复用 extract_images（含 rkey 重签那条链）", calls["extract"] == 6, calls)
@@ -111,7 +111,7 @@ def main():
 
         print("\n[B] 缓存：同一 id 不再重复请求")
         calls.update(api=0, vision=0, extract=0)
-        out2 = bc._fetch_forward_content("fid-A")
+        out2 = bc._fetch_forward_content("fid-A", vision=True)
         check("★ 第二次没打 API", calls["api"] == 0, calls)
         check("★ 第二次没重复看图", calls["vision"] == 0, calls)
         check("★ 结果与首次一致", out2 == out)
@@ -120,7 +120,7 @@ def main():
         bc._FWD_CACHE.clear()
         desc_ok[0] = False
         calls.update(api=0, vision=0, extract=0)
-        out3 = bc._fetch_forward_content("fid-B")
+        out3 = bc._fetch_forward_content("fid-B", vision=True)
         check("★ 6 个纯 [图片] 占位", out3.count("[图片]") == 6, out3[:200])
         check("★ 注记说都没取到画面", "6 张图片（都没取到画面）" in out3, out3[-120:])
         check("★ 注记要求别猜、让对方打字",
@@ -132,7 +132,7 @@ def main():
         bc._FWD_CACHE.clear()
         bc._config["forward_vision_enable"] = False
         calls.update(api=0, vision=0, extract=0)
-        out4 = bc._fetch_forward_content("fid-D")
+        out4 = bc._fetch_forward_content("fid-D", vision=True)
         check("★ 一次看图都没调", calls["vision"] == 0, calls)
         check("★ 仍给了 [图片] 占位", out4.count("[图片]") == 6, out4[:160])
         check("★ 与开启时的结果不同（缓存没串）", out4 != out)
@@ -142,7 +142,7 @@ def main():
         bc._FWD_CACHE.clear()
         resp = [_fwd_resp([[_img(i) for i in range(8)]])]
         calls.update(api=0, vision=0, extract=0)
-        out5 = bc._fetch_forward_content("fid-E")
+        out5 = bc._fetch_forward_content("fid-E", vision=True)
         check("★ 只看了 6 张", calls["vision"] == bc._FWD_IMG_MAX, calls)
         check("★ 6 个描述 + 2 个占位",
               out5.count("[图片：") == 6 and out5.count("][图片]") >= 0, out5[:200])
@@ -155,7 +155,7 @@ def main():
                             _img(9),
                             {"type": "record", "data": {"file": "a.amr"}},
                             {"type": "face", "data": {"id": "1"}}]])]
-        out6 = bc._fetch_forward_content("fid-F")
+        out6 = bc._fetch_forward_content("fid-F", vision=True)
         check("★ 正文保留", "这是重点" in out6, out6[:160])
         check("★ 语音占位", "[语音]" in out6, out6[:160])
         check("★ 表情占位", "[表情]" in out6, out6[:160])
@@ -169,7 +169,7 @@ def main():
         bc._FWD_CACHE.clear()
         resp = [_fwd_resp([[_img(7)]])]
         msg = {"_raw_elements": [{"type": "forward", "data": {"id": "fid-G"}}]}
-        t = bc.extract_text(msg)
+        t = bc.extract_text(msg, with_vision=True)
         check("★ 产出 [转发消息] 而不是空占位",
               "[转发消息]" in t and "[合并转发消息]" not in t, t[:160])
 
@@ -179,7 +179,7 @@ def main():
         desc_delay[0] = 0.25
         calls.update(api=0, vision=0, extract=0)
         t0 = time.time()
-        out7 = bc._fetch_forward_content("fid-H")
+        out7 = bc._fetch_forward_content("fid-H", vision=True)
         dt = time.time() - t0
         desc_delay[0] = 0.0
         check("★ 6 张都描述了",
@@ -189,7 +189,56 @@ def main():
         check("★ 顺序不乱（6 个描述都在行内）", "（转发里共 6 张图片（已读到 6 张画面）" in out7,
               out7[-140:])
 
-        print("\n[I] 静态接线")
+        print("\n[I] 只在被 @ / 被引用时才开看图")
+        bot_qq = str(bc.BOT_QQ or "10001")
+        fwd_seg = {"type": "forward", "data": {"id": "fid-x"}}
+        at_bot = {"type": "at", "data": {"qq": bot_qq}}
+        at_other = {"type": "at", "data": {"qq": "999999999", "nickname": "路人甲"}}
+        at_all = {"type": "at", "data": {"qq": "all"}}
+        reply_seg = {"type": "reply", "data": {"id": "123"}}
+        txt_seg = {"type": "text", "data": {"text": "看看"}}
+        check("★ 群纯转发 → 不开",
+              not bc._forward_vision_allowed({"message": [fwd_seg]}))
+        check("★ 群 @bot → 开",
+              bc._forward_vision_allowed({"message": [fwd_seg, at_bot, txt_seg]}))
+        check("★ 群 @全体 → 开",
+              bc._forward_vision_allowed({"message": [fwd_seg, at_all]}))
+        check("★ 群 @别人 → 不开",
+              not bc._forward_vision_allowed({"message": [fwd_seg, at_other]}))
+        check("★ 群只带引用（没 @）→ 开",
+              bc._forward_vision_allowed({"message": [reply_seg, txt_seg]}))
+        check("★ 群文本型 @bot → 开",
+              bc._forward_vision_allowed({"message": [fwd_seg],
+                                          "raw_message": "[CQ:at,qq=%s] @%s 看看"
+                                                         % (bot_qq, str(bc.BOT_QQ))}))
+        check("★ 私聊纯转发 → 不开",
+              not bc._forward_vision_allowed({"message": [fwd_seg]}, private=True))
+        check("★ 私聊带正文 → 开",
+              bc._forward_vision_allowed({"message": [fwd_seg, txt_seg]}, private=True))
+        check("★ 私聊引用 → 开",
+              bc._forward_vision_allowed({"message": [reply_seg, fwd_seg]}, private=True))
+
+        print("\n[J] 默认不看图；同一 fid 占位版与看图版分键缓存")
+        bc._FWD_CACHE.clear()
+        resp = [_fwd_resp([[_img(11)]])]
+        calls.update(api=0, vision=0, extract=0)
+        t_default = bc.extract_text(msg)
+        check("★ extract_text 默认产出占位而非描述",
+              calls["vision"] == 0 and "[图片]" in t_default and "[图片：" not in t_default,
+              t_default[:160])
+        bc._FWD_CACHE.clear()
+        calls.update(api=0, vision=0, extract=0)
+        plain = bc._fetch_forward_content("fid-J", vision=False)
+        seen = bc._fetch_forward_content("fid-J", vision=True)
+        check("★ 占位版不看图、看图版看图",
+              calls["vision"] == 1 and "[图片：" in seen and "[图片：" not in plain,
+              calls)
+        check("★ 两种结果分别缓存（API 只打 2 次）", calls["api"] == 2, calls)
+        check("★ 再看图版命中缓存不重复看图",
+              bc._fetch_forward_content("fid-J", vision=True) == seen
+              and calls["vision"] == 1, calls)
+
+        print("\n[K] 静态接线")
         src = io.open(os.path.join(ROOT, "bot_core.py"), encoding="utf-8",
                       errors="replace").read()
         check("★ 复用 extract_images（不是自己拼 url 下载）",
@@ -198,6 +247,13 @@ def main():
         check("★ 有张数上限与总预算", "_FWD_IMG_MAX = 6" in src and "_FWD_IMG_BUDGET" in src)
         check("★ 有并发批次", "_fwd_describe_batch" in src and "ThreadPoolExecutor" in src)
         check("★ 有开关", "forward_vision_enable" in src)
+        check("★ 解析函数默认 vision=False",
+              "def _fetch_forward_content(forward_id, _depth=0, vision=False)" in src)
+        check("★ extract_text 默认 with_vision=False",
+              "def extract_text(msg, _depth=0, with_vision=False)" in src)
+        check("★ 插件钩子明确不开看图",
+              "extract_text(msg, with_vision=False).strip()" in src)
+        check("★ 主流程按判据传开关", "_fwd_vis = _forward_vision_allowed" in src)
 
     finally:
         bc.api_call = orig_api

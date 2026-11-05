@@ -5062,7 +5062,58 @@ def _extract_card_text(data_str) -> str:
     return ""
 
 
-def extract_text(msg, _depth=0):
+def _forward_vision_allowed(msg, private=False):
+    """转发里的图片，只有「有人真的在问我」时才值得付看图成本。
+
+    纯机械判据，不调模型、不读历史：
+      · 群聊：at 段指向 bot / @全体，或带 reply 段（引用别人发的转发来问我）；
+        @ 别人的消息不算 —— 那条后面本来就会被「别抢话」丢掉。
+      · 私聊：有正文或引用（私聊本来就是对我说话）；纯转发不回复，不看图。
+
+    为什么放在 extract_text 之前：看图发生在解析过程中，而主流程的
+    is_at_bot 是在 text 拿到之后才算的，来不及当开关。
+    """
+    segs = msg.get("message") or msg.get("_raw_elements") or []
+    if not isinstance(segs, list):
+        segs = []
+    has_reply = any(isinstance(s, dict) and str(s.get("type") or "") == "reply"
+                    for s in segs)
+    if private:
+        has_text = any(isinstance(s, dict) and str(s.get("type") or "") == "text"
+                       and str((s.get("data") or {}).get("text") or "").strip()
+                       for s in segs)
+        return bool(has_reply or has_text)
+    for s in segs:
+        if not isinstance(s, dict) or str(s.get("type") or "") != "at":
+            continue
+        d = s.get("data") or {}
+        if not isinstance(d, dict):
+            d = {}
+        qq = str(d.get("qq") or d.get("user_id") or "")
+        nick = str(d.get("nickname") or "")
+        if qq == "all" or qq == str(BOT_QQ):
+            return True
+        try:
+            if _is_bot_self_name(qq) or _is_bot_self_name(nick):
+                return True
+            if not qq and nick and any(n and n in nick for n in _bot_self_names()):
+                return True
+        except Exception:
+            pass
+    # 文本型 @（没有 at 段时）
+    raw = str(msg.get("raw_message") or "")
+    if raw:
+        if f"@{BOT_QQ}" in raw:
+            return True
+        try:
+            if any(f"@{n}" in raw for n in _bot_self_names() if n):
+                return True
+        except Exception:
+            pass
+    return bool(has_reply)
+
+
+def extract_text(msg, _depth=0, with_vision=False):
     # 优先用 _raw_elements（原始消息段），回退到 message
     raw = msg.get("_raw_elements") or msg.get("message", "")
     if isinstance(raw, list):
@@ -5094,7 +5145,8 @@ def extract_text(msg, _depth=0):
                     d = seg.get("data") or seg.get("multiForwardMsgElement") or seg.get("multiForwardElement") or seg.get("forwardElement") or {}
                     fid = d.get("id", "") or d.get("resId", "") or d.get("rid", "")
                     if fid:
-                        fwd_text = _fetch_forward_content(fid, _depth + 1)
+                        fwd_text = _fetch_forward_content(
+                            fid, _depth + 1, vision=with_vision)
                         parts.append(f"[转发消息] {fwd_text}" if fwd_text else "[合并转发消息]")
                     else:
                         parts.append("[合并转发消息]")
@@ -5254,7 +5306,7 @@ def _fwd_seg_placeholder(seg_type, data):
     return ""
 
 
-def _fetch_forward_content(forward_id, _depth=0):
+def _fetch_forward_content(forward_id, _depth=0, vision=False):
     """通过 OneBot API 获取合并转发消息的完整文本（支持嵌套转发）。
 
     2026-11-05 真机：用户 @ 机器人看一个合并转发，里面是 **6 张图片**，
@@ -5265,14 +5317,18 @@ def _fetch_forward_content(forward_id, _depth=0):
       · 其它非文本段给事实占位（语音/视频/表情…），不丢信息；
       · 结尾补一行「共几张、读到几张、别猜」的诚实注记；
       · 按 forward id 缓存，消掉插件钩子 / 主流程 / 引用回抓的重复 API 请求。
-    开关 `forward_vision_enable`（默认开），单次最多 6 张、总预算 25 秒。
+
+    ★ `vision` 默认 **False**：看图一次约 10s，纯转发（只记上下文、不回复）
+      不值得付这个成本。只有 `_forward_vision_allowed()` 判定「被 @ / 被引用」
+      时，调用方才显式传 True。总闸 `forward_vision_enable` 关掉则一律不看。
+      缓存键按 vision 分开，先解析出来的占位不会污染后面被 @ 时的真描述。
     """
     if _depth > 3:
         return ""
     fid = str(forward_id or "")
     now = time.time()
-    vision_on = bool(_config.get("forward_vision_enable", True))
-    # 开关变了不能继续吃旧缓存（带图描述 vs 纯占位是两种结果）
+    vision_on = bool(vision) and bool(_config.get("forward_vision_enable", True))
+    # 同一个 fid 的「占位版」与「看图版」是两种结果，必须分键缓存
     cache_key = fid + ("|v" if vision_on else "|p")
     with _FWD_CACHE_LOCK:
         hit = _FWD_CACHE.get(cache_key)
@@ -5326,7 +5382,8 @@ def _fetch_forward_content(forward_id, _depth=0):
                         nested_id = sd.get("id", "")
                         if nested_id:
                             try:
-                                nested = _fetch_forward_content(nested_id, _depth + 1)
+                                nested = _fetch_forward_content(
+                                    nested_id, _depth + 1, vision=vision_on)
                                 if nested:
                                     line_parts.append(nested)
                                     has_real_text = True
@@ -17247,7 +17304,8 @@ def main():
                         pm = get_plugin_manager()
                         if pm and pm.has_typed_hook("on_message"):
                             _mtype = msg.get("_type", "private")
-                            _mtext = extract_text(msg).strip()
+                            # 插件钩子只要文本，不必为每条转发付看图成本
+                            _mtext = extract_text(msg, with_vision=False).strip()
                             _msender = str(msg.get("sender", {}).get("user_id", "") or msg.get("user_id", ""))
                             _plugin_reply = pm.execute_typed_hooks_first(
                                 "on_message",
@@ -17305,9 +17363,11 @@ def main():
                     if not _group_allowed(group_id):
                         _notice_group_blocked(group_id, _group_block_reason(group_id))
                         continue
-                    text = extract_text(msg).strip()
-                    
-                    
+                    # 转发看图只在被 @ / 被引用时开；纯转发只拿占位，不付 10s 成本
+                    _fwd_vis = _forward_vision_allowed(msg, private=False)
+                    text = extract_text(msg, with_vision=_fwd_vis).strip()
+
+
                     # 转发消息：静默记录，不打印逐行内容
                     if "[转发消息]" in text:
                         log(f"群[{group_id}] [转发] 已提取{len(text)}字，不回复")
@@ -17337,7 +17397,9 @@ def main():
                                     resp = api_call("get_msg", {"message_id": reply_id})
                                     if resp.get("retcode") == 0:
                                         qdata = resp.get("data", {})
-                                        qtext = extract_text(qdata)
+                                        # 开关取决于**当前这条**消息（有没有 @ / 引用），
+                                        # 不是被引用的 qdata —— 它本身通常只是个纯转发。
+                                        qtext = extract_text(qdata, with_vision=_fwd_vis)
                                         # ★ 引用的原消息是图片时，图片地址只存在于 raw_message 的
                                         #   CQ 串里（extract_text 只会给出 "[图片]"）—— 这里单独抠出来，
                                         #   否则引用图片永远进不了视觉层（线上就是"引用一张图问这是啥"）。
@@ -17754,8 +17816,9 @@ def main():
                     log(f"私聊[{sender}] 好友自动回复已关闭（联系人管理页），跳过")
                     continue
 
-                text = extract_text(msg).strip()
-                
+                _fwd_vis = _forward_vision_allowed(msg, private=True)
+                text = extract_text(msg, with_vision=_fwd_vis).strip()
+
                 # 纯转发消息：只记录上下文，不触发回复
                 has_fwd = any(isinstance(s, dict) and s.get("type") == "forward" for s in msg.get("message", []))
                 has_usr_txt = any(isinstance(s, dict) and s.get("type") == "text" and (s.get("data") or {}).get("text", "").strip() for s in msg.get("message", []))
@@ -17782,7 +17845,7 @@ def main():
                                 resp = api_call("get_msg", {"message_id": reply_id})
                                 if resp.get("retcode") == 0:
                                     qdata = resp.get("data", {})
-                                    qtext = extract_text(qdata)
+                                    qtext = extract_text(qdata, with_vision=_fwd_vis)
                                     # 引用的是图片 → 地址只在 raw_message 的 CQ 串里
                                     _raw_q = str(qdata.get("raw_message") or "")
                                     if _raw_q:
