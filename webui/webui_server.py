@@ -1336,6 +1336,43 @@ def _protocol_hud():
     }
 
 
+def _privhelper_status(timeout=0.5):
+    """协议页用：高权限助手在不在（P0-3，2026-11-05）。
+
+    只读 :3007/health，不碰 token、不做任何写操作。助手是 SYSTEM 计划任务
+    起的独立进程，掉了对 webui 是不可见的 —— 以前只能翻 data/privhelper.log。
+
+    红线：离线必须**返回 online=False**，不能抛异常、不能超时拖住页面。
+    /api/status 是按秒轮询的轻量接口（见 _protocol_hud 注释），这里单独开
+    端点给协议页 5 秒拉一次，不往 /api/status 里塞 HTTP 探测。
+    """
+    try:
+        import importlib.util as _ilu
+        _pc_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "harness", "privclient.py")
+        _spec = _ilu.spec_from_file_location("eggb_privclient_status", _pc_path)
+        _pc = _ilu.module_from_spec(_spec)
+        _spec.loader.exec_module(_pc)
+        h = _pc.health(timeout=timeout)
+    except Exception as e:
+        return {"ok": True, "online": False, "elevated": False, "pid": None,
+                "port": 3007, "error": "%s: %s" % (type(e).__name__, e),
+                "hint": "助手状态读取失败，看 data/privhelper.log"}
+    h = h or {}
+    online = bool(h.get("ok"))
+    elevated = bool(h.get("elevated"))
+    hint = ""
+    if not online:
+        hint = ("助手未运行：以高权限启动会退回 UAC 兜底（本机 EnableLUA=0 提不了权）；"
+                "重跑 scripts/install_privhelper.ps1 或 "
+                "Start-ScheduledTask -TaskName EggBloom-PrivHelper")
+    elif not elevated:
+        hint = "助手在线但不是高完整性令牌，spawn_session 可能注入不了 QQ"
+    return {"ok": True, "online": online, "elevated": elevated,
+            "pid": h.get("pid"), "port": h.get("port") or 3007, "hint": hint}
+
+
 def _refresh_status():
     while True:
         try:
@@ -3043,6 +3080,11 @@ class Handler(BaseHTTPRequestHandler):
             stats["mem_usage"] = sys_stats["memory"]
             stats.update(_protocol_hud())      # 协议驱动/运行态（与缓存路径同一份口径）
             self._send_json(200, {"data": stats})
+            return
+
+        # P0-3：协议页的助手在线徽标。单独端点，不塞进 /api/status（那边按秒轮询）
+        if path == "/api/protocol/privhelper":
+            self._send_json(200, _privhelper_status())
             return
 
         if path == "/api/gallery":

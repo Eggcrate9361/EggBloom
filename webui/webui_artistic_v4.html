@@ -7387,7 +7387,8 @@ async function pageProtocol(el) {
       }).join('')
     + '</div>'
 
-    + '<div class="hd" style="margin-top:var(--s6)"><span class="lab">操作</span><i class="rule"></i></div>'
+    + '<div class="hd" style="margin-top:var(--s6)"><span class="lab">操作</span><i class="rule"></i>'
+    +   '<span id="pHelperState" class="sig" title="高权限助手状态，每 5 秒刷新">助手：检测中…</span></div>'
     + '<div style="display:flex;gap:var(--s3);flex-wrap:wrap">'
     +   '<button class="btn primary" id="pStart"' + (running ? ' disabled' : '') + '>启动协议层</button>'
     +   '<button class="btn" id="pStartAdmin" title="通过高权限助手在用户会话里启动（推荐）">以高权限启动</button>'
@@ -7739,6 +7740,33 @@ $('pStop').onclick = async () => {
     if (!document.body.contains(el)) { clearInterval(window.__pLogTimer); window.__pLogTimer = null; return; }
     pullLogs();
   }, 2500);
+
+  /* ── P0-3 高权限助手状态（2026-11-05）───────────────────────────
+    助手是 SYSTEM 计划任务起的独立进程，掉了对协议页完全不可见 —— 以前只能翻
+    data/privhelper.log。5 秒拉一次只读端点：停掉 30 秒内必变离线，起回来自动恢复。
+    页面切走时清掉定时器（与 __pLogTimer 同一套 contains 判据），不留后台轮询。 */
+  const pHelper = $('pHelperState');
+  const paintHelper = (r) => {
+    if (!pHelper || !document.body.contains(pHelper)) return;
+    const online = !!(r && r.online), high = !!(r && r.elevated);
+    let cls = 'sig err', txt = '助手：离线';
+    if (online && high) { cls = 'sig ok'; txt = '助手：在线 · 高权限'; }
+    else if (online) { cls = 'sig'; txt = '助手：在线 · 权限不足'; }
+    pHelper.className = cls;
+    pHelper.innerHTML = '<i></i>' + txt;
+    pHelper.title = (r && r.hint) ? r.hint : (online ? ':3007 已响应' : '等待 :3007');
+  };
+  const pullHelper = async () => {
+    try { paintHelper(await API('/protocol/privhelper', null, 3000)); }
+    catch (e) { paintHelper(null); }
+  };
+  if (window.__pHelperTimer) { clearInterval(window.__pHelperTimer); }
+  await pullHelper();
+  window.__pHelperTimer = setInterval(() => {
+    if (!document.body.contains(el)) { clearInterval(window.__pHelperTimer); window.__pHelperTimer = null; return; }
+    pullHelper();
+  }, 5000);
+
   $('pLogClear').onclick = async () => {
     try { await API('/protocol/logs/clear', { method:'POST', body:'{}' }); _logSig = ''; drawLogs(null); }
     catch (e) { say(false, e.message); }
