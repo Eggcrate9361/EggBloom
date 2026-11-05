@@ -782,7 +782,16 @@ def push_proto_log(text: str):
 
 
 def _self_is_elevated() -> bool:
-    """当前进程是否以高完整性运行（Windows）。非 Windows / 探测失败按 False。"""
+    """当前进程是否以高完整性运行（Windows）。非 Windows / 探测失败按 False。
+
+    ★ 2026-11-05 修：必须先设 argtypes/restype。原写法没设，
+      `GetCurrentProcess()` 的伪句柄 -1 在 64 位下按 c_int 截断，
+      `OpenProcessToken` 拿到无效句柄 → **永远返回 False**。
+      真机证据：High 完整性的进程里，原写法 False、补 types 后 True。
+      协议页的诊断分支靠它区分「已提权但仍没注入」和「压根没提权」，
+      一直 False 会让它永远给"请右键以管理员身份运行"那一条。
+      harness/privhelper.is_elevated() 是同一段代码的另一份，改要两边一起改。
+    """
     try:
         import ctypes
         from ctypes import wintypes
@@ -790,6 +799,15 @@ def _self_is_elevated() -> bool:
         TokenElevation = 20
         adv = ctypes.windll.advapi32
         k32 = ctypes.windll.kernel32
+        k32.GetCurrentProcess.restype = wintypes.HANDLE
+        adv.OpenProcessToken.argtypes = [wintypes.HANDLE, wintypes.DWORD,
+                                         ctypes.POINTER(wintypes.HANDLE)]
+        adv.OpenProcessToken.restype = wintypes.BOOL
+        adv.GetTokenInformation.argtypes = [wintypes.HANDLE, ctypes.c_int,
+                                            ctypes.c_void_p, wintypes.DWORD,
+                                            ctypes.POINTER(wintypes.DWORD)]
+        adv.GetTokenInformation.restype = wintypes.BOOL
+        k32.CloseHandle.argtypes = [wintypes.HANDLE]
         h = wintypes.HANDLE()
         if not adv.OpenProcessToken(k32.GetCurrentProcess(), TOKEN_QUERY,
                                     ctypes.byref(h)):

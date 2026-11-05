@@ -52,10 +52,28 @@ def log(msg):
 
 
 def is_elevated():
+    """当前进程是否以高完整性令牌在跑。
+
+    ★ 2026-11-05 修：**必须**先设 argtypes/restype。原写法直接调
+      `k32.GetCurrentProcess()`（默认 restype 是 32 位 c_int），伪句柄 -1
+      被截成 0x00000000FFFFFFFF，`OpenProcessToken` 拿到无效句柄直接失败
+      → 函数**永远返回 False**。真机证据：以 SYSTEM 起的 privhelper，
+      /health 一直报 elevated:false；同进程里补上 argtypes 的版本返回 True。
+      webui_server._self_is_elevated() 是同一段代码的另一份，改要两边一起改。
+    """
     try:
         import ctypes
         from ctypes import wintypes
         adv, k32 = ctypes.windll.advapi32, ctypes.windll.kernel32
+        k32.GetCurrentProcess.restype = wintypes.HANDLE
+        adv.OpenProcessToken.argtypes = [wintypes.HANDLE, wintypes.DWORD,
+                                         ctypes.POINTER(wintypes.HANDLE)]
+        adv.OpenProcessToken.restype = wintypes.BOOL
+        adv.GetTokenInformation.argtypes = [wintypes.HANDLE, ctypes.c_int,
+                                            ctypes.c_void_p, wintypes.DWORD,
+                                            ctypes.POINTER(wintypes.DWORD)]
+        adv.GetTokenInformation.restype = wintypes.BOOL
+        k32.CloseHandle.argtypes = [wintypes.HANDLE]
         h = wintypes.HANDLE()
         if not adv.OpenProcessToken(k32.GetCurrentProcess(), 0x0008, ctypes.byref(h)):
             return False
