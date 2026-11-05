@@ -137,7 +137,8 @@ def run_one(path, timeout):
 def run_evals():
     """跑 evals/ 下所有机械用例：reply 判据 + 自主性策略层。"""
     scripts = [("reply", os.path.join(ROOT, "evals", "run_eval.py")),
-               ("autonomy", os.path.join(ROOT, "evals", "autonomy_eval.py"))]
+               ("autonomy", os.path.join(ROOT, "evals", "autonomy_eval.py")),
+               ("fluency", os.path.join(ROOT, "evals", "fluency_eval.py"))]
     lines, ok_all, ran = [], True, 0
     for name, path in scripts:
         if not os.path.exists(path):
