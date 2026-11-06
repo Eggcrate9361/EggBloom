@@ -148,6 +148,25 @@ class TestQuestionMarksCoverage(unittest.TestCase):
             with self.subTest(s=s):
                 self.assertEqual(self.f(s), s)
 
+    def test_quoted_content_does_not_make_question(self):
+        """引号里的疑问词不算本句语气（2026-11-06 真机）。
+
+        原句：「你 08:03 先发的「你怎么知道我醒来了」，我才接的」
+        —— 引号里有「怎么」，整句被补成「…我才接的？」，一句陈述变成反问。
+        判语气只看引号外的部分；整句就是一个引语的，更不该动。
+        """
+        keep = [
+            "你 08:03 先发的「你怎么知道我醒来了」，我才接的",
+            "我这儿只看见你 08:03 自己冒出来问「你怎么知道我醒来了」",
+            "他问我「你吃了吗」",
+            "「你吃了吗」",
+        ]
+        for s in keep:
+            with self.subTest(s=s):
+                self.assertEqual(self.f(s), s, f"转述句被误加了问号：{s}")
+        # 注：以「」结尾的行本来就被 `_QM_KEEP` 当成"已带标点"跳过，
+        # 所以这里不测"引号结尾还要补问号"—— 那是既有策略，不是这次要改的东西。
+
     # ── 4. 原有行为不能被改坏 ──
     def test_first_round_still_passes(self):
         """第一版锁住的用例必须继续成立（这次是收窄，不是推翻）。"""

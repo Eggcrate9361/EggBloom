@@ -87,6 +87,29 @@ def main():
     check("没有该块", not _own_block(msgs))
     check("用户消息仍在", any(m.get("role") == "user" for m in msgs), msgs[-1])
 
+    print("\n[D] 一次主动开口发了两条气泡 → 两条都要在里面")
+    # 2026-11-06 真机：bot 主动发「醒得挺早啊你」「我这刚处理完一堆破事」，
+    # 用户引的是**第一条**；旧实现只取最后一条 → 模型回「我发过这句？别往我头上安」。
+    msgs = _build([
+        {"role": "user", "content": "你怎么知道我醒来了", "ts": now - 200},
+        {"role": "assistant", "content": "醒得挺早啊你", "ts": now - 150},
+        {"role": "assistant", "content": "我这刚处理完一堆破事", "ts": now - 148},
+    ], "consist_d")
+    blk = _own_block(msgs)
+    check("★ 第一条气泡在内", "醒得挺早啊你" in blk, blk)
+    check("★ 第二条气泡也在内", "我这刚处理完一堆破事" in blk, blk)
+    check("仍然带「你自己说的」提示", "你自己" in blk, blk)
+
+    print("\n[E] 跨过用户消息就停：只认最近这一段")
+    msgs = _build([
+        {"role": "assistant", "content": "更早说的话", "ts": now - 600},
+        {"role": "user", "content": "中间用户插话", "ts": now - 500},
+        {"role": "assistant", "content": "刚说的话", "ts": now - 100},
+    ], "consist_e")
+    blk = _own_block(msgs)
+    check("含最近那句", "刚说的话" in blk, blk)
+    check("不含更早那句", "更早说的话" not in blk, blk)
+
     print("\n" + "=" * 56)
     print(f"通过 {PASS} / 失败 {FAIL}")
     if FAILURES:

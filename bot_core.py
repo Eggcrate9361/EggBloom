@@ -238,6 +238,18 @@ def _plugin_send_text(text, target=None, group_id=None) -> bool:
                 })
         except Exception:
             pass
+        # ★ 2026-11-06（用户："bot 不知道自己干了什么说了什么"）：插件发出的话
+        #   以前只进 chat_history（历史行）和沙漏，**不进行为账本** → 追问
+        #   "你刚不是发过吗"时，`self_actions.render` 里没有这条，它只能否认。
+        #   记在最外层这个唯一出口上，proactive_talk / recall_manager 一起覆盖。
+        try:
+            if _ok:
+                import self_actions as _sa
+                _sa.record("say", scene=("group" if group_id else "private"),
+                           target=str(group_id or target or ""),
+                           detail=text[:40], group_id=str(group_id or ""))
+        except Exception:
+            pass
         return _ok
     except Exception as e:
         try:
@@ -472,12 +484,52 @@ def _dyn_add(container, key: str, text) -> None:
         container.append(text)
 
 
+def _dyn_texts(container) -> List[str]:
+    """取出动态上下文容器里已加入的文本（`list` 与 `life_context.Parts` 都认）。
+
+    P1-3（2026-11-06）：注入侧去重要知道"前面已经放过什么"，而容器有两种形状
+    （1.6.0 刀 2 之后是 `Parts`，老路径仍是 list）。这里**只读**，不动容器。
+    """
+    if container is None:
+        return []
+    try:
+        blocks = getattr(container, "blocks", None)
+        if blocks is not None:
+            return [str(t) for _k, t in blocks]
+    except Exception:
+        pass
+    if isinstance(container, (list, tuple)):
+        return [str(t) for t in container if t]
+    return []
+
+
 def _inject_ego_context(dynamic_parts, inject_text: str, tag: str = "EGO"):
-    """把 EGO 注入内容作为 system 级指令追加进 dynamic_parts（而非用户消息尾部）。"""
+    """把 EGO 注入内容作为 system 级指令追加进 dynamic_parts（而非用户消息尾部）。
+
+    ★ 2026-11-06（P1-3「同一件事不会来自两处」）：拼进去之前先跟**已注入的记忆**
+      对一遍行。沙漏里存的对话原文，super_memory 的 `messages` 表也存一份；
+      私聊两边都能召回同一句，prompt 里就出现两遍 —— 模型会更用力地按条目交付
+      （汇报腔），也白烧 token。去重规则保守（见 memory_api.filter_duplicate_lines）：
+      只删"归一化后全等"或"长句互为子串"，没有重复时输出**逐字节不变**。
+    """
     if not inject_text or dynamic_parts is None:
         return
+    _text = inject_text
+    try:
+        from harness import memory_api as _mem
+        _filtered, _st = _mem.filter_duplicate_lines(
+            _dyn_texts(dynamic_parts), inject_text)
+        if _st.get("dropped"):
+            _text = _filtered
+            _sample = "｜".join(_st.get("samples") or [])
+            log(f"[记忆] EGO 注入去重 {_st['dropped']} 行（与已注入记忆重复）"
+                + (f"：{_sample}" if _sample else ""))
+    except Exception:
+        _text = inject_text   # 去重失败就按原样注入，绝不因此丢内容
+    if not str(_text or "").strip():
+        return
     _dyn_add(dynamic_parts, "ego",
-             f"【{tag}上下文】以下是关于当前对话对象的长期状态，不是对方说的话：\n{inject_text}")
+             f"【{tag}上下文】以下是关于当前对话对象的长期状态，不是对方说的话：\n{_text}")
 
 
 def _inject_sleep_state(dynamic_parts, is_group: bool = True):
@@ -4536,6 +4588,17 @@ def send_file(file_path: str, target_qq: Optional[str] = None) -> bool:
         log(f"文件不存在: {file_path}")
         return False
     st, _desc = _send_file_blocking(file_path, str(target_qq))
+    # ★ 2026-11-06（用户："bot 不知道自己干了什么"）：发文件以前只写日志，
+    #   **不进行为账本** → 下一轮问它"刚才发我的是什么"，它只能说"我没发过"。
+    #   记在 send_file 这个唯一的同步出口上，handle_user_file 的目录批量分支
+    #   也就自动覆盖（每个文件一条）。
+    if st == "ok":
+        try:
+            import self_actions as _sa
+            _sa.record("file", scene="private", target=str(target_qq),
+                       detail=os.path.basename(file_path))
+        except Exception:
+            pass
     return st == "ok"
 
 
@@ -8068,6 +8131,17 @@ def _capability_view_lines(*, is_group, group_id, sender, tool_names):
             _blocked = [n for n in _all if n not in _allowed]
         except Exception:
             _blocked = []
+    # 权限不够的第三种（2026-11-06）：私聊非白名单拿不到写/执行/桌面。
+    # 以前这类混进"这轮没挂上"，模型被教成"要的话直接说" → 先答应再失败。
+    _denied: List[str] = []
+    if not is_group:
+        try:
+            _priv_ok = _private_tool_allowed(sender) if sender else False
+        except Exception:
+            _priv_ok = False
+        if not _priv_ok:
+            _offered_set = {str(n) for n in (tool_names or ()) if n}
+            _denied = [n for n in _all if n not in _offered_set]
     _role = _bot_group_role(group_id) if (is_group and group_id) else ""
     try:
         _sender_is_admin = bool(_is_authorized(sender)) if sender else False
@@ -8077,6 +8151,7 @@ def _capability_view_lines(*, is_group, group_id, sender, tool_names):
         offered_tools=tool_names,
         all_tools=_all,
         blocked_tools=_blocked,
+        denied_tools=_denied,
         plugins=_plugins,
         is_group=is_group,
         bot_role=_role,
@@ -8268,36 +8343,97 @@ def _private_tool_allowed(uid) -> bool:
         return False
 
 
+#: 工具组默认许可（2026-11-06 从 `_tools_subset_for_scene` 里的写死代码搬出来）。
+#  配置里对应键为空数组时用这三份；非空则以配置为准（见 `_cfg_tool_groups`）。
+#  语义：
+#    · 群聊不给本机能力（desktop/write/proc）—— 群友不该能让我动这台机器
+#    · 私聊白名单（管理员）= 上限全开
+#    · 私聊非白名单 = **只能聊天**（+ 联网搜索）。用户原话：「私聊一般只能聊天，
+#      除非是管理员」。想放宽就改配置 private_public_groups，不用动代码。
+_DEFAULT_GROUP_TOOL_GROUPS = ("core", "work", "web", "group", "plugin", "todo", "skill")
+_DEFAULT_PRIVATE_TOOL_GROUPS = ("core", "work", "web", "plugin", "todo", "skill",
+                                "write", "proc", "desktop", "mcp")
+_DEFAULT_PRIVATE_PUBLIC_GROUPS = ("core",)
+
+#: `[工具组]` 那行日志的去重表（每个进程每种场景只打一次）
+_GROUP_LOGGED = set()
+
+
+def _known_tool_groups():
+    from harness import tool_registry as _tr
+    return {_tr.GROUP_CORE, _tr.GROUP_WORK, _tr.GROUP_WEB, _tr.GROUP_GROUP,
+            _tr.GROUP_WRITE, _tr.GROUP_PROC, _tr.GROUP_TODO, _tr.GROUP_DEEP,
+            _tr.GROUP_MCP, _tr.GROUP_SKILL, _tr.GROUP_DESKTOP, "plugin"}
+
+
+def _cfg_tool_groups(key, default):
+    """读配置里的组名单；空/非法 → 用默认。
+
+    为什么要"非法就忽略"：配置中心是给人手填的，写错一个组名（比如 `desktp`）
+    如果整体生效失败，表现是"工具全没了"，很难查。这里逐项过滤，
+    不认识的组名记一行日志、跳过，其余照常。
+    """
+    raw = _config.get(key)
+    if not isinstance(raw, (list, tuple)) or not raw:
+        return list(default)
+    known = _known_tool_groups()
+    out, bad = [], []
+    for g in raw:
+        g = str(g or "").strip()
+        if not g or g in out:
+            continue
+        (out if g in known else bad).append(g)
+    if bad:
+        log(f"[工具组] {key} 里有不认识的组名，已忽略: {bad}")
+    return out or list(default)
+
+
 def _tools_subset_for_scene(is_group: bool, privileged: bool = True) -> list:
     """按场景返回该给模型的工具名（稳定顺序）。
 
-    私聊：core/work/write/proc/desktop/web/skill/todo/plugin/mcp —— 全给。
-    群聊：去掉 write/proc/desktop（本机能力不进群），其余全给；
-    最终还会再过一遍 group_tool_allowlist 白名单。
+    三份名单都在配置里（`group_tool_groups` / `private_tool_groups` /
+    `private_public_groups`），留空走本文件顶部的默认值：
 
-    ★ 1.6.0 刀 3（2026-11-01）：`deep_task` 单独一组 `GROUP_DEEP`，
-    **只有 `agent_as_tool` 打开时才进来**；私聊还要求进入过白名单（`privileged`），
-    因为它会开一个能调工具的子 agent —— 普通私聊用户不该有这双手。
-    ★ 刀 4：群/私聊那两道场景开关收成 `agent_can_work`（能不能干活的唯一开关）。
+      · 私聊白名单（管理员） → core/work/web/skill/todo/plugin/write/proc/desktop/mcp
+      · 私聊非白名单         → core/work/web/skill/todo/plugin（能聊能查）
+      · 群聊                 → core/work/web/group/skill/todo/plugin
+                              最终还会再过一遍 group_tool_allowlist 白名单
+
+    ★ 2026-11-06：**判据从"关键词"回到"身份"**。以前 private 分支还要看用户这
+      句话里有没有"文件/截图/发我"之类，没命中就不给 desktop 组 —— 用户换个说法
+      就变成"我手上没有发文件的工具"。工具该不该给，取决于**他是谁**，
+      而不是他这次用了什么词（词表永远补不完，而且失败是静默的）。
+    ★ 1.6.0 刀 3：`deep_task` 单独一组 `GROUP_DEEP`，**只有 `agent_as_tool` 打开
+      时才进来**；私聊还要求进过白名单（`privileged`），因为它会开一个能调工具
+      的子 agent —— 普通私聊用户不该有这双手。
     """
     from harness import tool_registry as _tr
-    groups = [_tr.GROUP_CORE, _tr.GROUP_WORK, _tr.GROUP_WEB,
-              _tr.GROUP_SKILL, _tr.GROUP_TODO, "plugin"]
     if is_group:
-        groups.append(_tr.GROUP_GROUP)
+        groups = _cfg_tool_groups("group_tool_groups", _DEFAULT_GROUP_TOOL_GROUPS)
     elif privileged:
-        groups.extend([_tr.GROUP_WRITE, _tr.GROUP_PROC,
-                       _tr.GROUP_DESKTOP, _tr.GROUP_MCP])
+        groups = _cfg_tool_groups("private_tool_groups", _DEFAULT_PRIVATE_TOOL_GROUPS)
+    else:
+        groups = _cfg_tool_groups("private_public_groups", _DEFAULT_PRIVATE_PUBLIC_GROUPS)
     # 多步任务：开关关 → 模型根本看不到这个工具（回退粒度就是"别开它"）
     if bool(_config.get("agent_as_tool", False)) and _agent_can_work(is_group):
         if is_group or privileged:
-            groups.append(_tr.GROUP_DEEP)
+            groups = list(groups) + [_tr.GROUP_DEEP]
     seen, names = set(), []
     for g in groups:
         for n in _tr.names_in(g):
             if n not in seen:
                 seen.add(n)
                 names.append(n)
+    # 每个进程每种场景只打一行：工具给多给少是"为什么它不会用某能力"的第一嫌疑，
+    # 以前只能靠猜（或去读配置）。这行让排查从"读代码"变成"看日志"。
+    try:
+        _k = (bool(is_group), bool(privileged), tuple(groups))
+        if _k not in _GROUP_LOGGED:
+            _GROUP_LOGGED.add(_k)
+            _scene = "群聊" if is_group else ("私聊·白名单" if privileged else "私聊·非白名单")
+            log(f"[工具组] {_scene} → {len(names)} 个工具（{','.join(groups)}）")
+    except Exception:
+        pass
     return names
 
 
@@ -9424,33 +9560,107 @@ def handle_generate_image(prompt, style="default", user_ref_image=None):
         log(f"图片生成错误: {e}")
         return f"图片生成失败: {str(e)}"
 
+# ── 显式命令表（2026-11-06 重写：不再"句子里出现关键词就当命令"）──────────
+#
+# 旧版是清一色 `^.*?(关键词).*$` —— **包含即命中**。真机事故（11-06 00:40）：
+#   用户说「生日结束了吧」，被 `(结束|终止|…)\s*(.+)` 抓成「结束进程 了吧」；
+#   同一张表还意味着「我刚重启完」会真的重启机器、「你关机了吗」会真的关机、
+#   「他截图给我看了」会真截一张图发过去。
+#
+# 根因不是词表写少了，而是**判据用错了**：自然语言里出现一个动词，不代表
+# 用户在下指令。工具/命令该由模型决定（它有 take_screenshot / open_app /
+# send_user_file 等工具），前置正则只保留"整句就是一个命令"的显式形式。
+#
+# 现在只认两种（其余一律交模型）：
+#   ① **整句就是命令**：fullmatch + 不超 60 字 → `截屏` / `关机` / `系统信息`
+#   ② **显式前缀 `#`**：破坏性动作必须这样 → `#结束 notepad`、`#发送 D:\a.zip`
+#
+# 字段：(模式, 处理函数, 权限, 名字, 是否必须带前缀)
+_CMD_MAX_LEN = 60
+_CMD_PREFIXES = ("#", "＃", "/", "／")
+
+#: "打开"的宾语得像一个真实目标（盘符/路径/带扩展名/引号），
+#: 否则"打开话匣子"这种句子会被当成 open 命令。判据是**形态**不是措辞。
+_CMD_TARGET_RE = re.compile(
+    r"""^(?:"[^"]+"|'[^']+'|.*[\\/].*|[A-Za-z]:.*|.*\.[A-Za-z0-9]{1,6}$)""")
+
 COMMAND_PATTERNS = [
-    # 截屏：匹配任意位置的截屏关键词
-    (r'^.*?(截[屏图]|screenshot).*$', lambda m: handle_screenshot(), "admin"),
-    # 打开：匹配"打开 XXX"
-    (r'^.*?打开\s*(.+)$', lambda m: handle_open(m.group(1)), "admin"),
-    # 系统信息：匹配"查看系统信息""电脑配置"等
-    (r'^.*?(系统信息|系统配置|系统状态|电脑配置|电脑状态|电脑信息).*$', lambda m: handle_sysinfo(), "all"),
+    # 截屏
+    (r"(?:截[屏图]|screenshot)", lambda m: handle_screenshot(), "admin", "screenshot", False),
+    # 打开：宾语得像个目标
+    (r"打开\s*(.+)", lambda m: handle_open(m.group(1)), "admin", "open", False),
+    # 系统信息
+    (r"(?:系统信息|系统配置|系统状态|电脑配置|电脑状态|电脑信息)",
+     lambda m: handle_sysinfo(), "all", "sysinfo", False),
     # 音量
-    (r'^.*?(音量|声音)\s*(增大|加大|加|↑|up|上调|升高|调高).*$', lambda m: handle_volume("up"), "admin"),
-    (r'^.*?(音量|声音)\s*(减小|降低|减|↓|down|下调|调低).*$', lambda m: handle_volume("down"), "admin"),
-    (r'^.*?(静音|mute).*$', lambda m: handle_volume("mute"), "admin"),
-    (r'^.*?音量\s*(\d+).*$', lambda m: handle_volume("set", int(m.group(1))), "admin"),
-    # 电源（危险指令，仅管理员）
-    (r'^.*?(关机|重启|锁屏|休眠).*$', lambda m: handle_power(m.group(1)), "admin"),
-    (r'^.*?(取消关机|取消重启).*$', lambda m: handle_power(m.group(1)), "admin"),
-    # 进程（危险指令，仅管理员）
-    (r'^.*?(进程列表|查看进程|显示进程|高占用|进程$).*$', lambda m: handle_process("list"), "admin"),
-    (r'^.*?(结束|终止|杀掉?|关闭进程)\s*(.+)$', lambda m: handle_process("kill", m.group(2)), "admin"),
+    (r"(?:音量|声音)\s*(?:增大|加大|加|↑|up|上调|升高|调高)",
+     lambda m: handle_volume("up"), "admin", "vol_up", False),
+    (r"(?:音量|声音)\s*(?:减小|降低|减|↓|down|下调|调低)",
+     lambda m: handle_volume("down"), "admin", "vol_down", False),
+    (r"(?:静音|mute)", lambda m: handle_volume("mute"), "admin", "mute", False),
+    (r"音量\s*(\d+)", lambda m: handle_volume("set", int(m.group(1))), "admin", "vol_set", False),
+    # 电源：**整句**才认（"关机" / "#关机"），"我刚重启完" 不再触发
+    (r"(?:取消关机|取消重启)", lambda m: handle_power(m.group(0)), "admin", "power_cancel", False),
+    (r"(?:关机|重启|锁屏|休眠)", lambda m: handle_power(m.group(0)), "admin", "power", False),
+    # 进程
+    (r"(?:进程列表|查看进程|显示进程|高占用)",
+     lambda m: handle_process("list"), "admin", "proc_list", False),
+    # 结束进程：**必须带前缀**（"结束"两个字在自然语言里太常见）
+    (r"(?:结束|终止|杀掉?|关闭进程)\s*(.+)",
+     lambda m: handle_process("kill", m.group(1)), "admin", "proc_kill", True),
     # 搜索
-    (r'^.*?搜索\s*(.+)$', lambda m: handle_search(m.group(1)), "all"),
-    # 文件转发：发送/传/发我 + 文件名或路径（管理员，可能泄露本地文件）
-    (r'^.*?(?:把|将)?\s*(?:发送|传|发给我|发我)\s*(.+?)(?:文件|给我)?$', lambda m: handle_user_file(m.group(1).strip()), "admin"),
+    (r"搜索\s*(.+)", lambda m: handle_search(m.group(1)), "all", "search", False),
+    # 文件转发：**必须带前缀**（可能泄露本机文件）
+    (r"(?:把|将)?\s*(?:发送|传|发给我|发我)\s*(.+?)(?:文件|给我)?",
+     lambda m: handle_user_file(m.group(1).strip()), "admin", "send_file", True),
     # 帮助
-    (r'^(帮助|命令|功能|help|指令|怎么用)$', lambda m: True, "command_help"),
+    (r"(?:帮助|命令|功能|help|指令|怎么用)", lambda m: True, "command_help", "help", False),
     # 学习状态
-    (r'^.*?(学习状态|自主学习|learning.status).*$', lambda m: handle_learning_status(), "all"),
+    (r"(?:学习状态|自主学习|learning\.status)",
+     lambda m: handle_learning_status(), "all", "learning", False),
 ]
+
+
+def _strip_cmd_prefix(text):
+    """去掉显式命令前缀，返回 (正文, 是否带前缀)。"""
+    t = str(text or "").strip()
+    for p in _CMD_PREFIXES:
+        if t.startswith(p):
+            return t[len(p):].strip(), True
+    return t, False
+
+
+def cmd_match(text):
+    """纯函数：这条消息算不算显式命令。返回 (下标, match) 或 None。
+
+    判据（不再看"句子里有没有关键词"）：
+      · 整条消息 ≤ `_CMD_MAX_LEN` 字；
+      · fullmatch 某条命令模式（`截屏` 行，不含 `.*?` 那种放宽）；
+      · 破坏性命令必须带 `#` 前缀；
+      · 「打开 X」的 X 得像个真实目标（路径/扩展名），否则不算。
+
+    单独抽出来是为了能直接测：命中"生日结束了吧"这种句子时，
+    以前会去 kill 一个叫「了吧」的进程。
+    """
+    raw = str(text or "").strip()
+    if not raw or len(raw) > _CMD_MAX_LEN:
+        return None
+    body, prefixed = _strip_cmd_prefix(raw)
+    if not body:
+        return None
+    for idx, (pattern, _handler, _perm, name, need_prefix) in enumerate(COMMAND_PATTERNS):
+        if need_prefix and not prefixed:
+            continue
+        m = re.fullmatch(pattern, body, re.I)
+        if not m:
+            continue
+        if name == "open" and not prefixed:
+            target = (m.group(1) or "").strip()
+            if not _CMD_TARGET_RE.match(target):
+                continue          # 「打开话匣子」不是命令
+        return idx, m
+    return None
+
 
 
 def handle_learning_status():
@@ -11302,38 +11512,59 @@ def _handle_group_admin_command(text, msg, sender, group_id):
             pass
     return True
 def try_execute_command(text, sender=""):
-    """尝试匹配并执行控制指令。返回 True 表示已处理。"""
-    # 帮助指令特殊处理
-    if re.search(r'^(帮助|命令|功能|help|指令|怎么用)$', text.strip(), re.I):
+    """尝试执行**显式**控制指令。返回 True 表示已处理。
+
+    ★ 2026-11-06：判据从"句子里含关键词"改成"整句就是命令 / 带 `#` 前缀"，
+      规则与理由见 `cmd_match` 上方的注释。自然语言一律返回 False，
+      交给模型（它有对应工具），不再抢消息。
+
+    为什么这条很重要：旧判据下「生日结束了吧」会去 kill 一个叫「了吧」的进程，
+    「我刚重启完」会真的重启机器 —— 这不是体验问题，是会毁数据的。
+    """
+    raw = str(text or "").strip()
+    # 帮助：整句精确匹配（"怎么用" 这类，不参与下面的命令表）
+    if re.fullmatch(r"(?:帮助|命令|功能|help|指令|怎么用)", raw, re.I):
         send_message(get_help_text())
         return True
-    
-    for pattern, handler, perm in COMMAND_PATTERNS:
-        m = re.match(pattern, text.strip())
-        if m:
-            # 权限检查：admin 级命令需管理员权限（help 永远放行）
-            if perm == "admin" and not _is_authorized(sender):
-                log(f"  → 权限拒绝: sender={sender} 尝试执行管理员指令 {pattern[:20]}...")
-                send_message("该指令需要管理员权限")
-                return True
-            result = handler(m)
-            return True
-    return False
+
+    hit = cmd_match(text)
+    if not hit:
+        return False
+    idx, m = hit
+    _pat, handler, perm, name, _need_prefix = COMMAND_PATTERNS[idx]
+    if perm == "command_help":
+        send_message(get_help_text())
+        return True
+    if perm == "admin" and not _is_authorized(sender):
+        log(f"  → 权限拒绝: sender={sender} 尝试执行管理员指令 {name}")
+        send_message("该指令需要管理员权限")
+        return True
+    try:
+        handler(m)
+    except Exception as e:
+        log(f"  → 指令执行失败 {name}: {e}")
+        try:
+            send_message(f"指令执行失败: {e}")
+        except Exception:
+            pass
+    return True
 
 
 def get_help_text():
-    return """可用指令:
+    return """可用指令（整句发送；破坏性动作要加 # 前缀）:
 截屏 - 截图桌面发给你
-打开 XX - 打开文件/程序/文件夹
+打开 D:\\某个文件 - 打开文件/程序/文件夹
 系统信息 - 查看电脑配置
 音量+/音量-/静音
 关机/重启/锁屏
-进程列表/终止 XX
+进程列表
+#结束 notepad - 结束指定进程
 搜索 XX - 搜索文件
+#发送 D:\\a.zip - 把本机文件发给你
 群友画像 - 群聊发言统计趣味报告
 学习状态 - 查看自主学习数据
 查天气/搜新闻 - AI 联网搜索
-其他消息 - AI 聊天"""
+其他消息 - AI 聊天（工具由模型自己决定）"""
 
 
 # ═══════════════════════════════════════════
@@ -12104,13 +12335,25 @@ def _build_cached_messages(history: List[Dict], cache_key: str,
     #   历史里明明有那句（账本摘要 100 字口径也在窗口内），但它选择改口。
     #   把上一条**原文**单独摆出来（最多 160 字、30 分钟内有效），比指望它
     #   从摘要账本里自己翻出来稳。prompt 层面做不到绝对，但这是最便宜的一档。
-    _last_own = None
+    #
+    #   ★ 2026-11-06 修（真机 08:05）：只取**一条**不够。主动开口一次发两条
+    #     （「醒得挺早啊你」/「我这刚处理完一堆破事」），用户引的是第一条，
+    #     而这个块里只有第二条 → 模型两手一摊「我发过这句？别往我头上安」。
+    #     现在取**最近一段连续的 assistant**（一次开口 = 多条气泡），最多 3 条。
+    _own_list = []
     for _h in reversed(history or []):
-        if isinstance(_h, dict) and _h.get("role") == "assistant":
-            _last_own = _h
+        if not isinstance(_h, dict):
+            continue
+        if _h.get("role") != "assistant":
+            break          # 只认最近那一段"我说的话"，跨过用户消息就停
+        _own_list.append(_h)
+        if len(_own_list) >= 3:
             break
+    _own_list.reverse()
+    _last_own = _own_list[-1] if _own_list else None
     if _last_own:
-        _own_txt = str(_last_own.get("content") or "").strip()
+        _own_txt = "\n".join(str(_h.get("content") or "").strip()
+                             for _h in _own_list if str(_h.get("content") or "").strip())
         try:
             _own_ts = float(_last_own.get("ts") or 0)
         except (TypeError, ValueError):
@@ -12129,7 +12372,7 @@ def _build_cached_messages(history: List[Dict], cache_key: str,
                                  #   tests/test_self_consistency.py 依赖它。
                                  "【你上一条说的（原文，被追问时以这个为准，别改口；"
                                  "注意这是**你自己**说的，不是对方说的，别算到对方头上）】\n"
-                                 + _clip_for_history(_own_txt, 160)})
+                                 + _clip_for_history(_own_txt, 240)})
 
     # 动态上下文（时间/记忆等，放最后面——不影响前面的缓存）
     for part in dynamic_parts:

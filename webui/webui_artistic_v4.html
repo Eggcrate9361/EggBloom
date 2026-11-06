@@ -3006,6 +3006,9 @@ body.mech-open .rack .lb{animation:fadeMark 260ms linear 420ms forwards}
   font-size:var(--z3);line-height:1.9;background:rgba(0,0,0,.12)}
 .aigc-note b{color:var(--gold);font-weight:400}
 .aigc-note code{font-family:var(--f-m);color:var(--ink2)}
+/* 语音页签：一条合成记录一行（时间/状态/文本/试听） */
+.tts-row{display:flex;gap:var(--s3);align-items:center;border-bottom:1px solid var(--line);
+  padding:var(--s2) 0;font-size:var(--z3)}
 
 </style>
 
@@ -5058,6 +5061,9 @@ window.FIELD_META = {
     "image_free_lane_enable": {"label": "图片理解走免费链", "desc": "开：先用免费视觉车道（挂掉时会白等并熔断）。关（默认）：直接走主模型，约 1~2 秒。真机免费链已连续空响应，关掉更稳。", "ctl": "bool", "panel": "llm", "unit": "", "id": "sImageFreeLane", "default": false, "default_text": "关闭"},
     "private_tool_whitelist": {"label": "私聊特权工具白名单（每行一个 QQ）", "desc": "只有名单里的 QQ 能在私聊拿到写文件/执行/桌面这些工具；其他人只给只读工具，越权调用一律回「没有权限」。留空 = 谁都不给。", "ctl": "lines", "panel": "llm", "unit": "", "id": "sPrivateToolWhitelist", "default": [], "default_text": "空"},
     "max_tool_rounds": {"label": "单次回复工具轮次", "desc": "一次聊天回复里最多几轮工具调用（默认 3）。调大能做多步任务，但更慢更贵；Agent/派活链路不受这个限制。", "ctl": "number", "panel": "llm", "unit": "轮", "id": "sMaxToolRounds", "default": 3, "default_text": "3"},
+    "group_tool_groups": {"label": "群聊工具组（每行一个）", "desc": "群聊给模型哪些工具组。默认 core/work/web/group/plugin/todo/skill。desktop/write/proc 是本机能力，别加进来——群友不该能让我动这台机器。留空 = 默认值。", "ctl": "lines", "panel": "llm", "unit": "", "id": "sGroupToolGroups", "default": [], "default_text": "默认"},
+    "private_tool_groups": {"label": "私聊工具组 · 白名单（每行一个）", "desc": "只对 private_tool_whitelist 里的人生效：给哪些工具组。默认除本机能力外全给（core/work/web/write/proc/desktop/mcp/skill/todo/plugin）。留空 = 默认值。", "ctl": "lines", "panel": "llm", "unit": "", "id": "sPrivateToolGroups", "default": [], "default_text": "默认"},
+    "private_public_groups": {"label": "私聊工具组 · 非白名单（每行一个）", "desc": "不在白名单的人私聊时给哪些工具组。默认只给 core（联网搜索）——也就是「只能聊天」。想放宽就把组名加进来（work/web/plugin/skill/todo/write/proc/desktop/mcp）。留空 = 默认值。", "ctl": "lines", "panel": "llm", "unit": "", "id": "sPrivatePublicGroups", "default": [], "default_text": "默认"},
   }
 };
 /* ══ FIELD_META_END */
@@ -8695,8 +8701,8 @@ async function pageImagegen(el) {
     /* AIGC 全模态（2026-11-01）：一个侧栏项，四个页签；语音/视频 1.6.0 接入 */
     + '<div class="aigc-tabs">'
     +   '<div class="aigc-tab on" data-t="img">生图</div>'
-    +   '<div class="aigc-tab" data-t="tts">语音<span class="soon">1.6.0</span></div>'
-    +   '<div class="aigc-tab" data-t="video">视频<span class="soon">1.6.0</span></div>'
+    +   '<div class="aigc-tab" data-t="tts">语音</div>'
+    +   '<div class="aigc-tab" data-t="video">视频<span class="soon">1.6.x</span></div>'
     +   '<div class="aigc-tab" data-t="lib">素材</div>'
     + '</div>'
     + '<div id="aigcMainPane">'
@@ -8744,25 +8750,189 @@ async function pageImagegen(el) {
     +   '<button class="btn sm" id="igGalRefresh" style="margin-left:auto">刷新</button></div>'
     + '<div class="me-cards" id="igGal" style="margin-top:var(--s3)"></div>'
     + '</div>'
+    + '<div id="aigcTtsPane" hidden></div>'
     + '<div id="aigcSoonPane" hidden></div>';
 
-  /* 页签：图/素材沿用现有面板；语音、视频先给"规划中"的说明，不放假功能 */
+  /* ── 语音页签（1.6.0 P1.5）：真接 /api/aigc/*，不再放"规划中" ────────
+     后端是 piper（离线）+ faster-whisper，跑在 data/aigc/venv 的子进程里；
+     这里只负责提交任务、轮询状态、把产物喂给 <audio>。
+     没装模型时**照实说**（caps 里 piper=false），不装作能用。 */
+  let _ttsTimer = 0, _ttsCaps = null;
+  const ttsMsg = (ok, t) => {
+    const m = $('ttsMsg');
+    if (m) m.innerHTML = '<div class="sig ' + (ok ? 'ok' : 'err') + '"><i></i>' + esc(t) + '</div>';
+  };
+
+  const ttsList = async () => {
+    const box = $('ttsList');
+    if (!box) return;
+    let r = {};
+    try { r = await API('/aigc/list?kind=tts&limit=8', {}, 15000); } catch (e) { r = {}; }
+    const ts = (r && r.tasks) || [];
+    if (!ts.length) { box.innerHTML = '<div class="dim">还没有合成过。</div>'; return; }
+    box.innerHTML = ts.map(t => {
+      const id = String(t.id || '');
+      const txt = String(((t.params || {}).text) || '');
+      return '<div class="tts-row">'
+        + '<span class="mono dim" style="min-width:92px">' + esc(id.slice(0, 10)) + '</span>'
+        + '<span class="dim" style="min-width:56px">' + esc(t.status || '') + '</span>'
+        + '<span class="dim" style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'
+        +   esc(txt.slice(0, 42)) + '</span>'
+        + (t.status === 'done'
+            ? '<audio controls preload="none" src="/api/aigc/file?id=' + encodeURIComponent(id)
+              + '" style="height:26px"></audio>'
+            : '')
+        + '</div>';
+    }).join('');
+  };
+
+  const ttsRender = (caps) => {
+    const pane = $('aigcTtsPane');
+    if (!pane) return;
+    const voices = (caps && caps.voices) || [];
+    const ready = !!(caps && caps.piper) && voices.length > 0;
+    const asrReady = !!(caps && caps.faster_whisper);
+    pane.innerHTML = ''
+      + '<div class="hd"><span class="lab">全模态 · 语音</span><i class="rule"></i>'
+      +   '<span class="sig ' + (ready ? 'live' : 'err') + '"><i></i>'
+      +   (ready ? 'piper 就绪' : 'piper 未就绪') + '</span></div>'
+      + '<div class="aigc-note" style="margin-bottom:var(--s5)">'
+      +   '音色 <code>' + esc(voices.join(' / ') || '—') + '</code>；'
+      +   'ASR <code>' + (asrReady ? 'faster-whisper 就绪' : '未安装') + '</code>；'
+      +   '产物落 <code>data/media/tts/</code>。'
+      +   (ready ? '' : '<br><b>依赖没装：</b>需要在 <code>data/aigc/venv</code> 里装 piper-tts，'
+      +     '并把音色 <code>.onnx</code> 放进 <code>data/models/piper/</code>。')
+      + '</div>'
+      + '<div class="fld"><label>要念的文字</label>'
+      +   '<textarea id="ttsText" rows="4" placeholder="最多 2000 字；换行会被保留"></textarea></div>'
+      + '<div class="stats" style="margin-top:var(--s4)">'
+      +   '<div class="fld"><label>音色</label><select id="ttsVoice">'
+      +     voices.map(v => '<option value="' + esc(v) + '">' + esc(v) + '</option>').join('')
+      +   '</select></div>'
+      +   '<div class="fld"><label>语速（1.0 正常）</label>'
+      +     '<input id="ttsRate" type="number" step="0.05" min="0.5" max="2" value="1.0"></div>'
+      + '</div>'
+      + '<div style="display:flex;gap:var(--s3);margin-top:var(--s5)">'
+      +   '<button class="btn primary" id="ttsGo"' + (ready ? '' : ' disabled') + '>合成</button>'
+      +   '<button class="btn" id="ttsRefresh">刷新</button></div>'
+      + '<div id="ttsMsg" style="margin-top:var(--s4)"></div>'
+      + '<div id="ttsOut" style="margin-top:var(--s4)"></div>'
+      + '<div class="hd" style="margin-top:var(--s6)"><span class="lab">最近合成的</span><i class="rule"></i></div>'
+      + '<div id="ttsList" style="margin-top:var(--s3)"></div>'
+      + '<div class="hd" style="margin-top:var(--s6)"><span class="lab">转写（ASR）</span><i class="rule"></i>'
+      +   '<span class="dim">给一段本地音频的完整路径</span></div>'
+      + '<div style="display:flex;gap:var(--s2);align-items:center">'
+      +   '<input id="asrPath" placeholder="D:\\path\\to\\audio.wav" style="flex:1">'
+      +   '<button class="btn" id="asrGo"' + (asrReady ? '' : ' disabled') + '>转写</button></div>'
+      + '<div id="asrMsg" style="margin-top:var(--s4)"></div>'
+      + '<div id="asrOut" style="margin-top:var(--s3)"></div>';
+
+    const poll = (id, done) => {
+      let tries = 0;
+      const tick = async () => {
+        tries += 1;
+        let r = {};
+        try { r = await API('/aigc/task?id=' + encodeURIComponent(id), {}, 15000); } catch (e) { r = {}; }
+        const t = (r && r.task) || null;
+        if (t && (t.status === 'done' || t.status === 'failed' || t.status === 'rejected')) {
+          done(t);
+          return;
+        }
+        if (tries > 240) { done({ status: 'failed', error: '等待超时' }); return; }
+        _ttsTimer = setTimeout(tick, 700);
+      };
+      tick();
+    };
+
+    $('ttsRefresh').onclick = () => { ttsList(); };
+    $('ttsGo').onclick = async () => {
+      const text = ($('ttsText').value || '').trim();
+      if (!text) { ttsMsg(false, '先写点要念的东西'); return; }
+      $('ttsGo').disabled = true;
+      ttsMsg(true, '提交中…');
+      $('ttsOut').innerHTML = '';
+      try {
+        const r = await API('/aigc/submit', { method: 'POST', body: JSON.stringify({
+          kind: 'tts', params: { text: text, voice: $('ttsVoice').value,
+                                 length_scale: Number($('ttsRate').value) || 1.0 } }) }, 30000);
+        if (!r || !r.ok) { ttsMsg(false, (r && r.reason) || '提交失败'); $('ttsGo').disabled = false; return; }
+        const id = (r.task || {}).id;
+        ttsMsg(true, '合成中…（' + String(id || '').slice(0, 8) + '）');
+        poll(id, (t) => {
+          $('ttsGo').disabled = false;
+          if (t.status !== 'done') {
+            ttsMsg(false, t.error || ('任务 ' + t.status));
+          } else {
+            const d = ((t.meta || {}).duration || 0);
+            ttsMsg(true, '好了 · ' + d + ' 秒 · ' + ((t.meta || {}).bytes || 0) + ' 字节');
+            $('ttsOut').innerHTML = '<audio controls autoplay src="/api/aigc/file?id='
+              + encodeURIComponent(id) + '" style="width:100%"></audio>';
+          }
+          ttsList();
+        });
+      } catch (e) {
+        ttsMsg(false, e.message);
+        $('ttsGo').disabled = false;
+      }
+    };
+    $('asrGo').onclick = async () => {
+      const p = ($('asrPath').value || '').trim();
+      if (!p) { ttsMsg(false, '填一个音频路径'); return; }
+      $('asrGo').disabled = true;
+      $('asrMsg').innerHTML = '<div class="sig ok"><i></i>转写中（首次会下载模型，可能要几分钟）…</div>';
+      $('asrOut').innerHTML = '';
+      try {
+        const r = await API('/aigc/submit', { method: 'POST', body: JSON.stringify({
+          kind: 'asr', params: { audio: p, language: 'zh' } }) }, 30000);
+        if (!r || !r.ok) { $('asrMsg').innerHTML = '<div class="sig err"><i></i>'
+          + esc((r && r.reason) || '提交失败') + '</div>'; $('asrGo').disabled = false; return; }
+        const id = (r.task || {}).id;
+        poll(id, (t) => {
+          $('asrGo').disabled = false;
+          if (t.status !== 'done') {
+            $('asrMsg').innerHTML = '<div class="sig err"><i></i>' + esc(t.error || t.status) + '</div>';
+          } else {
+            $('asrMsg').innerHTML = '<div class="sig ok"><i></i>转写完成</div>';
+            $('asrOut').innerHTML = '<div class="aigc-note">'
+              + esc(((t.meta || {}).text || '').trim() || '（空）') + '</div>';
+          }
+        });
+      } catch (e) {
+        $('asrMsg').innerHTML = '<div class="sig err"><i></i>' + esc(e.message) + '</div>';
+        $('asrGo').disabled = false;
+      }
+    };
+    ttsList();
+  };
+
+  /* 页签：图/素材沿用现有面板；语音真接任务层；视频留到 1.6.x */
   const aigcSwitch = (key) => {
     document.querySelectorAll('.aigc-tab').forEach(x => x.classList.toggle('on', x.dataset.t === key));
-    const main = $('aigcMainPane'), soon = $('aigcSoonPane');
+    const main = $('aigcMainPane'), tts = $('aigcTtsPane'), soon = $('aigcSoonPane');
     if (!main || !soon) return;
-    main.hidden = (key === 'tts' || key === 'video');
-    soon.hidden = !main.hidden;
+    if (_ttsTimer) { clearTimeout(_ttsTimer); _ttsTimer = 0; }
+    main.hidden = (key !== 'img' && key !== 'lib');
+    if (tts) tts.hidden = (key !== 'tts');
+    soon.hidden = (key !== 'video');
     if (key === 'lib') {
       const g = $('igGal');
       if (g) g.scrollIntoView({ block: 'start', behavior: 'smooth' });
     }
-    if (!soon.hidden) {
-      const q = key === 'tts'
-        ? { t: '语音（TTS / ASR）', d: '文字转语音（piper，离线）与语音转写（faster-whisper）；<br>产物落 <code>data/media/audio/</code>，任务走统一任务层。', k: 'aigc_tts_backend / aigc_asr_backend' }
-        : { t: '视频', d: '图生视频与抽帧预览，1.6.0 只留接口，默认关闭；<br>先复用生图的 ComfyUI 工作流通道。', k: 'aigc_video_backend' };
-      soon.innerHTML = '<div class="aigc-note"><b>' + q.t + '</b> 计划 1.6.0 接入。<br>' + q.d
-        + '<br>开关：<code>' + q.k + '</code>（默认关，关掉即零网络请求）。</div>';
+    if (key === 'tts') {
+      if (!tts.dataset.built) {
+        tts.dataset.built = '1';
+        tts.innerHTML = '<div class="empty">读取后端能力…</div>';
+        API('/aigc/caps', {}, 20000).then(r => {
+          _ttsCaps = (r && r.caps) || {};
+          ttsRender(_ttsCaps);
+        }).catch(e => {
+          tts.innerHTML = '<div class="aigc-note">读不到 AIGC 能力：' + esc(e.message) + '</div>';
+        });
+      }
+    }
+    if (key === 'video') {
+      soon.innerHTML = '<div class="aigc-note"><b>视频</b> 留到 1.6.x 接入。'
+        + '图生视频与抽帧预览复用生图的 ComfyUI 通道，1.6.0 只留接口（<code>aigc_video_backend</code> 默认空）。</div>';
     }
   };
   document.querySelectorAll('.aigc-tab').forEach(t => {

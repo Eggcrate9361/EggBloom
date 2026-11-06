@@ -28,6 +28,7 @@
 - 读不到就空串，**绝不编**；任何一段异常只影响自己那一段
 """
 import os
+import re
 import sys
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -36,6 +37,10 @@ if _ROOT not in sys.path:
 
 #: 一次 recall 的默认字数预算（FIXPLAN §4：budget=600）
 DEFAULT_BUDGET = 600
+
+#: 判"同一行"时的最短长度。太短的行（"【核心记忆】"、"- 1"）只做全等比较，
+#: 不做包含判断 —— 否则一个 `"嗯"` 能把别人整段吞掉。
+DEDUPE_MIN_LEN = 12
 
 
 def _log(msg):
@@ -277,3 +282,74 @@ def remember(kind, *, uid="", text="", scene="", group_id="", meta=None) -> bool
             return False
 
     return False
+
+
+# ── 注入侧：两条通道合成一条（P1-3「同一件事不会来自两处」）──────────────
+#
+# 现状（2026-11-06 核）：prompt 里确实有**两条注入通道** ——
+#   ① 本模块 `recall()`：身份 / 称呼 / 跨场景 / 检索（沙漏）/ 群画像；
+#   ② EGO 插件的 `before_reply`：super_memory 的【核心记忆】+ 长期人格 + 好感。
+#
+# 两者**存的东西重叠**：沙漏记全部对话原文，super_memory 的 `messages` 表也记
+# user_msg + bot_reply。群聊侧靠 `memory_context.collect(sources=("sand",))`
+# 刻意只取沙漏来避重，但私聊侧两边都能召回同一句话 —— 一条事实在 prompt 里
+# 出现两遍，模型会更用力地按条目交付（汇报腔的放大器），也白烧 token。
+#
+# 所以收敛点放在**最后一个出口**：`_inject_ego_context()`（bot_core 里唯一
+# 往 dynamic_parts 塞 ego 文本的函数）在拼接前把"已经注入过的行"剔掉。
+# 不合并存储、不改召回逻辑、不改注入顺序 —— 没有重复时输出逐字节不变。
+
+_LINE_PREFIX_RE = re.compile(r"^[\s\-–—·•*　]+")
+
+
+def _norm_line(line) -> str:
+    """归一化一行：去掉列表符号、折叠空白。只用于比较，不改原文本。"""
+    t = _LINE_PREFIX_RE.sub("", str(line or ""))
+    t = re.sub(r"[ \t\u3000]+", " ", t).strip()
+    return t
+
+
+def filter_duplicate_lines(existing, incoming, *, min_len=DEDUPE_MIN_LEN):
+    """把 `incoming` 里与 `existing` 重复的行去掉。
+
+    参数
+      existing : 已经注入过的文本。可以是字符串，也可以是字符串列表
+                 （`dynamic_parts` 那种一段一个元素的形状）。
+      incoming : 待注入的文本（多行）。
+      min_len  : 判"包含关系"的最短长度；短于此只做全等比较。
+
+    返回 (过滤后的文本, stats)。stats = {"kept": n, "dropped": n, "samples": [...]}
+    —— `samples` 只留前两条被丢掉的行（截 30 字），用于日志与测试，不落盘。
+
+    判重规则（保守，宁留勿删）：
+      · 归一化后全等 → 重复；
+      · 长度 ≥ min_len 且是某条已有行的子串 / 包含某条已有行 → 重复；
+      · 其余一律保留。**绝不因为"看起来像"就删** —— 记忆是可以重复措辞的。
+    """
+    if isinstance(existing, str):
+        ex_text = existing
+    else:
+        ex_text = "\n".join(str(x or "") for x in (existing or []))
+    ex_lines = [n for n in (_norm_line(ln) for ln in ex_text.splitlines()) if n]
+    ex_set = set(ex_lines)
+    ex_long = [n for n in ex_lines if len(n) >= min_len]
+    ex_joined = "\n".join(ex_lines)
+
+    kept, dropped = [], []
+    for raw in str(incoming or "").splitlines():
+        norm = _norm_line(raw)
+        if not norm:
+            # 空行保留（块之间本来就有空行，删了会粘成一坨）
+            kept.append(raw)
+            continue
+        dup = norm in ex_set
+        if not dup and len(norm) >= min_len:
+            if norm in ex_joined or any(n in norm for n in ex_long):
+                dup = True
+        if dup:
+            dropped.append(norm[:30])
+        else:
+            kept.append(raw)
+    text = "\n".join(kept).strip("\n")
+    return text, {"kept": len(kept) - sum(1 for k in kept if not _norm_line(k)),
+                  "dropped": len(dropped), "samples": dropped[:2]}

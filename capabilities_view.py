@@ -80,6 +80,7 @@ def build_snapshot(
     offered_tools: Iterable[str] = (),
     all_tools: Iterable[str] = (),
     blocked_tools: Iterable[str] = (),
+    denied_tools: Iterable[str] = (),
     plugins: Dict[str, bool] | None = None,
     is_group: bool = False,
     bot_role: str = "",
@@ -92,12 +93,17 @@ def build_snapshot(
     plugins: {插件名: 是否启用}。缺省视为未启用（宁可说"没开"，也不要说"能"）。
     blocked_tools: 被群白名单挡在外面的工具名。与"按需加载没挂上"分开说，
                    因为前者用户改配置才能解决，后者下一轮自己会好。
+    denied_tools: **权限不够**（私聊不在白名单 / 组不在允许名单）。
+                   2026-11-06 新增：以前这类工具被归进 need_enable，文案是
+                   「要的话直接说」—— 模型照做，先答应再失败。实测最典型的是
+                   非管理员私聊问「能发文件吗」，答"能，把路径给我"，然后没有工具。
     """
     snap: Dict[str, List[Dict[str, str]]] = {
         STATE_OK: [], STATE_NEED_ENABLE: [], STATE_NEED_ADMIN: [], STATE_ABSENT: [],
     }
     offered = {str(n) for n in (offered_tools or ()) if n}
     blocked = {str(n) for n in (blocked_tools or ()) if n}
+    denied = {str(n) for n in (denied_tools or ()) if n}
     role_ok = bot_role in ("owner", "admin")
 
     # ── 主链工具 ──
@@ -108,6 +114,11 @@ def build_snapshot(
         item = {"name": name, "label": TOOL_LABELS.get(name, ""), "kind": "tool"}
         if name in offered:
             snap[STATE_OK].append(item)
+        elif name in denied:
+            item["how"] = ("要他本人是管理员（私聊白名单）才行，**别先答应**"
+                           if not is_group else
+                           "这个群不让用本机能力（要改配置），**别先答应**")
+            snap[STATE_NEED_ADMIN].append(item)
         else:
             item["how"] = ("群白名单没放它，让主人加进 group_tool_allowlist"
                            if name in blocked
@@ -181,6 +192,13 @@ def render(
         lines.append("这些工具这轮没挂上（按需加载或群白名单），要的话直接说，"
                      "**别说成「我没有这个能力」**："
                      + "、".join(i.get("label") or i.get("name") for i in tools_need) + "。")
+    # 权限不够的工具：与"没挂上"分开说 —— 前者换措辞没用，得换人/换配置。
+    # 2026-11-06：以前这类混在 need_enable 里，模型被教成"要的话直接说"，
+    # 于是非管理员问「能发文件吗」→「能，把路径给我」→ 然后没有工具。
+    tools_denied = pick(need_admin, "tool")
+    if tools_denied:
+        lines.append("这些能力有、但**权限不够**，别先答应，先说条件："
+                     + _group_how(tools_denied) + "。")
     plugins_need = pick(need_enable, "plugin")
     if plugins_need:
         lines.append("这些能力有，只是插件没开（**同样不是「没能力」**）："

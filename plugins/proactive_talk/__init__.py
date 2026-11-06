@@ -392,6 +392,23 @@ def _send_bubbles(qq: str, bubbles: list) -> int:
     return sent
 
 
+def _deliver(qq: str, bubbles: list) -> int:
+    """发送 + 记账。**日志顺序是判据，不是装饰。**
+
+    真机（2026-11-06 08:02）：「发送」在 08:02:36/40，「主动开口 → …」在 08:02:43。
+    气泡之间本来就有 0.8–4 秒打字延时，日志写在发送**之后** → 排查时看着像
+    "先发出去、后记日志"，甚至被误读成"两条消息不是它发的"。
+    现在先打**决定**（发什么给谁），再打**结果**（几条成功）；两行时间戳
+    分别对应"决定时刻"和"发完时刻"，中间那段就是真实打字延时。
+    """
+    joined = " / ".join(str(b) for b in (bubbles or []))
+    _log(f"主动开口 → {qq}: {joined[:60]}")
+    sent = _send_bubbles(qq, bubbles)
+    if sent < len(bubbles or []):
+        _log(f"主动开口结果 → {qq}: {sent}/{len(bubbles or [])} 条成功")
+    return sent
+
+
 # ── 生成 ──────────────────────────────────────────────────
 
 
@@ -740,7 +757,7 @@ def _proactive_once(force: bool = False, target: str = "") -> dict:
         except Exception as _ge:
             _log(f"事实围栏跳过（不影响发送）: {_ge}")
 
-        sent = _send_bubbles(chosen, bubbles)
+        sent = _deliver(chosen, bubbles)
         if sent == 0:
             return {"ok": False, "error": "发送失败（OneBot 未连接？）"}
 
@@ -756,7 +773,6 @@ def _proactive_once(force: bool = False, target: str = "") -> dict:
         _ctx.set_state("last_proactive_by", by)
         _ctx.set_state("last_proactive_ts", now)
         _update_pending_topic(bubbles, chosen)
-        _log(f"主动开口 → {chosen}: {joined[:60]}")
         return {"ok": True, "target": chosen, "bubbles": bubbles}
 
 

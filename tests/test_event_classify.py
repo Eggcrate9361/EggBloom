@@ -216,13 +216,25 @@ def main():
                             "EggBloom_v3", "qq_bot.log")
     if os.path.exists(real_log):
         try:
-            r = ws.collect_events(400)
+            # ★ 2026-11-06 修：原来只看最后 400 行，而 bot 刚重启过的那段时间
+            #   全是插件初始化和心跳（都归 debug），这条就假红了一次
+            #   （全量 310/311，唯一失败项）。判据的本意是"分类器不会把真日志
+            #   全判成 debug/error"，不是"日志里此刻必须有消息"。
+            #   现在取更大窗口；窗口里连一条入站消息都没有（刚重启/没人说话）
+            #   就跳过，并如实打印 —— 宁可跳过，不要假红。
+            r = ws.collect_events(4000)
             rc = r["counts"]
-            check("真日志里 message 非空", rc.get("message", 0) > 0, rc)
-            check("真日志里 error 不是唯一非空类",
-                  sum(1 for k in ("message", "decision", "tool", "cost")
-                      if rc.get(k, 0) > 0) >= 1, rc)
-            print(f"       真日志 counts: {rc}")
+            raw = ws._collect_logs(4000)
+            has_msg = any("收到: post_type=message" in str(x) for x in raw)
+            if has_msg:
+                check("真日志里 message 非空", rc.get("message", 0) > 0, rc)
+                check("真日志里 error 不是唯一非空类",
+                      sum(1 for k in ("message", "decision", "tool", "cost")
+                          if rc.get(k, 0) > 0) >= 1, rc)
+                print(f"       真日志 counts: {rc}")
+            else:
+                print(f"       （跳过：最近 4000 行没有入站消息，"
+                      f"counts={rc}；刚重启过就属正常）")
         except Exception as e:
             check("读真日志不抛异常", False, e)
     else:

@@ -326,6 +326,21 @@ _QM_VERB_SHAPE = re.compile(
 )
 
 
+# 引号里的内容**不代表本句语气**。2026-11-06 真机：
+#   「你 08:03 先发的「你怎么知道我醒来了」，我才接的」
+# 因为引号里有「怎么」，被 `_QM_ANYWHERE` 判成问句 → 行尾多补一个「？」，
+# 一句陈述被改成了反问。判语气前先把引语摘掉。
+_QM_QUOTED = re.compile(r"「[^」]*」|『[^』]*』|“[^”]*”|\"[^\"]*\"|'[^']*'")
+
+
+def _strip_quoted(s: str) -> str:
+    """去掉引号及其内容，只留"这句话自己说的部分"。"""
+    try:
+        return _QM_QUOTED.sub("", s or "").strip()
+    except Exception:
+        return s or ""
+
+
 def _add_missing_question_marks(text: str) -> str:
     """给「明显是问句但没打问号」的行尾补「？」。
 
@@ -348,46 +363,48 @@ def _add_missing_question_marks(text: str) -> str:
     out = []
     for line in text.split("\n"):
         s = line.rstrip()
-        # 已有标点 / 否定用法 / 空行：一律不动
-        if (not s or _QM_KEEP.search(s)
+        # 判语气只看"本句自己说的部分"：引号里的内容不算（见 _QM_QUOTED）
+        j = _strip_quoted(s)
+        # 已有标点 / 否定用法 / 空行 / 整句只是引语：一律不动
+        if (not s or not j or _QM_KEEP.search(s)
                 or "没什么" in s or "没啥" in s):
             out.append(s)
             continue
         # 「睡什么睡」「有什么好看的」是否定祈使/陈述，不是疑问
-        if _QM_X_SHENME_X.search(s) or _QM_YOU_SHENME_HAO.search(s):
+        if _QM_X_SHENME_X.search(j) or _QM_YOU_SHENME_HAO.search(j):
             out.append(s)
             continue
 
         # ① 误补黑名单 ───────────────────────────────────────────
         _ne_q = False
-        if s.endswith("呢"):
+        if j.endswith("呢"):
             # 叙述用法（正琢磨…呢 / 忙着呢）与「非疑问词的 X呢」都不补
-            if (_QM_NE_ZHE.search(s) or _QM_NE_NARRATIVE.search(s)
-                    or not _QM_NE_QUESTION.search(s)):
+            if (_QM_NE_ZHE.search(j) or _QM_NE_NARRATIVE.search(j)
+                    or not _QM_NE_QUESTION.search(j)):
                 out.append(s)
                 continue
             # 走到这里说明「呢」前面是明确疑问词（图呢 / 饭呢 / 他人呢）→ 确定是问句
             _ne_q = True
-        elif _QM_BA.search(s):
+        elif _QM_BA.search(j):
             out.append(s)
             continue
-        elif _QM_A_YOU.search(s):
+        elif _QM_A_YOU.search(j):
             # `没忙啊` `刚在吃饭啊` 是陈述；只有含疑问词才当问句
-            if not (_QM_TAIL.search(s) or _QM_ANYWHERE.search(s)):
+            if not (_QM_TAIL.search(j) or _QM_ANYWHERE.search(j)):
                 out.append(s)
                 continue
 
         # ② 句式白名单 ───────────────────────────────────────────
-        if (_ne_q or _QM_TAIL.search(s) or _QM_VERB_SHAPE.search(s)
-                or _QM_LEADING.search(s)):
+        if (_ne_q or _QM_TAIL.search(j) or _QM_VERB_SHAPE.search(j)
+                or _QM_LEADING.search(j)):
             out.append(s + "？")
             continue
         # 正反问简写：吃了没 / 行不 / 来不（整句就是一个否定词的不算）
-        if _QM_MEI_BU.search(s) and not _QM_MEI_BU_KEEP.search(s):
+        if _QM_MEI_BU.search(j) and not _QM_MEI_BU_KEEP.search(j):
             out.append(s + "？")
             continue
         # ③ 宽泛兜底
-        if _QM_ANYWHERE.search(s):
+        if _QM_ANYWHERE.search(j):
             out.append(s + "？")
             continue
         out.append(s)

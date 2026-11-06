@@ -2683,6 +2683,105 @@ def _load_html():
 
 
 # 
+#  AIGC 全模态（1.6.0 P1.5）：/api/aigc/* 的薄壳
+#
+#  职责边界刻意划死：**这里只做 HTTP 与 JSON**，任务状态机在
+#  harness/aigc_task.py，模型调用在 harness/aigc_backends.py。
+#  三个文件里任何一个都能单独测（aigc_task 有 31 条用例，只用一个假后端）。
+# 
+_AIGC_BOOT = {"capped": None}
+
+
+def _aigc_service():
+    """取任务层单例，顺手把装好的后端挂上。
+
+    每次取都跑一遍 `bootstrap()`：它是幂等的（已注册的 kind 跳过），而
+    `capabilities()` 有 5 分钟缓存，代价只是一次字典判断。这样**装完模型不用
+    重启 webui** 就能用 —— 否则表现成"页面说 piper 就绪、一点合成却说后端未安装"。
+    """
+    try:
+        from harness import aigc_task as _at
+        from harness import aigc_backends as _ab
+        svc = _at.get_service()
+        try:
+            _AIGC_BOOT["capped"] = _ab.bootstrap(svc)
+        except Exception as e:
+            _AIGC_BOOT["capped"] = {"registered": [], "error": f"{e}"}
+        return svc
+    except Exception:
+        return None
+
+
+def _aigc_caps():
+    try:
+        from harness import aigc_backends as _ab
+        caps = _ab.capabilities()
+        return {"ok": True, "caps": caps}
+    except Exception as e:
+        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
+
+def _aigc_get(path, qs):
+    """GET 侧：caps / list / task / file。返回 (status, dict) 或 (status, bytes, ctype)。"""
+    svc = _aigc_service()
+    if path == "/api/aigc/caps":
+        return 200, _aigc_caps()
+    if svc is None:
+        return 200, {"ok": False, "error": "任务层不可用"}
+    if path == "/api/aigc/list":
+        kind = (qs.get("kind") or [""])[0] or None
+        try:
+            limit = int((qs.get("limit") or ["50"])[0])
+        except Exception:
+            limit = 50
+        return 200, {"ok": True, "tasks": svc.list(kind=kind, limit=limit)}
+    if path == "/api/aigc/task":
+        tid = (qs.get("id") or [""])[0]
+        t = svc.get(tid)
+        if not t:
+            return 200, {"ok": False, "error": "任务不存在"}
+        return 200, {"ok": True, "task": t}
+    if path == "/api/aigc/file":
+        tid = (qs.get("id") or [""])[0]
+        t = svc.get(tid) or {}
+        art = str(t.get("artifact") or "")
+        if not art or not os.path.isfile(art):
+            return 404, {"ok": False, "error": "产物不存在"}
+        ext = os.path.splitext(art)[1].lower()
+        ctype = {".wav": "audio/wav", ".mp3": "audio/mpeg", ".png": "image/png",
+                 ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".txt": "text/plain; charset=utf-8",
+                 ".mp4": "video/mp4"}.get(ext, "application/octet-stream")
+        try:
+            with open(art, "rb") as f:
+                return 200, f.read(), ctype
+        except Exception as e:
+            return 500, {"ok": False, "error": f"{type(e).__name__}: {e}"}
+    return 404, {"ok": False, "error": "未知接口"}
+
+
+def _aigc_post(path, data):
+    """POST 侧：submit / delete。"""
+    svc = _aigc_service()
+    if svc is None:
+        return {"ok": False, "error": "任务层不可用"}
+    if path == "/api/aigc/submit":
+        kind = str(data.get("kind") or "").strip()
+        params = data.get("params") or {}
+        if not isinstance(params, dict):
+            return {"ok": False, "error": "params 必须是对象"}
+        try:
+            return svc.submit(kind, params, sync=bool(data.get("sync")))
+        except Exception as e:
+            return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+    if path == "/api/aigc/delete":
+        tid = str(data.get("id") or "")
+        if not tid:
+            return {"ok": False, "error": "缺少 id"}
+        return {"ok": bool(svc.delete(tid, remove_files=bool(data.get("remove_files", True))))}
+    return {"ok": False, "error": "未知接口"}
+
+
+# 
 #  HTTP Handler
 # 
 class Handler(BaseHTTPRequestHandler):
@@ -2923,6 +3022,24 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             return
         path = urlparse(self.path).path
+
+        # ── AIGC 全模态（1.6.0 P1.5）：caps / list / task / file ──
+        #   放在最前：产物要按二进制回（wav 试听），不能落进静态文件分支。
+        if path.startswith("/api/aigc/"):
+            st, payload = _aigc_get(path, parse_qs(urlparse(self.path).query))
+            if isinstance(payload, (bytes, bytearray)):
+                self.send_response(st)
+                self.send_header("Content-Type", "audio/wav" if str(path).endswith("file") else "application/octet-stream")
+                self.send_header("Accept-Ranges", "none")
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                try:
+                    self.wfile.write(payload)
+                except Exception:
+                    pass
+            else:
+                self._send_json(st, payload)
+            return
 
         # ── Agent 事件流：长连接透传（放在最前，避免被静态文件/HTML 分支截走）──
         if path == "/api/agent/stream":
@@ -3758,6 +3875,11 @@ class Handler(BaseHTTPRequestHandler):
                 data = json.loads(body)
         except Exception:
             pass
+
+        # ── AIGC 全模态（1.6.0 P1.5）：submit / delete ──
+        if path.startswith("/api/aigc/"):
+            self._send_json(200, _aigc_post(path, data))
+            return
 
         # ── 热补丁更新（2026-11-01）：安装 + 可选重启（后台跑，前端轮询进度）──
         if path == "/api/update/apply":

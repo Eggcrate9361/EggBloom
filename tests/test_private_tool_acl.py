@@ -63,7 +63,11 @@ try:
     check("非白名单没有 write", "_acl_write" not in no_set)
     check("非白名单没有 proc", "_acl_proc" not in no_set)
     check("非白名单没有 desktop", "_acl_desktop" not in no_set)
-    check("非白名单仍有只读", "_acl_work" in no_set)
+    # 2026-11-06 政策变更（用户原话「私聊一般只能聊天，除非是管理员」）：
+    # 默认 public 组从 core/work/web/plugin/todo/skill 收成只剩 core，
+    # 所以这条从「仍有只读 work」改成「连 work 也没有」。
+    # 想放宽不改代码：private_public_groups 里加组名。
+    check("非白名单只能聊天（work 也不给）", "_acl_work" not in no_set, sorted(no_set))
 finally:
     if old is None:
         cfg.pop("private_tool_whitelist", None)

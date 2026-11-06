@@ -476,6 +476,20 @@ DEFAULT_CONFIG = {
     # 其他人私聊只给只读工具，越权调用一律回"没有权限"。
     "private_tool_whitelist": [],
     "tools_full_inject_enable": True,
+    # ── 工具组的许可边界（2026-11-06）───────────────────────────────
+    # 以前这三套组是**写死**在 `_tools_subset_for_scene()` 里的。写死的问题：
+    # 想"私聊只让聊天"必须改代码；而"给不给"本来就是**权限**问题，不该藏在
+    # if 里。现在三份名单都进配置中心，改配置即生效：
+    #   · group_tool_groups     群聊（本机能力不进群，别把 desktop 加进来）
+    #   · private_tool_groups   私聊 + 白名单（管理员）的上限
+    #   · private_public_groups 私聊非白名单：**默认只给 core（联网搜索）——
+    #                           也就是"只能聊天"**，加组名才放宽
+    # 空数组 = 用代码里的默认值（**不是**"什么都不给"，防止手滑锁死自己）。
+    # 工具名到组的映射见 harness/tool_registry.py 的 GROUP_* 常量：
+    #   core / work / web / group / plugin / todo / skill / write / proc / desktop / mcp / deep
+    "group_tool_groups": [],
+    "private_tool_groups": [],
+    "private_public_groups": [],
     "recall_feedback_use_preset": True,   # 撤回反馈：预设
     "recall_feedback_context_window": 300,  # 秒：bot 多久内说过话才回撤回（否则沉默）
     "group_idle_exit_use_preset": True,   # 空闲退场：预设
