@@ -18452,42 +18452,27 @@ def main():
                         log(f"[Agent] 私聊执行异常: {_p_e}")
 
                 log("  → 进入AI聊天流程")
-                # 3. AI 聊天（私聊记忆由 EGO/super_memory 向量召回经 before_reply 注入，见下方 ego 钩子）
-                # ★ 私聊画像：这里以前**写死空串**，于是 `private_memory_context`
-                #   永远为空 → call_deepseek 里那段 `if private_memory_context:`
-                #   （【用户画像】注入）从不执行 → 本体记忆（沙漏）根本不进私聊 prompt。
-                #   症状（聊天日志实证）：刚说"你那些事我还能忘？"，被追问
-                #   "8月17号我干什么了"就只会"这我哪知道啊" —— 只能吹牛，人格显得很假。
-                #   ⚠ 必须把**本轮用户原话**传进去：get_memory_prompt_block 的第二层
-                #   「相关记忆」只在 message 非空且 light=False 时才做检索；
-                #   传 "" 或 light=True 只剩一行元信息（实测 48 字符），等于没注入。
+                # 3. AI 聊天（super_memory 向量召回仍由 before_reply 的 ego 钩子注入，
+                #    见下方 ego 钩子；这里只管画像/元信息，检索已收口到 memory_api）
+                # ★ 私聊画像（2026-11-06 收口）：这里只给**画像/元信息**，
+                #   检索（语义 + 日期）统一由记忆唯一读口 `memory_api.recall()`
+                #   → `memory_context.build_block(scope="private", scope_id=uid,
+                #   sources=("sand","sm"))` 负责，见 harness/memory_api.py:_retrieval。
+                #
+                #   旧实现在这里自己调了一次 builder + 一次旧层的日期召回，
+                #   与 memory_api 的检索层**同源双注**：同一条旧事在 prompt 里
+                #   出现两遍（而且一处带分一处不带），还各自算字数预算。
+                #   现在 `skip_search=True + skip_date=True`：只留元信息层。
                 pm_ctx = ""
-                # ★ 1.5.10 E（审计补）：private_memory_enable 此前无人读取。
-                #   默认 True 保持现状；关掉后不注入【用户画像】。
                 if bool(_config.get("private_memory_enable", True)):
                     try:
                         from sandglass_bridge import get_memory_prompt_block as _mpb
-                        # 2.0 阶段C：私聊检索层换 builder（沙漏带分 + super_memory 向量，
-                        #   scope_id=sender 与 EGO after_reply 写入侧同 key）；
-                        #   旧函数只留画像/日期/元信息层（skip_search 摘掉它的无阈值检索层，
-                        #   防双注）。builder 异常才退回旧全量路径，链路不断。
-                        from harness import memory_context as _mc
-                        _mblk = _mc.build_block(text or "", scope="private",
-                                                scope_id=str(sender), sources=("sand", "sm"))
-                        # ★ 2026-11-02：旧层也带作用域 —— 否则它的「按日期召回」会扫整份
-                        #   沙漏（只有群聊记录），把别人的发言当成"对方昨天说的"注进私聊。
-                        _old = (_mpb(text or "", light=False, skip_search=True,
-                                     scope=("private", str(sender))) or "").strip()
-                        pm_ctx = ((_mblk + "\n\n" + _old) if _mblk else _old)[:1200]
-                    except Exception:
-                        try:
-                            from sandglass_bridge import get_memory_prompt_block as _mpb
-                            pm_ctx = (_mpb(text or "", light=False,
-                                        scope=("private", str(sender)))
-                              or "").strip()[:1200]
-                        except Exception as _e:
-                            pm_ctx = ""
-                            log(f"[私聊画像] 组装失败（已降级为空）: {_e}")
+                        pm_ctx = (_mpb(text or "", light=True,
+                                       skip_search=True, skip_date=True,
+                                       scope=("private", str(sender))) or "").strip()[:1200]
+                    except Exception as _e:
+                        pm_ctx = ""
+                        log(f"[私聊画像] 组装失败（已降级为空）: {_e}")
 
                 # ── 画图意图检测 ──
                 #   ★ 2026-11-02：见 _is_draw_request 的说明（旧正则被"的图片"误伤）。

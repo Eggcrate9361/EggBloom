@@ -101,10 +101,13 @@ class TestRecallHistoryBlock(unittest.TestCase):
         seg = src[src.find("def _retrieval"):src.find("def _people_block")]
         self.assertIn('scope="group"', seg, "群聊召回没走群作用域")
         self.assertIn("if not group_id:", seg, "召回未限定在群聊路径")
-        # 私聊 light 模式保留（语义检索归 super_memory）
-        # ★ 2026-11-02：私聊检索必须带作用域（之前只断言了"传了 light"）
-        self.assertIn("get_memory_prompt_block(query, light=True", src)
-        self.assertIn('scope=("private", str(uid or ""))', src)
+        # ★ 2026-11-06：私聊检索收口到 memory_api → memory_context builder。
+        #   旧的 `get_memory_prompt_block(light=True)` 那层**跳过检索**，已废弃；
+        #   现在判据是"私聊 builder 带 uid 作用域 + 两个源都开"。
+        #   群聊仍走 sand 单源，避免与 EGO 的 super_memory 向量同源双注。
+        self.assertIn('scope="private", scope_id=str(uid or "")', src)
+        self.assertIn('sources=("sand", "sm")', src)
+        self.assertIn('sources=("sand",)', src)
         # bot_core 只许通过 recall() 拿记忆，不许再自己 import 这些读口
         for bad in ("recall_history_block(", "build_people_block(",
                     "get_memory_prompt_block("):

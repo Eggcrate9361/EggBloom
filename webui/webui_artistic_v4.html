@@ -5064,6 +5064,7 @@ window.FIELD_META = {
     "group_tool_groups": {"label": "群聊工具组（每行一个）", "desc": "群聊给模型哪些工具组。默认 core/work/web/group/plugin/todo/skill。desktop/write/proc 是本机能力，别加进来——群友不该能让我动这台机器。留空 = 默认值。", "ctl": "lines", "panel": "llm", "unit": "", "id": "sGroupToolGroups", "default": [], "default_text": "默认"},
     "private_tool_groups": {"label": "私聊工具组 · 白名单（每行一个）", "desc": "只对 private_tool_whitelist 里的人生效：给哪些工具组。默认除本机能力外全给（core/work/web/write/proc/desktop/mcp/skill/todo/plugin）。留空 = 默认值。", "ctl": "lines", "panel": "llm", "unit": "", "id": "sPrivateToolGroups", "default": [], "default_text": "默认"},
     "private_public_groups": {"label": "私聊工具组 · 非白名单（每行一个）", "desc": "不在白名单的人私聊时给哪些工具组。默认只给 core（联网搜索）——也就是「只能聊天」。想放宽就把组名加进来（work/web/plugin/skill/todo/write/proc/desktop/mcp）。留空 = 默认值。", "ctl": "lines", "panel": "llm", "unit": "", "id": "sPrivatePublicGroups", "default": [], "default_text": "默认"},
+    "private_memory_retrieval_enable": {"label": "私聊长期检索", "desc": "超出对话窗口的旧事，用沙漏 + 向量 + 日期类问题召回（按本人数据隔离，带相关度阈值和字数预算）。关掉则私聊只看当前窗口。", "ctl": "bool", "panel": "switches", "unit": "", "id": "sPrivateMemoryRetrieval", "default": true, "default_text": "开启"},
   }
 };
 /* ══ FIELD_META_END */

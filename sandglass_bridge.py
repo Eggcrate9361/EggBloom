@@ -971,7 +971,7 @@ def memory_feed(msg, scope="group"):
 
 
 def get_memory_prompt_block(message="", light=False, skip_search=False,
-                            scope=None, group_id=""):
+                            scope=None, group_id="", skip_date=False):
     """获取增强版记忆注入上下文
 
     四层结构：
@@ -992,6 +992,10 @@ def get_memory_prompt_block(message="", light=False, skip_search=False,
     group_id（2026-10-19）：第一层**人物画像**的群限定（重名检测需要）。
     与 scope 分开传是因为 scope 是 `(kind, key)` 元组，取群号要拆包、易错；
     调用方本来就有裸 group_id，直接给更清晰。为空 = 不限定（列全部画像）。
+
+    skip_date（2026-11-06）：只摘掉「第二层半」的日期类召回，其余层不变。
+    私聊检索收口到 memory_api → memory_context.build_block 之后，
+    只想保留画像/元信息的调用方用它，避免日期召回重复注入。
     """
     if not _enabled or not is_available():
         return ""
@@ -1016,7 +1020,10 @@ def get_memory_prompt_block(message="", light=False, skip_search=False,
 
     # 第二层半：**日期类问题**（不受 light 闸门限制 —— 只是本地扫文件，很便宜）
     #   关键词检索对日期是瞎的（搜"8月17"能给"我才17岁"），必须按时间戳取。
-    if message:
+    #   ★ 2026-11-06 `skip_date`：私聊检索收口到 memory_api → memory_context
+    #     builder（它自己第一步就做日期召回），这里再做一次就是同源双注。
+    #     只想要"人物画像/元信息"的调用方可以把这层也摘掉。
+    if message and not skip_date:
         try:
             bydate = recall_by_date(message, scope=scope, scope_id=group_id)
             if bydate:

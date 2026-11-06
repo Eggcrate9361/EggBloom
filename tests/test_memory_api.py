@@ -68,12 +68,21 @@ def main():
     p.set(SB, "cross_scene_recent",
           lambda uid, **kw: ["昨晚在群里说想换工作"] if kw.get("exclude_group", "") == "" else [])
     p.set(SB, "build_people_block", lambda gid: f"【群里的人】群{gid}有3个人")
-    # ★ 2026-11-02：私聊检索现在必须带 scope=("private", uid) —— stub 收下并记下来
+    # ★ 2026-11-06：私聊检索已收口到 memory_context.build_block（唯一读口），
+    #   旧的 `get_memory_prompt_block(light=True)` 那条只剩元信息。
+    #   桩要跟着换：记下 scope / scope_id / sources，验证不串人。
     _scope_seen = {}
-    def _fake_prompt_block(q, light=True, skip_search=False, scope=None, group_id=""):
-        _scope_seen["scope"] = scope
-        return f"【私聊记忆】关于「{q}」"
-    p.set(SB, "get_memory_prompt_block", _fake_prompt_block)
+    import harness.memory_context as MC
+
+    def _fake_build_block(msg, scope="group", scope_id="", ctx=None,
+                          sources=("sand", "sm")):
+        _scope_seen["scope"] = (scope, scope_id)
+        _scope_seen["sources"] = set(sources or ())
+        # 群聊要返回**群形状**的块：用例 [B] 会断言群聊输出里没有【私聊记忆】
+        return (f"【私聊记忆】关于「{msg}」" if scope == "private"
+                else f"【相关记忆】群里关于「{msg}」")
+
+    p.set(MC, "build_block", _fake_build_block)
     written = {}
     p.set(SB, "log_user_message", lambda text, **kw: written.setdefault("user", (text, kw)))
     p.set(SB, "log_bot_reply", lambda text, **kw: written.setdefault("bot", (text, kw)))
@@ -90,6 +99,8 @@ def main():
         check("带私聊检索", "【私聊记忆】" in out, out)
         check("★ 私聊检索带作用域", _scope_seen.get("scope") == ("private", "10001"),
               _scope_seen.get("scope"))
+        check("★ 私聊检索两个源都开",
+              _scope_seen.get("sources") == {"sand", "sm"}, _scope_seen.get("sources"))
         check("私聊不带群画像", "【群里的人】" not in out, out)
 
         print("\n[B] 群聊：身份 / 跨场景 / 检索 / 群画像")

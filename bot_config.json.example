@@ -249,6 +249,7 @@
   "self_learn_ignore_qqs": [],
   "self_learn_exclude_ai_names": true,
   "private_memory_enable": true,
+  "private_memory_retrieval_enable": true,
   "memory_scope_share": true,
   "slang_injector_enable": true,
   "nsfw_enabled": true,

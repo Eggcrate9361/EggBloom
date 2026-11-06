@@ -35,8 +35,13 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-#: 一次 recall 的默认字数预算（FIXPLAN §4：budget=600）
-DEFAULT_BUDGET = 600
+#: 一次 recall 的默认字数预算（FIXPLAN §4 原为 600；2026-11-06 提到 900）
+#: 为什么：私聊检索收口进来之后，顺序是「身份 → 称呼 → 跨场景 → 检索」。
+#: 检索块本身最多 400 字 + 抬头，而前面三段真机合计约 230 字 ——
+#: 600 的旧预算会把**最后装的检索整段丢掉**（`_pack` 是整段丢，不裁中间），
+#: 表现成"检索跑了但 prompt 里一条都没有"。900 才能让四段都装得下。
+#: 这是**上限**不是固定开销：没检索到东西时仍然只注入实际有的几段。
+DEFAULT_BUDGET = 900
 
 #: 判"同一行"时的最短长度。太短的行（"【核心记忆】"、"- 1"）只做全等比较，
 #: 不做包含判断 —— 否则一个 `"嗯"` 能把别人整段吞掉。
@@ -113,25 +118,37 @@ def _identity_blocks(uid, group_id, private):
 
 
 def _retrieval(query, scene, group_id, private, uid=""):
-    """检索：私聊走沙漏 light；群聊走 memory_context builder（只取沙漏源）。
+    """检索：私聊与群聊**共用一个 builder**，作用域不同。
 
-    ★ 2026-11-02 修（用户："私聊还是做对不同人的记忆隔离吧"）：
-      私聊分支原来**不传 scope** → `get_memory_prompt_block` 里"日期类问题"
-      那层照旧扫整份沙漏（沙漏只写群聊、且不分人）→ 私聊能读到群里别人的话。
-      现在私聊显式传 `("private", uid)`：沙漏里没有私聊数据 → 直接返回空，
-      宁缺勿串。
+    ★ 2026-11-06（单独动私聊检索层）：私聊原来走
+      `get_memory_prompt_block(light=True, scope=("private", uid))` ——
+      `light=True` 把整个检索层跳过了，只剩一行元信息。旧注释写的
+      「沙漏里没有私聊数据 → 直接返回空，宁缺勿串」是**过时的**：
+      私聊用户行本来就写进沙漏（`[昵称(uid)] 正文`），
+      `_scope_match` 的 `("private", uid)` 也一直支持按 uid 过滤。
+      于是超过 history 窗口的旧事，能不能想起来全看另一处 `pm_ctx` 碰运气。
+
+      现在收口：私聊也走 `memory_context.build_block`，带
+        · scope=("private", uid)（跨人隔离，不串别人的私聊）
+        · sand + sm 两个源（沙漏情景 + super_memory 向量）
+        · 日期类召回、τ 阈值、字数预算（builder 自带）
+        · `[记忆] ... 检索 N 字` 日志（recall() 统一打）
+      开关 `private_memory_retrieval_enable`（默认开），关掉即零检索；
+      builder 抛异常返回 None，绝不编。
     """
     if not query:
         return None
     if private:
         try:
-            from sandglass_bridge import get_memory_prompt_block
-            blk = get_memory_prompt_block(query, light=True,
-                                          scope=("private", str(uid or "")))
+            if not bool(_cfg().get("private_memory_retrieval_enable", True)):
+                return None
+            from harness import memory_context as _mc
+            blk = _mc.build_block(query, scope="private", scope_id=str(uid or ""),
+                                  sources=("sand", "sm"))
             if blk:
                 return ("检索", blk)
         except Exception:
-            return None
+            pass
         return None
     if not group_id:
         return None

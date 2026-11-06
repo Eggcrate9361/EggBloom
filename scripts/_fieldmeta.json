@@ -1699,6 +1699,16 @@
       "id": "sPrivatePublicGroups",
       "default": [],
       "default_text": "默认"
+    },
+    "private_memory_retrieval_enable": {
+      "label": "私聊长期检索",
+      "desc": "超出对话窗口的旧事，用沙漏 + 向量 + 日期类问题召回（按本人数据隔离，带相关度阈值和字数预算）。关掉则私聊只看当前窗口。",
+      "ctl": "bool",
+      "panel": "switches",
+      "unit": "",
+      "id": "sPrivateMemoryRetrieval",
+      "default": true,
+      "default_text": "开启"
     }
   },
   "actions": {

@@ -610,6 +610,11 @@ DEFAULT_CONFIG = {
     #     值=2 表示"至少被两次独立发言验证过"。调高更保守（3 更严）。
     "self_learn_min_count": 2,
     "private_memory_enable": True,
+    # 私聊长期检索（2026-11-06）：超出 history 窗口的旧事，靠
+    # memory_api.recall() → memory_context.build_block(scope=private, uid) 召回
+    # （沙漏情景 + super_memory 向量 + 日期类问题，带 τ 阈值与字数预算）。
+    # 关掉 = 私聊只剩当前会话窗口，零检索、零额外 token。这是这一刀的回退开关。
+    "private_memory_retrieval_enable": True,
     # 私聊与群聊共享记忆（2026-10-25 加，2026-10-30 改默认开）。
     # 打开后：群聊能召回私聊内容、私聊能召回群聊内容；**群与群之间仍隔离**。
     # 2026-10-30 用户拍板「记忆全打通」→ 默认 True。隐私代价是真实的

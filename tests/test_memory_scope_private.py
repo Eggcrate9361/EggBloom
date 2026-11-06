@@ -91,10 +91,15 @@ finally:
     except OSError:
         pass
 
-# ── 6. 源码约束：私聊两处记忆调用都带 scope ───────────────────────
+# ── 6. 源码约束：私聊两处记忆调用都带作用域 ───────────────────────
+# 2026-11-06：检索收口到 memory_api 的 builder 之后，bot_core 只剩
+# 画像/元信息这一处带 scope；另一处在 memory_api（scope/scope_id 分开传）。
 src = open(os.path.join(ROOT, "bot_core.py"), encoding="utf-8").read()
+api = open(os.path.join(ROOT, "harness", "memory_api.py"), encoding="utf-8").read()
 n_scope = src.count('scope=("private", str(sender))')
-check("★ bot_core 私聊记忆调用都带作用域（>=2 处）", n_scope >= 2, n_scope)
+check("★ bot_core 私聊画像调用带作用域", n_scope >= 1, n_scope)
+check("★ memory_api 私聊检索按 uid 隔离",
+      'scope="private", scope_id=str(uid or "")' in api)
 check("日期召回透传 scope", "recall_by_date(message, scope=scope" in
       open(os.path.join(ROOT, "sandglass_bridge.py"), encoding="utf-8").read())
 

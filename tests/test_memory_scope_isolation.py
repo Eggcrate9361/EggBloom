@@ -42,7 +42,9 @@ ctx = io.open(os.path.join(ROOT, "harness", "memory_context.py"), encoding="utf-
 sg = io.open(os.path.join(ROOT, "sandglass_bridge.py"), encoding="utf-8").read()
 
 check("★ memory_api 私聊检索带 scope",
-      'scope=("private", str(uid or ""))' in api)
+      'scope="private", scope_id=str(uid or "")' in api)
+check("★ memory_api 私聊检索两个源都开",
+      'sources=("sand", "sm")' in api)
 check("★ memory_context 日期召回带 scope",
       "recall_by_date(message, scope=(scope, scope_id))" in ctx)
 check("sandglass 私聊直接返回空", 'if _kind == "private":' in sg and
