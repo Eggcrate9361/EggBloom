@@ -11271,6 +11271,17 @@ def _do_group_admin(action, *, target="", value="", sender="", group_id="",
             return (False, f"{_ADMIN_LABELS.get(action, '操作')}失败：{e}")
         rc = resp.get("retcode") if isinstance(resp, dict) else resp
         if rc == 0:
+            # 2026-11-06：群管理动作进行为账本（踢人/禁言/改名片…）。
+            # 记在 _call 这个唯一成功出口上，所有动作一次覆盖；
+            # 下一轮问"你刚才把谁禁言了"才有据可依，不用靠猜。
+            try:
+                import self_actions as _sa
+                _sa.record("admin", scene="group", target=str(group_id),
+                           detail=f"{_ADMIN_LABELS.get(action, action)} {target or ''}"
+                                  f"{(' ' + value) if value else ''}".strip(),
+                           group_id=str(group_id))
+            except Exception:
+                pass
             return (True, _ADMIN_LABELS.get(action, "办了"))
         return (False, f"{_ADMIN_LABELS.get(action, '操作')}没办成，驱动返回 retcode={rc}")
 
@@ -12837,6 +12848,15 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
         _tmm.set_turn(images=list(_turn_imgs or []), is_group=bool(is_group),
                       sender=str(sender or target_qq or ""),
                       group_id=str(group_id or ""))
+    except Exception:
+        pass
+    # 行为账本的"这轮在跟谁说话"（2026-11-06）：工具层（ws_write / py_run /
+    # 群管理）拿不到场景，靠这里每轮告诉它一次，否则会把群里的动作记成私聊。
+    try:
+        import self_actions as _sa_turn
+        _sa_turn.set_turn(scene=("group" if is_group else "private"),
+                          target=str(group_id if is_group else (sender or target_qq or "")),
+                          group_id=str(group_id or ""))
     except Exception:
         pass
     """同步调用 DeepSeek API（在后台线程中运行），支持工具调用和重试。

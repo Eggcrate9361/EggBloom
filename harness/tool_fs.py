@@ -220,6 +220,12 @@ def tool_write(args):
 
     nlines = content.count("\n") + (1 if content else 0)
     verb = "已覆盖" if existed else "已创建"
+    # 2026-11-06：写文件进行为账本 —— 下一轮问"你改过哪个文件"才有据可依
+    try:
+        from self_actions import record_tool as _rt
+        _rt("edit", f"{verb} {_ws.rel(path)}（{nlines} 行）", ref=_ws.rel(path))
+    except Exception:
+        pass
     return f"{verb} {_ws.rel(path)}（{len(content.encode('utf-8'))} 字节，{nlines} 行）。"
 
 
@@ -364,6 +370,12 @@ def tool_edit(args):
     # 回灌 diff 摘要（模型可见即已记录；也方便前端页渲染轨迹卡）
     lines_add = str(new).count("\n") + (1 if str(new) else 0)
     lines_del = str(old).count("\n") + 1
+    try:
+        from self_actions import record_tool as _rt
+        _rt("edit", f"改了 {_ws.rel(path)}（-{lines_del} +{lines_add} 行）",
+            ref=_ws.rel(path))
+    except Exception:
+        pass
     return (f"已修改 {_ws.rel(path)}（替换 {1 if not args.get('replace_all') else 'all'} 处，"
             f"约 -{lines_del} +{lines_add} 行，字节变化 {delta:+d}）。")
 
@@ -468,6 +480,12 @@ def tool_edit_many(args):
             return (f"[部分失败] 已写入 {len(written)} 个文件后失败：{_ws.rel(p)} "
                     f"{type(e).__name__}: {e}\n已受影响：{', '.join(written) or '无'}")
 
+    try:
+        from self_actions import record_tool as _rt
+        _rt("edit", f"批量改了 {len(written)} 个文件（{len(prepared)} 处）",
+            ref=", ".join(written[:3]))
+    except Exception:
+        pass
     return "已批量修改 %d 处，涉及 %d 个文件：\n%s" % (
         len(prepared), len(written), "\n".join(detail))
 

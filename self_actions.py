@@ -53,6 +53,7 @@ MAX_FILE_LINES = 5000
 PERSIST_KINDS = frozenset({
     "meme_save", "meme_send", "meme", "collect", "poke",
     "task", "image", "file", "job", "proactive",
+    "edit", "run", "admin",
 })
 
 #: 各类动作写进记忆时的重要度（影响衰减/保留层级，见 super_memory._classify_tier）
@@ -60,6 +61,7 @@ PERSIST_IMPORTANCE = {
     "meme_save": 0.7, "collect": 0.7, "task": 0.65,
     "poke": 0.6, "image": 0.6, "file": 0.6, "job": 0.6,
     "meme": 0.5, "meme_send": 0.5, "proactive": 0.5,
+    "edit": 0.6, "run": 0.5, "admin": 0.6,
 }
 
 #: 关掉长期写入（排障/测试用）：`set_persist(False)`
@@ -210,6 +212,33 @@ def record(kind: str, *, scene: str = "", target: str = "",
     return rec
 
 
+# ── 工具层专用：不知道自己在哪个场景，由主链每轮告诉它 ──────────────
+# 工具函数（ws_write / py_run / 群管理）只拿得到自己的参数，不知道"这轮是群里
+# 还是私聊、对谁"。让它们各自猜会猜错（群里记成私聊，target 记成群号）。
+# 所以主链在**每轮开始时**调 `set_turn()`，工具只调 `record_tool()`。
+_TURN = {"scene": "", "target": "", "group_id": ""}
+
+
+def set_turn(*, scene: str = "", target: str = "", group_id: str = "") -> None:
+    """记下这一轮在跟谁说话（主链调用；工具只读）。"""
+    _TURN["scene"] = str(scene or "")[:12]
+    _TURN["target"] = str(target or "")[:24]
+    _TURN["group_id"] = str(group_id or "")[:24]
+
+
+def record_tool(kind: str, detail: str = "", ref: str = "", **kw) -> dict:
+    """工具动作入账（edit / run / admin）。失败不抛，绝不影响工具本身。"""
+    try:
+        ctx = dict(_TURN)
+        return record(kind,
+                      scene=kw.pop("scene", ctx["scene"]),
+                      target=kw.pop("target", ctx["target"]),
+                      detail=detail, ref=ref,
+                      group_id=kw.pop("group_id", ctx["group_id"]), **kw)
+    except Exception:
+        return {"kind": str(kind or "")}
+
+
 def recent(*, scene: str = "", target: str = "", minutes: float = 15.0,
            limit: int = 5, now: Optional[float] = None) -> List[dict]:
     """最近的动作（可按场景/对象过滤）。"""
@@ -297,6 +326,11 @@ _KIND_WORD = {
     "job": "起了一个后台任务",
     "proactive": "主动开了口",
     "file": "发了一个文件",
+    # 2026-11-06：工具层的三类动作。以前它们只在当轮的工具消息里，
+    # 下一轮问"你改过哪个文件"就说不清了。
+    "edit": "改了文件",
+    "run": "跑了一段代码",
+    "admin": "动了群设置",
 }
 
 

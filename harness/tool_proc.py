@@ -420,6 +420,14 @@ def tool_py_run(args):
     head = (f"py_run[{name}] {status} 用时 {elapsed:.2f}s"
             f"（会话已运行 {'%.0fs' % (time.time() - s.started_at) if s.started_at else '0s'}，"
             f"cwd={_ws.rel(res.get('cwd') or _ws.workspace_root())}）")
+    # 2026-11-06：执行型动作进行为账本。以前"我跑过那段代码"只在当轮的工具
+    # 消息里，下一轮就没了；用户问"你刚才跑的是什么"只能复述不出来。
+    try:
+        from self_actions import record_tool as _rt
+        _code_hint = " ".join(str(code).strip().split("\n")[0].split())[:40]
+        _rt("run", f"py_run {status} {elapsed:.1f}s：{_code_hint}")
+    except Exception:
+        pass
     return head + "\n" + "\n\n".join(parts)
 
 
