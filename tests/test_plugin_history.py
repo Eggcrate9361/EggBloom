@@ -81,12 +81,16 @@ def main():
         check(f"★ 不超过群上限 {cap}", len(gh2) <= cap, len(gh2))
         check("留下的是最新的", gh2 and gh2[-1].get("content") == f"第{cap + 4}句", gh2[-1:])
 
-        print("\n[C] 私聊上限 24")
-        for i in range(30):
+        # 2026-11-06：存储上限从写死的 24 提到 _PRIVATE_HISTORY_CAP（60）。
+        # 判据跟着常量走，别再写死数字 —— 上次改上限就在这里假红过一次。
+        pcap = bot_core._PRIVATE_HISTORY_CAP
+        print(f"\n[C] 私聊上限 {pcap}")
+        n_send = pcap + 6
+        for i in range(n_send):
             bot_core._plugin_send_text(f"私聊第{i}句", target="999002")
         ch = bot_core.chat_history.get("999002") or []
-        check("★ 不超过 24 条", len(ch) == 24, len(ch))
-        check("留下的是最新的", ch and ch[-1].get("content") == "私聊第29句", ch[-1:])
+        check(f"★ 不超过 {pcap} 条", len(ch) == pcap, len(ch))
+        check("留下的是最新的", ch and ch[-1].get("content") == f"私聊第{n_send - 1}句", ch[-1:])
 
         print("\n[D] 发送失败：不进历史（没发出去的话不能当成说过）")
         state["ok"] = False

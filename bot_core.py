@@ -218,7 +218,7 @@ def _plugin_send_text(text, target=None, group_id=None) -> bool:
                     if isinstance(_ch, dict):
                         with _hs["_session_lock"]:
                             _lst = list(_ch.get(str(target)) or []) + [_entry]
-                            _ch[str(target)] = _lst[-24:]
+                            _ch[str(target)] = _lst[-_PRIVATE_HISTORY_CAP:]
         except Exception:
             pass
         # ★ 2026-11-03 二修：短期历史只活 24 条，**长期记忆（沙漏）也要补**。
@@ -902,6 +902,14 @@ def _mark_seen_msg_id(mid):
     return False
 chat_history: Dict[str, List[Dict[str, str]]] = {}  # {qq: [...]}  按 QQ 号隔离私聊历史
 group_chat_history: Dict[str, List[Dict[str, str]]] = {}  # {group_id: [...]}  群聊独立对话历史
+
+#: 私聊历史**存储**上限（条）。2026-11-06 从 24 提到 60：
+#: 24 条只够 12 轮，而组装时又只取 16 条 → 第 1~4 轮**静默蒸发**，
+#: 长对话问回开头只能说"你没说过"。真正的成本闸是字符预算
+#: `history_recent_budget_chars`（默认 6000），条数不必再当第二道硬闸。
+_PRIVATE_HISTORY_CAP = 60
+#: 单条回复存进 history 时保留的字数（与 _build_cached_messages 的单条上限对齐）
+_HISTORY_ENTRY_STORE_CHARS = 1500
 
 # HUD 顶部状态条的运行时计数（**本次运行**）：消息条数 + 活跃群集合。
 # 为什么单独维护，而不是在 /api/status 里现算：
@@ -3830,7 +3838,7 @@ def _note_sent_meme(meme_path, *, target_qq: str = "", group_id: str = "") -> No
         elif target_qq:
             ch = chat_history.setdefault(str(target_qq), [])
             ch.append({"role": "assistant", "content": line, "ts": time.time()})
-            chat_history[str(target_qq)] = ch[-24:]
+            chat_history[str(target_qq)] = ch[-_PRIVATE_HISTORY_CAP:]
         # 行为账本（2026-10-30）：它要知道"我刚发了一张表情包"。
         # 只记事实，不评价；下一轮由 self_actions.render 注入一小段。
         try:
@@ -5085,7 +5093,7 @@ def load_state():
         # C2 存储对齐：加载时压缩到最近 24 轮（同写入端截断一致）
         for qq in list(chat_history.keys()):
             if len(chat_history[qq]) > 24:
-                chat_history[qq] = chat_history[qq][-24:]
+                chat_history[qq] = chat_history[qq][-_PRIVATE_HISTORY_CAP:]
     else:
         LAST_MSG_TIME = 0
         chat_history = {}
@@ -5109,7 +5117,7 @@ def save_state(force: bool = False):
         try:
             data_store.write_json(STATE_FILE, {
                 "last_msg_time": LAST_MSG_TIME,
-                "chat_history": {qq: ch[-24:] for qq, ch in chat_history.items()} if chat_history else {},
+                "chat_history": {qq: ch[-_PRIVATE_HISTORY_CAP:] for qq, ch in chat_history.items()} if chat_history else {},
                 "group_chat_history": group_chat_history,
             })
             if _STATE_SAVE_FAILS["n"]:
@@ -10762,9 +10770,9 @@ def _handle_poke_event(ev):
                     _pch = chat_history.setdefault(poke_qq, [])
                     _pch.append({"role": "user", "content": "（戳了戳你）",
                                  "ts": time.time()})
-                    _pch.append({"role": "assistant", "content": reply[:500],
+                    _pch.append({"role": "assistant", "content": reply[:_HISTORY_ENTRY_STORE_CHARS],
                                  "ts": time.time()})
-                    chat_history[poke_qq] = _pch[-24:]
+                    chat_history[poke_qq] = _pch[-_PRIVATE_HISTORY_CAP:]
                 log(f"私聊戳一戳回复: {reply[:40]}")
                 # 补发戳一戳表情包（AI 标注了 [表情:xx] 则用该情绪，否则随机）
                 if MEME_OK:
@@ -13211,7 +13219,17 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
         except Exception:
             pass
     else:
-        history = chat_history.get(target_qq, [])[-_cfg_int("private_history_rounds", 16, 4, 40):]
+        _pall = chat_history.get(target_qq, []) or []
+        _pr = _cfg_int("private_history_rounds", 32, 4, 40)
+        history = _pall[-_pr:]
+        # ★ 2026-11-06：以前这行是**静默切片**（存 24 条只传 16 条），
+        #   长对话的第 1~4 轮凭空消失，日志里一个字都没有 —— 被问回开头只能
+        #   答"你没说过"。现在存储放宽到 60 条、切片放宽到 32 条，
+        #   真正的成本闸交给 `_build_cached_messages` 的字符预算（会打
+        #   `[历史预算]`），并且这里把"丢了什么"记下来。
+        if len(_pall) > _pr:
+            log(f"[私聊历史] 传最近 {_pr} 条（存 {len(_pall)} 条，头部丢 "
+                f"{len(_pall) - _pr} 条；更早的交给长期记忆/字符预算）")
         cache_key = f"p_{target_qq}"
 
     # ── 按需工具集（harness.tool_registry）──
@@ -18420,7 +18438,7 @@ def main():
                                         _pch.append({"role": "assistant",
                                                      "content": _p_ans[:500],
                                                      "ts": time.time()})
-                                        chat_history[sender] = _pch[-24:]
+                                        chat_history[sender] = _pch[-_PRIVATE_HISTORY_CAP:]
                                         save_chat_log(sender, _bot_nicknames()[0], "", _p_ans[:500])
                                     except Exception as _p_hist_e:
                                         log(f"[Agent] 私聊留痕失败（不影响发送）: {_p_hist_e}")
@@ -18772,7 +18790,7 @@ def main():
                     
                     ch = chat_history.setdefault(sender, [])
                     ch.append({"role": "user", "content": text, "ts": time.time()})
-                    ch.append({"role": "assistant", "content": reply[:500],
+                    ch.append({"role": "assistant", "content": reply[:_HISTORY_ENTRY_STORE_CHARS],
                                "ts": time.time()})
                     try:
                         import self_actions as _sa
@@ -18781,13 +18799,14 @@ def main():
                     except Exception:
                         pass
                     # C2 存储对齐：私聊截断 60→24 轮（组装只取最近10轮，储存更多纯占内存+IO）
-                    chat_history[sender] = ch[-24:]
+                    chat_history[sender] = ch[-_PRIVATE_HISTORY_CAP:]
                     # P1-3：把刚发的表情包也记进 history —— 模型下一轮才知道
                     # 自己发了哪张（否则它只会说"图是系统配的"）。
                     if _pm_meme_path:
                         _note_sent_meme(_pm_meme_path, target_qq=sender)
                     # 转存 AI 回复
-                    save_chat_log(sender, _bot_nicknames()[0], "", reply[:500])
+                    save_chat_log(sender, _bot_nicknames()[0], "",
+                                  reply[:_HISTORY_ENTRY_STORE_CHARS])
                     save_instruction(text, reply)
                     # 统一记忆分发（1.5 任务 2.3）：私聊回复侧同步
                     try:
