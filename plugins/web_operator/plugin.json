@@ -1,0 +1,7 @@
+{
+  "id": "web_operator",
+  "title": "web_operator",
+  "description": "web_operator 插件",
+  "priority": 50,
+  "default_enabled": true
+}

@@ -1,0 +1,370 @@
+# -*- coding: utf-8 -*-
+"""harness/tool_meme.py —— 找回并发出自己收的表情包（2026-10-30）。
+
+用户要的：「把你偷的那张图再发一遍」——模型得能**准确调出来**，不是又随机配一张。
+
+    meme_find(query)   → 在图库里找（路径/标签/画面描述都能匹配），返回候选
+    meme_send(id)      → 把指定那张发到当前对话
+
+只查自己收的（`memes/memes/collected/index.json`），只发图库里的文件（防目录穿越）。
+"""
+from __future__ import annotations
+
+import json
+import os
+import time
+from typing import Any, Dict, List
+
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+MEME_ROOT = os.path.join(_ROOT, "memes", "memes")
+INDEX_FILE = os.path.join(MEME_ROOT, "collected", "index.json")
+DESC_FILE = os.path.join(MEME_ROOT, "descriptions.json")
+
+_SEND = None
+_FAIL_COUNT = 0
+_FAIL_UNTIL = 0.0
+_TURN = {"images": [], "is_group": False, "sender": "", "group_id": ""}
+
+#: 上一轮"真的带图"的那次（2026-10-31）。用户发完图、隔一条文字再说「存表情包」
+#: 时，本轮 `_TURN["images"]` 是空的 —— 但那句"存"指的显然是刚发的那张。
+#: 窗口可配：`meme_save_lookback_sec`（默认 300 秒，0 = 只看本轮）。
+_LAST_IMAGES = {"images": [], "is_group": False, "sender": "", "group_id": "", "ts": 0.0}
+_LAST_IMAGES_TTL = 300.0
+
+
+def _cfg() -> dict:
+    """读主配置（harness 不 import bot_core，失败就退回内置默认）。"""
+    try:
+        import config as _c
+        return _c.load_config() or {}
+    except Exception:
+        return {}
+
+
+def _lookback_sec() -> float:
+    try:
+        return float(_cfg().get("meme_save_lookback_sec", _LAST_IMAGES_TTL) or 0.0)
+    except (TypeError, ValueError):
+        return _LAST_IMAGES_TTL
+
+
+def set_turn(*, images=None, is_group: bool = False, sender: str = "",
+             group_id: str = "") -> None:
+    """每轮由主链写入：这一轮有哪些图、在哪个场景、发给谁。"""
+    _TURN["images"] = [str(x) for x in (images or []) if str(x or "").strip()]
+    _TURN["is_group"] = bool(is_group)
+    _TURN["sender"] = str(sender or "")
+    _TURN["group_id"] = str(group_id or "")
+    if _TURN["images"]:
+        _LAST_IMAGES.update(images=list(_TURN["images"]), is_group=bool(is_group),
+                            sender=_TURN["sender"], group_id=_TURN["group_id"],
+                            ts=time.time())
+
+
+def turn_images_for_save(path: str = "") -> list:
+    """这一轮可存的图：显式 path > 本轮 images > 上一轮（同人、5 分钟内）。"""
+    p = str(path or "").strip()
+    if p:
+        return [p]
+    imgs = list(_TURN.get("images") or [])
+    if imgs:
+        return imgs
+    same_person = (
+        _LAST_IMAGES.get("sender") == _TURN.get("sender")
+        and _LAST_IMAGES.get("group_id") == _TURN.get("group_id")
+        and _LAST_IMAGES.get("is_group") == _TURN.get("is_group")
+    )
+    if same_person and _LAST_IMAGES.get("images") \
+            and (time.time() - float(_LAST_IMAGES.get("ts") or 0)) <= _lookback_sec():
+        return list(_LAST_IMAGES["images"])
+    return []
+
+MEME_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "meme_find",
+            "description": ("在你自己收的表情包里找（按标签/画面描述/文件名）。"
+                            "用户要你发「之前收的那张图」时先用它找到 id。"),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "关键词，可空（空=最近收的）"},
+                    "limit": {"type": "number", "description": "最多几条，默认 5"},
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "meme_save",
+            "description": ("把用户这一轮发来的图片存进表情库（用户说「存/收下/留着」时用）。"
+                            "不传 path 就存这一轮的全部图。"),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "可选：指定某张本地路径"},
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "meme_send",
+            "description": "把 meme_find 找到的那张表情包发到当前对话。id 用返回里的 id。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string", "description": "meme_find 返回的 id"},
+                },
+                "required": ["id"],
+            },
+        },
+    },
+]
+
+
+def set_sender(fn) -> None:
+    """宿主注入：fn(full_path, ctx) -> bool。"""
+    global _SEND
+    _SEND = fn if callable(fn) else None
+
+
+def _load(path: str) -> dict:
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            d = json.load(f)
+        return d if isinstance(d, dict) else {}
+    except Exception:
+        return {}
+
+
+def _desc_for(rel: str, descs: dict) -> str:
+    v = descs.get(rel)
+    if isinstance(v, dict):
+        v = v.get("desc")
+    if not v:
+        v = descs.get(os.path.basename(rel))
+        if isinstance(v, dict):
+            v = v.get("desc")
+    return str(v or "")
+
+
+def meme_find(query: str = "", limit: int = 5) -> Dict[str, Any]:
+    q = str(query or "").strip().lower()
+    idx = _load(INDEX_FILE)
+    descs = _load(DESC_FILE)
+    rows: List[dict] = []
+    for sha, rec in idx.items():
+        if not isinstance(rec, dict):
+            continue
+        rel = str(rec.get("path") or "")
+        if not rel:
+            continue
+        tags = [str(t) for t in (rec.get("tags") or [])]
+        desc = _desc_for(rel, descs)
+        hay = (rel + " " + "、".join(tags) + " " + desc).lower()
+        if q and q not in hay:
+            continue
+        rows.append({
+            "id": rel,
+            "tags": tags,
+            "desc": desc[:120],
+            "collected_at": rec.get("ts"),
+            "sha1": sha,
+        })
+    rows.sort(key=lambda r: float(r.get("collected_at") or 0), reverse=True)
+    n = max(1, min(20, int(limit or 5)))
+    out = {"ok": True, "count": len(rows[:n]), "total": len(idx),
+           "items": rows[:n]}
+    if q and not rows and idx:
+        # 别让模型把"没匹配到关键词"说成"库里一张都没有"（真机 20:07 就这么说的）
+        _tags = sorted({tag for rec in idx.values() if isinstance(rec, dict)
+                        for tag in (rec.get("tags") or [])})[:12]
+        out["hint"] = (f"没匹配到「{query}」；库里共 {len(idx)} 张，"
+                       f"可用标签：{'、'.join(_tags) or '无'}。可换关键词或空查询取最近收的。")
+    return out
+
+
+def _resolve(meme_id: str) -> str:
+    mid = str(meme_id or "").strip().replace("\\", "/")
+    if not mid:
+        return ""
+    # 允许相对（collected/x.jpg）或绝对；统一限制在图库根内
+    full = mid if os.path.isabs(mid) else os.path.join(MEME_ROOT, mid)
+    full = os.path.normpath(full)
+    root = os.path.normpath(MEME_ROOT)
+    if not (full == root or full.startswith(root + os.sep)):
+        return ""
+    return full if os.path.isfile(full) else ""
+
+
+def meme_send(meme_id: str = "", **kw) -> Dict[str, Any]:
+    # ★ 2026-11-02 真机：模型把参数叫成 id / name / file / path，
+    #   适配器只认签名里的键 → 传进来是空的 → TypeError: missing 'meme_id'，
+    #   工具失败后它还把原生调用格式（<｜｜DSML｜｜...）当正文吐了出来。
+    #   这里做一层别名容错，并且**缺参不再抛异常**（抛异常会让模型乱试格式）。
+    if not str(meme_id or "").strip():
+        for _k in ("id", "meme", "name", "file", "path", "image", "meme_path"):
+            _v = kw.get(_k)
+            if isinstance(_v, str) and _v.strip():
+                meme_id = _v
+                break
+    meme_id = str(meme_id or "").strip()
+    if not meme_id:
+        return {"ok": False,
+                "error": "缺少 meme_id（例：meme_send 传 {\"meme_id\": \"collected/xxx.jpg\"}）。"
+                         "先用 meme_find 查 id，别自己拼。"}
+    full = _resolve(meme_id)
+    if not full:
+        return {"ok": False, "error": "没这张图（id 不对或不在图库里）"}
+    if not callable(_SEND):
+        return {"ok": False, "error": "发送未接线"}
+    try:
+        from . import tool_task as _tt
+        ctx = dict(getattr(_tt, "_CTX", {}) or {})
+    except Exception:
+        ctx = {}
+    if not ctx.get("sender") and not ctx.get("group_id"):
+        return {"ok": False, "error": "没有对话上下文，发不出去"}
+    try:
+        ok = bool(_SEND(full, ctx))
+    except Exception as e:
+        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+    if not ok:
+        return {"ok": False, "error": "发送失败（协议层拒绝）"}
+    return {"ok": True, "sent": os.path.relpath(full, MEME_ROOT).replace("\\", "/")}
+
+
+def _saved_detail(rel: str) -> Dict[str, Any]:
+    """刚存的这张：相对路径 + 标签 + 画面描述（模型据此说清"存的是哪张"）。"""
+    item = {"rel": rel}
+    try:
+        import meme_desc as _md
+        tags = _md.tags_for(MEME_ROOT, rel) or []
+        if tags:
+            item["tags"] = [str(t) for t in tags[:4]]
+        desc = str(_md.desc_for(MEME_ROOT, rel) or "").strip()
+        if desc:
+            item["desc"] = desc[:80]
+    except Exception:
+        pass
+    return item
+
+
+def _record_save(rel: str, detail: Dict[str, Any]) -> None:
+    """存图也要**进账**（2026-11-01 用户报障：bot 存了却不知道自己存了什么）。
+
+    以前 `meme_save` 是纯代码动作，`self_actions` 里一条都没有 —— 问它
+    「你什么时候存的表情包、从谁那儿存的、存的哪张」只能瞎猜。
+    现在短期账本 + 长期记忆都记：谁发的（source）、存的哪张（ref）、
+    什么标签/画面（detail）。
+    """
+    try:
+        import self_actions as _sa
+    except Exception:
+        return
+    tags = detail.get("tags") or []
+    desc = str(detail.get("desc") or "").strip()
+    src = str(_TURN.get("sender") or "")
+    gid = str(_TURN.get("group_id") or "") if _TURN.get("is_group") else ""
+    detail_text = "、".join(str(t) for t in tags[:3])
+    if desc:
+        detail_text = (detail_text + "｜" + desc[:50]) if detail_text else desc[:50]
+    if not detail_text:
+        detail_text = os.path.basename(rel)
+    try:
+        _sa.record("meme_save",
+                   scene=("group" if gid else "private"),
+                   target=(gid or src),
+                   group_id=gid,
+                   source=src,
+                   ref=rel,
+                   detail=detail_text)
+    except Exception:
+        pass
+
+
+def meme_save(path: str = "") -> Dict[str, Any]:
+    """存这一轮（或指定）的图到表情库。返回每张的结果。"""
+    paths = turn_images_for_save(path if isinstance(path, str) else "")
+    if not paths:
+        return {"ok": False, "error": "这一轮没有可存的图片"}
+    scene_group = bool(_TURN.get("is_group") and _TURN.get("group_id"))
+    saved, failed, dups = [], [], []
+    for p in paths[:4]:
+        try:
+            import meme_collect as _mc
+            rel = _mc.maybe_collect(
+                p, source=("group" if scene_group else "private"),
+                from_group=(_TURN.get("group_id") if scene_group else ""),
+                sender=str(_TURN.get("target") or ""))
+        except Exception as e:
+            failed.append({"path": p, "error": f"{type(e).__name__}: {e}"})
+            continue
+        if rel:
+            _d = _saved_detail(rel)
+            saved.append(_d)
+            _record_save(rel, _d)
+        else:
+            # 静默跳过会让模型只能说"存不进去"；把同一条判据翻成人话
+            why = ""
+            try:
+                why = _mc.skip_reason(p)
+            except Exception:
+                pass
+            if "存过" in str(why):
+                try:
+                    rel_ex, how = _mc.existing_entry(p)
+                except Exception:
+                    rel_ex, how = "", ""
+                if scene_group:
+                    # 群聊不展开"重复"这件事（用户要求只在私聊说）
+                    failed.append({"path": p, "error": "这张存不进去"})
+                else:
+                    dups.append({"path": rel_ex, "how": how})
+            else:
+                failed.append({"path": p, "error": why or "这张存不进去"})
+    # 连续失败冷却（真机 21:11–21:12 连试三回，模型只能反复说同一句）
+    global _FAIL_COUNT, _FAIL_UNTIL
+    if saved:
+        _FAIL_COUNT = 0
+    else:
+        _FAIL_COUNT += 1
+        if _FAIL_COUNT >= 3:
+            _FAIL_UNTIL = time.time() + 600
+            _FAIL_COUNT = 0
+    out = {"ok": bool(saved), "saved": saved, "failed": failed,
+           "count": len(saved), "scene": "group" if scene_group else "private",
+           "cooldown": _FAIL_UNTIL > time.time(),
+           "note": ("这张存不进去，先别试了" if _FAIL_UNTIL > time.time()
+                    else ("存好了" if saved else "没存成，换个说法或稍后再试"))}
+    # ★ 2026-11-01：现在存了哪张 / 是不是重复 —— 只在私聊说。
+    #   群聊里不展开，免得 bot 在群里聊"重复表情"。
+    if not scene_group:
+        if dups:
+            out["duplicates"] = dups
+            if not saved:
+                out["ok"] = True          # 早就存过 = 目标已达成，不算失败
+                out["note"] = "这张之前就存过了"
+                out["failed"] = [x for x in failed if x.get("error") not in ("", None)]
+    return out
+
+
+def register_all() -> Dict[str, Any]:
+    from . import tool_registry as _tr
+    fns = {"meme_find": meme_find, "meme_send": meme_send, "meme_save": meme_save}
+    for sch in MEME_TOOLS:
+        name = sch["function"]["name"]
+        # 全放 work（只读组，常驻）：真机 20:53 证明 write/proc 组要命中
+        # 特定词才注入，「存」不在词表里 → 模型根本看不到 meme_save。
+        groups = (_tr.GROUP_WORK,)
+        _tr.register(name, sch, fn=_tr.adapt_kwargs(fns[name]), groups=groups, source="harness")
+    return {k: _tr.adapt_kwargs(v) for k, v in fns.items()}
+
+
+__all__ = ["MEME_TOOLS", "set_sender", "meme_find", "meme_send", "register_all"]

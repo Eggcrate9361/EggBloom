@@ -1,0 +1,16 @@
+#!/bin/sh
+# 提交信息闸（2026-11-13）。规则见 CONTRIBUTING.md §6，判据见 tools/commit_lint.py。
+#
+# 为什么要有这一层：11-13 体检发现规范写了、闸也"通过"了，而实际有 6 个提交
+# 正文写着转述。事后扫历史只能发现问题，拦不住新问题 —— 所以拦在 commit 之前。
+#
+# 跳过的唯一正当理由：确认是闸误判。用 git commit --no-verify 跳过，
+# 但发布闸（--all-refs --strict）仍会把它算出来，跑不掉。
+REPO=$(git rev-parse --show-toplevel)
+
+if ! command -v python >/dev/null 2>&1; then
+    echo "[commit-msg] 没找到 python，跳过提交信息检查（先装 Python 3.13）" >&2
+    exit 0
+fi
+
+exec python "$REPO/tools/commit_lint.py" --message-file "$1"

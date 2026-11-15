@@ -1,0 +1,249 @@
+# -*- coding: utf-8 -*-
+"""tests/test_updater.py —— 热补丁更新的安全边界
+
+这是**给终端用户跑的东西**：它会覆盖用户机器上的程序文件。
+所以测试的重点不是"能装上"，而是"装错的东西一个都不许落地"：
+
+  A. 白名单：只允许代码/页面/评测；`data/`、`bot_config.json`、`.env` 一律拒
+  B. 路径穿越：`../evil.py`、`C:/x.py`、绝对路径 一律拒
+  C. sha256 对不上：**不写盘**，只报错
+  D. 正常安装：旧文件先备份，新内容落地，返回清单
+  E. 回滚：备份目录拷回去，内容与原来逐字节一致
+  F. 数据目录：补丁里塞 `data/` 也不会被装（纵深防御）
+"""
+import hashlib
+import json
+import os
+import shutil
+import sys
+import tempfile
+import zipfile
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(HERE)
+sys.path.insert(0, ROOT)
+
+from harness import updater as U  # noqa: E402
+
+PASS = 0
+FAIL = 0
+FAILURES = []
+
+
+def check(name, cond, extra=""):
+    global PASS, FAIL
+    if cond:
+        PASS += 1
+        print(f"  [OK]   {name}")
+    else:
+        FAIL += 1
+        FAILURES.append(name + (f"  → {extra}" if extra else ""))
+        print(f"  [FAIL] {name}  {extra}")
+
+
+def sha(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        h.update(f.read())
+    return h.hexdigest()
+
+
+def make_zip(path, entries):
+    with zipfile.ZipFile(path, "w") as zf:
+        for name, data in entries.items():
+            zf.writestr(name, data)
+
+
+def main():
+    print("[A] 白名单")
+    for name, want in [
+        ("bot_core.py", True),
+        ("harness/updater.py", True),
+        ("plugins/ego/__init__.py", True),
+        ("webui/webui_artistic_v3.html", True),
+        ("evals/scenarios.json", True),
+        ("data/x.json", False),
+        ("bot_config.json", False),
+        (".env", False),
+        ("tests/test_x.py", False),
+        ("webui/providers.json", False),
+        ("logs/a.log", False),
+        ("memes/memes/a.jpg", False),
+    ]:
+        check(f"{name} → {'收' if want else '拒'}", U.is_allowed(name) is want)
+
+    print("\n[B] 路径穿越")
+    for name in ("../evil.py", "harness/../../evil.py", "C:/x.py", "/etc/x.py",
+                 "harness//x.py", "./harness/../data/x.json"):
+        check(f"{name} 被拒", U.is_allowed(name) is False)
+
+    td = tempfile.mkdtemp(prefix="eb_upd_")
+    root = os.path.join(td, "app")
+    os.makedirs(os.path.join(root, "harness"))
+    os.makedirs(os.path.join(root, "data"))
+    with open(os.path.join(root, "harness", "a.py"), "w", encoding="utf-8") as f:
+        f.write("OLD")
+    with open(os.path.join(root, "data", "keep.json"), "w", encoding="utf-8") as f:
+        f.write("DATA")
+
+    print("\n[C] sha256 不匹配")
+    z = os.path.join(td, "p.zip")
+    make_zip(z, {"harness/a.py": "NEW", "data/keep.json": "HACKED",
+                 "bot_config.json": "HACKED"})
+    rep = U.apply(z, {"sha256": "0" * 64}, root=root)
+    check("拒绝安装", rep["ok"] is False and "sha256" in rep["error"], rep)
+    check("原文件没动", open(os.path.join(root, "harness", "a.py")).read() == "OLD")
+    check("数据没动", open(os.path.join(root, "data", "keep.json")).read() == "DATA")
+
+    print("\n[D] 正常安装（含越权条目）")
+    rep = U.apply(z, {"sha256": sha(z)}, root=root)
+    check("安装成功", rep["ok"] is True, rep)
+    check("代码已更新", open(os.path.join(root, "harness", "a.py")).read() == "NEW")
+    check("数据没被覆盖", open(os.path.join(root, "data", "keep.json")).read() == "DATA")
+    check("bot_config 没被写", not os.path.exists(os.path.join(root, "bot_config.json")))
+    check("越权条目记进 skipped", "data/keep.json" in rep["skipped"], rep)
+    check("旧文件已备份", any("a.py" in x for x in rep["backed_up"]), rep)
+
+    print("\n[E] 回滚")
+    rb = U.rollback(rep["backup_dir"], root=root)
+    check("回滚成功", rb["ok"] is True, rb)
+    check("内容回到 OLD", open(os.path.join(root, "harness", "a.py")).read() == "OLD")
+
+    print("\n[F] 补丁里塞 data/ 也不落")
+    z2 = os.path.join(td, "p2.zip")
+    make_zip(z2, {"data/new.json": "X", "harness/b.py": "B"})
+    rep2 = U.apply(z2, {"sha256": sha(z2)}, root=root)
+    check("只装白名单里的", rep2["applied"] == ["harness/b.py"], rep2)
+    check("data/new.json 不存在", not os.path.exists(os.path.join(root, "data", "new.json")))
+
+    print("\n[G] 用户自己的东西：永远不覆盖")
+    for name in ("plugins/personality.txt",
+                 "plugins/personality_versions/v2.txt",
+                 "plugins/user_funny/__init__.py",
+                 "plugins/custom/anything.py",
+                 "skills/user_xxx/SKILL.md"):
+        check(f"{name} 被保护", U.is_allowed(name) is False and U.is_protected(name) is True)
+
+    print("\n[H] 本地改过的官方文件：保留（基线哈希）")
+    # 场景：官方 plugins/ego/x.py 上一版内容 = BASE；用户改成了 MYEDIT；
+    # 补丁里带的是新版 NEW。base 记录的 sha 是 BASE → 本地 != BASE → 保留
+    pdir = os.path.join(root, "plugins", "ego")
+    os.makedirs(pdir, exist_ok=True)
+    target = os.path.join(pdir, "x.py")
+    with open(target, "w", encoding="utf-8") as f:
+        f.write("MYEDIT")
+    z3 = os.path.join(td, "p3.zip")
+    make_zip(z3, {"plugins/ego/x.py": "NEW", "plugins/ego/y.py": "NEWY"})
+    with open(os.path.join(td, "base.txt"), "w", encoding="utf-8") as f:
+        f.write("BASE")
+    fb = os.path.join(td, "base.txt")
+    rep3 = U.apply(z3, {"sha256": sha(z3),
+                        "base": {"plugins/ego/x.py": sha(fb)}}, root=root)
+    check("本地改过的没被覆盖", open(target, encoding="utf-8").read() == "MYEDIT")
+    check("记进 kept", "plugins/ego/x.py" in rep3["kept"], rep3)
+    check("没改过的照常更新", os.path.exists(os.path.join(pdir, "y.py")))
+
+    print("\n[I] 基线一致时才覆盖")
+    with open(target, "w", encoding="utf-8") as f:
+        f.write("BASE")
+    fb2 = os.path.join(td, "base2.txt")
+    with open(fb2, "w", encoding="utf-8") as f:
+        f.write("BASE")
+    rep4 = U.apply(z3, {"sha256": sha(z3),
+                        "base": {"plugins/ego/x.py": sha(fb2)}}, root=root)
+    check("更新成功", open(target, encoding="utf-8").read() == "NEW", rep4)
+
+    print("\n[J] 带进度的整条链路（manifest → 下载 → 校验 → 覆盖）")
+    # 独立根目录，避免和上面的状态互相影响
+    root2 = os.path.join(td, "app2")
+    os.makedirs(os.path.join(root2, "harness"), exist_ok=True)
+    with open(os.path.join(root2, "harness", "a.py"), "w", encoding="utf-8") as f:
+        f.write("OLD")
+    z2 = os.path.join(td, "p4.zip")
+    make_zip(z2, {"harness/a.py": "NEW2"})
+    man2 = {"version": "9.9.9", "sha256": sha(z2), "size": os.path.getsize(z2),
+            "url": "file:///" + z2.replace("\\", "/")}
+    mp = os.path.join(td, "latest2.json")
+    with open(mp, "w", encoding="utf-8") as f:
+        json.dump(man2, f)
+    seen = []
+    rep5 = U.apply_from_manifest("file:///" + mp.replace("\\", "/"), root=root2,
+                                 on_progress=lambda ph, done, total: seen.append(ph))
+    check("安装成功", rep5.get("ok") is True, rep5)
+    check("版本透传", rep5.get("version") == "9.9.9", rep5)
+    check("内容已更新", open(os.path.join(root2, "harness", "a.py"), encoding="utf-8").read() == "NEW2")
+    check("进度阶段顺序", seen[:1] == ["manifest"] and "download" in seen
+          and "verify" in seen and seen[-1] == "done", seen)
+
+    print("\n[K] 没有更新地址")
+    rep6 = U.apply_from_manifest("", root=root2)
+    check("明确报错", rep6.get("ok") is False and "地址" in str(rep6.get("error")), rep6)
+
+    print("\n[L] 版本比较（不能把降级当更新）")
+    for remote, local, want in (("1.5.11", "1.5.10", True),
+                                ("1.5.10", "1.5.11", False),
+                                ("1.5.11", "1.5.11", False),
+                                ("1.6.0", "1.5.11", True),
+                                ("1.5.10", "", True),
+                                ("", "1.5.10", False)):
+        got = U.is_newer(remote, local)
+        check(f"{remote or '空'} vs {local or '空'} → {want}", got is want, got)
+    check("解析带 v 前缀/后缀", U.version_tuple("v1.5.11-dev+x") == (1, 5, 11),
+          U.version_tuple("v1.5.11-dev+x"))
+
+    print("\n[M] 打完补丁要认得新版本（否则永远提示同一个补丁）")
+    root3 = os.path.join(td, "app3")
+    os.makedirs(os.path.join(root3, "harness"), exist_ok=True)
+    with open(os.path.join(root3, "VERSION"), "w", encoding="utf-8") as f:
+        f.write("# test\nrelease=1.6.0\n")
+    with open(os.path.join(root3, "harness", "d.py"), "w", encoding="utf-8") as f:
+        f.write("OLD")
+    z4 = os.path.join(td, "p5.zip")
+    make_zip(z4, {"harness/d.py": "NEW"})
+    check("补丁前自称 1.6.0", U._read_version(root3) == "1.6.0", U._read_version(root3))
+    rep7 = U.apply(z4, {"sha256": sha(z4), "version": "1.6.1"}, root=root3)
+    check("安装成功", rep7.get("ok") is True, rep7)
+    check("本地版本变成 1.6.1", U._read_version(root3) == "1.6.1", U._read_version(root3))
+    check("不再提示同一个补丁", U.is_newer("1.6.1", U._read_version(root3)) is False)
+    check("更新版本仍会提示", U.is_newer("1.6.2", U._read_version(root3)) is True)
+    check("记账落在 data/", os.path.isfile(os.path.join(root3, "data", "update-state.json")))
+    check("记账文件进不了补丁", U.is_allowed("data/update-state.json") is False)
+    check("VERSION 本身没被改", "release=1.6.0" in open(
+        os.path.join(root3, "VERSION"), encoding="utf-8").read())
+    check("VERSION 也进不了补丁", U.is_allowed("VERSION") is False)
+    rb2 = U.rollback(rep7["backup_dir"], root=root3)
+    check("回滚成功", rb2.get("ok") is True, rb2)
+    check("回滚后版本退回 1.6.0", U._read_version(root3) == "1.6.0", U._read_version(root3))
+    check("回滚后文件也回去了", open(os.path.join(root3, "harness", "d.py")).read() == "OLD")
+
+    print("\n[N] 行尾不能把官方文件误判成「用户改过」")
+    # 发行包是 CRLF，manifest 的 base 来自 git blob（LF）——
+    # 不对齐的话用户本地每个官方文件都会进 kept，补丁等于空转。
+    root4 = os.path.join(td, "app4")
+    os.makedirs(os.path.join(root4, "harness"), exist_ok=True)
+    with open(os.path.join(root4, "harness", "e.py"), "wb") as f:
+        f.write(b"A\r\nB\r\n")
+    lf = os.path.join(td, "e_lf.py")
+    with open(lf, "wb") as f:
+        f.write(b"A\nB\n")
+    z5 = os.path.join(td, "p6.zip")
+    make_zip(z5, {"harness/e.py": "NEW"})
+    rep8 = U.apply(z5, {"sha256": sha(z5),
+                        "base": {"harness/e.py": sha(lf)}}, root=root4)
+    check("CRLF 本地文件没被判成改过", rep8["kept"] == [], rep8)
+    check("照常覆盖", open(os.path.join(root4, "harness", "e.py")).read() == "NEW", rep8)
+    crlf = os.path.join(td, "e_crlf.py")
+    with open(crlf, "wb") as f:
+        f.write(b"A\r\nB\r\n")
+    check("归一哈希 CRLF == LF", U.sha256_normalized(crlf) == U.sha256_normalized(lf))
+
+    print("\n" + "=" * 56)
+    print(f"通过 {PASS} / 失败 {FAIL}")
+    if FAILURES:
+        for f in FAILURES:
+            print("  -", f)
+    return 1 if FAIL else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

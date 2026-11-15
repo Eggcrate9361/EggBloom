@@ -1,0 +1,7 @@
+{
+  "id": "group_chat_decider",
+  "title": "group_chat_decider",
+  "description": "group_chat_decider 插件",
+  "priority": 50,
+  "default_enabled": true
+}

@@ -1,0 +1,10 @@
+{
+  "id": "separation",
+  "version": "1.1.0",
+  "description": "分离（切离、交出）与真实：不可逆内核态开关的只读状态页；不提供启动按钮，启用只在终端执行",
+  "provides": [],
+  "requires": [],
+  "permissions": ["read"],
+  "scope": "global",
+  "title": "分离 / 切离 / 交出"
+}

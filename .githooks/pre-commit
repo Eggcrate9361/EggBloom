@@ -1,0 +1,8 @@
+#!/bin/sh
+# 提交前敏感信息扫描（2026-10-29）：命中真实号/密钥/本机路径即拒绝提交。
+# 脚本本体在仓库里（scripts/check_secrets.py），这里只是调用。
+#
+# 2026-11-13：与 commit-msg 一起挪进 .githooks/ 做版本化，装法见
+# scripts/install_git_hooks.py（新克隆的机器不用再手工回忆这 3 行）。
+REPO=$(git rev-parse --show-toplevel)
+exec python "$REPO/scripts/check_secrets.py" --staged

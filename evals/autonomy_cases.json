@@ -1,0 +1,22 @@
+{
+  "_说明": "自主性插件策略层的机械用例（1.5.11 归属：接线在 1.6.0，这里只锁 guard() 的语义）。判据来自《EggBloom-自主性插件-设计.md》§2 裁决规则表与 §9 验收 1/2/3/6。",
+  "version": 1,
+  "updated": "2026-10-31",
+  "cases": [
+    {"id": "guard-01", "note": "越权：L2 想发布视频", "level": 2, "action": "publish.video", "confirmed": false, "expect": "deny"},
+    {"id": "guard-02", "note": "同级放行：L2 发消息", "level": 2, "action": "msg.send", "confirmed": false, "expect": "allow"},
+    {"id": "guard-03", "note": "低一级也放行：L2 读记忆", "level": 2, "action": "memory.search", "confirmed": false, "expect": "allow"},
+    {"id": "guard-04", "note": "L3 未确认 → 挂起", "level": 3, "action": "delete", "confirmed": false, "expect": "need_confirm"},
+    {"id": "guard-05", "note": "L3 已确认 → 放行", "level": 3, "action": "delete", "confirmed": true, "expect": "allow"},
+    {"id": "guard-06", "note": "未登记动作 → 按 L3 拒绝（不是 need_confirm，也不是放行）", "level": 3, "action": "kernel.format", "confirmed": false, "expect": "deny"},
+    {"id": "guard-07", "note": "未登记动作在 L2 → 拒绝", "level": 2, "action": "kernel.format", "confirmed": true, "expect": "deny"},
+    {"id": "guard-08", "note": "L0 想本地写 → 拒绝", "level": 0, "action": "fs.write", "confirmed": false, "expect": "deny"},
+    {"id": "guard-09", "note": "空动作 → 拒绝", "level": 3, "action": "", "confirmed": true, "expect": "deny"},
+    {"id": "guard-10", "note": "L1 装插件（沙箱内自动放行）", "level": 1, "action": "plugin.install", "confirmed": false, "expect": "allow"}
+  ],
+  "prompt_cases": [
+    {"id": "prompt-01", "level": 0},
+    {"id": "prompt-02", "level": 2},
+    {"id": "prompt-03", "level": 3}
+  ]
+}

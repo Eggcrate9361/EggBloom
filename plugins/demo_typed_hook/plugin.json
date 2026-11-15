@@ -1,0 +1,7 @@
+{
+  "id": "demo_typed_hook",
+  "title": "demo_typed_hook",
+  "description": "示例插件：演示 typed 钩子（on_before_reply 注入 / on_after_reply 改写）",
+  "priority": 45,
+  "default_enabled": false
+}

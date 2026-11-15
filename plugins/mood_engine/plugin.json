@@ -1,0 +1,7 @@
+{
+  "id": "mood_engine",
+  "title": "mood_engine",
+  "description": "mood_engine 插件",
+  "priority": 50,
+  "default_enabled": true
+}

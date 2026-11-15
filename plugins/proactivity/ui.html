@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>主动性行为</title>
+  <style id="pv-kit">/*PV-KIT*/
+/* 面板局部：只加 pv-kit 没有的三条 */
+.pa-row{display:grid;grid-template-columns:150px 1fr;gap:10px 14px;align-items:center}
+.pa-row+.pa-row{margin-top:10px}
+.pa-k{font-size:12px;color:var(--pv-ink-2)}
+.pa-rng{display:flex;align-items:center;gap:12px}
+.pa-rng input[type="range"]{flex:1;accent-color:var(--pv-gold)}
+.pa-rng b{min-width:76px;text-align:right;font-family:var(--pv-mono);font-size:12px;color:var(--pv-gold)}
+.pa-desc{font-size:11px;color:var(--pv-ink-3);padding-left:150px;margin:2px 0 14px;line-height:1.5}
+.pa-recent td{font-size:12px}
+.pa-badge{display:inline-block;padding:1px 6px;border-radius:4px;font-family:var(--pv-mono);
+  font-size:11px;background:var(--pv-surface-3);color:var(--pv-ink-2)}
+.pa-badge.say{color:var(--pv-gold)}
+.pa-badge.poke{color:var(--pv-warn)}
+</style>
+</head>
+<body>
+  <div class="pv-head">
+    <h1>主动性行为</h1>
+    <div class="pv-sub">观察会话状态 → 规则闸门 → 模型判断（说 / 戳 / 算了）→ 统一预算内出手</div>
+  </div>
+
+  <div class="pv-panel">
+    <div class="pv-panel-h"><h2>运行状态</h2><i class="pv-rule"></i><span class="pv-count" id="run">—</span></div>
+    <div class="pv-stats">
+      <div class="pv-stat"><b id="s-sessions">—</b><span>观测中的会话</span></div>
+      <div class="pv-stat"><b id="s-budget">—</b><span>本档预算</span></div>
+      <div class="pv-stat"><b id="s-hour">—</b><span>本小时已用</span></div>
+      <div class="pv-stat"><b id="s-pending">—</b><span>待仲裁</span></div>
+    </div>
+    <div class="pv-flex" style="margin-top:14px">
+      <button class="primary" id="save">保存</button>
+      <button id="refresh">刷新</button>
+      <span class="pv-hint" style="margin:0">改完点保存；预算与开关下一轮 tick（≤30 秒）生效</span>
+    </div>
+    <div class="pv-msg" id="msg"></div>
+  </div>
+
+  <div class="pv-panel">
+    <div class="pv-panel-h"><h2>总闸与预算</h2><i class="pv-rule"></i></div>
+    <div class="pa-row">
+      <span class="pa-k">总开关</span>
+      <label class="pv-flex" style="margin:0">
+        <input type="checkbox" data-c="proactivity_enable" id="en"> <span class="pv-hint" style="margin:0">关掉后四条行为一条都不触发</span>
+      </label>
+    </div>
+    <div class="pa-row">
+      <span class="pa-k">预算档位</span>
+      <div class="pa-rng">
+        <input type="range" min="0" max="3" step="1" data-c="proactivity_budget_level" id="lv">
+        <b id="lv-label">—</b>
+      </div>
+    </div>
+    <div class="pa-desc">四条行为共享这一个预算：0 关闭 / 1 克制 1 次每时 / 2 常态 3 次 / 3 活跃 6 次（每场景）</div>
+    <div class="pa-row">
+      <span class="pa-k">开口人格</span>
+      <select class="pv-input" data-c="proactivity_persona" style="max-width:260px">
+        <option value="xiaoa">小a（默认）</option>
+        <option value="entertain">娱乐向</option>
+        <option value="gentle">温柔向</option>
+        <option value="sharp">毒舌向</option>
+      </select>
+    </div>
+    <div class="pa-desc">决定主动开口的语气底子。娱乐向会玩梗，但对方正经说话时会收住</div>
+    <div class="pa-row">
+      <span class="pa-k">是谁</span>
+      <textarea class="pv-input" data-c="proactivity_personality" rows="2"
+                placeholder="一两句就够；留空用预设" style="width:100%"></textarea>
+    </div>
+    <div class="pa-row">
+      <span class="pa-k">什么时候说</span>
+      <textarea class="pv-input" data-c="proactivity_behavior_style" rows="2"
+                placeholder="不硬找话题 / 冷场安静 / 不刷屏；留空用预设" style="width:100%"></textarea>
+    </div>
+    <div class="pa-row">
+      <span class="pa-k">什么味</span>
+      <textarea class="pv-input" data-c="proactivity_reply_style" rows="3"
+                placeholder="用平台锚定：像 B 站评论区 / 像贴吧 / 像群聊" style="width:100%"></textarea>
+    </div>
+    <div class="pa-row">
+      <span class="pa-k">备用风格</span>
+      <textarea class="pv-input" data-c="proactivity_style_pool" rows="3"
+                placeholder="一行一条，按概率临时换一种味道；留空不换" style="width:100%"></textarea>
+    </div>
+    <div class="pa-row">
+      <span class="pa-k">换风格概率</span>
+      <input class="pv-input" type="number" min="0" max="1" step="0.05"
+             data-c="proactivity_style_prob" style="width:88px">
+    </div>
+
+    <div class="pa-row">
+      <span class="pa-k">静默时段</span>
+      <input class="pv-input" data-c="proactivity_quiet_hours" id="qh" placeholder="0-7（留空 = 不设）">
+    </div>
+    <div class="pa-desc">这段时间不主动出手，格式 0-7 或 23-7；熬夜作息建议 8-13</div>
+    <div class="pa-row">
+      <span class="pa-k">老插件让位</span>
+      <label class="pv-flex" style="margin:0">
+        <input type="checkbox" data-c="proactivity_takeover_legacy" id="take">
+        <span class="pv-hint" style="margin:0">proactive_talk / proactive_poke 的心跳让给本框架，避免同一件事触发两次</span>
+      </label>
+    </div>
+  </div>
+
+  <div class="pv-panel">
+    <div class="pv-panel-h"><h2>四条行为</h2><i class="pv-rule"></i></div>
+    <div class="pa-row">
+      <label class="pv-flex" style="margin:0"><input type="checkbox" data-c="proactivity_no_reply_enable" id="b1">
+        <span class="pa-k">① 未回应</span></label>
+      <input class="pv-input" type="number" min="1" max="1440" data-c="proactivity_no_reply_min" id="b1m" style="width:120px">
+    </div>
+    <div class="pa-desc">bot 发出消息后多少分钟没人回，才考虑补一句 / 换个话题（分钟）</div>
+
+    <div class="pa-row">
+      <label class="pv-flex" style="margin:0"><input type="checkbox" data-c="proactivity_at_dropped_enable" id="b2">
+        <span class="pa-k">② 被 @ 却没回</span></label>
+      <input class="pv-input" type="number" min="1" max="1440" data-c="proactivity_at_dropped_min" id="b2m" style="width:120px">
+    </div>
+    <div class="pa-desc">被 @ 后多少分钟仍没有 bot 的回复，事后补一句或说明（分钟）</div>
+
+    <div class="pa-row">
+      <label class="pv-flex" style="margin:0"><input type="checkbox" data-c="proactivity_pending_topic_enable" id="b3">
+        <span class="pa-k">③ 未兑现话头</span></label>
+      <input class="pv-input" type="number" min="1" max="1440" data-c="proactivity_pending_topic_min" id="b3m" style="width:120px">
+    </div>
+    <div class="pa-desc">自己说过「我等下发你」却一直没下文，多久后交代（分钟）</div>
+
+    <div class="pa-row">
+      <label class="pv-flex" style="margin:0"><input type="checkbox" data-c="proactivity_idle_contact_enable" id="b4">
+        <span class="pa-k">⑤ 冷场接触</span></label>
+      <input class="pv-input" type="number" min="1" max="1440" data-c="proactivity_idle_min" id="b4m" style="width:120px">
+    </div>
+    <div class="pa-desc">双方都静默多久，才让模型选「说一句 / 只戳一下 / 算了」（分钟，原戳一戳插件是 240）</div>
+
+    <div class="pa-row">
+      <label class="pv-flex" style="margin:0"><input type="checkbox" data-c="proactivity_recall_enable" id="b5">
+        <span class="pa-k">④ 撤回反馈</span></label>
+      <div class="pa-rng">
+        <button class="btn sm" id="take-recall">一键交棒</button>
+        <span class="pv-hint" id="recall-state" style="margin:0">—</span>
+      </div>
+    </div>
+    <div class="pa-desc">交棒会同时写 <code>recall_feedback_by=proactivity</code> 并打开本行为 —— 两个都写才不会「双回」或「谁都不回」</div>
+  </div>
+
+  <div class="pv-panel">
+    <div class="pv-panel-h"><h2>还有六条</h2><i class="pv-rule"></i></div>
+
+    <div class="pa-row">
+      <label class="pv-flex" style="margin:0"><input type="checkbox" data-c="proactivity_user_burst_enable">
+        <span class="pa-k">⑤ 连发没人接</span></label>
+      <div class="pa-rng">
+        <input class="pv-input" type="number" min="2" max="10" data-c="proactivity_burst_count" style="width:88px">
+        <input class="pv-input" type="number" min="1" max="60" data-c="proactivity_burst_min" style="width:88px">
+      </div>
+    </div>
+    <div class="pa-desc">一个人连着发几条（左）/ 最后一条之后等几分钟（右）才接。群里自动减一条，并要求期间没人插话</div>
+
+    <div class="pa-row">
+      <label class="pv-flex" style="margin:0"><input type="checkbox" data-c="proactivity_image_only_enable">
+        <span class="pa-k">⑥ 只发图没说话</span></label>
+      <input class="pv-input" type="number" min="1" max="60" data-c="proactivity_image_min" style="width:88px">
+    </div>
+    <div class="pa-desc">只发了图/文件、一个字没配，等多少分钟问一句</div>
+
+    <div class="pa-row">
+      <label class="pv-flex" style="margin:0"><input type="checkbox" data-c="proactivity_name_dropped_enable">
+        <span class="pa-k">⑦ 提到名字没 @</span></label>
+      <input class="pv-input" type="number" min="1" max="60" data-c="proactivity_name_min" style="width:88px">
+    </div>
+    <div class="pa-desc">消息里叫了名字但没真的 @，等多少分钟接一句</div>
+
+    <div class="pa-row">
+      <label class="pv-flex" style="margin:0"><input type="checkbox" data-c="proactivity_resume_enable">
+        <span class="pa-k">⑧ 隔很久回来</span></label>
+      <div class="pa-rng">
+        <input class="pv-input" type="number" min="1" max="720" data-c="proactivity_resume_gap_h" style="width:88px">
+        <input class="pv-input" type="number" min="1" max="60" data-c="proactivity_resume_min" style="width:88px">
+      </div>
+    </div>
+    <div class="pa-desc">断了几小时没互动（左）算「很久没来」/ 回来那句之后等几分钟（右）接上次的话头</div>
+
+    <div class="pa-row">
+      <label class="pv-flex" style="margin:0"><input type="checkbox" data-c="proactivity_job_enable">
+        <span class="pa-k">⑨ 忙完顺口提一句</span></label>
+      <span class="pv-hint" style="margin:0">后台任务（含视频 / AIGC 长链路）结束时主动交代结果，只报给最近 15 分钟还活跃的会话</span>
+    </div>
+
+    <div class="pa-row">
+      <label class="pv-flex" style="margin:0"><input type="checkbox" data-c="proactivity_state_enable">
+        <span class="pa-k">⑫ 群里有点变化</span></label>
+      <span class="pv-hint" style="margin:0">改群名 / 新人进群 / 有人退群 / 加好友 → 视关系评论一句</span>
+    </div>
+
+    <div class="pa-row">
+      <label class="pv-flex" style="margin:0"><input type="checkbox" data-c="proactivity_schedule_enable">
+        <span class="pa-k">⑬ 记着对方的事</span></label>
+      <input class="pv-input" type="number" min="1" max="120" data-c="proactivity_schedule_min" style="width:88px">
+    </div>
+    <div class="pa-desc">日程表里的下一条快到了，提前多少分钟提醒；只发给最近一小时说过话的会话</div>
+
+    <div class="pa-row">
+      <label class="pv-flex" style="margin:0"><input type="checkbox" data-c="proactivity_care_enable">
+        <span class="pa-k">⑭ 说说自己的状态</span></label>
+      <span class="pv-hint" style="margin:0">累了 / 孤独 / 失眠 / 感冒时主动说一句；孤独、受伤、失眠只在私聊说</span>
+    </div>
+  </div>
+
+  <div class="pv-panel">
+    <div class="pv-panel-h"><h2>最近动作</h2><i class="pv-rule"></i><span class="pv-count" id="recent-n">—</span></div>
+    <table class="pv-table pa-recent">
+      <thead><tr><th style="width:92px">时间</th><th style="width:96px">触发</th>
+        <th style="width:64px">动作</th><th>对象 / 内容</th></tr></thead>
+      <tbody id="recent"><tr><td colspan="4" class="pv-hint" style="margin:0">还没有主动动作</td></tr></tbody>
+    </table>
+  </div>
+
+<script>
+const API = '/api/plugins/action';
+const $ = id => document.getElementById(id);
+const msg = $('msg');
+const LEVELS = {0: '关闭 0/时', 1: '克制 1/时', 2: '常态 3/时', 3: '活跃 6/时'};
+const KIND = {no_reply: '① 未回应', at_dropped: '② 被@没回',
+              pending_topic: '③ 话头', idle_contact: '⑪ 冷场', recall: '④ 撤回',
+              user_burst: '⑤/⑩ 连发', image_only: '⑥ 只发图',
+              name_dropped: '⑦ 喊名字', resume_topic: '⑧ 久别',
+              autonomy_done: '⑨ 顺口说', state_change: '⑫ 有变化',
+              schedule_near: '⑬ 记着的事', care: '⑭ 自己的状态'};
+let CFG = {}, ST = {};
+
+async function call(action, params) {
+  const r = await fetch(API, {method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({plugin_id: 'proactivity', action, params: params || {}})});
+  const t = await r.text();
+  try { return JSON.parse(t); } catch (e) { return {raw: t}; }
+}
+
+function setMsg(t, ok) {
+  msg.className = 'pv-msg ' + (ok ? 'ok' : 'err');
+  msg.textContent = t || '';
+}
+function ago(ts) {
+  if (!ts) return '—';
+  const s = Math.max(0, Math.floor(Date.now() / 1000 - ts));
+  if (s < 60) return s + ' 秒前';
+  if (s < 3600) return Math.floor(s / 60) + ' 分钟前';
+  if (s < 86400) return (s / 3600).toFixed(1) + ' 小时前';
+  return Math.floor(s / 86400) + ' 天前';
+}
+function setVal(id, v) {
+  const el = $(id);
+  if (!el) return;
+  if (el.type === 'checkbox') el.checked = !!v;
+  else el.value = (v == null ? '' : v);
+}
+
+function draw(cfg, st) {
+  CFG = cfg || {}; ST = st || {};
+  /* 所有 data-c 控件统一回填：以后加开关/数字框不用再改这里（上一版逐项
+     setVal，加了六条行为后漏填过三个控件，面板显示空值）。 */
+  document.querySelectorAll('[data-c]').forEach(el => {
+    const v = CFG[el.dataset.c];
+    if (el.type === 'checkbox') el.checked = !!v;
+    else if (Array.isArray(v)) el.value = v.join('\n');
+    else el.value = (v == null ? '' : v);
+  });
+  $('lv-label').textContent = LEVELS[Number(CFG.proactivity_budget_level || 0)] || '—';
+
+  $('run').textContent = ST.running ? '观测层运行中' : '观测层未运行';
+  $('s-sessions').textContent = ST.sessions == null ? '—' : ST.sessions;
+  $('s-budget').textContent = ST.budget_label || '—';
+  const hourly = ST.hourly || {};
+  const scene = Object.keys(hourly).map(k => k.split('|')[0]);
+  const used = scene.length ? Math.max.apply(null, scene.map(s => hourly[s + '|' + Math.floor(Date.now() / 3600000)] || 0)) : 0;
+  $('s-hour').textContent = used + ' / ' + (ST.per_hour == null ? '—' : ST.per_hour);
+  $('s-pending').textContent = ST.pending == null ? '—' : ST.pending;
+  if ($('recall-state')) {
+    $('recall-state').textContent = ST.recall_feedback_by === 'proactivity'
+      ? '已交棒（主链让位）' : '主链在处理（未交棒）';
+  }
+
+  const rows = ST.recent || [];
+  $('recent-n').textContent = rows.length + ' 条';
+  $('recent').innerHTML = rows.length ? rows.slice().reverse().map(x => {
+    const badge = x.act === 'poke' ? '<span class="pa-badge poke">戳一下</span>'
+      : x.act === 'video' ? '<span class="pa-badge say">发视频</span>'
+      : x.act === 'image' ? '<span class="pa-badge say">发图</span>'
+      : '<span class="pa-badge say">说一句</span>';
+    return '<tr><td>' + ago(x.ts) + '</td><td>' + (KIND[x.kind] || x.kind || '—') + '</td>'
+      + '<td>' + badge + '</td><td>' + (x.target || '') + '　' + (x.text || '') + '</td></tr>';
+  }).join('') : '<tr><td colspan="4" class="pv-hint" style="margin:0">还没有主动动作</td></tr>';
+}
+
+function readForm() {
+  const out = {};
+  document.querySelectorAll('[data-c]').forEach(el => {
+    const k = el.dataset.c;
+    if (el.type === 'checkbox') out[k] = el.checked;
+    else if (el.type === 'range' || el.type === 'number') out[k] = Number(el.value);
+    else out[k] = el.value;
+  });
+  return out;
+}
+
+async function load() {
+  try {
+    const r = await call('get_config');
+    if (!r || r.ok === false) { setMsg('读取失败：' + ((r && r.error) || '未知'), false); return; }
+    draw(r.config, r.status);
+  } catch (e) { setMsg('读取异常：' + e.message, false); }
+}
+
+$('save').onclick = async () => {
+  $('save').disabled = true;
+  try {
+    const r = await call('set_config', readForm());
+    if (r && r.ok) {
+      draw(r.config, (await call('get_config')).status);
+      setMsg('已保存：' + Object.keys(r.applied || {}).length + ' 项', true);
+    } else {
+      setMsg('保存失败：' + ((r && r.error) || '未知'), false);
+    }
+  } catch (e) { setMsg('保存异常：' + e.message, false); }
+  finally { $('save').disabled = false; }
+};
+$('refresh').onclick = load;
+$('take-recall').onclick = async () => {
+  if (!confirm('交棒后主链不再回撤回，由主动性接管。确定？')) return;
+  const r = await call('take_recall');
+  if (r && r.ok) { await load(); setMsg('已交棒：主链让位，撤回改由主动性判断', true); }
+  else setMsg('交棒失败：' + ((r && r.error) || '未知'), false);
+};
+$('lv').oninput = () => { $('lv-label').textContent = LEVELS[Number($('lv').value)] || '—'; };
+
+load();
+setInterval(() => { if (!document.hidden) load(); }, 15000);
+</script>
+</body>
+</html>

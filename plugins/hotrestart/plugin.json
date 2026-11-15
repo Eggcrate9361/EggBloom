@@ -1,0 +1,21 @@
+{
+  "id": "hotrestart",
+  "title": "热重载 / 自重启",
+  "version": "1.0.0",
+  "description": "热重载单个插件、让 bot 自己重启（systemd-run 瞬态 timer，不在本进程 fork）",
+  "author": "EggBloom",
+  "provides": [
+    "runtime.reload_plugin",
+    "runtime.restart"
+  ],
+  "requires": [],
+  "budget": {
+    "max_chars": 200
+  },
+  "permissions": [
+    "process"
+  ],
+  "scope": "global",
+  "priority": 20,
+  "default_enabled": true
+}

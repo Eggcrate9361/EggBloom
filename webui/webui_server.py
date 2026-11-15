@@ -1,0 +1,6427 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+"""
+EggBloom WebUI Server - Modern Management Dashboard
+Design: LobeChat(glass sidebar) + Linear(dark premium) + Vercel(minimal gradients)
+Tech: ThreadedHTTP + Single-file SPA (Chart.js + CSS Glassmorphism + Vanilla JS)
+
+Start: python webui_server.py
+Visit: http://localhost:8080
+"""
+import json, os, sys, time, threading, sqlite3, subprocess, socket, zlib, shutil
+import datetime, re
+from pathlib import Path
+from collections import deque
+from http.server import HTTPServer, BaseHTTPRequestHandler
+from socketserver import ThreadingMixIn
+from urllib.parse import urlparse, parse_qs, unquote
+import urllib.request
+
+# Windows console fix
+if sys.stdout is not None and sys.stdout.encoding != "utf-8":
+    sys.stdout.reconfigure(encoding="utf-8")
+if sys.stderr is not None and sys.stderr.encoding != "utf-8":
+    sys.stderr.reconfigure(encoding="utf-8")
+
+# 统一日志轮转（stdout 由上层重定向到 webui_r*.log，此处再落一份 webui.log 供追溯）
+try:
+    import logger_setup
+except ImportError:
+    logger_setup = None
+
+def _uni_log(msg):
+    """走统一日志(轮转)，print 行为保持不变"""
+    try:
+        if logger_setup is not None:
+            logger_setup.get_logger("webui").info(msg)
+    except Exception:
+        pass
+
+# Paths
+HERE = Path(__file__).parent
+if getattr(sys, 'frozen', False):
+    _APP_DIR = Path(sys.executable).resolve().parent
+else:
+    _APP_DIR = HERE.resolve()
+_PROJECT_CANDIDATES = [
+    _APP_DIR,
+    _APP_DIR.parent,
+    _APP_DIR.parent.parent,
+    _APP_DIR.parent.parent.parent,
+    _APP_DIR.parent.parent.parent.parent,
+    Path.home() / "AppData/Local/EggBloom_v3",
+]
+PROJECT = None
+for _c in _PROJECT_CANDIDATES:
+    if (_c / "bot_config.json").exists() or (_c / "bot_core.py").exists():
+        PROJECT = _c
+        break
+if PROJECT is None:
+    PROJECT = _APP_DIR
+sys.path.insert(0, str(PROJECT))
+# 统一配置层：读程序目录 bot_config.json(优先) + AppData(补缺) + env + 凭据管理器
+from config import load_config as load_config  # noqa: E402
+import log_levels  # noqa: E402  # 与终端着色同一套分级规则
+
+
+# 静态文件服务允许的扩展名（杜绝 .log/.py/.db/.env 等敏感文件被静态读出）
+_STATIC_EXTS = {".html", ".htm", ".css", ".js", ".mjs", ".json", ".map",
+                ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".ico",
+                ".woff", ".woff2", ".ttf", ".txt", ".md"}
+
+
+def _is_redacted_key(k):
+    """判断 API Key 是否为前端回传的占位符/掩码（不应写回凭据管理器）。"""
+    k = (k or "").strip()
+    if not k:
+        return True
+    if k.startswith("«redacted"):
+        return True
+    if k.endswith("****"):
+        return True
+    return False
+
+
+def _mask_secret(k, keep=6):
+    """把敏感值掩码成 «redacted:xxxxx…» 占位符（保留前缀便于识别），绝不回传全量明文。"""
+    k = (k or "").strip()
+    if not k:
+        return ""
+    if len(k) <= keep:
+        return "«redacted»"
+    return "«redacted:" + k[:keep] + "…»"
+
+
+# ── 插件 UI 共用层（统一样式 + 自建下拉框）────────────────────────
+# 样式源在 `plugins/_ui/kit.css`（和离线注入脚本同一份），行为在
+# `webui/plugin-ui.js`。/page 每次把两者一起注入 iframe，改一处即全量生效。
+_PLUGIN_UI_ASSETS = None
+
+
+def _plugin_ui_assets():
+    global _PLUGIN_UI_ASSETS
+    if _PLUGIN_UI_ASSETS is None:
+        base = Path(__file__).resolve().parent
+        kit = (Path(PROJECT) if PROJECT else base.parent) / "plugins" / "_ui" / "kit.css"
+        css = kit.read_text(encoding="utf-8")
+        js = (base / "plugin-ui.js").read_text(encoding="utf-8")
+        _PLUGIN_UI_ASSETS = (css, js)
+    return _PLUGIN_UI_ASSETS
+
+
+def _inject_plugin_ui(html: str) -> str:
+    """把共用样式 + 行为层注入插件页；失败时原样返回，绝不让插件页打不开。"""
+    if not html or "eb-ui-kit" in html:
+        return html
+    try:
+        css, js = _plugin_ui_assets()
+    except Exception:
+        return html
+    style = '<style id="eb-ui-kit">\n' + css + '\n</style>\n'
+    script = '<script id="eb-ui-kit-js">\n' + js + '\n</script>\n'
+    if "</head>" in html:
+        html = html.replace("</head>", style + "</head>", 1)
+    else:
+        html = style + html
+    if "</body>" in html:
+        html = html.replace("</body>", script + "</body>", 1)
+    else:
+        html += script
+    return html
+
+
+def _plugin_file_meta(plugin_dir):
+    """读插件元信息：`plugin.json` 优先，其次 `__init__.py` 里的 PLUGIN_MANIFEST/META。
+
+    与 `/api/plugins` 静态扫描分支用的是同一套读法（那边内联着，这里为了占位页
+    单独收成函数；两边都只做"读字面量"，不执行插件逻辑）。
+    """
+    out = {}
+    try:
+        jf = Path(plugin_dir) / "plugin.json"
+        if jf.exists():
+            out.update(json.loads(jf.read_text(encoding="utf-8")) or {})
+    except Exception:
+        pass
+    try:
+        init = Path(plugin_dir) / "__init__.py"
+        if init.exists():
+            src = init.read_text(encoding="utf-8", errors="replace")
+            for kw in ("PLUGIN_META = ", "PLUGIN_MANIFEST = "):
+                i = src.find(kw)
+                if i < 0:
+                    continue
+                b = src.find("{", i)
+                if b < 0:
+                    continue
+                depth = 0
+                for ci in range(b, len(src)):
+                    if src[ci] == "{":
+                        depth += 1
+                    elif src[ci] == "}":
+                        depth -= 1
+                    if depth == 0:
+                        ns = {"__builtins__": {}, "enabled": False}
+                        try:
+                            exec("_m = " + src[b:ci + 1], ns)
+                        except Exception:
+                            pass
+                        mm = ns.get("_m")
+                        if isinstance(mm, dict):
+                            for k, v in mm.items():
+                                out.setdefault(k, v)
+                        break
+                break
+            # 有的插件把 PLUGIN_HOOKS 先写 `{}` 再在文件尾部补全（proactive_poke 就是），
+            # 只取第一个匹配会得到空表 → 占位页误报"没有声明钩子"。取所有定义并合并。
+            hooks = []
+            for mm in re.finditer(r"PLUGIN_HOOKS\s*=\s*\{(.*?)\}", src, re.S):
+                hooks += re.findall(r'"(\w+)"\s*:', mm.group(1))
+            if hooks and not out.get("hooks"):
+                out["hooks"] = list(dict.fromkeys(hooks))
+    except Exception:
+        pass
+    return out
+
+
+#: 钩子 → 人话（占位页用）
+_HOOK_TEXT = {
+    "on_load": "插件加载时初始化（读配置 / 建状态）",
+    "on_enable": "被启用时启动（后台线程 / 心跳）",
+    "on_disable": "被停用时收尾",
+    "on_unload": "卸载时清理",
+    "on_event": "订阅事件（新消息 / 撤回 / 戳一戳等）",
+    "on_message": "每条消息先过一遍",
+    "before_reply": "生成回复前改写输入",
+    "after_reply": "回复发出后跟进（记账 / 学习）",
+    "on_tick": "定时心跳",
+}
+
+
+def _plugin_stub_html(plugin_id: str, missing_id: str = "") -> str:
+    """没有 `ui.html` 的插件：给一页说明，而不是一行 JSON 错误。
+
+    插件页的「打开」对每张卡都可见。以前点开没有面板的插件只会看到
+    `{"error":"plugin ui not found"}` —— 既不知道它是干嘛的，也不知道去哪开关。
+    这页回答三个问题：**做什么 / 靠什么触发 / 在哪里调整**。
+    """
+    from html import escape
+
+    pid = str(plugin_id or missing_id or "")
+    d = PROJECT / "plugins" / pid if pid else None
+    if not pid or d is None or not d.is_dir():
+        body = ('<div class="pv-head"><h1>找不到这个插件</h1>'
+                '<div class="pv-sub">plugin_id = ' + escape(pid) + '</div></div>'
+                '<div class="pv-panel"><p class="ps-p">插件目录不存在，'
+                '可能是已删除，或链接里的 id 拼错了。</p></div>')
+        return ('<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8">'
+                '<meta name="viewport" content="width=device-width, initial-scale=1.0">'
+                '<title>找不到插件</title></head><body>' + body + '</body></html>')
+
+    m = _plugin_file_meta(d)
+    name = str(m.get("title") or m.get("display_name") or m.get("name") or pid)
+    ver = str(m.get("version") or "")
+    desc = str(m.get("description") or "").strip() or "（这个插件没写简介）"
+    merged = str(m.get("merged_into") or "")
+
+    enabled = None
+    try:
+        sf = PROJECT / "plugins" / "plugin_state.json"
+        if sf.exists():
+            st = json.loads(sf.read_text(encoding="utf-8"))
+            em = st.get("enabled", st.get("已启用", {}))
+            if isinstance(em, dict) and pid in em:
+                enabled = bool(em[pid])
+    except Exception:
+        pass
+    if enabled is None:
+        enabled = bool(m.get("default_enabled", False))
+
+    hooks = [h for h in (m.get("hooks") or []) if isinstance(h, str)]
+    provides = [x for x in (m.get("provides") or []) if isinstance(x, str)]
+
+    bits = []
+    if len(ver):
+        bits.append("v" + ver)
+    bits.append("已启用" if enabled else "已停用")
+    if merged:
+        bits.append("已并入 " + merged)
+
+    hk = "".join('<li><code>%s</code>　%s</li>' % (escape(h), escape(_HOOK_TEXT.get(h, "自定义钩子")))
+                 for h in hooks) or "<li>没有声明钩子（可能是纯状态面板，或只在被调用时执行）</li>"
+    caps = ("".join('<li><code>%s</code></li>' % escape(p) for p in provides)
+            if provides else "<li>没有对外声明能力</li>")
+
+    tip = ("这个插件已经并入 <b>%s</b>，在插件页合并成一张卡了；"
+           "这里只是保留入口与说明。" % escape(merged)) if merged else (
+          "开关在<b>插件页这张卡的右下角</b>（启用 / 停用）；"
+          "如果它有配置项，<b>配置中心</b>里能搜到；"
+          "运行日志在 <code>qq_bot.log</code> 里按插件名过滤。")
+
+    body = (
+        '<div class="pv-head"><h1>' + escape(name) + '</h1>'
+        '<div class="pv-sub">' + escape(" · ".join(bits)) + '</div></div>'
+
+        '<div class="pv-panel"><div class="pv-panel-h"><h2>这个插件做什么</h2>'
+        '<i class="pv-rule"></i></div><p class="ps-p">' + escape(desc) + '</p></div>'
+
+        '<div class="pv-panel"><div class="pv-panel-h"><h2>它没有独立面板</h2>'
+        '<i class="pv-rule"></i></div>'
+        '<p class="ps-p">插件目录里没有 <code>ui.html</code> —— 它不靠界面工作，'
+        '而是在下面这些时机自动执行：</p><ul class="ps-list">' + hk + '</ul>'
+        '<p class="ps-p" style="margin-top:12px">对外提供的能力：</p>'
+        '<ul class="ps-list">' + caps + '</ul></div>'
+
+        '<div class="pv-panel"><div class="pv-panel-h"><h2>在哪里调整</h2>'
+        '<i class="pv-rule"></i></div><p class="ps-p">' + tip + '</p></div>'
+    )
+    return ('<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8">'
+            '<meta name="viewport" content="width=device-width, initial-scale=1.0">'
+            '<title>' + escape(name) + '</title>'
+            '<style>'
+            '.ps-p{font-size:13px;line-height:1.75;color:var(--pv-ink-2,#b9b0a0);margin:0}'
+            '.ps-p code,.ps-list code{background:var(--pv-surface-2,#1f1b16);'
+            'border:1px solid var(--pv-line,#2a251e);border-radius:4px;padding:1px 5px;'
+            'font-family:var(--pv-mono,monospace);font-size:12px;color:var(--pv-gold,#d8b877)}'
+            '.ps-list{margin:10px 0 0;padding-left:18px;'
+            'color:var(--pv-ink-2,#b9b0a0);font-size:13px;line-height:1.9}'
+            '</style></head><body>' + body + '</body></html>')
+
+
+def _detect_protocol_paths():
+    """通用探测：扫描常见安装区（各盘根 + 用户下载/桌面目录，深度<=3），
+    不依赖任何固定安装路径——通过「目录名模式」和「可执行文件名」双通道识别驱动。
+
+    按文件名反查（适配任意安装目录名）：
+      NapCat   : NapCatWinBootMain.exe / napcat.exe
+      LLOneBot : llbot.exe / LLBot.exe / LLOneBot.exe / LLOneBot_WebUI.exe
+      SnowLuma : SnowLuma.exe / Lagrange.OneBot.exe（运行时：同目录 node.exe + index.mjs）
+      QQ       : QQ.exe / QQNT.exe（目录名须含 qq/tencent/imqq，避免误判）
+    """
+    import os as _os
+    found_qq, found_nap, found_llo, found_snw = [], [], [], []
+    _skip = {"Windows", "Program Files", "Program Files (x86)", "ProgramData",
+             "$Recycle.Bin", "System Volume Information", "node_modules",
+             "AppData", "Application Data", "MicrosoftEdgeBackups", "WpSystem",
+             "WindowsApps", "PerfLogs", "Recovery", "Documents and Settings", ".git"}
+
+    EXE_NAP = ("NapCatWinBootMain.exe", "napcat.exe")
+    EXE_LLO = ("llbot.exe", "LLBot.exe", "LLOneBot.exe", "LLOneBot_WebUI.exe")
+    EXE_SNW = ("SnowLuma.exe", "Lagrange.OneBot.exe")
+
+    def _add(driver, exe):
+        lst = {"qq": found_qq, "napcat": found_nap,
+               "llonebot": found_llo, "snowluma": found_snw}[driver]
+        if exe and _os.path.exists(exe) and exe not in lst:
+            lst.append(exe)
+
+    def _dir_kind(name):
+        low = name.lower()
+        if "napcat" in low:
+            return "napcat"
+        if "snowluma" in low or "lagrange" in low:
+            return "snowluma"
+        if "llbot" in low or "llonebot" in low:
+            return "llonebot"
+        if "qq" in low or "tencent" in low or "imqq" in low:
+            return "qq"
+        return None
+
+    def _is_runtime_snowluma(directory):
+        return (_os.path.exists(_os.path.join(directory, "node.exe"))
+                and _os.path.exists(_os.path.join(directory, "index.mjs")))
+
+    home = _os.path.expanduser("~")
+    import string as _string
+    roots = [d + ":\\" for d in _string.ascii_uppercase if _os.path.exists(d + ":\\")]
+    roots = list(dict.fromkeys(roots + [home]))
+    scan_dirs = list(roots)
+    for extra in ("Downloads", "Desktop", "下载", "桌面"):
+        p = _os.path.join(home, extra)
+        if _os.path.isdir(p):
+            scan_dirs.append(p)
+
+    for root in scan_dirs:
+        if not _os.path.isdir(root):
+            continue
+        try:
+            for base, dirs, files in _os.walk(root):
+                depth = base[len(root):].count(_os.sep)
+                if depth >= 3:
+                    dirs[:] = []
+                    continue
+                dirs[:] = [d for d in dirs if d not in _skip and not d.startswith(".")]
+                kind = _dir_kind(_os.path.basename(base))
+                if kind == "qq":
+                    for n in ("QQ.exe", "QQNT.exe"):
+                        _add("qq", _os.path.join(base, n))
+                elif kind == "napcat":
+                    for n in EXE_NAP:
+                        _add("napcat", _os.path.join(base, n))
+                elif kind == "llonebot":
+                    for n in EXE_LLO:
+                        _add("llonebot", _os.path.join(base, n))
+                elif kind == "snowluma":
+                    for n in EXE_SNW:
+                        _add("snowluma", _os.path.join(base, n))
+                    if _is_runtime_snowluma(base):
+                        _add("snowluma", _os.path.join(base, "node.exe"))
+                for n in EXE_NAP:
+                    if n in files:
+                        _add("napcat", _os.path.join(base, n))
+                for n in EXE_LLO:
+                    if n in files:
+                        _add("llonebot", _os.path.join(base, n))
+                for n in EXE_SNW:
+                    if n in files:
+                        _add("snowluma", _os.path.join(base, n))
+        except Exception:
+            pass
+
+    return {"ok": True, "qq_paths": found_qq, "napcat_paths": found_nap,
+            "llonebot_paths": found_llo, "snowluma_paths": found_snw}
+
+
+def _classify_driver_path(path):
+    """根据用户选择的文件路径判断它属于哪个协议驱动（文件名 + 目录名启发式）。
+
+    返回 {driver: napcat|llonebot|snowluma|qq|unknown, abspath}。
+    """
+    import os as _os
+    abspath = _os.path.abspath(_os.path.expanduser((path or "").strip())) if (path or "").strip() else ""
+    if not abspath or not _os.path.exists(abspath):
+        return {"driver": "unknown", "abspath": abspath}
+    name = _os.path.basename(abspath).lower()
+    dirname = _os.path.dirname(abspath).lower()
+    if name in ("qq.exe", "qqnt.exe"):
+        return {"driver": "qq", "abspath": abspath}
+    if "napcat" in name or "napcat" in dirname:
+        return {"driver": "napcat", "abspath": abspath}
+    if "llbot" in name or "llonebot" in name or "llbot" in dirname or "llonebot" in dirname:
+        return {"driver": "llonebot", "abspath": abspath}
+    if "snowluma" in name or "snowluma" in dirname or "lagrange" in name or "lagrange" in dirname:
+        return {"driver": "snowluma", "abspath": abspath}
+    return {"driver": "unknown", "abspath": abspath}
+
+
+# 各驱动风险说明（前端风险面板 / 切换确认 / 自动识别共用）
+# 统一为「风险提示」：均属非官方登录通道，不做高低风险分级，
+# 只陈述各自登录行为差异，供用户自行判断。
+PROTO_RISK_INFO = {
+    "napcat": {
+        "level": "notice", "label": "风险提示",
+        "text": "NapCat BootMain 注入真实 QQ，重启会重扫登录态。非官方通道，频繁登录易触发腾讯风控",
+    },
+    "llonebot": {
+        "level": "warning", "label": "未测试 · 不保证兼容",
+        "text": "LLOneBot 为 QQNT 插件，注入真实 QQ。非官方通道，频繁重启/重扫登录态易触发腾讯风控。本驱动未在本项目实测，事件桥/反戳/群管理等功能不保证兼容，仅供探索",
+    },
+    "snowluma": {
+        "level": "notice", "label": "风险提示",
+        "text": "SnowLuma 需手动打开 QQ 客户端保持登录，再通过 WebUI 密码登录+手动加载账号，登录态由你主动控制，通常不会造成频繁登录；属非官方通道，仍建议勿在风控期内反复重启",
+    },
+}
+
+
+def _auto_detect_protocol_drivers():
+    """自动识别本机已安装 / 运行中的协议驱动，返回候选列表与推荐驱动。
+
+    返回 {ok, candidates: [{driver, name, exe, found, running, desc}], recommended}。
+    检测逻辑：
+    - 运行中：按各驱动默认端口探测（snowluma:5099 / napcat:3100 / llonebot:7000）
+    - 已安装：SnowLuma 查运行时目录（node.exe + index.mjs）；NapCat/LLOneBot/QQ 由 _detect_protocol_paths 泛化扫描
+    推荐优先级：正在运行 > 已安装；同状态按 napcat > llonebot > snowluma(无头)。
+    """
+    import os as _os
+    import socket as _sock
+
+    def _port_open(port):
+        try:
+            s = _sock.socket()
+            s.settimeout(0.4)
+            s.connect(("127.0.0.1", port))
+            s.close()
+            return True
+        except Exception:
+            return False
+
+    det = _detect_protocol_paths()
+
+    # SnowLuma：运行时目录 node.exe + index.mjs（探测结果优先）
+    snow_exe = (det.get("snowluma_paths") or [None])[0] or ""
+    snow_found = bool(snow_exe) and _os.path.exists(snow_exe)
+    cands = [{
+        "driver": "snowluma", "name": "SnowLuma", "exe": snow_exe if snow_found else "",
+        "found": snow_found, "running": _port_open(5099),
+        "desc": "OneBot v11 动作面最广（130+ 动作）",
+    }]
+
+    # NapCat / LLOneBot：复用探测结果
+    nap_exe = (det.get("napcat_paths") or [None])[0] or ""
+    cands.append({
+        "driver": "napcat", "name": "NapCat", "exe": nap_exe,
+        "found": bool(nap_exe), "running": _port_open(3100),
+        "desc": "常用稳定",
+    })
+    llo_exe = (det.get("llonebot_paths") or [None])[0] or ""
+    cands.append({
+        "driver": "llonebot", "name": "LLOneBot", "exe": llo_exe,
+        "found": bool(llo_exe), "running": _port_open(7000),
+        "desc": "QQNT 插件型",
+    })
+
+    # 当前配置驱动若在运行 → 优先推荐
+    # 推荐顺序：snowluma(手动登录，登录态主动控制，最不易触发频繁登录) > napcat > llonebot
+    order = {"snowluma": 0, "napcat": 1, "llonebot": 2}
+    for c in cands:
+        _r = PROTO_RISK_INFO.get(c["driver"]) or {}
+        c["risk"] = _r.get("level", "notice")
+        c["risk_label"] = _r.get("label", "风险提示")
+        c["risk_text"] = _r.get("text", "")
+    active = [c for c in cands if c["running"] or c["found"]]
+    active.sort(key=lambda c: (0 if c["running"] else 1, order.get(c["driver"], 9)))
+    recommended = active[0]["driver"] if active else ""
+    return {"ok": True, "candidates": cands, "recommended": recommended}
+
+
+def _protocol_check_items(driver: str = "") -> dict:
+    """启动前自检：当前驱动必填配置逐项检测（只读，不启动任何进程）。
+
+    返回 {ok, driver, items: [{key, label, ok, hint}]}，ok=False 表示存在未就绪项。
+    文件型配置（exe / QQ / dll / 清单文件）会同时校验路径是否存在，
+    与各驱动适配器 _preflight 的判定保持一致，避免启动失败后才提示。
+    """
+    import os as _os
+    try:
+        from protocols import registry
+        from protocol_manager import _current_driver
+    except Exception as e:
+        return {"ok": False, "driver": driver or "", "items": [], "error": f"协议层模块不可用: {e}"}
+
+    drv = str(driver or "").strip() or _current_driver()
+    if not registry.is_registered(drv):
+        return {"ok": False, "driver": drv, "items": [], "error": f"协议驱动 {drv} 未注册"}
+
+    try:
+        adapter = registry.build(drv)
+    except Exception as e:
+        return {"ok": False, "driver": drv, "items": [], "error": f"构建适配器失败: {e}"}
+
+    items = []
+
+    def _add(key, label, val, must_exist=False):
+        v = str(val or "").strip().strip('"').strip()
+        if not v:
+            items.append({"key": key, "label": label, "ok": False, "hint": "未配置"})
+            return
+        if must_exist and not _os.path.exists(v):
+            items.append({"key": key, "label": label, "ok": False, "hint": f"路径不存在: {v}"})
+            return
+        items.append({"key": key, "label": label, "ok": True, "hint": v})
+
+    if drv == "napcat":
+        nap_dir = getattr(adapter, "_napcat_dir", "")
+        _add("exe_path", "NapCat 启动器 exe", adapter.exe_path, must_exist=True)
+        _add("hook_dll", "NapCatWinBootHook.dll", _os.path.join(nap_dir, "NapCatWinBootHook.dll") if nap_dir else "", must_exist=True)
+        _add("qq_path", "QQ.exe 路径", adapter.qq_path, must_exist=True)
+        _add("qqnt_json", "qqnt.json（NapCat 补丁清单）", _os.path.join(nap_dir, "qqnt.json") if nap_dir else "", must_exist=True)
+        _add("napcat_mjs", "napcat.mjs（NapCat 主程序）", _os.path.join(nap_dir, "napcat.mjs") if nap_dir else "", must_exist=True)
+        _add("api_url", "OneBot API 地址", adapter.api_base_url)
+        _add("ws_port", "WS 事件端口", adapter.ws_port)
+        _add("report_url", "事件上报地址", adapter.report_url)
+    elif drv == "llonebot":
+        _add("exe_path", "QQ.exe 或 LLOneBot 启动器", adapter.exe_path, must_exist=True)
+        _add("api_url", "OneBot API 地址", adapter.api_base_url)
+        _add("ws_port", "WS 事件端口", adapter.ws_port)
+        _add("report_url", "事件上报地址", adapter.report_url)
+    elif drv == "snowluma":
+        try:
+            from protocols.snowluma_adapter import _resolve_runtime
+            node = _resolve_runtime(str(adapter.exe_path or ""))
+        except Exception:
+            node = str(adapter.exe_path or "")
+        runtime_dir = getattr(adapter, "runtime_dir", "")
+        _add("exe_path", "node.exe（SnowLuma 运行时）", node, must_exist=True)
+        _add("index_mjs", "index.mjs（SnowLuma 入口）", _os.path.join(runtime_dir, "index.mjs") if runtime_dir else "", must_exist=True)
+        _add("api_url", "OneBot API 地址", adapter.api_base_url)
+        _add("ws_port", "WS 事件端口", adapter.ws_port)
+        _add("report_url", "事件上报地址", adapter.report_url)
+    else:
+        _add("exe_path", "启动器路径", getattr(adapter, "exe_path", ""), must_exist=True)
+
+    # 事件桥（WS 事件通道）实时状态：驱动已在运行但事件桥未连接时，戳一戳/通知类
+    # 事件会被丢弃（消息收发走 HTTP 轮询不受影响）——正是「连上了但没反应」的常见原因。
+    try:
+        import socket as _sock
+        _S = globals().get("S")
+        _mgr = getattr(_S, "_protocol_manager", None) if _S is not None else None
+        _mgr_running = bool(_mgr and getattr(_mgr, "_running", False))
+        _bridge = ""
+        if _mgr_running:
+            try:
+                _bridge = str((_mgr.get_status() or {}).get("bridge_state", ""))
+            except Exception:
+                pass
+        _ws_port = 0
+        try:
+            _ws_port = int(getattr(adapter, "ws_port", 0) or 0)
+        except Exception:
+            _ws_port = 0
+        _ws_open = False
+        if _ws_port and _ws_port > 0:
+            try:
+                _sk = _sock.socket(_sock.AF_INET, _sock.SOCK_STREAM)
+                _sk.settimeout(0.4)
+                _ws_open = _sk.connect_ex(("127.0.0.1", _ws_port)) == 0
+                _sk.close()
+            except Exception:
+                pass
+        if _mgr_running and _bridge == "up":
+            _add("event_bridge", "事件桥（WS 事件通道）", "已连接，戳一戳/通知类事件可正常上报")
+        elif _ws_open:
+            items.append({"key": "event_bridge", "label": "事件桥（WS 事件通道）", "ok": False,
+                          "hint": f"驱动已在运行(:{_ws_port})但事件桥未连接 → 戳一戳/通知类事件不会上报（消息轮询不受影响）；点「启动协议层」将直接接管并连接事件桥"})
+        else:
+            _add("event_bridge", "事件桥（WS 事件通道）", "未运行（启动协议层后自动连接）")
+    except Exception:
+        pass
+
+    missing = [it for it in items if not it.get("ok")]
+    return {"ok": not missing, "driver": drv, "items": items, "missing": missing}
+
+
+# 本地 embedding 服务守护：llama-server 跑 BGE-small-zh，端口 8083
+# 未启动时自动拉起（失败静默，super_memory 会自动降级回传统检索）
+# 路径来源：super_memory data/config.json > bot_config.json(embed_*) > 内置默认（本机 LiGGUF/BGE 模型）
+_EMBED_DEFAULT_EXE = Path(str(load_config().get("embed_exe") or "")).resolve()
+_EMBED_DEFAULT_MODEL = Path(str(load_config().get("embed_model_path") or "")).resolve()
+# 内置默认：模型随 EGO super_memory 打包分发（体量小）；llama-server 为 HTTP 兜底
+_EMBED_BUILTIN_MODEL = PROJECT / "plugins" / "ego" / "super_memory" / "models" / "bge-small-zh-v1.5-f16.gguf"
+_EMBED_BUILTIN_EXE = Path(r"D:\llama-b10068\llama-server.exe")
+_EMBED_PORT = 8083
+_embed_proc = None
+
+
+def _embed_config():
+    """embedding 服务路径配置：读取 super_memory 插件的 data/config.json（use_vector_recall/embed_url/embed_exe/embed_model_path）"""
+    try:
+        p = PROJECT / "plugins" / "ego" / "super_memory" / "data" / "config.json"
+        if p.exists():
+            return json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    try:
+        p2 = PROJECT / "plugins" / "super_memory" / "data" / "config.json"
+        if p2.exists():
+            return json.loads(p2.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    return {}
+
+
+def _ensure_embed_server():
+    """确保 8083 embedding 服务在运行（路径可配置，见 super_memory 配置）"""
+    global _embed_proc
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(0.3)
+        alive = s.connect_ex(("127.0.0.1", _EMBED_PORT)) == 0
+        s.close()
+        if alive:
+            return True
+    except Exception as e:
+        print(f"[embed] 存活探测异常（按未启动处理）: {e}")
+    # 已拉起过但退出的，清引用
+    if _embed_proc and _embed_proc.poll() is not None:
+        _embed_proc = None
+    cfg = _embed_config()
+    if cfg.get("use_vector_recall") is False:
+        return False  # 显式关闭向量检索时不拉起
+    _sm_plugin = PROJECT / "plugins" / "ego" / "super_memory"
+
+    def _ascii_mirror(path, cache_dir):
+        """非 ASCII 路径镜像到 llama-server 同目录 models/（真实 ASCII 持久路径），返回 Path。
+
+        llama-server.exe / LiGGUF DLL 均无法读取含非 ASCII 字符的路径（水星目录实测：
+        路径在「水星」处截断）。且 MSIX python 的 ~/AppData/Local 被重定向到 WpSystem
+        虚拟路径，原生 llama-server 读不到 → 必须镜像到 llama-server 所在目录的 models/。
+        """
+        p = os.path.abspath(str(path or ""))
+        if not p or not os.path.exists(p) or all(ord(c) < 128 for c in p):
+            return Path(p) if p else path
+        try:
+            target_dir = os.path.join(str(cache_dir), "models")
+            os.makedirs(target_dir, exist_ok=True)
+            target = os.path.join(target_dir, os.path.basename(p))
+            if not os.path.exists(target) or os.path.getsize(target) != os.path.getsize(p):
+                import shutil
+                shutil.copyfile(p, target)
+            return Path(target)
+        except Exception:
+            return path
+
+    def _resolve(p, fallback):
+        p = str(p or "")
+        if p and not os.path.isabs(p):
+            p = str(_sm_plugin / p)
+        return Path(p or str(fallback))
+
+    exe = _resolve(cfg.get("embed_exe"), _EMBED_DEFAULT_EXE or _EMBED_BUILTIN_EXE)
+    model = _resolve(cfg.get("embed_model_path"), _EMBED_DEFAULT_MODEL or _EMBED_BUILTIN_MODEL)
+    model = _ascii_mirror(model, exe.parent)
+    # 2026-11-13 真机：exe 解析成仓库目录时 exists() 也为真，Popen 会去 exec 一个
+    # 目录 → [Errno 13] Permission denied，再被 30s 看门狗刷了 7085 次。
+    # 必须是「文件」且「可执行」，不能用 exists()（目录同样返回 True）。
+    if not (os.path.isfile(str(exe)) and os.path.isfile(str(model))):
+        print(f"[embed] 服务未启动且找不到 embedding 程序/模型文件: {exe} / {model}")
+        return False
+    if not os.access(str(exe), os.X_OK):
+        print(f"[embed] embedding 程序不可执行（目录或缺少执行权限）: {exe}")
+        return False
+    try:
+        log_dir = exe.parent
+        logp = log_dir / f"embed-{_EMBED_PORT}.log"
+        stdout = open(logp, "a", encoding="utf-8", errors="replace")
+        stderr = open(logp, "a", encoding="utf-8", errors="replace")
+        import subprocess as _sp
+
+        _embed_proc = _sp.Popen(
+            [str(exe), "-m", str(model), "--host", "127.0.0.1", "--port", str(_EMBED_PORT),
+             "--embeddings", "-c", "8192", "--log-file", str(logp)],
+            stdout=stdout, stderr=stderr,
+            creationflags=getattr(_sp, "CREATE_NO_WINDOW", 0),
+        )
+        print(f"[embed] 已拉起 llama-server embedding -> {exe}")
+        return True
+    except Exception as e:
+        print(f"[embed] 拉起失败: {e}")
+        return False
+
+
+def _embed_status():
+    """向量检索可用性（2026-11-10，给前端启动提示用）。
+
+    三条路都要看，任何一条通就算可用：
+      ① 进程内 LiGGUF（models/ 下有 dll + gguf）—— 发行包走这条
+      ② HTTP 兜底 127.0.0.1:8083
+      ③ 配置里显式关掉 use_vector_recall → 直接判不可用（按用户意图，不再弹窗以外处理）
+    返回 {ok, reason, path}。reason ∈ inproc / http / missing / off。
+    """
+    try:
+        sm = PROJECT / "plugins" / "ego" / "super_memory"
+        models = sm / "models"
+        path = str(models)
+    except Exception:
+        sm, models, path = None, None, ""
+    try:
+        cfg = _embed_config() or {}
+    except Exception:
+        cfg = {}
+    if cfg.get("use_vector_recall") is False:
+        return {"ok": False, "reason": "off", "path": path}
+    dll_ok = False
+    model_ok = False
+    try:
+        if models and models.is_dir():
+            dll_ok = any((models / n).exists() for n in
+                         ("ligguf_embed.dll", "ligguf_embed.so", "ligguf_embed.dylib"))
+            model_ok = any(models.glob("*.gguf"))
+    except Exception:
+        pass
+    if dll_ok and model_ok:
+        return {"ok": True, "reason": "inproc", "path": path}
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(0.2)
+        alive = s.connect_ex(("127.0.0.1", _EMBED_PORT)) == 0
+        s.close()
+    except Exception:
+        alive = False
+    if alive:
+        return {"ok": True, "reason": "http", "path": path}
+    return {"ok": False, "reason": "missing", "path": path}
+
+
+def _health_issues():
+    """启动自检（2026-11-10）：返回「会静默降级」的问题清单，前端拿去做启动弹窗。
+
+    判定原则：只报**用户能修、且不修就悄悄坏掉**的；
+    有歧义的（比如 protocol_running —— snowluma 走 webhook 时它恒 False）不报，
+    宁可少报也不要把用户训练成“见弹窗就点关闭”。
+
+    2026-11-15：删掉原来的「Bot 未在运行」。Bot 要用户在 Bot 页手动启动，
+    服务一起来 S.bot_running 恒为 False，这条每次冷启动必报 —— 报的是**常态**
+    不是异常；状态栏 / Bot 页 / Agent 页都明写着，一点都不静默。留着只会把弹窗
+    训练成「每次多点一下知道了」，正好违反上面这条判定原则。
+    """
+    issues = []
+
+    # ① 向量检索：记忆能写不能取，表现只是“它记性差”
+    try:
+        e = _embed_status()
+        if not e.get("ok") and e.get("reason") != "off":
+            issues.append({
+                "id": "embed", "level": "warn", "page": "settings",
+                "title": "向量模型检索不可用",
+                "body": "记忆系统或将无法正常使用。",
+                "detail": "请尝试修复，该模块位于 " + str(e.get("path") or
+                          "plugins/ego/super_memory/models"),
+                "hint": ("需要 bge-small-zh-v1.5 的 gguf 权重与 ligguf_embed 动态库；"
+                         "若只想临时恢复，可在配置页启动 llama-server，走 127.0.0.1:8083 兜底。"),
+            })
+    except Exception as _e1:
+        issues.append({"id": "embed", "level": "warn", "page": "settings",
+                       "title": "向量检索状态未知",
+                       "body": "检查向量模型时出错，记忆检索可能已降级。",
+                       "detail": str(_e1), "hint": ""})
+
+    # ② 模型：没配 Key（本地模型除外）/ 连接失败
+    try:
+        cfg = load_config() or {}
+    except Exception:
+        cfg = {}
+    try:
+        prov = str(cfg.get("api_provider") or "").strip().lower()
+        key = str(cfg.get("api_key") or "").strip()
+        local = prov in ("ollama", "lmstudio", "llama-server", "llama_server", "local", "local-llm")
+        # ★ 别只看 api_key：Key 可能来自凭据库、也可能由提供商预置（如 opencode_go），
+        #   直接判空会误报。以 bot 自己报的 llm_status 为准，Key 只作为旁证。
+        st = str(getattr(S, "llm_status", "") or "").strip().lower()
+        if st in ("error", "failed", "auth_failed"):
+            issues.append({
+                "id": "llm_conn", "level": "error", "page": "settings",
+                "title": "模型连接失败",
+                "body": "请求没发出去或回了错误，聊天会表现为“它不说话”。",
+                "detail": "配置中心 → 接入 → 测试连接；日志页能看原始错误。",
+                "hint": "",
+            })
+        elif not key and not local and st not in ("connected", "ok"):
+            issues.append({
+                "id": "llm_key", "level": "error", "page": "settings",
+                "title": "还没配置模型 Key",
+                "body": "现在发消息不会有任何回复。",
+                "detail": "配置中心 → 接入，选提供商后填 API Key；本地模型请在「本地模型」里选路径。",
+                "hint": "",
+            })
+    except Exception:
+        pass
+
+    # ③ 协议驱动没设：界面能看，QQ 收发不通
+    try:
+        if not str((_protocol_hud() or {}).get("protocol_driver") or "").strip():
+            issues.append({
+                "id": "protocol", "level": "warn", "page": "protocol",
+                "title": "没有设置协议驱动",
+                "body": "QQ 消息收发这条链路是断的。",
+                "detail": "到协议页选驱动（SnowLuma / NapCat 等）并启动。",
+                "hint": "",
+            })
+    except Exception:
+        pass
+
+    return issues
+
+
+_EMBED_WATCH_BASE = 30        # 正常存活巡检间隔（秒）
+_EMBED_WATCH_MAX = 900        # 连续拉起失败后的最长退避（秒，15 分钟）
+_embed_fail_streak = 0        # 连续拉起失败次数；成功或恢复即归零
+
+
+def _embed_backoff(streak: int) -> int:
+    """连续失败第 n 次的等待秒数：30 → 60 → 120 → 240 → 480 → 900 封顶。"""
+    return min(_EMBED_WATCH_BASE * (2 ** min(max(streak, 1) - 1, 5)), _EMBED_WATCH_MAX)
+
+
+def _embed_watch_tick() -> int:
+    """巡检一轮，返回本轮应休眠的秒数。
+
+    抽成单轮函数是为了能被回归测试直接调用（不必真起守护线程 / 真睡 30s）。
+    2026-11-13 真机：拉起失败被固定 30s 循环刷了 7085 次、59 小时无人察觉，
+    systemd 只看到 active。失败必须降频 + 留痕，不能伪装成正常运行。
+    """
+    global _embed_fail_streak
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(0.5)
+        alive = s.connect_ex(("127.0.0.1", _EMBED_PORT)) == 0
+        s.close()
+    except Exception as e:
+        _embed_fail_streak += 1
+        delay = _embed_backoff(_embed_fail_streak)
+        print(f"[embed] 巡检异常（连续 {_embed_fail_streak} 次），退避 {delay}s: {e}")
+        return delay
+
+    if alive:
+        if _embed_fail_streak:
+            print(f"[embed] 8083 已恢复（此前连续 {_embed_fail_streak} 次拉起失败）")
+        _embed_fail_streak = 0
+        return _EMBED_WATCH_BASE
+
+    # 显式关掉向量检索属于配置意图，不是故障：不重试、不刷屏、拉长巡检
+    if _embed_config().get("use_vector_recall") is False:
+        _embed_fail_streak = 0
+        return _EMBED_WATCH_MAX
+
+    print("[embed] 8083 掉线，尝试自动重启")
+    try:
+        ok = bool(_ensure_embed_server())
+    except Exception as e:
+        ok = False
+        print(f"[embed] 拉起过程异常: {e}")
+    if ok:
+        if _embed_fail_streak:
+            print(f"[embed] 拉起成功（连续失败 {_embed_fail_streak} 次后恢复）")
+        _embed_fail_streak = 0
+        return _EMBED_WATCH_BASE
+
+    _embed_fail_streak += 1
+    delay = _embed_backoff(_embed_fail_streak)
+    print(f"[embed] 连续第 {_embed_fail_streak} 次拉起失败，退避 {delay}s"
+          "（不再按 30s 无限刷屏）")
+    return delay
+
+
+def _watch_embed_server():
+    """embedding 存活监控：正常每 30s；连续失败指数退避到 15min 封顶。"""
+    delay = _EMBED_WATCH_BASE
+    while True:
+        time.sleep(delay)
+        delay = _embed_watch_tick()
+
+
+try:
+    _ensure_embed_server()
+except Exception as e:
+    print(f"[embed] 启动期拉起异常: {e}")
+# 守护线程：embedding 挂掉自动拉起（后台，不阻塞主流程）
+try:
+    t = threading.Thread(target=_watch_embed_server, daemon=True)
+    t.start()
+except Exception:
+    pass
+
+
+def _post_bot_core_json(path, payload, timeout=8.0):
+    """向 bot_core POST 一份 JSON（插件动作转发用）。bot 不在线返回 None。"""
+    if not _is_bot_core_alive():
+        return None
+    try:
+        data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        req = urllib.request.Request(
+            f"{BOT_CORE_URL}{path}", data=data,
+            headers={"Content-Type": "application/json"}, method="POST")
+        with _local_open(req, timeout=timeout) as r:
+            return json.loads(r.read().decode("utf-8"))
+    except Exception:
+        return None
+
+
+def _invoke_generic_plugin(plugin_id, action, params):
+    """通用插件通道：按统一标准调用任意插件，不修改主程序。
+
+    标准约定（插件 __init__.py 内声明，全部可选）：
+      1. PLUGIN_ACTIONS = { "action_name": fn(params)->jsonable }   优先匹配
+      2. 兜底：模块导出 get_config / set_config / toggle
+      3. 兜底：模块导出 execute_action(action, params) -> jsonable
+    只有声明了 PLUGIN_ACTIONS 或 execute_action 的新标准插件会走此通道；
+    其余插件返回 None，继续交由硬编码分支/旧 fallback 处理，保持完全兼容。
+    """
+    # 1.5.10：先交给 **bot 进程**（插件 ctx/状态都在那边）。
+    #   只有 bot 明确说"不认识这个动作"才继续走本地兜底。
+    _remote = _post_bot_core_json("/api/plugins/action",
+                                  {"plugin_id": plugin_id, "action": action, "params": params or {}})
+    if isinstance(_remote, dict) and _remote.get("handled"):
+        _remote.pop("handled", None)
+        return _remote
+    try:
+        mod = __import__(f"plugins.{plugin_id}", fromlist=["PLUGIN_ACTIONS", "execute_action"])
+    except Exception:
+        return None
+    # 非标准插件的兜底动作由下方 fallback 分支处理，同步：
+    acts = getattr(mod, "PLUGIN_ACTIONS", None)
+    exec_fn = getattr(mod, "execute_action", None)
+    supports_standard = isinstance(acts, dict) or callable(exec_fn)
+    if not supports_standard:
+        return None
+    # 1. PLUGIN_ACTIONS 映射
+    try:
+        if isinstance(acts, dict):
+            fn = acts.get(action)
+            if callable(fn):
+                try:
+                    # 2026-11-01：动作签名有的收 params、有的不收（bili/web_search 的
+                    # get_config() 是 0 参），一律传 dict 会 TypeError。
+                    try:
+                        import inspect as _insp
+                        _argc = len(_insp.signature(fn).parameters)
+                    except (TypeError, ValueError):
+                        _argc = 1
+                    return fn(params or {}) if _argc >= 1 else fn()
+                except Exception as e:
+                    return {"error": f"[{plugin_id}] {action} failed: {e}"}
+    except Exception:
+        pass
+    # 2. 标准动作兜底：get_config / set_config / toggle
+    try:
+        if action == "get_config":
+            fn = getattr(mod, "get_config", None)
+            if callable(fn):
+                return fn()
+        elif action == "set_config":
+            fn = getattr(mod, "set_config", None)
+            if callable(fn):
+                return fn(params or {})
+        elif action == "toggle":
+            fn = getattr(mod, "toggle", None)
+            if callable(fn):
+                return fn()
+    except Exception as e:
+        return {"error": f"[{plugin_id}] {action} failed: {e}"}
+    # 3. execute_action 兜底
+    if callable(exec_fn):
+        try:
+            return exec_fn(action, params or {})
+        except Exception as e:
+            return {"error": f"[{plugin_id}] {action} failed: {e}"}
+    return None
+
+
+# 执行time State
+STATE_LOCK = threading.Lock()
+BOT_CORE_URL = "http://127.0.0.1:3005"
+
+
+# ── 本机请求一律不走系统代理（2026-10-25）──────────────────────────
+# 实测：环境里有 HTTP_PROXY/HTTPS_PROXY 时，Python 的 urllib 会把
+# `http://127.0.0.1:3005` **也交给代理**。代理连不上目标就干等 2 秒才回 502，
+# 而这 2 秒是同步阻塞在 HTTP handler 里的。
+#
+# 后果（在本机实测到）：
+#   · GET /api/bot/status   1.65s —— probe_protocol_online 探 4 个端口 × 0.4s
+#   · /api/admin/notify_log 2.07s —— 转发 bot_core 前先被代理卡 2 秒
+#   两者都在首屏路径上，页面看起来"一直在转圈"。
+#
+# curl 默认对 localhost 免代理，urllib 不会（它只认 no_proxy，没有就全走代理）。
+# 所以本机地址必须显式用一个空 ProxyHandler 的 opener。
+#
+# ⚠ 只给**本机地址**用这个 opener。外网请求（模型 API、模型列表）仍走默认
+#   opener —— 那些该走代理，关掉会直接连不上。
+_LOCAL_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
+def _local_open(req, timeout=5):
+    """打开一个**本机** HTTP 请求，绕过系统代理。"""
+    return _LOCAL_OPENER.open(req, timeout=timeout)
+
+
+# Performance cache
+class _Cache:
+    def __init__(self, ttl=5):
+        self._data = None
+        self._time = 0
+        self._ttl = ttl
+    def get(self):
+        if self._data is not None and time.time() - self._time < self._ttl:
+            return self._data
+        return None
+    def set(self, val):
+        self._data = val
+        self._time = time.time()
+
+
+# bot_core connection cache (5s)
+_BOT_CORE_CACHE = _Cache(ttl=5)
+
+def _is_bot_core_alive():
+    cached = _BOT_CORE_CACHE.get()
+    if cached is not None:
+        return cached
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(0.15)
+        alive = s.connect_ex(('127.0.0.1', 3005)) == 0
+        s.close()
+    except Exception:
+        alive = False
+    _BOT_CORE_CACHE.set(alive)
+    return alive
+
+
+def fetch_from_bot_core(path, timeout=0.5):
+    if not _is_bot_core_alive():
+        return None
+    try:
+        req = urllib.request.Request(f"{BOT_CORE_URL}{path}", headers={"Accept": "application/json"})
+        with _local_open(req, timeout=timeout) as r:
+            return json.loads(r.read().decode("utf-8"))
+    except Exception:
+        return None
+
+
+# ── 更新进度（2026-11-01，配置页进度条）────────────────────────────────
+#   一次只允许跑一个：前端 POST /api/update/apply 立即返回，然后轮询
+#   /api/update/status。进度在后台线程里写，下载按 64KB 增量刷新。
+UPDATE_STATE = {
+    "running": False, "phase": "", "downloaded": 0, "total": 0,
+    "percent": 0, "ok": False, "done": False, "error": "",
+    "version": "", "text": "", "report": {},
+}
+_UPDATE_LOCK = threading.Lock()
+
+
+def _upd_state(**kw):
+    with _UPDATE_LOCK:
+        UPDATE_STATE.update(kw)
+
+
+def _upd_snapshot() -> dict:
+    with _UPDATE_LOCK:
+        return dict(UPDATE_STATE)
+
+
+def _update_progress(phase: str, done: int = 0, total: int = 0) -> None:
+    """updater.apply_from_manifest 的进度回调 → 全局状态。"""
+    text = {"manifest": "获取更新清单", "download": "下载补丁",
+            "verify": "校验并安装", "done": "安装完成"}.get(phase, phase)
+    pct = 0
+    if phase == "download":
+        pct = int(done * 100 / total) if total else 0
+    elif phase in ("verify", "done"):
+        pct = 100
+    _upd_state(phase=phase, downloaded=int(done), total=int(total),
+               percent=pct, text=text, running=(phase != "done"))
+
+
+def _update_worker(man_url: str, restart: bool) -> None:
+    try:
+        rep = _update_apply_from_manifest(man_url, on_progress=_update_progress)
+        ok = bool(rep.get("ok"))
+        _upd_state(running=False, done=True, ok=ok,
+                   error="" if ok else str(rep.get("error") or "安装失败"),
+                   version=str(rep.get("version") or ""),
+                   percent=100, phase="done",
+                   text=("安装完成" if ok else "安装失败"), report=rep)
+        if ok and restart:
+            threading.Thread(target=_restart_after_update, daemon=True).start()
+    except Exception as e:
+        _upd_state(running=False, done=True, ok=False, error=f"{type(e).__name__}: {e}",
+                   text="安装失败")
+
+
+def _update_apply_from_manifest(man_url: str, on_progress=None) -> dict:
+    """下载 manifest 指向的补丁 → 校验 → 覆盖（带进度）。不重启（调用方决定）。"""
+    sys.path.insert(0, str(PROJECT))
+    from harness import updater as _upd
+    return _upd.apply_from_manifest(man_url, on_progress=on_progress)
+
+
+def _restart_after_update():
+    """更新后重启服务：先停 bot，再退出进程让 Electron 守护拉起新代码。"""
+    try:
+        stop_bot()
+    except Exception:
+        pass
+    time.sleep(1.2)
+    os._exit(0)
+
+
+def push_bot_reload():
+    """通知 bot_core 热重载配置（POST /reload_config）。bot 未运行时静默跳过。"""
+    if not _is_bot_core_alive():
+        return None
+    try:
+        req = urllib.request.Request(
+            f"{BOT_CORE_URL}/reload_config",
+            data=b"{}",
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with _local_open(req, timeout=2) as r:
+            return json.loads(r.read().decode("utf-8"))
+    except Exception:
+        return None
+
+
+# System stats cache (2s)
+_SYS_CACHE = _Cache(ttl=2)
+
+# Protocol log buffer
+PROTO_LOG_MAX = 600
+PROTO_LOG = deque(maxlen=PROTO_LOG_MAX)
+PROTO_LOG_LOCK = threading.Lock()
+_LOG_CLEARED = False
+
+def push_proto_log(text: str):
+    global _LOG_CLEARED
+    with PROTO_LOG_LOCK:
+        PROTO_LOG.append({"time": datetime.datetime.now().strftime("%H:%M:%S"), "text": text})
+        _LOG_CLEARED = False
+
+
+def _self_is_elevated() -> bool:
+    """当前进程是否以高完整性运行（Windows）。非 Windows / 探测失败按 False。
+
+    ★ 2026-11-05 修：必须先设 argtypes/restype。原写法没设，
+      `GetCurrentProcess()` 的伪句柄 -1 在 64 位下按 c_int 截断，
+      `OpenProcessToken` 拿到无效句柄 → **永远返回 False**。
+      真机证据：High 完整性的进程里，原写法 False、补 types 后 True。
+      协议页的诊断分支靠它区分「已提权但仍没注入」和「压根没提权」，
+      一直 False 会让它永远给"请右键以管理员身份运行"那一条。
+      harness/privhelper.is_elevated() 是同一段代码的另一份，改要两边一起改。
+    """
+    try:
+        import ctypes
+        from ctypes import wintypes
+        TOKEN_QUERY = 0x0008
+        TokenElevation = 20
+        adv = ctypes.windll.advapi32
+        k32 = ctypes.windll.kernel32
+        k32.GetCurrentProcess.restype = wintypes.HANDLE
+        adv.OpenProcessToken.argtypes = [wintypes.HANDLE, wintypes.DWORD,
+                                         ctypes.POINTER(wintypes.HANDLE)]
+        adv.OpenProcessToken.restype = wintypes.BOOL
+        adv.GetTokenInformation.argtypes = [wintypes.HANDLE, ctypes.c_int,
+                                            ctypes.c_void_p, wintypes.DWORD,
+                                            ctypes.POINTER(wintypes.DWORD)]
+        adv.GetTokenInformation.restype = wintypes.BOOL
+        k32.CloseHandle.argtypes = [wintypes.HANDLE]
+        h = wintypes.HANDLE()
+        if not adv.OpenProcessToken(k32.GetCurrentProcess(), TOKEN_QUERY,
+                                    ctypes.byref(h)):
+            return False
+        buf = ctypes.c_ulong(0)
+        need = ctypes.c_ulong(0)
+        ok = adv.GetTokenInformation(h, TokenElevation, ctypes.byref(buf),
+                                     ctypes.sizeof(buf), ctypes.byref(need))
+        k32.CloseHandle(h)
+        return bool(ok and buf.value)
+    except Exception:
+        return False
+
+
+def _uac_disabled() -> bool:
+    """本机是否关闭了 UAC（EnableLUA=0）。关闭时 RunAs 无法提权。"""
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
+                            r"SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System") as k:
+            v, _ = winreg.QueryValueEx(k, "EnableLUA")
+            return int(v) == 0
+    except Exception:
+        return False
+
+
+def _port_open_local(port: int) -> bool:
+    import socket as _s
+    try:
+        with _s.create_connection(("127.0.0.1", int(port)), timeout=0.6):
+            return True
+    except Exception:
+        return False
+
+
+def _kill_runtime_processes(runtime: str) -> int:
+    """杀掉占着协议端口的旧实例 + 命令行里带该运行时的 node。
+
+    用 netstat/tasklist 而不是拼 PowerShell 引号 —— 后者转义一错就静默失败
+    （真机 2026-11-05 09:41：旧实例占着 5099，新实例绑不上直接退出）。
+    """
+    import subprocess as _sp
+    import re as _re
+    killed = 0
+    pids = set()
+
+    # ① 端口占用者（SnowLuma: 5099 webui / 3000 http / 3001 ws）
+    try:
+        out = _sp.run(["netstat", "-ano", "-p", "tcp"],
+                      capture_output=True, text=True, encoding="utf-8",
+                      errors="ignore", timeout=15).stdout
+        for line in (out or "").splitlines():
+            if "LISTENING" not in line.upper():
+                continue
+            m = _re.search(r":(5099|3000|3001)\s+\S+\s+LISTENING\s+(\d+)", line, _re.I)
+            if m:
+                pids.add(m.group(2))
+    except Exception:
+        pass
+
+    # ② 命令行里带运行时目录的 node（兜底：端口还没起来但进程在）
+    try:
+        out = _sp.run(["wmic", "process", "where", "name='node.exe'",
+                       "get", "processid,commandline"],
+                      capture_output=True, text=True, encoding="utf-8",
+                      errors="ignore", timeout=15).stdout
+        for line in (out or "").splitlines():
+            if runtime.lower() in line.lower():
+                m = _re.search(r"(\d+)\s*$", line.strip())
+                if m:
+                    pids.add(m.group(1))
+    except Exception:
+        pass
+
+    for pid in pids:
+        if not str(pid).isdigit() or int(pid) == 0:
+            continue
+        try:
+            _sp.run(["taskkill", "/PID", str(pid), "/F", "/T"],
+                    capture_output=True, timeout=10)
+            killed += 1
+        except Exception:
+            pass
+    return killed
+
+
+def _launch_snowluma_elevated():
+    """用 UAC 提权拉起 SnowLuma 运行时。返回 (ok, 人话说明)。
+
+    只启动进程，不做连接：连接由 /api/protocol/start 负责（它带链路诊断）。
+    """
+    import os as _os
+    import subprocess as _sp
+    try:
+        from config import load_config
+        cfg = load_config() or {}
+        drv = ((cfg.get("protocol_drivers") or {}).get("snowluma") or {})
+        exe = str(drv.get("exe_path") or "").strip()
+    except Exception as e:
+        return False, f"读配置失败: {e}"
+
+    if not exe:
+        return False, "先配置 SnowLuma 运行时（exe_path 指向 node.exe 或运行目录）"
+
+    # ★ 先把运行时算出来：助手分支与 RunAs 分支都要用。
+    #   （曾经放在后面 → NameError 被 except 吞掉，助手永远走不到）
+    node = exe
+    if _os.path.isdir(node):
+        node = _os.path.join(node, "node.exe")
+    elif _os.path.basename(node).lower() == "index.mjs":
+        node = _os.path.join(_os.path.dirname(node), "node.exe")
+    runtime = _os.path.dirname(node)
+    if not _os.path.isfile(node):
+        return False, f"node.exe 不存在: {node}"
+    if not _os.path.isfile(_os.path.join(runtime, "index.mjs")):
+        return False, f"index.mjs 不存在: {runtime}"
+
+    # ★ 首选：高权限助手（SYSTEM）把进程送进用户会话 —— 对所有机器都一样，
+    #   不需要 UAC、不需要人工以管理员启动。真机 2026-11-05 验证过：
+    #   这样起来的 SnowLuma 在 session 1、Node=High、能注入 QQ。
+    try:
+        # 用显式路径加载，避免依赖 sys.path 里有没有 app 根目录
+        import importlib.util as _ilu
+        _pc_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                                "harness", "privclient.py")
+        _spec = _ilu.spec_from_file_location("eggb_privclient", _pc_path)
+        _pc = _ilu.module_from_spec(_spec)
+        _spec.loader.exec_module(_pc)
+        if _pc.available():
+            _r = _pc.spawn_session(node, ["index.mjs"], runtime)
+            if _r and _r.get("ok"):
+                return True, ("已通过高权限助手启动 SnowLuma（会话 %s，无需 UAC）。"
+                              "起来后页面会自动连接。" % _r.get("session", "?"))
+    except Exception:
+        pass
+
+    # 次选：UAC（UAC 关闭的机器上 RunAs 不提权 —— 直接说清楚，别让用户干等弹窗）
+    if _uac_disabled() and not _self_is_elevated():
+        return False, ("本机 UAC 已关闭，程序内无法提权。"
+                       "请**关闭 EggBloom** 后**以管理员身份启动**，再点「启动协议层」。")
+
+    # ★ 先清掉"起来了但没注入"的旧实例：否则提权起来的那个绑不上 5099/3000，
+    #   用户看到的是两个实例抢端口（真机 2026-11-05 09:27 就是这么乱掉的）。
+    try:
+        _n = _kill_runtime_processes(runtime)
+        if _n:
+            import time as _t
+            _t.sleep(2.0)
+    except Exception:
+        pass
+
+    # Start-Process -Verb RunAs 会弹 UAC；工作目录必须是运行时目录
+    ps = (
+        "Start-Process -FilePath '{node}' -ArgumentList 'index.mjs' "
+        "-WorkingDirectory '{rt}' -Verb RunAs"
+    ).format(node=node.replace("'", "''"), rt=runtime.replace("'", "''"))
+    try:
+        _sp.Popen(["powershell", "-NoProfile", "-WindowStyle", "Hidden",
+                   "-Command", ps],
+                  stdout=_sp.DEVNULL, stderr=_sp.DEVNULL)
+    except Exception as e:
+        return False, f"发起提权失败: {e}"
+    return True, ("已请求管理员权限启动 SnowLuma —— 请在 UAC 弹窗点「是」。"
+                  "起来后页面会自动连接；若没连上，回来点一次「启动协议层」看诊断。")
+
+
+def _no_injection_hint() -> str:
+    """SnowLuma 起来了但没注入 QQ 时，给用户的**下一步动作**。
+
+    按环境分三种 —— 关键是 UAC 关闭时不能让用户去点按钮（那不会生效）：
+      · UAC 关 & 非管理员：必须**关闭 EggBloom 后以管理员身份启动**
+      · UAC 关 & 已是管理员：注入仍失败，看日志（多半是 QQ 版本不匹配）
+      · UAC 开：点本页「以管理员启动」即可
+    """
+    if _uac_disabled() and not _self_is_elevated():
+        return ("SnowLuma 已启动，但**没有注入 QQ**（3000/3001 未监听）。\n"
+                "本机 UAC 已关闭（EnableLUA=0），程序内无法提权。"
+                "请**关闭 EggBloom**，然后**以管理员身份启动 EggBloom**"
+                "（右键 EggBloom Desktop.exe →「以管理员身份运行」），"
+                "再回来点「启动协议层」。")
+    if _uac_disabled():
+        return ("SnowLuma 已启动，但**没有注入 QQ**。已以管理员身份运行仍未注入 ——"
+                "看 SnowLuma 日志里的 [Hook] 段，可能是 QQ 版本与框架不匹配。")
+    return ("SnowLuma 已启动，但**没有注入 QQ**（3000/3001 未监听）。\n"
+            "常见原因：QQ 以高权限运行，普通权限注入不进去。"
+            "点本页「以管理员启动」—— 会弹一次 UAC，点「是」即可。")
+
+
+def _protocol_start_diagnosis(wait_s: float = 6.0) -> str:
+    """启动后按链路逐层验证，返回**人话结论**（不是"已启动"）。
+
+    链路：QQ ←注入— 协议端(WebUI) —OneBot— 127.0.0.1:<port> ←— EggBloom
+    """
+    import re as _re
+    import time as _t
+    import urllib.request as _ur
+    import json as _json
+
+    try:
+        from protocol_manager import _current_driver
+        driver = str(_current_driver() or "")
+    except Exception:
+        driver = ""
+
+    mgr = getattr(S, "_protocol_manager", None)
+    adapter = getattr(mgr, "adapter", None) if mgr else None
+    base = str(getattr(adapter, "api_base_url", "") or "")
+    m = _re.search(r":(\d+)", base)
+    port = int(m.group(1)) if m else 3000
+
+    def _port_ok(p: int) -> bool:
+        import socket as _s
+        try:
+            with _s.create_connection(("127.0.0.1", p), timeout=0.6):
+                return True
+        except Exception:
+            return False
+
+    def _login():
+        # 优先走适配器（自动带驱动自己的 token）
+        try:
+            if adapter is not None and hasattr(adapter, "api_call"):
+                d = adapter.api_call("get_login_info", timeout=2)
+                if isinstance(d, dict) and d.get("retcode") == 0:
+                    u = (d.get("data") or {})
+                    return str(u.get("user_id") or "")
+        except Exception:
+            pass
+        try:
+            with _ur.urlopen(f"http://127.0.0.1:{port}/get_login_info", timeout=2) as r:
+                d = _json.loads(r.read().decode("utf-8", "ignore"))
+            if isinstance(d, dict) and d.get("retcode") == 0:
+                u = (d.get("data") or {})
+                return str(u.get("user_id") or "")
+        except Exception:
+            pass
+        return ""
+
+    deadline = _t.time() + max(2.0, float(wait_s))
+    uin = ""
+    while _t.time() < deadline:
+        if _port_ok(port):
+            uin = _login()
+            if uin:
+                break
+        _t.sleep(1.0)
+
+    if uin:
+        return f"协议层已启动，OneBot 已连上（{driver or '驱动'}，UIN {uin}）"
+    if driver == "snowluma" and _port_ok(5099):
+        return _no_injection_hint()
+    if _port_ok(port):
+        return f"OneBot 端口已通（:{port}），但取不到登录号（QQ 可能未登录）"
+    return (f"协议层进程没起来（{driver or '驱动'}，端口 :{port}）：先看「协议日志」里的报错，"
+            "常见原因是启动器路径不对，或 QQ 没登录。")
+
+
+def _protocol_status_callback(status: str, detail: str = ""):
+    """协议驱动状态回调：更新 S.protocol_running 并写入协议日志"""
+    try:
+        with STATE_LOCK:
+            if status == "started":
+                S.protocol_running = True
+            elif status == "stopped":
+                S.protocol_running = False
+        if detail:
+            push_proto_log(f"[{status}] {detail}")
+        elif status:
+            push_proto_log(status)
+    except Exception:
+        pass
+
+
+class State:
+    def __init__(self):
+        self.bot_running = False
+        self.bot_start_time = time.time()
+        self.messages_total = 0
+        self.groups_active = 0
+        self.images_generated = 0
+        self.memes_sent = 0
+        self.plugin_count = 0
+        self.plugin_active = 0
+        self.llm_status = "unknown"
+        self.llm_model = "deepseek-flash"
+        self.memory_total = 0
+        self.session_count = 0
+        self.api_calls_today = 0
+        self.tokens_used = 0
+        self.activities = deque(maxlen=30)
+        self._init_acts()
+    def _init_acts(self):
+        now = datetime.datetime.now()
+        items = [
+            ("emerald", "系统已启动"),
+            ("violet", "AI 引擎就绪"),
+            ("cyan", "ComfyUI 已连接"),
+            ("amber", "表情引擎就绪"),
+            ("rose", "插件已加载"),
+            ("violet", "DeepSeek API 已配置"),
+            ("emerald", "Self-learning DB loaded"),
+            ("cyan", "OneBot 协议就绪"),
+        ]
+        for i, (c, t) in enumerate(items):
+            ts = now - datetime.timedelta(minutes=(len(items) - i) * 3)
+            self.activities.append({"color": c, "text": t, "time": ts.strftime("%H:%M")})
+    def add_activity(self, color, text):
+        self.activities.appendleft({"color": color, "text": text, "time": datetime.datetime.now().strftime("%H:%M")})
+    def merge_bot_core_data(self, data):
+        """用 bot_core 返回的数据更新 State"""
+        if not data:
+            return
+        with STATE_LOCK:
+            for key in ["messages_total", "groups_active", "images_generated",
+                        "memes_sent", "plugin_count", "plugin_active",
+                        "llm_status", "llm_model", "memory_total",
+                        "session_count", "api_calls_today", "tokens_used"]:
+                if key in data:
+                    setattr(self, key, data[key])
+            if data.get("bot_start_time"):
+                self.bot_start_time = data["bot_start_time"]
+                self.bot_running = True
+
+
+S = State()
+_bot_process = None
+_bot_lock = threading.Lock()
+
+
+def _llm_headers(api_key: str, url: str = "", provider_id: str = "") -> dict:
+    """调 LLM 端点时的请求头（2026-11-02）。
+
+    两个坑都在这一个函数里收口：
+      ① Cloudflare 会按 User-Agent 拦（默认 `Python-urllib/3.x` → 403/1010）；
+      ② OpenCode 的网关要求 `x-opencode-session`，缺了直接 400 MissingSessionID。
+    """
+    h = {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer " + str(api_key or ""),
+        "Accept": "application/json",
+        "User-Agent": "EggBloom/1.6 (+https://github.com/Eggcrate9361/EggBloom)",
+        "Accept-Language": "zh-CN,zh;q=0.9",
+    }
+    low = (str(url or "") + " " + str(provider_id or "")).lower()
+    if "opencode" in low:
+        h["x-opencode-session"] = "eggbloom-webui"
+    return h
+
+
+def _detect_provider_type(base_url, provider_id):
+    pid = (provider_id or '').lower()
+    # 所有 OpenAI 兼容服务商(国产官方/聚合)直接按其 id 返回,模型探测统一走 /v1/models
+    if pid in {'deepseek', 'openai', 'custom', 'aliyun', 'zhipu', 'kimi', 'step',
+               'minimax', 'volcengine', 'qianfan', 'hunyuan', 'siliconflow', 'openrouter',
+               'groq', 'together'}:
+        return pid
+    if pid in {'anthropic', 'claude'}:
+        return 'anthropic'
+    if pid in {'google', 'gemini'}:
+        return 'gemini'
+    if pid == 'ollama':
+        return 'ollama'
+    if pid == 'lmstudio':
+        return 'lmstudio'
+    url = (base_url or '').lower()
+    if 'deepseek' in url:
+        return 'deepseek'
+    if 'openai' in url or 'openai.com' in url:
+        return 'openai'
+    if 'anthropic' in url or '/messages' in url:
+        return 'anthropic'
+    if 'generativelanguage' in url:
+        return 'gemini'
+    if 'ollama' in url or '11434' in url:
+        return 'ollama'
+    if 'lmstudio' in url or '1234' in url:
+        return 'lmstudio'
+    return 'custom'
+
+
+def _model_candidate_urls(base_url, provider_type):
+    if not base_url:
+        return []
+    try:
+        p = urllib.parse.urlsplit(base_url)
+        path = (p.path or '').rstrip('/')
+        for suffix in ['/v1/chat/completions', '/chat/completions', '/v1/messages', '/messages']:
+            if path.endswith(suffix):
+                path = path[:-len(suffix)]
+                break
+        root = urllib.parse.urlunsplit((p.scheme, p.netloc, path, p.query, p.fragment)).rstrip('/')
+    except Exception:
+        root = base_url.rstrip('/')
+
+    if provider_type in ('anthropic', 'claude'):
+        # Claude: GET /v1/models，需 x-api-key + anthropic-version
+        if root.endswith('/v1'):
+            return [root + '/models']
+        return [root + '/v1/models', root + '/models']
+    if provider_type in ('gemini', 'google'):
+        # Gemini: GET /v1beta/models，需 ?key= 查询参数
+        return [root + '/models', root + '/v1beta/models']
+    if provider_type in ('custom',):
+        # 自定义端点也可能是标准 OpenAI 兼容服务：仍尝试 /v1/models（服务端用短超时快速失败）；
+        # 失败时前端回落已保存的模型列表 + 手动输入。
+        return [
+            root + '/v1/models',
+            root + '/models',
+        ]
+    candidates = [
+        root + '/v1/models',
+        root + '/models',
+    ]
+    return candidates
+
+
+def _provider_api_key(request_key, provider_entry):
+    """解析模型列表拉取用的 API Key：请求 Key > 提供商专属凭据 > 全局凭据。"""
+    k = (request_key or '').strip()
+    if k and not _is_redacted_key(k):
+        return k
+    if provider_entry:
+        pk = (provider_entry.get('api_key') or '').strip()
+        if pk and not _is_redacted_key(pk):
+            return pk
+    try:
+        from config import get_provider_api_key
+        pid = (provider_entry or {}).get('id') or ''
+        return get_provider_api_key(pid) or ''
+    except Exception:
+        return ''
+
+
+def _make_autonomous_chat():
+    """为 web_operator 自主 Agent 构造宿主文本模型回调。
+    签名：chat(messages, tools=None, max_tokens=...) -> (content, tool_calls, usage)。
+    复用主模型配置（api_provider / model_name / api_url + 凭据管理器里的 Key）。"""
+    from providers import make_provider
+    cfg = load_config()
+    pid = (cfg.get('api_provider') or '').strip()
+    api_url = (cfg.get('api_url') or '').strip()
+    model = (cfg.get('model_name') or cfg.get('model') or '').strip()
+    if not api_url:
+        try:
+            from config import API_PROVIDERS
+            api_url = (API_PROVIDERS.get(pid) or {}).get('url') or 'https://api.deepseek.com/chat/completions'
+        except Exception:
+            api_url = 'https://api.deepseek.com/chat/completions'
+    api_key = ''
+    try:
+        from config import get_provider_api_key, get_api_key
+        api_key = (get_provider_api_key(pid) if pid else get_api_key()) or ''
+    except Exception:
+        api_key = ''
+    if not api_key:
+        raise RuntimeError('未检测到可用的模型 API Key（请在设置里配置提供商与密钥）')
+    prov = make_provider(api_url=api_url, api_key=api_key,
+                         model=model or 'deepseek-flash', provider=pid or 'openai', max_retries=2)
+
+    def _chat(messages, tools=None, max_tokens=1500):
+        return prov.chat(messages, tools=tools, max_tokens=max_tokens)
+    return _chat
+
+
+def _fetch_remote_models(url, api_key, provider_type):
+    """按提供商类型用正确的鉴权方式请求模型列表，返回 (models, error)。"""
+    pt = (provider_type or 'openai').lower()
+    headers = {'Accept': 'application/json'}
+    final_url = url
+    if pt in ('anthropic', 'claude'):
+        headers.update({'x-api-key': api_key or '', 'anthropic-version': '2023-06-01'})
+    elif pt in ('gemini', 'google'):
+        sep = '&' if '?' in url else '?'
+        final_url = url + sep + 'key=' + urllib.parse.quote(api_key or '')
+    else:
+        headers['Authorization'] = 'Bearer ' + (api_key or '')
+    req = urllib.request.Request(final_url, headers=headers)
+    with urllib.request.urlopen(req, timeout=6) as r:
+        data = json.loads(r.read().decode('utf-8'))
+
+    def _mid(m):
+        if pt in ('gemini', 'google'):
+            n = m.get('name') or m.get('id') or m.get('model') or ''
+            return n.split('/')[-1] if '/' in n else n
+        return m.get('id') or m.get('name') or m.get('model') or ''
+
+    raw = data.get('data') or data.get('models') or []
+    models = []
+    for m in raw:
+        mid = _mid(m)
+        if mid:
+            models.append({'id': mid, 'name': m.get('name', mid)})
+    models.sort(key=lambda x: x['id'])
+    return models, None
+
+
+def _classify_error(err):
+    text = str(err)
+    if '地址不可达' in text or 'Name or service not known' in text or 'getaddrinfo' in text or 'Connection refused' in text or 'timed out' in text:
+        return '地址不可达'
+    if 'HTTP' in text or '403' in text or '401' in text or '404' in text or 'JSON' in text:
+        return '接口返回异常'
+    return text
+
+
+def _start_bot_log_reader(proc):
+    def _reader():
+        try:
+            for line in iter(proc.stdout.readline, ''):
+                if not line:
+                    break
+                push_proto_log(f'[Bot] {line.rstrip()}')
+        except Exception:
+            pass
+        push_proto_log('[Bot] 进程已退出')
+    threading.Thread(target=_reader, daemon=True).start()
+
+# Pre-computed status cache (background refresh)
+_STATUS_CACHE = {"data": None, "time": 0}
+
+# 协议驱动 → 展示名（HUD 顶部状态条用）
+_PROTO_DRIVER_LABEL = {"napcat": "NapCat", "llonebot": "LLOneBot", "snowluma": "SnowLuma"}
+
+
+def _protocol_hud():
+    """HUD 用：当前协议驱动 + 是否在运行。
+
+    轻量红线：只读弱缓存配置 + 内存标志 —— **不做** WebUI 地址探测、不读驱动
+    日志（那些在 /api/protocol/status 里做）。/api/status 被前端按秒轮询且调用方
+    超时只有 0.5s，重活会把状态接口拖死、HUD 直接冻结。
+    此前 /api/status 载荷里**根本没有** protocol_driver 字段 → 前端恒显示
+    「未设置」（用户截图），这里补上。"""
+    driver = ""
+    try:
+        driver = str((load_config() or {}).get("protocol_driver") or "").strip()
+    except Exception:
+        driver = ""
+    running = False
+    mgr = getattr(S, "_protocol_manager", None)
+    if mgr is not None:
+        running = bool(getattr(mgr, "_running", False))
+    else:
+        running = bool(getattr(S, "protocol_running", False))
+    return {
+        "protocol_driver": driver,
+        "protocol_driver_label": _PROTO_DRIVER_LABEL.get(driver.lower(), driver),
+        "protocol_running": running,
+    }
+
+
+def _privhelper_status(timeout=0.5):
+    """协议页用：高权限助手在不在（P0-3，2026-11-05）。
+
+    只读 :3007/health，不碰 token、不做任何写操作。助手是 SYSTEM 计划任务
+    起的独立进程，掉了对 webui 是不可见的 —— 以前只能翻 data/privhelper.log。
+
+    红线：离线必须**返回 online=False**，不能抛异常、不能超时拖住页面。
+    /api/status 是按秒轮询的轻量接口（见 _protocol_hud 注释），这里单独开
+    端点给协议页 5 秒拉一次，不往 /api/status 里塞 HTTP 探测。
+    """
+    try:
+        import importlib.util as _ilu
+        _pc_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "harness", "privclient.py")
+        _spec = _ilu.spec_from_file_location("eggb_privclient_status", _pc_path)
+        _pc = _ilu.module_from_spec(_spec)
+        _spec.loader.exec_module(_pc)
+        h = _pc.health(timeout=timeout)
+    except Exception as e:
+        return {"ok": True, "online": False, "elevated": False, "pid": None,
+                "port": 3007, "error": "%s: %s" % (type(e).__name__, e),
+                "hint": "助手状态读取失败，看 data/privhelper.log"}
+    h = h or {}
+    online = bool(h.get("ok"))
+    elevated = bool(h.get("elevated"))
+    hint = ""
+    if not online:
+        hint = ("助手未运行：以高权限启动会退回 UAC 兜底（本机 EnableLUA=0 提不了权）；"
+                "重跑 scripts/install_privhelper.ps1 或 "
+                "Start-ScheduledTask -TaskName EggBloom-PrivHelper")
+    elif not elevated:
+        hint = "助手在线但不是高完整性令牌，spawn_session 可能注入不了 QQ"
+    return {"ok": True, "online": online, "elevated": elevated,
+            "pid": h.get("pid"), "port": h.get("port") or 3007, "hint": hint}
+
+
+def _refresh_status():
+    while True:
+        try:
+            bc = fetch_from_bot_core("/api/status")
+            if bc:
+                S.merge_bot_core_data(bc)
+            with STATE_LOCK:
+                stats = {
+                    "bot_running": S.bot_running,
+                    "bot_uptime": int(time.time() - S.bot_start_time),
+                    "messages_total": S.messages_total,
+                    "groups_active": S.groups_active,
+                    "images_generated": S.images_generated,
+                    "memes_sent": S.memes_sent,
+                    "plugin_count": S.plugin_count,
+                    "plugin_active": S.plugin_active,
+                    "llm_status": S.llm_status,
+                    "llm_model": S.llm_model,
+                    "memory_total": S.memory_total,
+                    "session_count": S.session_count,
+                    "api_calls_today": S.api_calls_today,
+                    "tokens_used": S.tokens_used,
+                }
+            sys_stats = get_system_stats()
+            stats["cpu_usage"] = sys_stats["cpu"]
+            stats["mem_usage"] = sys_stats["memory"]
+            try:
+                stats["embed"] = _embed_status()
+            except Exception as _ee:
+                stats["embed"] = {"ok": False, "reason": "error", "path": str(_ee)}
+            try:
+                stats["health"] = _health_issues()
+            except Exception as _he:
+                stats["health"] = []
+            stats.update(_protocol_hud())      # 协议驱动/运行态（HUD 顶部状态条）
+            _STATUS_CACHE["data"] = {"data": stats}
+            _STATUS_CACHE["time"] = time.time()
+        except Exception:
+            pass
+        time.sleep(1)
+
+# Start background refresh thread
+_thread = threading.Thread(target=_refresh_status, daemon=True)
+_thread.start()
+
+# Config: load_config 统一走 config.py（程序目录优先 + AppData 补缺 + env + 凭据管理器）
+def save_config(cfg):
+    p = PROJECT / "bot_config.json"
+    to_save = {k: v for k, v in cfg.items() if k != "api_key"}
+    try:
+        with open(str(p), 'w', encoding='utf-8') as f:
+            json.dump(to_save, f, ensure_ascii=False, indent=2)
+        return True
+    except Exception:
+        return False
+
+CONFIG_CACHE = load_config()
+
+# Self-learning / Memory
+_SL_CACHE = _Cache(ttl=30)
+
+def get_self_learning_stats():
+    cached = _SL_CACHE.get()
+    if cached is not None:
+        return cached
+    try:
+        db_paths = [
+            PROJECT / "self_learning_db" / "self_learning.db",
+            Path.home() / "AppData/Local/EggBloom_v3/self_learning_db/self_learning.db",
+        ]
+        for db in db_paths:
+            if not db.exists():
+                continue
+            conn = sqlite3.connect(str(db))
+            cur = conn.cursor()
+            cur.execute("SELECT COUNT(*) FROM messages")
+            total = cur.fetchone()[0]
+            cur.execute("SELECT COUNT(DISTINCT group_id) FROM messages")
+            groups = cur.fetchone()[0]
+            conn.close()
+            result = {"total_messages": total, "groups": groups}
+            _SL_CACHE.set(result)
+            return result
+        result = {"total_messages": 0, "groups": 0}
+    except Exception:
+        result = {"total_messages": 0, "groups": 0}
+    _SL_CACHE.set(result)
+    return result
+
+
+def get_memory_stats():
+    # T8: 私聊记忆已迁入 super_memory SQLite，统计改为查库
+    try:
+        import sqlite3
+        db_path = PROJECT / "plugins" / "ego" / "super_memory" / "data" / "super_memory.db"
+        if not db_path.exists():
+            return {"total": 0, "size_kb": 0}
+        conn = sqlite3.connect(str(db_path))
+        total = conn.execute("SELECT COUNT(DISTINCT scope_id) FROM messages WHERE scope='private'").fetchone()[0]
+        conn.close()
+        size_kb = db_path.stat().st_size // 1024
+        return {"total": total, "size_kb": size_kb}
+    except Exception:
+        return {"total": 0, "size_kb": 0}
+
+_EXPR_CACHE = _Cache(ttl=30)
+
+def get_expressions():
+    cached = _EXPR_CACHE.get()
+    if cached is not None:
+        return cached
+    try:
+        db = PROJECT / "self_learning_db" / "self_learning.db"
+        if not db.exists():
+            result = []
+        else:
+            conn = sqlite3.connect(str(db))
+            cur = conn.cursor()
+            cur.execute("SELECT expression, scene, quality, count FROM expressions ORDER BY count DESC LIMIT 20")
+            rows = cur.fetchall()
+            conn.close()
+            result = [{"text": r[0], "scene": r[1], "weight": r[2], "score": int(r[3] * 20)} for r in rows]
+    except Exception:
+        result = []
+    _EXPR_CACHE.set(result)
+    return result
+
+# Chat Logs
+def _collect_logs(limit=200):
+    """优先返回内存协议日志；为空时回退到磁盘日志文件，保证 bot 非 webui 启动时也有数据可看。
+    若用户主动清空过（_LOG_CLEARED=True 且内存仍空），保持为空，不回退到磁盘。
+
+    每条都补一个 `level` 字段（err/warn/ai/send/sys/info），供前端做色彩分级。
+    规则来自 log_levels.py，与终端着色同源。"""
+    global _LOG_CLEARED
+    with PROTO_LOG_LOCK:
+        proto = list(PROTO_LOG)
+        cleared = _LOG_CLEARED
+    if proto:
+        out = [dict(e) for e in proto[-max(1, min(limit, PROTO_LOG_MAX)):]]
+    elif cleared:
+        out = []
+    else:
+        out = get_chat_logs(limit)
+    for e in out:
+        if isinstance(e, dict) and "level" not in e:
+            e["level"] = log_levels.classify(e.get("text") or e.get("msg") or "")
+    return out
+
+# ── 事件分类（2026-10-24）────────────────────────────────────────────
+# 日志页要回答"发生了什么"。日志文件里混着五种东西：用户看得懂的事件、
+# 给人排查用的调试行、以及聊天记录。分类在**服务端**做，因为判据是日志
+# 文本的格式，前端再写一遍就是两份规则各算各的。
+#
+# ★ 2026-10-24 晚重写。第一版凭**关键词表**猜（"决策放行"/"建议插话"/
+#   "工具调用"…），实测在 25186 行真实日志里命中 0 次 —— 那些字样是我想象的，
+#   bot 实际打的是 `[事件] 收到:` / `[不回]` / `[发送]` 这套标签。
+#   结果是除了 error 全判成 debug，页面只剩错误（用户实拍）。
+#
+# 现在的判据，按优先级：
+#   1. level 字段 —— log_levels.classify 已经算好的权威分级，不重算
+#   2. 行首标签 —— bot 自己给日志分的类（[发送]/[事件]/[Agent]…）
+#   3. 内容特征 —— 只在标签说不清时用
+# 另外有一张**噪音表**：心跳、启动冷却、初始化这类行占了日志一半以上，
+# 不先挡掉，"消息"分类会被 30 秒一次的心跳淹掉。
+
+# 对"发生了什么"没有信息量的行 → debug（去控制台看原始日志）
+_EVT_NOISE_RE = re.compile(
+    r"post_type=meta_event"            # 30 秒一次的心跳，量最大
+    r"|启动冷却中|启动冷却完毕"
+    r"|昵称缓存总计"
+    r"|记忆系统初始化|后台初始化中|记忆系统初始化完成"
+    r"|工具注册表就绪|已接入主链|服务已注入|插件工具已接入"
+    r"|工作型工具已接入"
+)
+
+# 行首标签 → 事件类别（标签名不带括号，与 log_levels.leading_tag 对齐）
+_EVT_TAG_KINDS = {
+    "发送": "message", "发图": "message",
+    "事件": "message",          # 收到消息/戳一戳等协议事件
+    "不回": "decision", "不参与": "decision",
+    "Agent": "tool", "harness": "tool", "工具": "tool",
+}
+
+# 内容特征（标签说不清时才用）
+_EVT_DECISION_RE = re.compile(r"不参与|判定不接|建议插话|插话|触发|沉默|跳过回复")
+_EVT_TOOL_RE = re.compile(r"工具调用|已执行工具|工具轮次")
+# 真正发出去的内容（没有 [发送] 标签，但语义就是发出）：
+#   `私聊戳一戳回复: 大半夜戳我…` / `发送图片成功: xxx.gif → (...)`
+#   / `私聊戳一戳表情包: 炸毛`
+_EVT_OUT_RE = re.compile(r"^(发送图片(成功|失败)|私聊\S*.*(回复|表情包)|群\S*.*(回复|表情包))")
+# 收到的一批消息被合并（`群[123456789] 合并消息: [小明] [引用:小红] [图片]`）
+# 这是"有人说话了"的记录，算消息而不是调试。
+_EVT_MERGE_RE = re.compile(r"合并消息")
+
+
+def _classify_event(e):
+    """把一条记录归成 message / decision / tool / cost / error / debug。
+
+    cost 是"这一轮模型花了多少"（AI 回复 (4411 tokens, ￥0.002205…)），
+    单独一类而不是塞进 message：它是成本记录，不是消息内容。
+    """
+    if not isinstance(e, dict):
+        return "debug"
+    # [CHAT] 记录自带 direction，最可信（目前只进 stdout，日志文件里没有）
+    if str(e.get("direction") or "") in ("in", "out"):
+        return "message"
+    text = str(e.get("text") or e.get("msg") or "")
+    if not text:
+        return "debug"
+    # level 由 _collect_logs 用 log_levels.classify 补好；万一某个调用方
+    # 没带上（测试、将来的新数据源），这里自己算一次，不静默按 info 处理 ——
+    # 那会让 OneBot API 失败、[CRASH] 这类真错误漏成 debug。
+    lv = str(e.get("level") or "")
+    if not lv:
+        lv = log_levels.classify(text)
+    # 噪音先挡：心跳与初始化占了日志一半以上
+    if _EVT_NOISE_RE.search(text):
+        return "debug"
+    # level 是权威分级（log_levels.classify），不要再凭文本猜一遍
+    if lv == "err":
+        return "error"
+    if lv == "ai" or text.startswith("AI 回复") or text.startswith("AI ("):
+        return "cost"
+    if lv == "send":
+        return "message"
+    tag = log_levels.leading_tag(text)
+    if tag in _EVT_TAG_KINDS:
+        return _EVT_TAG_KINDS[tag]
+    if _EVT_OUT_RE.match(text) or _EVT_MERGE_RE.search(text):
+        return "message"
+    if _EVT_DECISION_RE.search(text):
+        return "decision"
+    if _EVT_TOOL_RE.search(text):
+        return "tool"
+    return "debug"
+
+
+# `[事件] 收到: post_type=message msg_type=private uid=(・_・)(1234567890) gid=`
+_EVT_RECV_RE = re.compile(r"收到:\s*post_type=(\w+)(?:\s+msg_type=\S*)?\s+uid=(\S+)")
+# `[发送] 私聊 → (・_・)(1234567890): retcode=0` / `[发送] 群[123] → ...`
+_EVT_SEND_RE = re.compile(r"(私聊|群\[[^\]]*\]|群)\s*→\s*(\S+)")
+# `[事件] 戳一戳: user_id=(・_・)(1234567890) group_id=私聊`
+# `[事件] 反戳 send_poke user=(・_・)(1234567890) group=私聊 retcode=0`
+_EVT_POKE_RE = re.compile(r"(?:user_id|user)=(\S+)(?:\s+group_id=|\s+group=)(\S+)")
+
+
+def _split_who(token):
+    """'(・_・)(1234567890)' → ('(・_・)', '')；'10001:' → ('10001', '')。
+
+    昵称本身可能带括号（"(・_・)"），所以不能按第一个左括号切。
+    只在**结尾**是 (纯数字) 时认为那是 QQ 号，剥掉留给名字。
+    """
+    t = str(token or "").strip().rstrip(":").strip()
+    m = re.match(r"^(.*?)\s*\(\d{5,}\)$", t)
+    if m and m.group(1).strip():
+        return m.group(1).strip(), ""
+    return t, ""
+
+
+def _who_scope(text):
+    """从真实日志行里取 (谁, 在哪)。取不到返回 ('', '')，不猜。"""
+    m = _EVT_RECV_RE.search(text)
+    if m:
+        who, _ = _split_who(m.group(2))
+        gid = ""
+        mg = re.search(r"gid=(\S*)", text)
+        if mg:
+            gid = (mg.group(1) or "").strip()
+        if "msg_type=private" in text or not gid:
+            scope = "私聊"
+        else:
+            scope = "群 " + gid
+        return who, scope
+    m = _EVT_SEND_RE.search(text)
+    if m:
+        who, _ = _split_who(m.group(2))
+        tgt = m.group(1)
+        if tgt == "私聊":
+            scope = "私聊"
+        elif tgt.startswith("群["):
+            scope = tgt.replace("群[", "群 ", 1).rstrip("]")
+        else:
+            scope = "群"
+        return who, scope
+    m = _EVT_POKE_RE.search(text)
+    if m:
+        who, _ = _split_who(m.group(1))
+        scope = "私聊" if m.group(2).strip() in ("私聊", "") else "群 " + m.group(2).strip()
+        return who, scope
+    return "", ""
+
+
+_EVT_TAG_RE = re.compile(r"^\s*(?:群\[\d+\]|私聊\[\d+\]|\[群:\d+\])?\s*\[([^\]]{1,12})\]\s*")
+_EVT_TOOLNAMES_RE = re.compile(r"['\"]([A-Za-z0-9_]+)['\"]")
+
+
+def _norm_event(e, kind):
+    """转成前端直接能画的形状。
+
+    日志行形如 `[23:44:23] [事件] 收到: post_type=notice uid=(・_・)(1234567890)`，
+    带时间前缀和方括号标签。前端再去正则拆一遍就是把格式知识写两份，
+    所以在这里一次拆好：tag=标签，text=去掉前缀与标签后的正文，
+    message 类另外拆出 who / scope / dir（前端要画"谁 · 在哪说"）。
+    """
+    text = str(e.get("text") or e.get("msg") or "")
+    out = {"kind": kind,
+           "time": str(e.get("time") or e.get("ts") or ""),
+           "text": text}
+    if kind == "message":
+        # 方向：发出类（[发送]/[发图]/发送图片成功/回复与表情包）算 out，其余算 in
+        out["dir"] = "out" if (str(e.get("level")) == "send"
+                               or text.lstrip("[").startswith(("发送", "发图"))
+                               or _EVT_OUT_RE.match(text)) else "in"
+        who, scope = _who_scope(text)
+        out["who"] = who
+        out["scope"] = scope
+        return out
+    tagged = _EVT_TAG_RE.match(text)
+    if tagged:
+        out["tag"] = tagged.group(1)
+        out["text"] = text[tagged.end():].strip()
+    if kind == "tool":
+        names = _EVT_TOOLNAMES_RE.findall(text)
+        if names:
+            out["tools"] = names
+            out["tag"] = "工具"
+            out["text"] = "、".join(names)
+    return out
+
+
+def collect_events(limit=400):
+    """日志页的数据源：剥掉调试行，只留消息/决策/工具/AI/错误，并带上被隐藏的条数。"""
+    rows = _collect_logs(limit)
+    events, counts = [], {"message": 0, "decision": 0, "tool": 0,
+                          "cost": 0, "error": 0, "debug": 0}
+    for e in rows:
+        kind = _classify_event(e)
+        counts[kind] = counts.get(kind, 0) + 1
+        if kind != "debug":
+            events.append(_norm_event(e, kind))
+    return {"events": events, "counts": counts, "total": len(rows)}
+
+
+# ══════════════════════════════════════════════════════════════
+# 轮次视图（2026-10-25）
+# ══════════════════════════════════════════════════════════════
+# 用户要的是「这一轮里发生了什么」，而事件视图给的是「这一行日志算什么类型」——
+# 用户问的话、决策、工具调用、工具返回、bot 的回复散落在不同类型里，
+# 中间夹着心跳和调试，拼不起来。轮次视图按一次问答切分，按会话分开。
+
+# `[11:44:45] 正文` —— 解析在 `_parse_log_row`（三种时间戳写法都在那里）
+# `[事件] 收到: post_type=message msg_type=group uid=小明(10001) gid=123456789`
+_RND_EVT = re.compile(
+    r"\[事件\]\s*收到:\s*post_type=(\w+)\s+msg_type=(\S*)\s+uid=(\S*)\s+gid=(\S*)")
+# 私聊用户消息：`收到: 你在干嘛呢`（可能带 `[引用]` 前缀）
+_RND_ASK_PM = re.compile(r"^收到:\s*(?:\[引用\]\s*)?(.+)$", re.S)
+# 引用消息：`私聊[(・_・)(1234567890)] 引用消息: 你看现在…`
+# 前缀要单独捕获：群标签可能带群名，不能靠"里面有括号"猜是私聊。
+_RND_ASK_QUOTE = re.compile(r"^(私聊|群)\[(.+?)\]\s*引用消息:\s*(.+)$", re.S)
+# 群聊合并后的批次：`群[123456789] 合并消息: [(・_・)] @AAA 你想不想养大肥鱼`
+# 群标签可能是群名 + 括号群号（`群[某酒庄(123456788)]`），不能只认纯数字。
+_RND_ASK_GRP = re.compile(r"^群\[([^\]]+)\]\s*合并消息:\s*(.+)$", re.S)
+_RND_ROUTE = re.compile(r"^→\s*(?:进入AI聊天流程|群回复流程|AI聊天流程)")
+_RND_TOOLS = re.compile(r"^工具调用:\s*\[(.+)\]")
+_RND_SEARCH = re.compile(r"^搜索「(.+?)」\s*→\s*(.*)$")
+_RND_TOOLREC = re.compile(r"^→\s*([A-Za-z_][A-Za-z0-9_]*):\s*(.*)$")
+_RND_DECISION = re.compile(r"\[(跳过|观察|决策放行|不参与)\]|暂不插话")
+# 决策行自带的批次正文（`bot_core` 里 `merged_text` 被截到 60/80 字）。
+# 决策是**在批次结算时**打的，而"下一轮"可能已经开了 → 不能再无条件粘到当前轮。
+# 用冒号后那段正文（跳过/放行都有）把决策绑回它自己那批；`[观察]` 行没有正文，
+# 无法绑定 —— 只留在还没收口的轮次里，不写进已完成的上一轮。
+_RND_OBSERVE = re.compile(r"\[观察\]")
+_RND_DEC_GO = re.compile(r"^群\[([^\]]+)\]\s*\[决策放行\].*?:\s*(.*)$", re.S)
+_RND_DEC_SKIP = re.compile(r"^群\[([^\]]+)\]\s*\[跳过\].*?:\s*(.*)$", re.S)
+# `私聊AI回复(Sample(1000000002)): 10-31 16:31｜我改什么口了`（2026-10 起的真机格式）
+# 老格式带方括号（`私聊[xxx] AI回复(...)`），两种都要认 —— 只认带括号的那种时，
+# 私聊回复全靠后面的 `[发送]` 行兜底，AI 回复正文（含多行）反而丢了。
+_RND_REPLY_PM = re.compile(r"^(?:私聊|群)(?:\[[^\]]*\])?\s*AI回复\((.+?)\):\s*(.+)$", re.S)
+# `群回复: 奇怪啥` / `群回复(引用 id=-768466530): 我怎么就天才了`
+_RND_REPLY_GRP = re.compile(r"^群回复(?:\([^)]*\))?:\s*(.+)$", re.S)
+_RND_SEND = re.compile(r"^\[发送\]\s*(私聊|群\[([^\]]+)\])\s*→\s*([^:]*):.*?句=(.*)$", re.S)
+_RND_COST = re.compile(r"^AI 回复 \(")
+# `[记忆] uid=… scene=group 注入 4 段/532 字（身份 92 / …）`（1.5.11 P0-3 新增）
+#   日志页要能回答"这一轮它到底记得什么"，所以把它挂到当前轮上，而不是当噪音丢掉。
+_RND_MEM = re.compile(r"^\[记忆\]\s*(.+)$")
+
+# ── notice 事件（2026-10-25）──
+# 日志页原来只认消息与群回复，戳一戳、撤回、成员增减、禁言整类不可见。
+# 旧版（1.5.8 首发）的戳一戳回复与表情包是独立通道，日志里留着这两类行；
+# 接入流水线后回复记成普通的「群回复:」，两种都认，老日志照样能读。
+_RND_POKE_EVENT = re.compile(
+    r"^\[事件\]\s*戳一戳:\s*user_id=(.+?)\s+group_id=(\S+)$")
+# 目标是别人（群友互戳）的行不进轮次
+_RND_POKE_IGNORE = re.compile(r"^\[事件\]\s*戳一戳忽略:")
+# `群[某酒庄(123456788)] 戳一戳回复: …` / `私聊戳一戳回复: …`
+_RND_POKE_REPLY = re.compile(
+    r"^(群|私聊)(?:\[([^\]]+)\])?\s*戳一戳回复:\s*(.+)$", re.S)
+_RND_POKE_MEME = re.compile(
+    r"^(群|私聊)(?:\[([^\]]+)\])?\s*戳一戳表情包:\s*(.+)$")
+# `[事件] 反戳 send_poke user=… group=… retcode=0`；旧版没有 action 段，也认
+_RND_POKE_BACK = re.compile(
+    r"^\[事件\]\s*反戳(?:\(兜底段\))?\s+(?:(\S+)\s+)?user=(.+?)\s+group=(\S+)"
+    r"(?:\s+retcode=(\S+))?")
+_RND_RECALL = re.compile(
+    r"^\[事件\]\s*撤回:\s*type=(\S+)\s+user_id=(.+?)\s+group_id=(\S+)\s+msg_id=(\S+)")
+_RND_MEMBER = re.compile(
+    r"^\[事件\]\s*群成员(增加|减少):\s*group=(\S+)\s+user=(\S+)")
+_RND_BAN = re.compile(
+    r"^\[事件\]\s*群(禁言|解除禁言):\s*group=(\S+)\s+user=(\S+)(.*)$")
+
+
+def _pm_scope(uid_or_label=""):
+    """私聊会话 key：`pm:<QQ>`。没有号就退回 `pm`（老日志/识别不出时）。
+
+    ★ 2026-10-31 用户反馈「日志私聊没有分开」：原来所有私聊都归成一个 `pm`，
+      和三个人的对话混在一条时间线里。私聊必须按人分桶，否则"跟谁聊的"看不出来。
+    """
+    m = re.search(r"(\d{5,})", str(uid_or_label or ""))
+    return "pm:" + m.group(1) if m else "pm"
+
+
+def _scope_key(label, uid=""):
+    """把日志里的会话标签归一成 key：群号 / `pm:<QQ>` / `pm`。
+
+    `'123456789'` → `'123456789'`
+    `'某酒庄(123456788)'` → `'123456788'`
+    `'私聊'` / `'pm'` + uid → `'pm:<uid>'`（没有 uid 才是 `'pm'`）
+
+    不归一的话，同一群在日志页会裂成 `群 123456789` 与
+    `群 某酒庄(123456788)` 两项 —— 后者来自带群名的 `群[...]` 行。
+    """
+    s = str(label or "").strip()
+    if not s or s in ("私聊", "pm"):
+        return _pm_scope(uid)
+    m = re.search(r"\((\d{5,})\)\s*$", s)
+    if m:
+        return m.group(1)
+    return s
+
+
+def _rnd_event_row(t, scope, who, ask, route):
+    """notice 类事件自成一"轮"：只填事件本身，没有决策与工具。"""
+    return {"time": t, "scope": scope, "who": who, "ask": ask[:200],
+            "route": route, "decisions": [], "tools": [], "reply": ""}
+
+
+#: 戳一戳事件轮的标记（`合并消息` 到达时要并回同一轮，而不是再开一轮）
+_POKE_ROUTE = "戳一戳 → 反戳 → 决策"
+
+
+def _rnd_split_sender(text):
+    """`[名字] 正文` → (名字, 正文)。首行没有 `[名字]` 前缀时名字为空。"""
+    s = str(text or "").strip()
+    if s.startswith("["):
+        end = s.find("]")
+        if 0 < end <= 40:
+            return s[1:end].strip(), s[end + 1:].strip()
+    return "", s
+
+
+
+def _read_log_rows(max_lines=6000, with_meta=False):
+    """读原始日志：先解析、再排序、后截断。
+
+    回复正文里有换行（`log(f"...{reply[:80]}")` 把多行内容直接写进日志），
+    被拆成没有时间戳的物理行。不拼回去，回复就只有第一行。
+
+    2026-10-25 改（原先是"按文件顺序追加、最后切尾"）：多文件时时间倒序、
+    跨文件重复行各留一份、外部 logger 的日期前缀也没人认。现在：
+
+      · 三种时间戳都认：`[HH:MM:SS]` / `YYYY-MM-DD HH:MM:SS,mmm` / `HH:MM:SS`。
+        没有日期的行以**该文件 mtime 的日期**为基准，再按文件内的时钟回绕
+        逐日递增（跑过夜的日志里 `23:59` 后面是 `00:00`，不认回绕的话
+        不同天的同一时刻会被排到一起，日志页的轮次被打散）。
+      · 行首的 `[INFO]` / `ERROR` / `INFO:` 级别前缀抽进 `level`，正文不再重复。
+      · 连续重复的方括号标签折叠成一个（`[事件] [事件] 正文` → `[事件] 正文`）。
+      · 跨文件完全相同的 `(日期, 时间, 正文)` 只留一条。
+      · 排序键 `(日期, 时间)`，稳定排序：同一秒内保持文件内的原始顺序。
+      · 续行仍并回上一条。
+
+    默认返回 `[[时间, 正文], …]`（轮次/事件视图沿用）；
+    `with_meta=True` 返回 `[[时间, 正文, 级别, 来源], …]`，给原始日志流用。
+    """
+    rows = []
+    for lf in _log_paths():
+        try:
+            if not lf.exists():
+                continue
+            src = _log_label(lf)
+            try:
+                base = datetime.datetime.fromtimestamp(lf.stat().st_mtime).date()
+            except Exception:
+                base = datetime.date.today()
+            local = []
+            for line in lf.read_text(encoding="utf-8", errors="replace").splitlines():
+                row = _parse_log_row(line, None, src)
+                if row is not None:
+                    local.append(row)
+                elif line.strip() and local:
+                    local[-1]["text"] += "\n" + line.rstrip()
+            _assign_dates(local, base)
+            rows.extend(local)
+        except Exception:
+            continue
+
+    rows.sort(key=lambda r: (r["date"], r["time"]))
+
+    seen = set()
+    uniq = []
+    for r in rows:
+        key = (r["date"], r["time"], r["text"])
+        if key in seen:
+            continue
+        seen.add(key)
+        uniq.append(r)
+    rows = uniq[-max_lines:]
+
+    if with_meta:
+        return [[r["time"], r["text"], r["level"], r["source"]] for r in rows]
+    return [[r["time"], r["text"]] for r in rows]
+
+
+# 时钟回绕的判定阈值：倒退超过 6 小时才算跨天（同一次收发里线程交错
+# 造成的倒退只有几秒，不能当成新的一天）。
+_ROW_DAY_WRAP_SEC = 6 * 3600
+
+
+def _hms_seconds(t):
+    try:
+        h, m, s = [int(v) for v in str(t).split(":")]
+        return h * 3600 + m * 60 + s
+    except Exception:
+        return None
+
+
+def _assign_dates(local, base_date):
+    """给没有日期前缀的行按文件顺序分配日期（就地改写）。
+
+    `base_date` 是文件 mtime 的日期，也就是**最后一行**所在的那天。
+    先数出文件里跨了几次天，再让第一行从 `base_date - 天数` 起，
+    每遇一次回绕加一天；这样排序后仍是文件顺序，不会被翻过来。
+    """
+    wrap = 0
+    prev = None
+    for r in local:
+        if r["date"]:
+            prev = None
+            continue
+        s = _hms_seconds(r["time"])
+        if s is None:
+            continue
+        if prev is not None and s < prev - _ROW_DAY_WRAP_SEC:
+            wrap += 1
+        prev = s
+
+    cur = base_date - datetime.timedelta(days=wrap)
+    prev = None
+    for r in local:
+        if r["date"]:
+            prev = None
+            continue
+        s = _hms_seconds(r["time"])
+        if s is not None and prev is not None and s < prev - _ROW_DAY_WRAP_SEC:
+            cur = cur + datetime.timedelta(days=1)
+        r["date"] = cur.strftime("%Y-%m-%d")
+        prev = s
+
+
+# 行首时间戳的三种写法（2026-10-25）
+#
+# 2026-10-28：`[HH:MM:SS]` 之外再认 `[YYYY-MM-DD HH:MM:SS]` —— bot_core.log
+# 改成带日期了。**这里必须跟着改**：`_ROW_TS_BRACKET` 认不出新格式的话，
+# 整行会被当成"续行"（return None）而丢掉，日志页直接少掉所有业务日志。
+# 带上日期之后，`_assign_dates` 的"时钟回绕 6 小时"启发式对这些行不再生效
+# （它遇到 r["date"] 非空就跳过）—— 这正是我们要的：日期由写的人负责，不靠猜。
+_ROW_TS_BRACKET = re.compile(
+    r"^\[(?:(\d{4}-\d{2}-\d{2})[ T])?(\d{2}:\d{2}:\d{2})(?:[.,]\d+)?\]\s?(.*)$")
+_ROW_TS_FULL = re.compile(
+    r"^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})(?:[.,]\d+)?\s*(.*)$")
+_ROW_TS_BARE = re.compile(r"^(\d{2}:\d{2}:\d{2})\s+(.*)$")
+# `[INFO] xxx` / `ERROR: xxx` —— 只认这几个词，别把 `[事件]` 当级别
+_ROW_LEVEL = re.compile(
+    r"^(?:\[(CRITICAL|FATAL|ERROR|WARNING|WARN|INFO|DEBUG)\]"
+    r"|(CRITICAL|FATAL|ERROR|WARNING|WARN|INFO|DEBUG):)\s*")
+_ROW_LEVEL_KIND = {"CRITICAL": "err", "FATAL": "err", "ERROR": "err",
+                   "WARNING": "warn", "WARN": "warn",
+                   "INFO": "info", "DEBUG": "debug"}
+# 连续重复的标签：`[事件] [事件] [事件] 正文`
+_ROW_DUP_TAG = re.compile(r"^(\[[^\]\n]{1,20}\])(?:\s*\1)+")
+
+
+def _parse_log_row(line, base_date, source):
+    """一行 → {date,time,text,level,source}；不是新行（续行）时返回 None。"""
+    date = base_date
+    m = _ROW_TS_BRACKET.match(line)
+    if m:
+        # 第 1 组是可选日期（新格式才有），第 2 组时间，第 3 组正文
+        if m.group(1):
+            date = m.group(1)
+        t, body = m.group(2), m.group(3)
+    else:
+        m = _ROW_TS_FULL.match(line)
+        if m:
+            date, t, body = m.group(1), m.group(2), m.group(3)
+        else:
+            m = _ROW_TS_BARE.match(line)
+            if not m:
+                return None
+            t, body = m.group(1), m.group(2)
+
+    level = ""
+    lv = _ROW_LEVEL.match(body)
+    if lv:
+        level = _ROW_LEVEL_KIND.get((lv.group(1) or lv.group(2)).upper(), "")
+        body = body[lv.end():]
+    body = _ROW_DUP_TAG.sub(r"\1", body).strip()
+    return {"date": date, "time": t, "text": body,
+            "level": level, "source": source}
+
+
+def _rnd_scope_from_event(text):
+    """从 `[事件] 收到: …` 行取 (scope_key, who)。scope_key = 'pm' 或群号。"""
+    m = _RND_EVT.search(text)
+    if not m:
+        return None, None
+    msg_type, uid, gid = m.group(2), m.group(3), m.group(4)
+    if gid and gid != "gid=" and not gid.startswith("="):
+        return _scope_key(gid), uid
+    if msg_type == "private" or not gid:
+        return _scope_key("私聊", uid), uid
+    return None, None
+
+
+def _rnd_who_nick(uid):
+    """uid 形如 `(・_・)(1234567890)` / `小明(10001)` / `小明`，取昵称部分。
+
+    注意 `(・_・)` 这种昵称**自己带括号**且在最前：直接 split("(") 会得到空串，
+    只能退化成整串。所以先剥首尾括号，再取最后一段之前的文字。
+    """
+    s = str(uid or "").strip()
+    if not s:
+        return ""
+    m = re.match(r"^\((.*)\)\s*\(\d{5,}\)$", s)
+    if m:
+        return m.group(1).strip() or s
+    if "(" in s:
+        head = s.split("(", 1)[0].strip()
+        if head:
+            return head
+    return s
+
+
+def _rnd_same_minute(t1, t2):
+    """两个 `HH:MM:SS` 是否相差在 5 秒内（同一条消息的两次记录）。"""
+    try:
+        def sec(x):
+            p = [int(v) for v in str(x).split(":")]
+            return p[0] * 3600 + p[1] * 60 + p[2]
+        return abs(sec(t1) - sec(t2)) <= 5
+    except Exception:
+        return False
+
+
+def collect_rounds(limit=120):
+    """按「一轮问答」重组日志，供日志页直接画。
+
+    返回 {"rounds": [...], "scopes": [{"key","label","count"}], "total"}
+
+    每轮：
+        time     这一轮开始的时间
+        scope    'pm' 或群号
+        who      对方昵称
+        ask      对方说的话
+        route    走哪条流程（进入AI聊天流程 / 跳过原因…）
+        decisions  决策记录列表
+        tools    [{"name","q","note"}]  工具调用与记录
+        reply    bot 的回复（多行）
+    刻意**不**收录 token 计费行（用户明确要求日志里不出现成本信息）。
+    """
+    rows = _read_log_rows(6000)
+    rounds = []
+    cur = None
+    last_scope = ("pm", "")
+    last_who = ""
+    # 决策行先挂起，等它自己那批的 `合并消息` 到达再落盘。
+    # 线上实证（20:18–20:19）：决策行总在 `合并消息` 之前一行，旧实现把它粘到
+    # **上一轮**，于是日志页出现「这轮的决策写在上一轮、回复写在下一轮」。
+    pending = []          # [(scope, decision_line)]
+
+    def drain(scope):
+        """取出属于该会话的挂起决策（其余保留）。"""
+        nonlocal pending
+        got = [d for sc, d in pending if sc == scope]
+        pending = [(sc, d) for sc, d in pending if sc != scope]
+        return got
+
+    def drop_pending(scope):
+        nonlocal pending
+        pending = [(sc, d) for sc, d in pending if sc != scope]
+
+    def flush():
+        nonlocal cur
+        if cur is not None:
+            rounds.append(cur)
+            cur = None
+
+    for t, text in rows:
+        s = text.strip()
+        if not s:
+            continue
+
+        # ── 会话作用域（原始事件行）──
+        sc, who = _rnd_scope_from_event(s)
+        if sc:
+            last_scope = (sc, _rnd_who_nick(who))
+            continue
+
+        # ── 记忆注入（1.5.11 P0-3）：挂到当前轮，不新开轮 ──
+        m = _RND_MEM.match(s)
+        if m:
+            if cur is not None:
+                _note = m.group(1).strip()
+                cur["mem"] = (cur.get("mem") + "；" + _note) if cur.get("mem") else _note
+            continue
+
+        # ── 戳一戳：事件行本身就是新一轮的起点 ──
+        m = _RND_POKE_EVENT.match(s)
+        if m:
+            _uid, _gid = m.group(1).strip(), m.group(2).strip()
+            _sc = _scope_key(_gid, _uid)
+            _nick = _rnd_who_nick(_uid)
+            last_scope = (_sc, _nick)
+            flush()
+            # 上一批如果只打了决策却没等到 `合并消息`，那是它自己的事，别带进戳轮。
+            drop_pending(_sc)
+            cur = _rnd_event_row(t, _sc, _nick, "（戳了戳你）", _POKE_ROUTE)
+            continue
+        if _RND_POKE_IGNORE.match(s):
+            continue
+
+        # ── 撤回 / 成员增减 / 禁言：各成一轮，没有回复 ──
+        m = _RND_RECALL.match(s)
+        if m:
+            _sc = _scope_key(m.group(3), m.group(2))
+            _who = _rnd_who_nick(m.group(2))
+            last_scope = (_sc, _who)
+            flush()
+            cur = _rnd_event_row(
+                t, _sc, _who, f"撤回了一条消息（msg_id={m.group(4)}）", "撤回")
+            continue
+        m = _RND_MEMBER.match(s)
+        if m:
+            _act, _gid, _uid = m.group(1), m.group(2), m.group(3)
+            _sc = _scope_key(_gid)
+            _who = _rnd_who_nick(_uid)
+            last_scope = (_sc, _who)
+            flush()
+            cur = _rnd_event_row(
+                t, _sc, _who, "进群" if _act == "增加" else "退群",
+                f"群成员{_act}")
+            continue
+        m = _RND_BAN.match(s)
+        if m:
+            _act, _gid, _uid, _rest = m.group(1), m.group(2), m.group(3), m.group(4)
+            _sc = _scope_key(_gid)
+            _who = _rnd_who_nick(_uid)
+            last_scope = (_sc, _who)
+            flush()
+            _ask = "解除禁言" if _act == "解除禁言" else "被禁言"
+            if _act != "解除禁言":
+                _dur = re.search(r"时长=(\d+)", _rest or "")
+                if _dur:
+                    _ask += f"（{_dur.group(1)} 秒）"
+            cur = _rnd_event_row(t, _sc, _who, _ask, f"群{_act}")
+            continue
+
+        # ── 新的用户消息 = 新一轮 ──
+        new_ask, new_scope, new_who = None, None, None
+        is_merge = False
+        m = _RND_ASK_PM.match(s)
+        if m and not s.startswith("[事件]"):
+            new_ask = m.group(1).strip()
+        else:
+            m = _RND_ASK_QUOTE.match(s)
+            if m:
+                new_ask = m.group(3).strip()
+                new_who = _rnd_who_nick(m.group(2))
+                new_scope = (_scope_key("私聊", m.group(2)) if m.group(1) == "私聊"
+                             else _scope_key(m.group(2)))
+            else:
+                m = _RND_ASK_GRP.match(s)
+                if m:
+                    is_merge = True
+                    new_who, new_ask = _rnd_split_sender(m.group(2))
+                    new_scope = _scope_key(m.group(1))
+        if new_ask:
+            _new_sc = new_scope or last_scope[0]
+            # 戳事件轮 + 紧随其后的 `合并消息` 是同一批：
+            # 并回那一轮，否则一轮只剩"决策"、下一轮只剩"回复"。
+            if (is_merge and cur is not None
+                    and str(cur.get("scope")) == str(_new_sc)
+                    and cur.get("route") == _POKE_ROUTE
+                    and "戳了戳你" in new_ask):
+                cur["ask"] = new_ask[:200]
+                if new_who and not cur.get("who"):
+                    cur["who"] = new_who
+                cur["decisions"].extend(drain(_new_sc))
+                continue
+            # 同一条消息会被记两次：先 `私聊[x] 引用消息: …`，再 `收到: [引用] …`。
+            # 两者只差一秒、正文相同 —— 合并成一轮，不然日志页出现两条一样的问话。
+            if (cur is not None and cur.get("ask") == new_ask
+                    and cur.get("scope") in (new_scope or cur.get("scope"))
+                    and _rnd_same_minute(t, cur.get("time"))):
+                cur["route"] = cur.get("route", "")
+                cur["decisions"].extend(drain(_new_sc))
+                continue
+            flush()
+            cur = {"time": t, "scope": _new_sc,
+                   "who": new_who or last_scope[1], "ask": new_ask[:200],
+                   "route": "", "decisions": [], "tools": [], "reply": ""}
+            cur["decisions"].extend(drain(_new_sc))
+            continue
+
+        # ── 决策 ──
+        # 跳过：这一批没有回复，也要单独成轮（否则它只会变成上一轮里的一行，
+        # 用户看到的就是"上一轮的问题配这一轮的决策"）。
+        m = _RND_DEC_SKIP.match(s)
+        if m:
+            _sc = _scope_key(m.group(1))
+            _w, _ask = _rnd_split_sender(m.group(2))
+            last_scope = (_sc, _w or last_scope[1])
+            flush()
+            cur = _rnd_event_row(t, _sc, _w or last_who,
+                                 _ask or "（空批次）", "跳过（决策器不建议插话）")
+            cur["decisions"].append(s[:120])
+            cur["decisions"].extend(drain(_sc))
+            flush()
+            continue
+        # 放行：先挂起，等下一条 `合并消息` 建好本轮再落盘。
+        # 必须放在 `if cur is None` 之前：一轮的第一条决策往往出现在
+        # `合并消息` 之前，此时 cur 还是 None，放后面会被直接丢掉。
+        m = _RND_DEC_GO.match(s)
+        if m:
+            pending.append((_scope_key(m.group(1)), s[:120]))
+            continue
+
+        if cur is None:
+            continue
+
+        # ── 成本行：用户不要求在日志里出现，直接跳过 ──
+        if _RND_COST.match(s):
+            continue
+
+        # ── 戳一戳的后续：反戳 / 回复 / 表情包 ──
+        m = _RND_POKE_BACK.match(s)
+        if m:
+            _sc = _scope_key(m.group(3))
+            if str(cur.get("scope")) == _sc:
+                _act = (m.group(1) or "poke").strip()
+                cur["decisions"].append(
+                    f"[反戳] {_act} retcode={m.group(4) or '?'}")
+            continue
+        m = _RND_POKE_REPLY.match(s)
+        if m:
+            _sc = _scope_key(m.group(2)) if m.group(2) else str(cur.get("scope") or "pm")
+            if str(cur.get("scope")) == _sc:
+                _piece = m.group(3).strip()[:400]
+                cur["reply"] = (_piece if not cur["reply"]
+                                else cur["reply"] + "\n" + _piece)
+            continue
+        m = _RND_POKE_MEME.match(s)
+        if m:
+            _sc = _scope_key(m.group(2)) if m.group(2) else str(cur.get("scope") or "pm")
+            if str(cur.get("scope")) == _sc:
+                cur["tools"].append({"name": "表情包",
+                                     "q": m.group(3).strip(), "note": ""})
+            continue
+
+        # ── 流程 ──
+        m = _RND_ROUTE.match(s)
+        if m:
+            cur["route"] = "进入 AI 聊天流程"
+            continue
+
+        # ── 工具名 ──
+        m = _RND_TOOLS.match(s)
+        if m:
+            names = [x.strip().strip("'\"") for x in m.group(1).split(",") if x.strip()]
+            for n in names:
+                if not any(x.get("name") == n for x in cur["tools"]):
+                    cur["tools"].append({"name": n, "q": "", "note": ""})
+            continue
+
+        # ── 搜索：关键词 + 走了哪条路 ──
+        m = _RND_SEARCH.match(s)
+        if m:
+            q, how = m.group(1).strip(), m.group(2).strip()
+            item = next((x for x in cur["tools"] if x["name"] == "search_web"
+                         and not x["q"]), None)
+            if item is None:
+                item = {"name": "search_web", "q": q, "note": ""}
+                cur["tools"].append(item)
+            item["q"] = q
+            item["note"] = how[:60]
+            continue
+
+        # ── 工具返回记录 ──
+        m = _RND_TOOLREC.match(s)
+        if m:
+            name, body = m.group(1), m.group(2)
+            item = next((x for x in cur["tools"] if x["name"] == name and not x["note"]), None)
+            if item is None:
+                item = {"name": name, "q": "", "note": ""}
+                cur["tools"].append(item)
+            # 只留一句梗概：剥掉 `action= (第1轮) → ` 这种程序噪声，取正文首段
+            note = re.sub(r"^action\s*=\s*.*?→\s*", "", body).strip()
+            note = note.split("\n")[0].strip()
+            item["note"] = note[:60]
+            continue
+
+        # ── 决策 ──
+        if _RND_DECISION.search(s):
+            # 别让别的会话的决策粘到本轮：日志里混着测试群的记录
+            gm = re.search(r"群\[([^\]]+)\]", s)
+            if gm and str(cur.get("scope")) != _scope_key(gm.group(1)):
+                continue
+            if _RND_OBSERVE.search(s) and cur.get("reply"):
+                continue      # 观察行没有批次正文，别写进已经回完的上一轮
+            cur["decisions"].append(s[:120])
+            continue
+
+        # ── bot 回复 ──
+        m = _RND_REPLY_PM.match(s)
+        if m:
+            # 真机行里正文前带 `10-31 16:31｜` 时间戳前缀（message_id 那栏），去掉
+            _rep = re.sub(r"^\d{2}-\d{2} \d{2}:\d{2}[｜|]\s*", "", m.group(2).strip())
+            cur["reply"] = _rep[:400]
+            # 这一行的正文就是整条回复（多行也在里面）。后面逐条 `[发送]` 是同一段
+            # 文字拆成的气泡，再拼一遍就重复了（2026-10-31 实测：每轮回复都打两遍）。
+            cur["_reply_from_ai"] = True
+            continue
+        m = _RND_REPLY_GRP.match(s)
+        if m:
+            cur["reply"] = m.group(1).strip()[:400]
+            cur["_reply_from_ai"] = True
+            continue
+
+        # ── 发送记录（群聊没有「AI回复」行，回复靠这些拼）──
+        m = _RND_SEND.match(s)
+        if m:
+            piece = m.group(4).strip()
+            if cur.get("_reply_from_ai"):
+                # 回复正文已由 `私聊AI回复(...)` 收过一次，气泡行不再追拼
+                pass
+            elif piece and not cur["reply"]:
+                cur["reply"] = piece
+            elif piece:
+                cur["reply"] += "\n" + piece
+            if m.group(1) == "私聊":
+                cur["scope"] = _scope_key("私聊", m.group(3))
+            continue
+
+    flush()
+    for _r in rounds:
+        _r.pop("_reply_from_ai", None)
+    rounds = [r for r in rounds if r.get("ask") or r.get("reply")]
+
+    # 会话列表：私聊按人分桶（在前），群按最近活跃排序
+    agg = {}
+    nick_of = {}
+    for r in rounds:
+        k = str(r.get("scope") or "pm")
+        agg[k] = agg.get(k, 0) + 1
+        if k.startswith("pm:") and r.get("who") and k not in nick_of:
+            nick_of[k] = str(r.get("who"))
+    scopes = []
+    for k in sorted([x for x in agg if x == "pm" or x.startswith("pm:")],
+                    key=lambda x: -agg[x]):
+        who = nick_of.get(k, "")
+        if who:
+            label = "私聊 · " + who
+        elif k == "pm":
+            label = "私聊"
+        else:
+            label = "私聊 · " + k.split(":", 1)[1]
+        scopes.append({"key": k, "label": label, "count": agg[k]})
+    for k, n in sorted(agg.items(), key=lambda kv: -kv[1]):
+        if k == "pm" or k.startswith("pm:"):
+            continue
+        scopes.append({"key": k, "label": f"群 {k}", "count": n})
+    return {"rounds": rounds[-limit:], "scopes": scopes, "total": len(rounds)}
+
+
+# 日志来源 → 文件名 → 前端徽标用的标签（2026-10-25）
+# `data/logs/qq_bot.log` 是 utils.log / logger_setup 写的统一日志文件，
+# 原来不在候选里 —— 所以 Sandglass、ai_client 这些模块的行在原始日志流里看不到。
+_LOG_SOURCES = [
+    ("core", PROJECT / "core_log.txt"),
+    ("app", PROJECT / "qq_bot.log"),
+    ("app", Path.home() / "AppData/Local/EggBloom_v3/qq_bot.log"),
+    ("temp", Path.home() / "AppData/Local/Temp/botcore_final.log"),
+    ("temp", Path.home() / "AppData/Local/Temp/eggbloom_bot.log"),
+    ("data", PROJECT / "data" / "logs" / "qq_bot.log"),
+]
+
+
+def _log_paths():
+    """日志文件候选列表（按优先级）。**唯一一份** —— 事件视图、原始流、
+    轮次视图都读这几处，不能再各写一遍。"""
+    return [p for _, p in _LOG_SOURCES]
+
+
+def _log_label(path):
+    """文件 → 来源标签（core / app / temp / data）。未知路径记 `log`。"""
+    try:
+        ap = Path(path).resolve()
+    except Exception:
+        return "log"
+    for label, p in _LOG_SOURCES:
+        try:
+            if p.resolve() == ap:
+                return label
+        except Exception:
+            continue
+    return "log"
+
+
+def get_chat_logs(limit=200):
+    """原始日志流：与轮次/事件同源（`_read_log_rows`），带级别与来源。
+
+    级率先用行首的 `[INFO]` / `ERROR` 前缀；没有前缀再交给
+    `log_levels.classify`。`[CHAT]` 记录只写 stdout、日志文件里没有，
+    所以这里不再单独分支（原分支从未在真实文件上命中过）。
+    """
+    out = []
+    try:
+        for t, text, lvl, src in _read_log_rows(limit, with_meta=True):
+            out.append({"text": text, "time": t, "direction": "log",
+                        "level": lvl or log_levels.classify(text),
+                        "source": src})
+    except Exception:
+        pass
+    return out[-limit:]
+
+# Tools catalog (群聊工具白名单用)
+_TOOL_CATALOG = [
+    {"name": "search_web", "label": "联网搜索", "desc": "搜索实时信息补充回答", "group_default": False},
+    {"name": "open_app", "label": "打开应用/文件", "desc": "打开本机应用、文件或链接", "group_default": False},
+    {"name": "take_screenshot", "label": "截图", "desc": "截取屏幕画面", "group_default": False},
+    {"name": "get_system_info", "label": "系统信息", "desc": "查询 CPU/内存/磁盘等系统状态", "group_default": False},
+    {"name": "control_volume", "label": "音量控制", "desc": "调节本机音量", "group_default": False},
+    {"name": "control_power", "label": "电源控制", "desc": "睡眠/锁屏/重启等电源操作", "group_default": False},
+    {"name": "manage_process", "label": "进程管理", "desc": "查看/结束本机进程", "group_default": False},
+    {"name": "search_files", "label": "文件搜索", "desc": "在本地磁盘查找文件", "group_default": False},
+    {"name": "send_user_file", "label": "发送文件", "desc": "把本地文件发送给用户", "group_default": False},
+    {"name": "web_operate", "label": "网页操作", "desc": "打开网页、填表单、点击、截图、答题", "group_default": False},
+    {"name": "get_group_members", "label": "群成员列表", "desc": "获取当前群成员，用于选人/@人", "group_default": True},
+    {"name": "generate_image", "label": "生成图片", "desc": "根据描述生成图片", "group_default": True},
+]
+
+def _tools_catalog():
+    """返回工具目录；group_default 为默认群聊允许的工具。"""
+    return list(_TOOL_CATALOG)
+
+# Gallery
+def get_image_gallery():
+    images = []
+    try:
+        img_dirs = [
+            PROJECT / "image_cache",
+            PROJECT / "memes" / "memes",
+            Path.home() / "AppData/Local/EggBloom_v3/image_cache",
+        ]
+        for d in img_dirs:
+            if not d.exists():
+                continue
+            for f in sorted(d.iterdir(), key=lambda x: x.stat().st_mtime, reverse=True):
+                if f.suffix.lower() in ('.png', '.jpg', '.jpeg', '.webp', '.gif'):
+                    images.append({
+                        "name": f.name,
+                        "size_kb": f.stat().st_size // 1024,
+                        "time": datetime.datetime.fromtimestamp(f.stat().st_mtime).strftime("%H:%M"),
+                        "path": str(f),
+                    })
+    except Exception:
+        pass
+    return images[:50]
+
+# System Stats
+def get_system_stats():
+    cached = _SYS_CACHE.get()
+    if cached is not None:
+        return cached
+    try:
+        import psutil
+        result = {"cpu": round(psutil.cpu_percent(interval=0.05), 1), "memory": round(psutil.virtual_memory().percent, 1)}
+    except ImportError:
+        import random
+        result = {"cpu": round(random.uniform(15, 35), 1), "memory": round(random.uniform(35, 55), 1)}
+    _SYS_CACHE.set(result)
+    return result
+
+# 插件Discovery
+# 
+#  HTML TEMPLATE - Single File SPA
+# 
+# Load frontend from external HTML file to avoid triple-quote issues
+# ── 前端版本（T8）───────────────────────────────────────────────────
+#  v3 = 旧版，**逐字节原样保留** —— 用户要拿它对照接口（引导/向导等细节怕漏）
+#  v4 = T8 重做版
+#  切换按钮由**服务端注入**，所以两个前端文件都不必改动。
+FRONTENDS = {
+    "v3": HERE / "webui_artistic_v3.html",
+    "v4": HERE / "webui_artistic_v4.html",
+}
+_UI_VERSION_FILE = HERE / "ui_version.txt"
+UI_DEFAULT_VERSION = "v4"      # v4 已完工（功能对等 + 新视觉），默认走新版
+                               # 想回旧版：写 webui/ui_version.txt 内容 v3，
+                               # 或点界面右上角的切换按钮（两者都会写这个文件）
+
+
+def _ui_version() -> str:
+    """当前生效的前端版本。配置缺失/无效时回退默认。"""
+    try:
+        v = _UI_VERSION_FILE.read_text(encoding="utf-8").strip().lower()
+        if v in FRONTENDS and FRONTENDS[v].is_file():
+            return v
+    except Exception:
+        pass
+    return UI_DEFAULT_VERSION
+
+
+def _frontend_file(v):
+    p = FRONTENDS.get(v)
+    return p if (p and p.is_file()) else None
+
+
+def _frontend_path():
+    return FRONTENDS[_ui_version()]
+
+
+_UI_SWITCH_TPL = """<div id="__uiSwitch" data-other="__OTHER__"></div>
+<style>#__uiSwitchBtn{position:fixed;right:16px;bottom:16px;z-index:2147483000;
+font:12px/1.5 'JetBrains Mono','Consolas',monospace;letter-spacing:.06em;
+color:#d8d4cc;background:rgba(18,18,22,.94);border:1px solid #3d3d47;
+padding:7px 13px;cursor:pointer;border-radius:0;box-shadow:0 6px 20px rgba(0,0,0,.55)}
+#__uiSwitchBtn:hover{color:#f2efe8;border-color:#6a6a78}
+#__uiSwitchBtn[disabled]{cursor:default;color:#6e6c69}</style>
+<script>(function(){var d=document.getElementById('__uiSwitch');if(!d)return;
+var b=document.createElement('button');b.id='__uiSwitchBtn';
+b.textContent='\\u21c4 \\u5207\\u5230'+(d.dataset.other==='v4'?'\\u65b0\\u7248 v4':'\\u65e7\\u7248 v3');
+b.title='\\u65b0\\u7248\\u89c6\\u89c9\\u672a\\u5b9a\\u7a3f\\u524d\\u968f\\u65f6\\u53ef\\u5207\\u56de';
+b.onclick=function(){b.disabled=true;b.textContent='\\u5207\\u6362\\u4e2d\\u2026';
+fetch('/api/ui/version',{method:'POST',headers:{'Content-Type':'application/json'},
+body:JSON.stringify({version:d.dataset.other})}).then(function(r){return r.json()})
+.then(function(j){if(j&&j.ok){location.reload();}else{b.disabled=false;
+b.textContent='\\u5207\\u6362\\u5931\\u8d25';}})
+.catch(function(){b.disabled=false;b.textContent='\\u5207\\u6362\\u5931\\u8d25';});};
+d.appendChild(b);})();</script>"""
+
+
+def _inject_ui_switch(html: str, other: str) -> str:
+    snippet = _UI_SWITCH_TPL.replace("__OTHER__", other)
+    i = html.rfind("</body>")
+    return (html[:i] + snippet + html[i:]) if i != -1 else (html + snippet)
+
+
+def _inject_separation_banner(html: str, st: dict) -> str:
+    """分离态：主界面顶部常驻横幅（不可关闭，设计 §7）。"""
+    ver = str((st or {}).get("version_at_enable") or "").strip()
+    tip = f"已分离：限制已归零并锁定。恢复只能重装发行包。"
+    if ver:
+        tip += f"（启用版本 {ver}）"
+    if st and st.get("audit_ok") is False:
+        tip += " ⚠ 审计组件已被修改"
+    snippet = (
+        '<div id="__sepBanner" style="position:fixed;left:0;right:0;top:0;z-index:2147482999;'
+        'padding:9px 14px;background:#1b160d;border-bottom:1px solid #8a6a33;'
+        'color:#e7c98d;font:12px/1.5 \'JetBrains Mono\',\'Consolas\',monospace;'
+        'letter-spacing:.03em;text-align:center">'
+        + tip +
+        ' <a href="/page?plugin_id=separation" target="_blank" '
+        'style="color:#f0d9a6;margin-left:10px">查看</a></div>'
+        '<script>(function(){try{document.body.style.paddingTop="42px";}catch(e){}})();</script>'
+    )
+    i = html.rfind("</body>")
+    return (html[:i] + snippet + html[i:]) if i != -1 else (html + snippet)
+
+
+def _read_frontend(v: str) -> str:
+    """读前端文件并在服务端注入切换按钮（另一版本存在时才注入，免得点了必失败）。"""
+    with open(FRONTENDS[v], "r", encoding="utf-8") as f:
+        html = f.read().rstrip()
+    other = "v4" if v == "v3" else "v3"
+    if _frontend_file(other) is not None:
+        html = _inject_ui_switch(html, other)
+    try:
+        from separation import active as _sep_active, status as _sep_status
+        if _sep_active():
+            html = _inject_separation_banner(html, _sep_status())
+    except Exception:
+        pass
+    return html
+
+
+try:
+    HTML = _read_frontend(_ui_version())
+except Exception as _e:
+    HTML = "<!DOCTYPE html><html><body><h1>EggBloom WebUI</h1><p>Failed to load frontend: " + str(_e) + "</p></body></html>"
+_html_mtime = 0
+
+# Meme image in-memory cache: rel-path -> (bytes, content_type, mtime_ms)
+_meme_cache = {}
+_MEME_CACHE_MAX = 1200
+
+def _meme_dirs():
+    return [PROJECT / 'memes' / 'memes', PROJECT.parent / 'memes' / 'memes'] if PROJECT else []
+
+
+def _within(child, base) -> bool:
+    """child 是否位于 base 之内（realpath + 大小写归一后比较）。
+
+    P0-4：用于表情包路径校验。此前 `_serve_meme` 是裸的 `meme_dir / rel`，
+    `/memes/../../bot_config.json` 这类上溯可读出 meme 目录之外的任意文件
+    （含 bot_config.json 里的 onebot_token）。
+    """
+    try:
+        c = os.path.normcase(os.path.abspath(str(child)))
+        b = os.path.normcase(os.path.abspath(str(base)))
+    except Exception:
+        return False
+    return c == b or c.startswith(b + os.sep)
+
+
+def _safe_meme_rel(rel):
+    """把 URL 里的相对路径规整成安全的相对路径；不安全则返回 None。
+
+    拒绝：空、绝对路径、含 `..` 的任一段、含盘符/UNC 前缀。
+    """
+    if not rel:
+        return None
+    s = str(rel).replace('\\', '/')
+    if s.startswith('/') or s.startswith('~'):
+        return None
+    parts = [p for p in s.split('/') if p not in ('', '.')]
+    if not parts or any(p == '..' for p in parts):
+        return None
+    if ':' in parts[0]:                 # C:xxx / UNC 之类
+        return None
+    return '/'.join(parts)
+
+
+def _serve_meme(self, rel):
+    """Serve a meme file with in-memory caching. Returns True if served.
+
+    安全（P0-4）：rel 来自 URL，必须先规整 + 做 realpath 容器校验，
+    双重把关后再读盘。校验失败**不返回任何内容**（调用方走 404）。
+    """
+    safe_rel = _safe_meme_rel(rel)
+    if safe_rel is None:
+        return False
+    for meme_dir in _meme_dirs():
+        try:
+            base = meme_dir.resolve()
+            file_path = (base / safe_rel).resolve()
+        except Exception:
+            continue
+        if not _within(file_path, base):
+            continue                    # 软链接/拼接绕过 → 直接跳过
+        if file_path.is_file():
+            key = str(file_path)
+            st = file_path.stat()
+            cached = _meme_cache.get(key)
+            if cached and cached[2] == st.st_mtime_ns and cached[3] == st.st_size:
+                data, ct, _, _ = cached
+            else:
+                data = file_path.read_bytes()
+                ext = file_path.suffix.lower()
+                ct = {'jpg': 'image/jpeg', 'jpeg': 'image/jpeg', 'png': 'image/png', 'gif': 'image/gif', 'webp': 'image/webp'}.get(ext[1:], 'application/octet-stream')
+                _meme_cache[key] = (data, ct, st.st_mtime_ns, st.st_size)
+                if len(_meme_cache) > _MEME_CACHE_MAX:
+                    _meme_cache.clear()
+            self.send_response(200)
+            self.send_header('Content-Type', ct)
+            self.send_header('Content-Length', str(len(data)))
+            self.send_header('Cache-Control', 'public, max-age=86400')
+            self.end_headers()
+            try:
+                self.wfile.write(data)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+            return True
+    # Fallback: search by filename across meme dirs (slower path, no caching)
+    try:
+        base = Path(safe_rel).name            # 只取文件名，天然不含上溯
+        if base:
+            for meme_dir in _meme_dirs():
+                if not meme_dir.exists():
+                    continue
+                for candidate in meme_dir.rglob(base):
+                    if not candidate.is_file():
+                        continue
+                    try:
+                        if not _within(candidate.resolve(), meme_dir.resolve()):
+                            continue              # 符号链接可能指向目录外，跳过
+                    except Exception:
+                        continue
+                    ext = candidate.suffix.lower()
+                    ct = {'jpg': 'image/jpeg', 'jpeg': 'image/jpeg', 'png': 'image/png', 'gif': 'image/gif', 'webp': 'image/webp'}.get(ext[1:], 'application/octet-stream')
+                    data = candidate.read_bytes()
+                    self.send_response(200)
+                    self.send_header('Content-Type', ct)
+                    self.send_header('Content-Length', str(len(data)))
+                    self.send_header('Cache-Control', 'public, max-age=86400')
+                    self.end_headers()
+                    try:
+                        self.wfile.write(data)
+                    except (BrokenPipeError, ConnectionResetError):
+                        pass
+                    return True
+    except Exception:
+        pass
+    return False
+
+def _get_html_mtime():
+    try:
+        m = os.path.getmtime(_frontend_path())
+        try:                       # 版本偏好变了也要触发重载
+            m = max(m, os.path.getmtime(_UI_VERSION_FILE))
+        except Exception:
+            pass
+        return m
+    except Exception:
+        return 0
+
+def _load_html():
+    global HTML, _html_mtime
+    try:
+        HTML = _read_frontend(_ui_version())
+        _html_mtime = _get_html_mtime()
+    except Exception:
+        pass
+
+
+# 
+#  AIGC 全模态（1.6.0 P1.5）：/api/aigc/* 的薄壳
+#
+#  职责边界刻意划死：**这里只做 HTTP 与 JSON**，任务状态机在
+#  harness/aigc_task.py，模型调用在 harness/aigc_backends.py。
+#  三个文件里任何一个都能单独测（aigc_task 有 31 条用例，只用一个假后端）。
+# 
+_AIGC_BOOT = {"capped": None}
+
+
+def _aigc_service():
+    """取任务层单例，顺手把装好的后端挂上。
+
+    每次取都跑一遍 `bootstrap()`：它是幂等的（已注册的 kind 跳过），而
+    `capabilities()` 有 5 分钟缓存，代价只是一次字典判断。这样**装完模型不用
+    重启 webui** 就能用 —— 否则表现成"页面说 piper 就绪、一点合成却说后端未安装"。
+    """
+    try:
+        from harness import aigc_task as _at
+        from harness import aigc_backends as _ab
+        svc = _at.get_service()
+        try:
+            _AIGC_BOOT["capped"] = _ab.bootstrap(svc)
+        except Exception as e:
+            _AIGC_BOOT["capped"] = {"registered": [], "error": f"{e}"}
+        return svc
+    except Exception:
+        return None
+
+
+def _aigc_caps():
+    try:
+        from harness import aigc_backends as _ab
+        caps = _ab.capabilities()
+        return {"ok": True, "caps": caps}
+    except Exception as e:
+        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
+
+def _aigc_get(path, qs):
+    """GET 侧：caps / list / task / file。返回 (status, dict) 或 (status, bytes, ctype)。"""
+    svc = _aigc_service()
+    if path == "/api/aigc/caps":
+        return 200, _aigc_caps()
+    if svc is None:
+        return 200, {"ok": False, "error": "任务层不可用"}
+    if path == "/api/aigc/list":
+        kind = (qs.get("kind") or [""])[0] or None
+        try:
+            limit = int((qs.get("limit") or ["50"])[0])
+        except Exception:
+            limit = 50
+        return 200, {"ok": True, "tasks": svc.list(kind=kind, limit=limit)}
+    if path == "/api/aigc/task":
+        tid = (qs.get("id") or [""])[0]
+        t = svc.get(tid)
+        if not t:
+            return 200, {"ok": False, "error": "任务不存在"}
+        return 200, {"ok": True, "task": t}
+    if path == "/api/aigc/file":
+        tid = (qs.get("id") or [""])[0]
+        t = svc.get(tid) or {}
+        art = str(t.get("artifact") or "")
+        if not art or not os.path.isfile(art):
+            return 404, {"ok": False, "error": "产物不存在"}
+        ext = os.path.splitext(art)[1].lower()
+        ctype = {".wav": "audio/wav", ".mp3": "audio/mpeg", ".png": "image/png",
+                 ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".txt": "text/plain; charset=utf-8",
+                 ".mp4": "video/mp4"}.get(ext, "application/octet-stream")
+        try:
+            with open(art, "rb") as f:
+                return 200, f.read(), ctype
+        except Exception as e:
+            return 500, {"ok": False, "error": f"{type(e).__name__}: {e}"}
+    return 404, {"ok": False, "error": "未知接口"}
+
+
+def _aigc_post(path, data):
+    """POST 侧：submit / delete。"""
+    svc = _aigc_service()
+    if svc is None:
+        return {"ok": False, "error": "任务层不可用"}
+    if path == "/api/aigc/submit":
+        kind = str(data.get("kind") or "").strip()
+        params = data.get("params") or {}
+        if not isinstance(params, dict):
+            return {"ok": False, "error": "params 必须是对象"}
+        try:
+            return svc.submit(kind, params, sync=bool(data.get("sync")))
+        except Exception as e:
+            return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+    if path == "/api/aigc/delete":
+        tid = str(data.get("id") or "")
+        if not tid:
+            return {"ok": False, "error": "缺少 id"}
+        return {"ok": bool(svc.delete(tid, remove_files=bool(data.get("remove_files", True))))}
+    return {"ok": False, "error": "未知接口"}
+
+
+# 
+#  HTTP Handler
+# 
+def _plugin_row(p, mf=None):
+    """插件行归一：把 `_manifest` 里前端要用的三件事提升成**顶层字段**。
+
+    为什么要有这个函数（2026-11-07 真机）：
+      `/api/plugins` 有两条路 —— bot_core 在跑时转发它的完整数据（带 `_manifest`），
+      没跑时退回本文件的静态扫描（只解析 `__init__.py`，没有 `_manifest`）。
+      前端原先读 `p._manifest.hidden`，第二条路上恒为 undefined → 隐藏静默失效：
+      已合并的老插件又冒出来、新插件显示英文 id、默认启用被当成停用。
+      归一放在这里，两条路输出同构，前端只认顶层字段。
+    """
+    p = dict(p or {})
+    m = mf if isinstance(mf, dict) else (p.get("_manifest") or {})
+    if "hidden" not in p:
+        p["hidden"] = bool(m.get("hidden"))
+    p["merged_into"] = str(p.get("merged_into") or m.get("merged_into") or "")
+    if not p.get("display_name"):
+        p["display_name"] = str(m.get("title") or p.get("name") or "")
+    return p
+
+
+def _plugin_enabled(state_map, name, mf, meta):
+    """启用状态：state 显式记录 > 清单 default_enabled > 代码里的 enabled。"""
+    if isinstance(state_map, dict) and name in state_map:
+        return bool(state_map.get(name))
+    if isinstance(mf, dict) and "default_enabled" in mf:
+        return bool(mf.get("default_enabled"))
+    return bool((meta or {}).get("enabled", (meta or {}).get("已启用", False)))
+
+
+class Handler(BaseHTTPRequestHandler):
+    def log_message(self, *a):
+        pass
+
+    def _origin_allowed(self):
+        """只允许同源/本机来源读取 API（防跨源窃取/CSRF）。
+
+        直接本机访问时 Origin 是 localhost；经 Caddy 从公网访问时 Origin 是
+        公网域名/IP，而 Host 被反代成 127.0.0.1。以前只认 localhost，于是
+        公网 WebUI 的所有 POST 都 403 空响应（前端报 Unexpected end of JSON）。
+        这里用 X-Forwarded-Host 校验同源；跨站 Origin 仍然拒绝。
+        """
+        origin = self.headers.get("Origin", "") or ""
+        if not origin:
+            return True  # 无 Origin（同源 GET / curl）放行
+        if origin == "null":
+            return True  # file://
+        try:
+            o = urlparse(origin)
+            host = (o.hostname or "").lower()
+        except Exception:
+            return False
+        if host in ("localhost", "127.0.0.1", "::1"):
+            return True
+        fwd = (self.headers.get("X-Forwarded-Host") or "").split(",")[0].strip().lower()
+        fwd = fwd.split(":")[0]
+        host_hdr = (self.headers.get("Host") or "").split(":")[0].strip().lower()
+        return bool(host and host in (fwd, host_hdr))
+
+    def _allowed_origin(self):
+        """给 ACAO 用的旧入口：同源/本机返回 Origin，跨站返回空串。"""
+        if self._origin_allowed():
+            return self.headers.get("Origin") or "*"
+        return ""
+
+    def _host_allowed(self):
+        """DNS rebinding 防护：Host 必须是本机或反代声明的同源主机。"""
+        host = (self.headers.get("Host") or "").strip().lower()
+        bare = host.split(":")[0]
+        if bare in ("localhost", "127.0.0.1", "::1", ""):
+            return True
+        fwd = (self.headers.get("X-Forwarded-Host") or "").split(",")[0].strip().lower()
+        fwd = fwd.split(":")[0]
+        return bool(fwd and bare == fwd)
+
+    def _proxy_agent_post(self, path, data):
+        """把 /api/agent/* 的 POST 转发给 bot_core（agent 逻辑都在那边）。
+
+        为什么不做成"webui 自己实现 agent"：设计文档 §3 定了**折中**方案 ——
+        逻辑放 harness，bot_core 加薄路由，webui 只转发。这样：
+          · agent 只有一份实现（不会两处漂移）；
+          · 前端始终只跟一个端口说话（不必知道 3005）；
+          · bot 没起来时给出人话错误，而不是超时。
+        """
+        payload = json.dumps(data or {}, ensure_ascii=False).encode("utf-8")
+        # 转发前先探测一次（避免 0.5s 超时把正常的慢请求也判死）
+        if not _is_bot_core_alive():
+            self._send_json(200, {
+                "ok": False,
+                "error": "Bot 未运行：Agent 需要 bot_core 提供模型与工具。请先在「Bot 控制」页启动。",
+                "hint": "bot_not_running",
+            })
+            return
+        try:
+            req = urllib.request.Request(
+                f"{BOT_CORE_URL}{path}",
+                data=payload,
+                headers={"Content-Type": "application/json", "Accept": "application/json"},
+                method="POST",
+            )
+            # agent 任务可能跑很久（多步工具调用）→ 给足超时
+            with _local_open(req, timeout=180) as r:
+                raw = r.read()
+            try:
+                out = json.loads(raw.decode("utf-8"))
+            except Exception:
+                out = {"ok": False, "error": "agent 返回了非 JSON 数据",
+                       "raw": raw[:500].decode("utf-8", "replace")}
+            self._send_json(200, out)
+        except urllib.error.HTTPError as e:
+            try:
+                detail = e.read().decode("utf-8", "replace")[:500]
+            except Exception:
+                detail = ""
+            self._send_json(200, {"ok": False, "error": f"agent 端点返回 {e.code}", "detail": detail})
+        except Exception as e:
+            self._send_json(200, {"ok": False, "error": f"{type(e).__name__}: {e}"})
+
+    def _proxy_bot_core(self, path, data=None, timeout=30.0):
+        """把请求转发给 bot_core（3005）。data=None → GET，否则 POST。
+
+        为什么要有这层：群管理那套接口本来在 3005，旧前端是**跨域直连**
+        （`fetch('http://127.0.0.1:3005/...')`）。让 v4 直连有两个问题：
+          ① 依赖 bot_core 的 CORS 头，脆弱；
+          ② 绕过了 webui 的 Origin/Host 闸门（P0-5 刚收紧过的地方）。
+        统一走这里转发，前端只跟 8080 说话 —— 与 Agent 端点同一套模式
+        （设计文档 §3「不新增独立进程/端口，复用 webui_server 转发」）。
+
+        ⚠️ 超时必须给足：`GET /api/groups` 会**为每个群调一次成员列表**，
+        群里多时很慢。旧 helper `fetch_from_bot_core` 的 0.5s 是为存活探测设的，
+        拿来做业务转发必然超时。
+        """
+        try:
+            url = f"{BOT_CORE_URL}{path}"
+            if data is None:
+                req = urllib.request.Request(url, headers={"Accept": "application/json"})
+            else:
+                req = urllib.request.Request(
+                    url, data=json.dumps(data, ensure_ascii=False).encode("utf-8"),
+                    headers={"Content-Type": "application/json"}, method="POST")
+            with _local_open(req, timeout=timeout) as r:
+                body = r.read().decode("utf-8", "replace")
+            self._send_json(200, json.loads(body) if body.strip() else {"ok": True})
+        except Exception as e:
+            # bot 未运行时给可读原因，不静默失败
+            self._send_json(200, {"ok": False,
+                                  "error": "bot_core 不可达或返回异常: " + str(e),
+                                  "bot_core": BOT_CORE_URL,
+                                  "hint": "请先在 Bot 页启动机器人"})
+
+    def _proxy_agent_stream(self, raw_path):
+        """把 /api/agent/stream（ndjson 长连接）原样透传给 bot_core。
+
+        必须**流式复制**，不能先 read() 再转发 —— 否则前端拿不到实时进度，
+        "流式"就退化成"等全部跑完再一次性给"。
+        """
+        if not _is_bot_core_alive():
+            self._send_json(200, {"ok": False,
+                                  "error": "Bot 未运行：Agent 流需要 bot_core。",
+                                  "hint": "bot_not_running"})
+            return
+        try:
+            req = urllib.request.Request(f"{BOT_CORE_URL}{raw_path}",
+                                         headers={"Accept": "application/x-ndjson"})
+            with _local_open(req, timeout=330) as up:
+                self.send_response(200)
+                self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
+                self.send_header("Cache-Control", "no-cache, no-store")
+                self.send_header("Connection", "close")
+                self.end_headers()
+                while True:
+                    chunk = up.read(2048)
+                    if not chunk:
+                        break
+                    try:
+                        self.wfile.write(chunk)
+                        self.wfile.flush()
+                    except (ConnectionAbortedError, BrokenPipeError):
+                        break
+        except (ConnectionAbortedError, BrokenPipeError):
+            pass
+        except Exception as e:
+            try:
+                self.wfile.write((json.dumps({"type": "error",
+                                              "error": f"{type(e).__name__}: {e}"},
+                                             ensure_ascii=False) + "\n").encode("utf-8"))
+            except Exception:
+                pass
+
+    def _send_json(self, status, data):
+        try:
+            body = json.dumps(data, ensure_ascii=False).encode("utf-8")
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            ao = self._allowed_origin()
+            if ao:
+                self.send_header("Access-Control-Allow-Origin", ao)
+            self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+            self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+            self.send_header("Connection", "close")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        except (ConnectionAbortedError, BrokenPipeError):
+            pass
+
+    def _send_html(self, html, no_store=False):
+        try:
+            data = html.encode("utf-8")
+            # ★ 2026-10-25：从 no-store 改成 no-cache + ETag。
+            #   实测每次刷新都完整重传 582 KB 文档，一次缓存都没命中。
+            #   no-store 是"别存"，浏览器连副本都不留，所以每次都全量下载。
+            #   改成 no-cache（可以存、但每次要问一句）：ETag 命中就回 304，
+            #   只传几个字节。内容变了 ETag 就变，不存在看到旧页面的风险 ——
+            #   这正是 ETag 存在的意义，比 no-store 既快又不牺牲正确性。
+            etag = '"h%x"' % (zlib.crc32(data) & 0xFFFFFFFF)
+            if no_store:
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(data)))
+                self.send_header("Cache-Control", "no-store, must-revalidate")
+                self.end_headers()
+                self.wfile.write(data)
+                return
+            # 文件时间也一并给出去：有些客户端（含 Chromium 对**顶层导航**）
+            # 更愿意用 If-Modified-Since 校验，光给 ETag 它不一定来问。
+            try:
+                _mt = int(_get_html_mtime())
+                lastmod = self.date_time_string(_mt) if _mt > 0 else None
+            except Exception:
+                lastmod = None
+            inm = self.headers.get("If-None-Match")
+            ims = self.headers.get("If-Modified-Since")
+            hit = (inm == etag)
+            if not hit and ims and lastmod:
+                try:
+                    from email.utils import parsedate_to_datetime
+                    hit = parsedate_to_datetime(ims) >= parsedate_to_datetime(lastmod)
+                except Exception:
+                    hit = False
+            if hit:
+                self.send_response(304)
+                self.send_header("ETag", etag)
+                if lastmod:
+                    self.send_header("Last-Modified", lastmod)
+                self.send_header("Cache-Control", "no-cache")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("ETag", etag)
+            if lastmod:
+                self.send_header("Last-Modified", lastmod)
+            ao = self._allowed_origin()
+            if ao:
+                self.send_header("Access-Control-Allow-Origin", ao)
+            self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+            self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+        except (ConnectionAbortedError, BrokenPipeError):
+            pass
+
+    def do_OPTIONS(self):
+        if not self._host_allowed():
+            self.send_response(403)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        self.send_response(204)
+        ao = self._allowed_origin()
+        if ao:
+            self.send_header("Access-Control-Allow-Origin", ao)
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def do_GET(self):
+        if not self._host_allowed():
+            self.send_response(403)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        path = urlparse(self.path).path
+
+        # ── AIGC 全模态（1.6.0 P1.5）：caps / list / task / file ──
+        #   放在最前：产物要按二进制回（wav 试听），不能落进静态文件分支。
+        if path.startswith("/api/aigc/"):
+            st, payload = _aigc_get(path, parse_qs(urlparse(self.path).query))
+            if isinstance(payload, (bytes, bytearray)):
+                self.send_response(st)
+                self.send_header("Content-Type", "audio/wav" if str(path).endswith("file") else "application/octet-stream")
+                self.send_header("Accept-Ranges", "none")
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                try:
+                    self.wfile.write(payload)
+                except Exception:
+                    pass
+            else:
+                self._send_json(st, payload)
+            return
+
+        # ── Agent 事件流：长连接透传（放在最前，避免被静态文件/HTML 分支截走）──
+        if path == "/api/agent/stream":
+            self._proxy_agent_stream(self.path)
+            return
+
+        # ── 只读 Agent 端点：GET 也转发（前端刷新时可直读，不必都走 POST）──
+        #  /api/agent/status | sessions | tools | memory | history?
+        #  /api/persona/cards（批次 I1 人格卡：GET=列表）
+        # 人格卡：单独一条，用业务超时转发（0.5s 是存活探测用的，读卡会超时）
+        if path == "/api/persona/cards":
+            self._proxy_bot_core(self.path, timeout=10)
+            return
+
+        if path in ("/api/agent/status", "/api/agent/sessions", "/api/agent/tools",
+                    "/api/agent/memory"):
+            bc = fetch_from_bot_core(path)
+            if bc is None:
+                # bot 没起 → 给一个"能力未知"的占位，前端能正常渲染并提示
+                self._send_json(200, {
+                    "ok": True,
+                    "ready": False,
+                    "bot_running": False,
+                    "memory": {"available": False, "reason": "Bot 未运行"},
+                    "tools": {"total": 0, "by_group": {}},
+                    "sessions": [],
+                })
+            else:
+                self._send_json(200, bc)
+            return
+
+        # ── 热补丁更新（2026-11-01）：只读检查放 GET ──
+        if path == "/api/update/check":
+            try:
+                sys.path.insert(0, str(PROJECT))
+                from harness import updater as _upd
+                url = urlparse(self.path).query
+                qs = {k: (v or [""])[0] for k, v in parse_qs(url).items()}
+                man_url = qs.get("url") or load_config().get("update_manifest_url") or ""
+                self._send_json(200, _upd.check(str(man_url)))
+            except Exception as e:
+                self._send_json(200, {"ok": False, "error": f"{type(e).__name__}: {e}"})
+            return
+
+        if path == "/api/update/status":
+            self._send_json(200, _upd_snapshot())
+            return
+
+        if path == "/" or path == "/index.html":
+            try:
+                mtime = _get_html_mtime()
+                if mtime != _html_mtime:
+                    _load_html()
+                data = HTML
+                self._send_html(data, no_store=True)
+            except Exception:
+                mtime = _get_html_mtime()
+                if mtime != _html_mtime:
+                    _load_html()
+                self._send_html(HTML, no_store=True)
+            return
+
+        if path == "/desktop":
+            try:
+                data = (PROJECT / "desktop-ui" / "index.html").read_text(encoding="utf-8")
+                self._send_html(data)
+            except Exception:
+                self._send_html("<h1>Desktop UI missing</h1><p>Create desktop-ui/index.html</p>")
+            return
+
+        # Serve static files from webui directory
+        if path.startswith("/assets/") or (path.startswith("/") and not path.startswith("/api/")):
+            # 防目录穿越/越权读文件：unquote + realpath 后必须仍位于 webui 目录内，且只放行静态扩展名
+            # （此前 `HERE / path.lstrip("/")` 不过滤 `..`，本机任意进程可读 ../bot_config.json 与 model-debug.log）
+            rel = unquote(path.lstrip("/"))
+            file_path = (HERE / rel).resolve()
+            _root = str(HERE.resolve())
+            _real = str(file_path)
+            in_dir = (_real == _root) or _real.startswith(_root + os.sep)
+            if in_dir and file_path.is_file() and file_path.suffix.lower() in _STATIC_EXTS:
+                try:
+                    # ★ 2026-10-25：静态资源加 ETag + Last-Modified，命中回 304。
+                    #   实测每次刷新都重传 624 KB 字体（3 个 woff2 全量），
+                    #   因为原来只有 "no-cache" 而没有校验凭证 ——
+                    #   no-cache 的意思是"可以存，但每次用之前必须问服务器"，
+                    #   而服务器没有 ETag 可比，只能整份重发。
+                    #   代价在你这里尤其明显：程序装在 E 盘（USB 移动硬盘），
+                    #   每刷新一次就从外置盘读 620 KB。
+                    #   ETag 先用 stat 算（mtime+size），**命中时连读盘都省掉**。
+                    st = file_path.stat()
+                    etag = '"%x-%x"' % (int(st.st_mtime), st.st_size)
+                    lastmod = self.date_time_string(int(st.st_mtime))
+                    if self.headers.get("If-None-Match") == etag:
+                        self.send_response(304)
+                        self.send_header("ETag", etag)
+                        self.send_header("Last-Modified", lastmod)
+                        self.send_header("Cache-Control", "no-cache")
+                        self.send_header("Content-Length", "0")
+                        self.end_headers()
+                        return
+                    data = file_path.read_bytes()
+                    ct = "application/javascript"
+                    if path.endswith(".css"):
+                        ct = "text/css"
+                    elif path.endswith(".png"):
+                        ct = "image/png"
+                    elif path.endswith(".svg"):
+                        ct = "image/svg+xml"
+                    elif path.endswith(".woff2"):
+                        ct = "font/woff2"
+                    self.send_response(200)
+                    self.send_header("Content-Type", ct)
+                    self.send_header("Content-Length", str(len(data)))
+                    # 字体一年内不会变，给长缓存省掉每日的第一趟往返；
+                    # 其余静态仍走 no-cache + ETag（改了就 304 不掉旧版）
+                    if path.endswith(".woff2"):
+                        self.send_header("Cache-Control", "public, max-age=604800")
+                    else:
+                        self.send_header("Cache-Control", "no-cache")
+                    self.send_header("ETag", etag)
+                    self.send_header("Last-Modified", lastmod)
+                    self.end_headers()
+                    self.wfile.write(data)
+                    return
+                except (ConnectionAbortedError, BrokenPipeError):
+                    pass
+
+        if path == "/api/status":
+            if _STATUS_CACHE["data"]:
+                self._send_json(200, _STATUS_CACHE["data"])
+                return
+            # 优先从 bot_core.py 获取实时数据
+            bc = fetch_from_bot_core("/api/status")
+            if bc:
+                S.merge_bot_core_data(bc)
+            with STATE_LOCK:
+                stats = {
+                    "bot_running": S.bot_running,
+                    "bot_uptime": int(time.time() - S.bot_start_time),
+                    "messages_total": S.messages_total,
+                    "groups_active": S.groups_active,
+                    "images_generated": S.images_generated,
+                    "memes_sent": S.memes_sent,
+                    "plugin_count": S.plugin_count,
+                    "plugin_active": S.plugin_active,
+                    "llm_status": S.llm_status,
+                    "llm_model": S.llm_model,
+                    "memory_total": S.memory_total,
+                    "session_count": S.session_count,
+                    "api_calls_today": S.api_calls_today,
+                    "tokens_used": S.tokens_used,
+                }
+            sys_stats = get_system_stats()
+            stats["cpu_usage"] = sys_stats["cpu"]
+            stats["mem_usage"] = sys_stats["memory"]
+            try:
+                stats["embed"] = _embed_status()
+            except Exception as _ee:
+                stats["embed"] = {"ok": False, "reason": "error", "path": str(_ee)}
+            try:
+                stats["health"] = _health_issues()
+            except Exception as _he:
+                stats["health"] = []
+            stats.update(_protocol_hud())      # 协议驱动/运行态（与缓存路径同一份口径）
+            self._send_json(200, {"data": stats})
+            return
+
+        # P0-3：协议页的助手在线徽标。单独端点，不塞进 /api/status（那边按秒轮询）
+        if path == "/api/protocol/privhelper":
+            self._send_json(200, _privhelper_status())
+            return
+
+        if path == "/api/gallery":
+            images = get_image_gallery()
+            self._send_json(200, {"images": images})
+            return
+
+        if path == "/api/memory":
+            sl = get_self_learning_stats()
+            ms = get_memory_stats()
+            exprs = get_expressions()
+            data = {
+                "memory_total": sl["total_messages"],
+                "learned_messages": sl["total_messages"],
+                "active_groups": sl["groups"],
+                "storage_kb": ms["size_kb"],
+                "expressions": exprs or [
+                    {"text": "666 太强了", "scene": "praise", "score": 85},
+                    {"text": "笑死我了", "scene": "funny", "score": 80},
+                    {"text": "确实", "scene": "chat", "score": 75},
+                ]
+            }
+            self._send_json(200, {"data": data})
+            return
+
+        if path == "/api/memory/list":
+            # T8: 私聊记忆已迁入 super_memory SQLite
+            try:
+                import sqlite3
+                db_path = PROJECT / "plugins" / "ego" / "super_memory" / "data" / "super_memory.db"
+                items = []
+                if db_path.exists():
+                    conn = sqlite3.connect(str(db_path))
+                    rows = conn.execute(
+                        "SELECT scope_id, COUNT(*), MAX(timestamp) FROM messages WHERE scope='private' GROUP BY scope_id"
+                    ).fetchall()
+                    conn.close()
+                    for scope_id, cnt, last_ts in rows:
+                        last = ""
+                        if last_ts:
+                            last = datetime.datetime.fromtimestamp(last_ts).strftime("%Y-%m-%d %H:%M")
+                        items.append({"qq": scope_id, "summary": f"{cnt} 轮 · 最后 {last}", "rounds": cnt})
+                items.sort(key=lambda x: x["qq"])
+            except Exception:
+                items = []
+            self._send_json(200, {"items": items})
+            return
+
+        if path == "/api/memory/detail":
+            qq = ""
+            try:
+                parsed = urlparse(self.path)
+                qs = parse_qs(parsed.query)
+                qq = (qs.get("qq") or [""])[0]
+            except Exception:
+                qq = ""
+            if not qq:
+                self._send_json(200, {"error": "missing qq"})
+                return
+            # T8: 私聊记忆已迁入 super_memory SQLite
+            try:
+                import sqlite3
+                db_path = PROJECT / "plugins" / "ego" / "super_memory" / "data" / "super_memory.db"
+                rounds = []
+                if db_path.exists():
+                    conn = sqlite3.connect(str(db_path))
+                    rows = conn.execute(
+                        "SELECT user_msg, bot_reply, timestamp FROM messages WHERE scope='private' AND scope_id=? ORDER BY timestamp ASC",
+                        (str(qq),),
+                    ).fetchall()
+                    conn.close()
+                    for user_msg, bot_reply, ts in rows:
+                        time_str = datetime.datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M") if ts else ""
+                        rounds.append({"time": time_str, "user": user_msg, "bot": bot_reply})
+                self._send_json(200, {"qq": qq, "rounds": rounds})
+            except Exception as e:
+                self._send_json(200, {"qq": qq, "rounds": [], "error": str(e)})
+            return
+
+        if path == "/page":
+            plugin_id = ""
+            try:
+                parsed = urlparse(self.path)
+                qs = parse_qs(parsed.query)
+                plugin_id = (qs.get("plugin_id") or [""])[0]
+            except Exception:
+                plugin_id = ""
+            if not plugin_id:
+                self._send_json(200, {"error": "missing plugin_id"})
+                return
+            ui_path = PROJECT / "plugins" / plugin_id / "ui.html"
+            if not ui_path.exists():
+                # ★ 2026-11-07：没有 ui.html 不再回一行 JSON 错误。
+                #   插件页的「打开」对每个插件都可见，点开却看到
+                #   `{"error":"plugin ui not found"}` 等于把人晾在那。
+                #   这里给一个说明页：它是干什么的、靠什么触发、开关在哪。
+                #   个别插件想定制，照旧放自己的 ui.html 覆盖即可。
+                stub = _plugin_stub_html(plugin_id)
+                if stub:
+                    self._send_html(_inject_plugin_ui(stub))
+                else:
+                    self._send_html(_inject_plugin_ui(
+                        _plugin_stub_html("", missing_id=plugin_id)))
+                return
+            try:
+                html = _inject_plugin_ui(ui_path.read_text(encoding="utf-8"))
+                self._send_html(html)
+            except Exception as e:
+                self._send_json(200, {"error": str(e)})
+            return
+
+        # ── 群/好友管理转发（T8）：这套接口在 bot_core(3005)，统一从 8080 转发 ──
+        #  MCP 端点（T2）同样在 bot_core(3005)；GET 用 self.path 保 query。
+        if path.startswith("/api/groups") or path.startswith("/api/friends") \
+                or path.startswith("/api/admin/notify_log") \
+                or path.startswith("/api/mcp/"):
+            self._proxy_bot_core(self.path)
+            return
+
+        # ── 前端版本（只读）──
+        if path == "/api/ui/version":
+            self._send_json(200, {"version": _ui_version(),
+                                  "available": [k for k in FRONTENDS if FRONTENDS[k].is_file()]})
+            return
+
+        if path == "/api/plugins/action":
+            # P0-5：state-changing 端点收紧为 POST-only。
+            #
+            # 此前 do_GET 与 do_POST 各有一份**逐行重复**的实现（476 vs 470 行），
+            # 而 do_POST 才带 Origin 闸门（防 CSRF），do_GET 只挡了 Host（防 DNS rebinding）
+            # → 恶意网页可用 fetch/XHR 的 GET 绕过闸门触发副作用。
+            #
+            # 处理动作而不是打补丁，理由：
+            #   1. 修 HTTP 语义错误本身 —— GET 不应有副作用（RFC 7231 语义）；
+            #   2. 逐条比对后确认 do_POST 的实现是 do_GET 的**严格超集**，
+            #      唯一差异是 action="style_features"，已移植到 do_POST（能力不丢）；
+            #   3. 全库 121 个调用点**全部**用 POST（无 method GET、无 query 拼装），
+            #      故不存在破坏现有前端的风险；
+            #   4. 顺带消掉 476 行重复实现（原来两处会各自漂移）。
+            self.send_response(405)
+            self.send_header("Allow", "POST")
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        if path == "/api/plugins":
+            bc = fetch_from_bot_core("/api/plugins")
+            if bc and bc.get("plugins"):
+                # 过滤适配层壳（chat_style/slang_learner/super_memory 转发到 ego，不在列表单独显示）
+                # 字段归一走 `_plugin_row()`，与下面静态扫描分支输出同构。
+                rows = [_plugin_row(p) for p in bc["plugins"]
+                        if not (p or {}).get("adapter")]
+                self._send_json(200, {"plugins": rows})
+                return
+            _plugins = []
+            try:
+                plugin_dir = PROJECT / "plugins"
+                if plugin_dir.exists():
+                    state_file = plugin_dir / "plugin_state.json"
+                    state = {}
+                    if state_file.exists():
+                        try:
+                            state = json.loads(state_file.read_text(encoding="utf-8"))
+                        except Exception:
+                            pass
+                    for entry in sorted(plugin_dir.iterdir()):
+                        if not entry.is_dir() or entry.name.startswith('_') or entry.name.startswith('.'):
+                            continue
+                        if entry.name == "plugin_manager.py":
+                            continue
+                        init_file = entry / "__init__.py"
+                        if not init_file.exists():
+                            continue
+                        try:
+                            meta = {"name": entry.name, "version": "1.0.0", "description": "", "author": "", "hooks": [], "priority": 50, "enabled": False}
+                            content_py = init_file.read_text(encoding="utf-8", errors="replace")
+                            # 老式插件读 PLUGIN_META，真插件（ABI）读 PLUGIN_MANIFEST
+                            for _kw in ("PLUGIN_META = ", "PLUGIN_MANIFEST = "):
+                                idx = content_py.find(_kw)
+                                if idx < 0:
+                                    continue
+                                bp = content_py.find("{", idx)
+                                if bp < 0:
+                                    continue
+                                depth = 0
+                                for ci in range(bp, len(content_py)):
+                                    if content_py[ci] == '{': depth += 1
+                                    elif content_py[ci] == '}': depth -= 1
+                                    if depth == 0:
+                                        dstr = content_py[bp:ci+1]
+                                        try:
+                                            ns = {"__builtins__": {}, "enabled": False}
+                                            exec("__pm__ = " + dstr, ns)
+                                            parsed = ns.get("__pm__", {})
+                                            if isinstance(parsed, dict):
+                                                meta.update(parsed)
+                                        except Exception:
+                                            pass
+                                        break
+                                break
+                            if not meta.get("description"):
+                                dm = re.search(r'"""(.*?)"""', content_py, re.DOTALL)
+                                if dm:
+                                    desc = dm.group(1).strip().split(chr(10))[0]
+                                    if len(desc) > 5:
+                                        meta["description"] = desc[:120]
+                            # 适配层壳标记：PLUGIN_META 可能是 `dict(...)` 写法（文本解析器读不到字面量），
+                            # 直接按文件里是否出现 adapter 键判定
+                            if 'adapter' in content_py:
+                                meta["adapter"] = True
+                        except Exception:
+                            pass
+                        em = state.get("enabled", state.get("已启用", {})) if isinstance(state, dict) else {}
+                        # ★ 2026-11-07：静态扫描也要读 `plugin.json`。
+                        #   只解析 __init__.py 的 PLUGIN_MANIFEST 会漏掉 title/hidden/
+                        #   merged_into/default_enabled —— 表现就是插件页把已合并的
+                        #   老插件又列出来、新插件没有中文名、默认启用被当成停用。
+                        mf = {}
+                        try:
+                            jf = entry / "plugin.json"
+                            if jf.exists():
+                                mf = json.loads(jf.read_text(encoding="utf-8")) or {}
+                        except Exception:
+                            mf = {}
+                        enabled = _plugin_enabled(em, meta.get("name", entry.name), mf, meta)
+                        # 适配层壳（转发到 ego 子模块）不在插件列表单独显示
+                        if meta.get("adapter"):
+                            continue
+                        _plugins.append(_plugin_row({
+                            "name": meta.get("name", entry.name),
+                            "display_name": str(mf.get("title") or meta.get("display_name")
+                                                or meta.get("name") or entry.name),
+                            "hidden": bool(mf.get("hidden")),
+                            "merged_into": str(mf.get("merged_into") or ""),
+                            "version": meta.get("version") or mf.get("version") or "1.0.0",
+                            "description": meta.get("description") or mf.get("description") or "",
+                            "author": meta.get("author") or mf.get("author") or "",
+                            "hooks": meta.get("hooks", []),
+                            "priority": meta.get("priority", 50),
+                            "page": meta.get("page", ""),
+                            "plugin_page": meta.get("plugin_page", ""),
+                            "ui": meta.get("ui", ""),
+                            "tags": meta.get("tags", []) if isinstance(meta.get("tags", []), list) else [],
+                            "category": meta.get("category", ""),
+                            "enabled": enabled,
+                        }, mf))
+            except Exception:
+                pass
+            with STATE_LOCK:
+                S.plugin_count = len(_plugins)
+                S.plugin_active = sum(1 for p in _plugins if p["enabled"])
+            self._send_json(200, {"plugins": _plugins})
+            return
+
+        if path == "/api/scope-policy":
+            # P4 · S6：作用域能力档位 —— 只读查询（预置/词汇/统计/审计留痕）。
+            # 写入端点留给 S5（那一半要等前端风格定了一起做）。
+            try:
+                sys.path.insert(0, str(PROJECT))
+                from harness.scope_registry import ScopeRegistry
+                reg = ScopeRegistry()
+                out = {
+                    "default_preset": reg.default_preset(),
+                    "presets": reg.presets(),
+                    "capabilities": reg.capabilities(),
+                    "stats": reg.stats(),
+                    "audit": reg.audit(50),
+                }
+                _q = parse_qs(urlparse(self.path).query)
+                _sc = (_q.get("scope") or [""])[0].strip()
+                if _sc and ":" in _sc:
+                    _kind, _sid = _sc.split(":", 1)
+                    out["resolved"] = {
+                        "scope": _sc,
+                        "preset": reg.resolve(_kind, _sid).get("preset"),
+                        "named_preset": reg.resolve(_kind, _sid).get("named_preset"),
+                        "overrides": reg.overrides(_kind, _sid),
+                        "allowed": sorted(reg.resolve(_kind, _sid).get("capabilities") or []),
+                    }
+                self._send_json(200, out)
+            except Exception as e:
+                self._send_json(200, {"error": str(e), "presets": {}, "audit": []})
+            return
+
+        if path == "/api/token-stats":
+            # ★ 会话级计数（群聊/私聊/网页）归 **bot_core** —— token_stats.record()
+            #   只在 bot_core 里被调用；本进程（webui_server）自己的 _cumulative 恒 0。
+            #   以前直接读本进程 → Token 页三行永远 0（用户截图："token 页空了"）。
+            #   先问 bot_core（超时放宽到 3s：它要读 jsonl 做日/窗口聚合），
+            #   拿不到（Bot 没起）才退回本地 —— 本地仍有按日聚合，页面不会全空。
+            bc = fetch_from_bot_core("/api/token-stats", timeout=3.0)
+            if bc and isinstance(bc.get("snapshot"), dict) and bc["snapshot"]:
+                self._send_json(200, {
+                    "snapshot": bc.get("snapshot") or {},
+                    "recent": bc.get("recent") or [],
+                    "context_pressure": bc.get("context_pressure") or [],
+                    "source": "bot_core",
+                })
+                return
+            try:
+                sys.path.insert(0, str(PROJECT))
+                from token_stats import snapshot as _ts_snapshot, history as _ts_history
+                # P23：一并回上下文压力（锚点式测量）。按压力降序 → 前端可一眼看出"谁快满了"。
+                try:
+                    from token_stats import context_pressure as _ts_pressure
+                    _ctx = _ts_pressure()
+                except Exception:
+                    _ctx = []
+                self._send_json(200, {"snapshot": _ts_snapshot(), "recent": _ts_history(50),
+                                      "context_pressure": _ctx, "source": "local"})
+            except Exception as e:
+                self._send_json(200, {"error": str(e), "snapshot": {}, "recent": [],
+                                      "context_pressure": [], "source": "local"})
+            return
+
+        if path == "/api/providers/catalog":
+            # 快速切模型下拉数据源：providers（含模型目录 + last_model）+ 当前 provider/model；
+            # 不回传任何 Key。模型目录由 /api/providers/models 拉取成功后自动持久化，
+            # 配置里没有就为空（用户到设置页拉一次即永久记住），不做静态目录兑底。
+            cfg = load_config()
+            provs = []
+            for _p in (cfg.get("providers") or []):
+                if not isinstance(_p, dict):
+                    continue
+                provs.append({
+                    "id": str(_p.get("id") or ""),
+                    "name": str(_p.get("name") or _p.get("id") or ""),
+                    "models": [m for m in (_p.get("models") or []) if m],
+                    "last_model": str(_p.get("last_model") or ""),
+                })
+            self._send_json(200, {
+                "providers": provs,
+                "api_provider": cfg.get("api_provider") or "",
+                "model_name": cfg.get("model_name") or "",
+            })
+            return
+
+        if path == "/api/config":
+            cfg = load_config()
+            display = dict(cfg)
+            try:
+                from separation import config_view
+                display = config_view(display)
+            except Exception:
+                display = dict(cfg)
+            providers = []
+            try:
+                # 优先回传 bot_config.json 中已保存的提供商（用户在「多提供商管理」里的编辑），
+                # 其次才是静态目录 webui/providers.json —— 否则用户新增/改动的提供商刷新即丢失
+                saved = cfg.get("providers") or []
+                if saved and isinstance(saved, list):
+                    providers = [dict(p) for p in saved if isinstance(p, dict)]
+                if not providers:
+                    providers_path = PROJECT / "webui" / "providers.json"
+                    if providers_path.exists():
+                        providers = json.loads(providers_path.read_text(encoding="utf-8"))
+            except Exception:
+                providers = [
+                    {"id": "deepseek", "name": "DeepSeek", "models": [{"id": "deepseek-flash", "name": "DeepSeek Chat"}]},
+                    {"id": "openai", "name": "OpenAI", "models": [{"id": "gpt-4o", "name": "GPT-4o"}]},
+                    {"id": "custom", "name": "Custom", "models": [{"id": "", "name": "Custom Endpoint"}]},
+                ]
+            display["providers"] = providers
+            for _p in display.get("providers", []) or []:
+                if isinstance(_p, dict):
+                    # models 目录随 providers 回传（仅模型 id/name，非敏感）：
+                    # 前端保存时整组写回，避免“显示层剥掉 → 保存写空 → 目录永久丢失”的链条
+                    if _p.get("api_key"):
+                        _p["api_key"] = _mask_secret(_p["api_key"])
+                    # 标记该提供商是否已在凭据管理器保存专属 Key（前端据此显示"清除 Key"入口）
+                    try:
+                        from config import provider_cred_name
+                        from cred_store import exists_cred
+                        _p["has_api_key"] = bool(_p.get("api_key")) or exists_cred(provider_cred_name(_p.get("id") or ""))
+                    except Exception:
+                        _p["has_api_key"] = False
+            # 敏感值掩码：api_key / onebot_token 不回传明文（凭据管理器持有真实值）
+            if display.get("api_key"):
+                display["api_key"] = _mask_secret(display["api_key"])
+            if display.get("onebot_token"):
+                display["onebot_token"] = _mask_secret(display["onebot_token"])
+            try:
+                from separation import config_meta
+                display["_separation"] = config_meta()
+            except Exception:
+                display["_separation"] = {"active": False, "read_only": []}
+            self._send_json(200, {"config": display})
+            return
+
+        if path == "/api/tools":
+            self._send_json(200, {"tools": _tools_catalog()})
+            return
+
+        if path == "/api/bot/status":
+            self._send_json(200, {"data": get_bot_status()})
+            return
+
+        if path == "/api/protocol/status":
+            mgr = getattr(S, '_protocol_manager', None)
+            running = bool(mgr and getattr(mgr, '_running', False))
+            try:
+                from protocols import registry
+                drivers = registry.get_driver_ids()
+            except Exception:
+                drivers = ["napcat"]
+            cfg = load_config()
+            driver = cfg.get("protocol_driver", "napcat") or "napcat"
+            status = {}
+            if mgr:
+                try:
+                    status = mgr.get_status() or {}
+                except Exception:
+                    status = {}
+            napcat_cfg = (cfg.get("protocol_drivers") or {}).get("napcat") or {}
+            llonebot_cfg = (cfg.get("protocol_drivers") or {}).get("llonebot") or {}
+            snowluma_cfg = (cfg.get("protocol_drivers") or {}).get("snowluma") or {}
+            # ★ 协议 WebUI 地址必须【抓取】，不能写死：
+            #   ① 先问当前适配器 —— 各驱动的 get_webui_info() 会去读它自己的
+            #      config/webui.json 与启动日志（NapCat/LLOneBot 取 token、
+            #      SnowLuma 从日志抓初始密码），返回 {found,host,port,url,token,user?}
+            #   ② 取不到再退回该驱动配置里的 webui_port（config.py 三份 drivers 都有）
+            #   ⚠ 绝不能拿 api_port（OneBot API，默认 3000）当 WebUI 端口 ——
+            #     那是两回事：SnowLuma WebUI 在 5099、NapCat 在 6099、LLOneBot 在 7000。
+            webui_info = {}
+            try:
+                _ad = getattr(mgr, "adapter", None) if mgr else None
+                if _ad is not None and hasattr(_ad, "get_webui_info"):
+                    webui_info = _ad.get_webui_info() or {}
+            except Exception:
+                webui_info = {}
+            if not webui_info.get("url"):
+                _drv_cfg = (cfg.get("protocol_drivers") or {}).get(driver) or {}
+                _wp = _drv_cfg.get("webui_port")
+                if _wp:
+                    webui_info = {"found": False, "host": "127.0.0.1", "port": int(_wp),
+                                  "url": f"http://127.0.0.1:{int(_wp)}", "token": "",
+                                  "source": "config"}
+            # 真实在线状态（2026-10-19）：`protocol_running` 只表示"有没有从本界面
+            # 点过启动"，外部启动的 NapCat/LLOneBot 不经过它 → 会误报"已停止"。
+            # 这里补一个真实探测结果，前端应优先用它。
+            _p_ok, _p_url = probe_protocol_online()
+            self._send_json(200, {
+                "protocol_running": running,
+                "protocol_online": _p_ok,
+                "protocol_url": _p_url,
+                "protocol_driver": driver,
+                "drivers": drivers,
+                "api_port": cfg.get('protocol_api_port', 3000),
+                "event_port": cfg.get('protocol_event_port', 3005),
+                "webui": webui_info,
+                "qq_path": _get_qq_path(),
+                "status": status,
+                "napcat_config": napcat_cfg,
+                "llonebot_config": llonebot_cfg,
+                "snowluma_config": snowluma_cfg,
+                "risks": PROTO_RISK_INFO,
+            })
+            return
+
+        if path == "/api/protocol/config":
+            cfg = load_config()
+            drivers = (cfg.get("protocol_drivers") or {})
+            self._send_json(200, {
+                "protocol_driver": cfg.get("protocol_driver", "napcat"),
+                "protocol_drivers": drivers,
+            })
+            return
+
+        if path == "/api/protocol/logs":
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+                body = {}
+                if length > 0:
+                    body = json.loads(self.rfile.read(length).decode("utf-8"))
+            except Exception:
+                body = {}
+            limit = int(body.get("limit", 200)) if isinstance(body, dict) else 200
+            self._send_json(200, {"logs": _collect_logs(limit)})
+            return
+
+        if path == "/api/imagegen/status":
+            cfg = load_config()
+            comfyui_running = False
+            comfyui_host = cfg.get("comfyui_host", "127.0.0.1")
+            comfyui_port = cfg.get("comfyui_port", 8000)
+            try:
+                req = urllib.request.Request(f"http://{comfyui_host}:{comfyui_port}/system_stats", headers={"Accept": "application/json"})
+                with _local_open(req, timeout=3) as r:
+                    comfyui_running = True
+            except Exception:
+                comfyui_running = False
+            self._send_json(200, {
+                "comfyui_running": comfyui_running,
+                "comfyui_host": comfyui_host,
+                "comfyui_port": comfyui_port,
+                "comfyui_timeout": cfg.get("comfyui_timeout", 120),
+                "comfyui_default_width": cfg.get("comfyui_default_width", 1024),
+                "comfyui_default_height": cfg.get("comfyui_default_height", 1536),
+                "comfyui_checkpoint": cfg.get("comfyui_checkpoint", ""),
+                "workflow_path": cfg.get("workflow_path", ""),
+                "prompt_node_id": cfg.get("prompt_node_id", "353"),
+                "llm_model": "local" if cfg.get("use_local_image_llm") else "deepseek",
+                "llm_url": cfg.get("llm_url", cfg.get("api_url", "https://api.deepseek.com/chat/completions")),
+                "nsfw_enabled": cfg.get("nsfw_enabled", True),
+            })
+            return
+
+        # --- Meme APIs ---
+        if path == "/api/memes":
+            try:
+                memes = []
+                tag_db = {}
+                for meme_dir in [PROJECT / 'memes' / 'memes', PROJECT.parent / 'memes' / 'memes']:
+                    if not meme_dir.exists():
+                        continue
+                    tags_path = meme_dir / 'tags.json'
+                    if tags_path.exists():
+                        try:
+                            raw = json.loads(tags_path.read_text(encoding='utf-8'))
+                            if isinstance(raw, dict):
+                                for k, v in raw.items():
+                                    if isinstance(v, dict):
+                                        v = v.get('tags', [])
+                                    tag_db[str(k)] = [str(t) for t in (v or []) if t is not None]
+                        except Exception:
+                            pass
+                    for fpath in meme_dir.rglob('*'):
+                        if not fpath.is_file() or fpath.suffix.lower() not in ('.png', '.jpg', '.jpeg', '.gif', '.webp'):
+                            continue
+                        rel = fpath.relative_to(meme_dir).as_posix()
+                        tags = []
+                        tag_file = fpath.with_suffix('.json')
+                        if tag_file.exists():
+                            try:
+                                tags = json.loads(tag_file.read_text(encoding='utf-8')).get('tags', [])
+                            except Exception:
+                                pass
+                        if not tags:
+                            tags = tag_db.get(rel, [])
+                        memes.append({'name': rel, 'url': rel, 'tags': tags})
+                # ★ 2026-11-02：带上「什么时候收的」「是不是被拉黑」——
+                #   表情包页要按 7 天新增分组，管理员还得能一键"不喜欢"。
+                try:
+                    _cbase = PROJECT / 'memes' / 'memes' / 'collected'
+                    _idx = {}
+                    _ip = _cbase / 'index.json'
+                    if _ip.exists():
+                        _idx = json.loads(_ip.read_text(encoding='utf-8')) or {}
+                    _blk = {}
+                    _bp = _cbase / 'blocked.json'
+                    if _bp.exists():
+                        _blk = json.loads(_bp.read_text(encoding='utf-8')) or {}
+                    _by_rel = {}
+                    for _sha, _v in (_idx.items() if isinstance(_idx, dict) else []):
+                        if isinstance(_v, dict) and _v.get('path'):
+                            _by_rel[str(_v['path']).replace('\\', '/')] = _v
+                    _blk_rel = {str(v.get('rel') or '').replace('\\', '/')
+                                for v in (_blk.values() if isinstance(_blk, dict) else [])
+                                if isinstance(v, dict)}
+                    for _m in memes:
+                        _rel = str(_m.get('name') or '')
+                        _ent = _by_rel.get(_rel) or {}
+                        _m['collected'] = bool(_ent)
+                        _m['collected_ts'] = float(_ent.get('ts') or 0)
+                        _m['blocked'] = _rel in _blk_rel
+                        _m['status'] = str(_ent.get('status') or 'approved')
+                except Exception:
+                    pass
+                self._send_json(200, {'memes': memes})
+            except Exception as e:
+                self._send_json(200, {'error': str(e), 'memes': []})
+            return
+
+        if path == "/api/memes/emotions":
+            emotions = set()
+            for meme_dir in [PROJECT / 'memes' / 'memes', PROJECT.parent / 'memes' / 'memes']:
+                if not meme_dir.exists():
+                    continue
+                # Read tags from individual .json sidecar files
+                for root_dir, dirs, files in os.walk(meme_dir):
+                    for fname in files:
+                        if fname.lower().endswith('.json') and fname.lower() != 'tags.json':
+                            try:
+                                with open(os.path.join(root_dir, fname), 'r', encoding='utf-8') as tf:
+                                    data = json.load(tf)
+                                    for t in (data.get('tags') or []):
+                                        emotions.add(str(t))
+                            except Exception: pass
+                # Also read from main tags.json database
+                tags_path = meme_dir / 'tags.json'
+                if tags_path.exists():
+                    try:
+                        with open(tags_path, 'r', encoding='utf-8') as tf:
+                            tag_db = json.load(tf)
+                            for tags in tag_db.values():
+                                if isinstance(tags, dict):
+                                    tags = tags.get('tags', [])
+                                for t in (tags or []):
+                                    emotions.add(str(t))
+                    except Exception: pass
+            self._send_json(200, {'emotions': sorted(emotions)})
+            return
+
+        if path == "/api/memes/recent":
+            try:
+                days = 7
+                try:
+                    q = parse_qs(urlparse(self.path).query)
+                    days = int((q.get('days') or ['7'])[0])
+                except Exception:
+                    days = 7
+                cutoff = time.time() - max(0, days) * 86400
+                cbase = PROJECT / 'memes' / 'memes' / 'collected'
+                idx = {}
+                ip = cbase / 'index.json'
+                if ip.exists():
+                    idx = json.loads(ip.read_text(encoding='utf-8')) or {}
+                blk = {}
+                bp = cbase / 'blocked.json'
+                if bp.exists():
+                    blk = json.loads(bp.read_text(encoding='utf-8')) or {}
+                blk_rel = {str(v.get('rel') or '').replace('\\', '/')
+                           for v in (blk.values() if isinstance(blk, dict) else [])
+                           if isinstance(v, dict)}
+                items = []
+                for sha, v in (idx.items() if isinstance(idx, dict) else []):
+                    if not isinstance(v, dict):
+                        continue
+                    ts = float(v.get('ts') or 0)
+                    if ts < cutoff:
+                        continue
+                    rel = str(v.get('path') or '').replace('\\', '/')
+                    items.append({'name': rel, 'url': rel, 'tags': v.get('tags') or [],
+                                  'ts': ts, 'blocked': rel in blk_rel})
+                items.sort(key=lambda x: -x['ts'])
+                self._send_json(200, {'days': days, 'count': len(items), 'memes': items})
+            except Exception as e:
+                self._send_json(200, {'days': 7, 'count': 0, 'memes': [], 'error': str(e)})
+            return
+
+        if path == "/api/memes/pending":
+            # ★ 2026-11-02：审核区 —— 新收的图先摆在这儿，通过后才进发送池。
+            try:
+                sys.path.insert(0, str(PROJECT))
+                import meme_collect as _mc2
+                items = _mc2.list_by_status("pending")
+                for it in items:
+                    it["url"] = it.get("path") or ""
+                    # 自动打标建议（2026-11-15）：候选素材不是表情包，
+                    # 建议标签只展示，等人复核采纳后才写进 tags.json。
+                    try:
+                        _sg = _mc2.suggest_for(it.get("path") or "")
+                        it["suggest_tags"] = _sg.get("suggest_tags") or []
+                        it["suggest_reason"] = _sg.get("reason") or ""
+                        it["desc"] = _sg.get("desc") or ""
+                    except Exception:
+                        it["suggest_tags"] = []
+                        it["suggest_reason"] = ""
+                        it["desc"] = ""
+                self._send_json(200, {"count": len(items), "memes": items})
+            except Exception as e:
+                self._send_json(200, {"count": 0, "memes": [], "error": str(e)})
+            return
+
+        # Serve meme images statically
+        if path.startswith('/memes/'):
+            rel = path[len('/memes/'):]
+            # Normalize accidental backslashes from any client-side path handling
+            rel = rel.replace('\\\\', '/')
+            # Decode percent-encoded UTF-8 paths
+            try:
+                rel = unquote(rel)
+            except Exception:
+                pass
+            # On Windows the request path may arrive as raw UTF-8 bytes decoded to str
+            # or as latin1 mojibake; normalize to proper filesystem path.
+            try:
+                if isinstance(rel, str):
+                    rel = rel.encode('latin1').decode('utf8')
+            except Exception:
+                pass
+            if _serve_meme(self, rel):
+                return
+
+        self.send_response(404)
+        self.end_headers()
+
+    def do_POST(self):
+        if not self._host_allowed() or not self._origin_allowed():
+            self.send_response(403)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        parsed = urlparse(self.path)
+        path = parsed.path
+        try:
+            with open(str(HERE / 'model-debug.log'), 'a', encoding='utf-8') as df:
+                df.write('[POST] path=' + str(path) + '\n')
+        except Exception:
+            pass
+        data = {}
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+            if length > 0:
+                body = self.rfile.read(length).decode("utf-8")
+                data = json.loads(body)
+        except Exception:
+            pass
+
+        # ── AIGC 全模态（1.6.0 P1.5）：submit / delete ──
+        if path.startswith("/api/aigc/"):
+            self._send_json(200, _aigc_post(path, data))
+            return
+
+        # ── 热补丁更新（2026-11-01）：安装 + 可选重启（后台跑，前端轮询进度）──
+        if path == "/api/update/apply":
+            try:
+                if _upd_snapshot().get("running"):
+                    self._send_json(200, {"ok": False, "error": "已经有一个更新在跑"})
+                    return
+                man_url = str(data.get("url") or load_config().get("update_manifest_url") or "")
+                _upd_state(running=True, done=False, ok=False, error="", percent=0,
+                           phase="manifest", text="准备中", downloaded=0, total=0,
+                           version="", report={})
+                threading.Thread(target=_update_worker,
+                                 args=(man_url, bool(data.get("restart"))),
+                                 daemon=True).start()
+                self._send_json(200, {"ok": True, "started": True})
+            except Exception as e:
+                _upd_state(running=False, done=True, ok=False, error=f"{type(e).__name__}: {e}")
+                self._send_json(200, {"ok": False, "error": f"{type(e).__name__}: {e}"})
+            return
+
+        # ── Agent 端点转发（前端只跟 webui_server 说话，agent 逻辑在 bot_core）──
+        #  设计文档 §3 明确：「不新增独立进程/端口（复用 webui_server 转发）」。
+        #  bot 未运行时返回一个可读的错误（前端能提示"先启动 Bot"），而不是静默失败。
+        if path.startswith("/api/agent/"):
+            self._proxy_agent_post(path, data)
+            return
+
+        # ── 人格卡转发（批次 I1）：逻辑在 bot_core / harness.persona_cards ──
+        if path.startswith("/api/persona/cards"):
+            self._proxy_agent_post(path, data)
+            return
+
+        # ── 日志页的事件源（2026-10-24）──────────────────────────────
+        # ★ 必须在 do_POST 里：前端是 `API('/events', {method:'POST', ...})`。
+        #   第一版错放在 do_GET，POST 请求匹配不到路由 → 落到默认分支返回
+        #   空响应体 → 前端 `res.json()` 抛 "UNEXPECTED END OF JSON INPUT"，
+        #   而页面还提示"后端未启动时属正常"，把人往错的方向引。
+        #   实测：后端活着（BOT 运行 11 秒）但日志页一片空白。
+        #   body 用上面已解析好的 data，不重复读 rfile（读第二次会拿到空）。
+        if path == "/api/events":
+            limit = int(data.get("limit", 400)) if isinstance(data, dict) else 400
+            self._send_json(200, collect_events(limit))
+            return
+
+        # ── 轮次视图（2026-10-25）：按一次问答重组，供日志页画对话流 ──
+        if path == "/api/rounds":
+            limit = int(data.get("limit", 120)) if isinstance(data, dict) else 120
+            scope = str(data.get("scope") or "") if isinstance(data, dict) else ""
+            out = collect_rounds(limit)
+            if scope:
+                out["rounds"] = [r for r in out["rounds"]
+                                 if str(r.get("scope") or "pm") == scope]
+            self._send_json(200, out)
+            return
+
+        if path == "/api/imagegen/generate":
+            payload = dict(data or {})
+            prompt = (payload.get("prompt") or "").strip()
+            negative_prompt = (payload.get("negative_prompt") or "").strip()
+            width = int(payload.get("width") or 1024)
+            height = int(payload.get("height") or 1536)
+            steps = int(payload.get("steps") or 24)
+            cfg = float(payload.get("cfg") or 7)
+            seed = int(payload.get("seed") or 42)
+            style = (payload.get("style") or "default").strip()
+            llm_model = (payload.get("llm_model") or "deepseek").strip()
+            llm_url = (payload.get("llm_url") or "").strip()
+            comfyui_host = (payload.get("comfyui_host") or "127.0.0.1").strip()
+            comfyui_port = int(payload.get("comfyui_port") or 8000)
+            comfyui_timeout = int(payload.get("comfyui_timeout") or 120)
+            comfyui_checkpoint = (payload.get("comfyui_checkpoint") or "").strip()
+            workflow_path = (payload.get("workflow_path") or "").strip()
+            prompt_node_id = (payload.get("prompt_node_id") or "353").strip()
+            nsfw_enabled = bool(payload.get("nsfw_enabled", True))
+            if not prompt:
+                self._send_json(200, {"success": False, "error": "prompt 为空"})
+                return
+            try:
+                from comfyui_client import (
+                    get_comfyui_client,
+                    load_workflow,
+                    set_prompt_in_workflow,
+                )
+            except Exception as e:
+                self._send_json(200, {"success": False, "error": f"ComfyUI 模块未找到: {e}"})
+                return
+            try:
+                client = get_comfyui_client({
+                    "comfyui_host": comfyui_host,
+                    "comfyui_port": comfyui_port,
+                    "comfyui_timeout": comfyui_timeout,
+                })
+                if not client.is_connected():
+                    self._send_json(200, {"success": False, "error": "ComfyUI 未连接"})
+                    return
+                api_workflow = {}
+                if workflow_path and Path(workflow_path).exists():
+                    api_workflow = load_workflow(workflow_path)
+                    api_workflow = set_prompt_in_workflow(api_workflow, prompt, prompt_node_id)
+                else:
+                    api_workflow = {
+                        "1": {"class_type": "LoadImage", "inputs": {"image": "example.png", "upload": "image"}},
+                        "2": {"class_type": "UNETLoader", "inputs": {"unet_name": comfyui_checkpoint or "anima_baseV10.safetensors", "weight_dtype": "default"}},
+                        "3": {"class_type": "CLIPLoader", "inputs": {"clip_name": "qwen_3_06b_base.safetensors", "type": "stable_diffusion", "device": "default"}},
+                        "4": {"class_type": "CLIPTextEncode", "inputs": {"text": prompt, "clip": ["3", 0]}},
+                        "5": {"class_type": "CLIPTextEncode", "inputs": {"text": (negative_prompt or "lowres, bad anatomy, bad hands, text, error, worst quality, low quality, jpeg artifacts, signature, watermark"), "clip": ["3", 0]}},
+                        "6": {"class_type": "VAELoader", "inputs": {"vae_name": "qwen_image_vae.safetensors"}},
+                        "7": {"class_type": "VAEEncode", "inputs": {"pixels": ["1", 0], "vae": ["6", 0]}},
+                        "8": {"class_type": "KSampler", "inputs": {"model": ["2", 0], "positive": ["4", 0], "negative": ["5", 0], "latent_image": ["7", 0], "seed": seed, "steps": steps, "cfg": cfg, "sampler_name": "euler", "scheduler": "normal", "denoise": 0.6 if style == "img2img" else 1.0}},
+                        "9": {"class_type": "VAEDecode", "inputs": {"samples": ["8", 0], "vae": ["6", 0]}},
+                        "10": {"class_type": "SaveImage", "inputs": {"images": ["9", 0], "filename_prefix": "EggBloom"}},
+                    }
+                prompt_id = client.queue_prompt(api_workflow)
+                try:
+                    local_paths = client.wait_and_get_images(prompt_id, timeout=comfyui_timeout)
+                    image_url = ""
+                    if local_paths:
+                        first = local_paths[0]
+                        if first.startswith("http://"):
+                            image_url = first
+                        else:
+                            image_url = f"file:///{first.replace(chr(92), '/')}"
+                    self._send_json(200, {"success": True, "prompt_id": prompt_id, "image_url": image_url, "prompt": prompt, "width": width, "height": height, "workflow_path": workflow_path})
+                    return
+                except Exception as e:
+                    self._send_json(200, {"success": True, "prompt_id": prompt_id, "image_url": "", "error": f"队列已提交，下载失败: {e}"})
+                    return
+            except Exception as e:
+                self._send_json(200, {"success": False, "error": str(e)})
+                return
+
+        if path == "/api/imagegen/test":
+            payload = dict(data or {})
+            host = (payload.get("host") or "127.0.0.1").strip()
+            port = int(payload.get("port") or 8000)
+            timeout = int(payload.get("timeout") or 3)
+            try:
+                url = f"http://{host}:{port}/system_stats"
+                req = urllib.request.Request(url, headers={"Accept": "application/json"})
+                with _local_open(req, timeout=timeout) as r:
+                    resp_data = json.loads(r.read().decode("utf-8"))
+                self._send_json(200, {"success": True, "comfyui_version": resp_data.get("system", {}).get("comfyui_version", "")})
+                return
+            except Exception as e:
+                self._send_json(200, {"success": False, "output": str(e)})
+                return
+
+        if path == "/api/imagegen/workflow":
+            payload = dict(data or {})
+            filename = (payload.get("filename") or "").strip()
+            content = payload.get("content")
+            save_dir = PROJECT / "webui" / "uploaded_workflows"
+            try:
+                save_dir.mkdir(parents=True, exist_ok=True)
+                safe_name = re.sub(r'[^A-Za-z0-9_.-]+', '_', filename) or "workflow.json"
+                save_path = save_dir / safe_name
+                if isinstance(content, str):
+                    open(str(save_path), "w", encoding="utf-8").write(content)
+                else:
+                    save_path.write_bytes(content)
+                self._send_json(200, {"success": True, "path": str(save_path)})
+                return
+            except Exception as e:
+                self._send_json(200, {"success": False, "output": str(e)})
+                return
+
+        if path == "/api/config/reload":
+            result = push_bot_reload()
+            self._send_json(200, {"ok": True, "bot": result})
+            return
+
+        if path == "/api/config":
+            cfg = load_config()
+            update = {k: v for k, v in data.items() if k not in ("api_key", "api_key_clear")}
+            # 分离态：限制键服务端 403，不能靠前端隐藏（设计 §7）
+            try:
+                from separation import active as _sep_active, restricted_keys as _sep_keys
+                if _sep_active():
+                    _bad = sorted(set(update) & _sep_keys())
+                    if "de_ai" in update:
+                        _bad.append("de_ai")
+                    if _bad:
+                        self._send_json(403, {
+                            "ok": False, "separated": True,
+                            "error": "已分离：限制已归零并锁定，不能在配置页写回",
+                            "keys": _bad,
+                        })
+                        return
+            except Exception:
+                pass
+            # 清除 Key：api_key_clear 传提供商 id（清专属凭据）或 "_global_"（清全局 Key）
+            clear_target = str(data.get("api_key_clear") or "").strip()
+            if clear_target:
+                try:
+                    from config import clear_provider_api_key
+                    if clear_target == "_global_":
+                        from cred_store import MODEL_API_KEY_CRED, delete_cred
+                        delete_cred(MODEL_API_KEY_CRED)
+                    else:
+                        clear_provider_api_key(clear_target)
+                except Exception:
+                    pass
+            if "group_tool_allowlist" in update and not update["group_tool_allowlist"]:
+                # 空名单 = 恢复默认群聊工具（删除配置键，回到 GROUP_TOOLS）
+                cfg.pop("group_tool_allowlist", None)
+            # 空闲退场静默阈值下限保护：避免前端误填 0 导致 Bot 刚回复完就触发“退场”
+            if "group_idle_exit_min_silence" in update:
+                try:
+                    sil = int(update["group_idle_exit_min_silence"] or 0)
+                except (TypeError, ValueError):
+                    sil = 0
+                update["group_idle_exit_min_silence"] = max(sil, 30)
+            # 每提供商 API Key：写入凭据管理器专属条目（EggBloom.MODEL_API_KEY_{id}），
+            # providers 数组只存 id/URL/模型，不落盘明文 Key；旧明文 Key 在此自动迁移。
+            if isinstance(update.get("providers"), list):
+                try:
+                    from config import save_provider_api_key, clear_provider_api_key
+                except Exception:
+                    save_provider_api_key = clear_provider_api_key = None
+                old_provider_ids = [str(p.get("id")) for p in (cfg.get("providers") or []) if isinstance(p, dict)]
+                cleaned_providers = []
+                for _p in update["providers"]:
+                    if not isinstance(_p, dict):
+                        continue
+                    _p = dict(_p)
+                    _pid = str(_p.get("id") or "")
+                    _pk = _p.get("api_key") or ""
+                    _clear = bool(_p.pop("_clear_key", False))
+                    _p.pop("has_api_key", None)  # 展示用标记，不落盘
+                    if save_provider_api_key is not None:
+                        if _clear:
+                            clear_provider_api_key(_pid)
+                        elif _pk and not _is_redacted_key(_pk):
+                            save_provider_api_key(_pid, _pk)
+                        elif _pk:
+                            # 前端只回传掩码占位符：若旧配置里存有该提供商明文 Key，迁移进凭据管理器
+                            _old_entry = next((p for p in (cfg.get("providers") or [])
+                                               if isinstance(p, dict) and str(p.get("id")) == _pid), None)
+                            _old_plain = (_old_entry or {}).get("api_key") or ""
+                            if _old_plain and not _is_redacted_key(_old_plain):
+                                save_provider_api_key(_pid, _old_plain)
+                    _p.pop("api_key", None)  # 不落盘明文
+                    cleaned_providers.append(_p)
+                # 被删除的提供商：清理其专属凭据，避免残留 Key 占位
+                if save_provider_api_key is not None:
+                    kept_ids = [str(x.get("id")) for x in cleaned_providers]
+                    for _oid in old_provider_ids:
+                        if _oid and _oid not in kept_ids:
+                            try:
+                                clear_provider_api_key(_oid)
+                            except Exception:
+                                pass
+                update["providers"] = cleaned_providers
+            # ★ 2026-10-25：不允许把 model_name 写成空串。
+            #   配置页的「保存」会把表单里所有字段整组提交，而模型下拉在
+            #   「该提供商还没拉过模型目录」时值是空的 → 一次普通保存就把
+            #   model_name 清成 ''，之后所有请求都发 model="" 。
+            #   实测配置里就出现过 model_name='' 而 api_provider='aliyun'，
+            #   症状是「切换了模型但测试/回复用的不是它」。
+            #   清空 model_name 没有任何正当用途（等于把 bot 打瘸），所以直接挡。
+            if "model_name" in update and not str(update.get("model_name") or "").strip():
+                _keep = str(cfg.get("model_name") or "").strip()
+                if _keep:
+                    update["model_name"] = _keep
+                    print(f"[config] 忽略空的 model_name（保留 {_keep}）")
+                else:
+                    update.pop("model_name", None)
+            cfg.update(update)
+            if data.get("api_key") and not _is_redacted_key(data.get("api_key")):
+                # 新 key 写入凭据管理器，不落盘明文
+                try:
+                    from cred_store import MODEL_API_KEY_CRED, write_cred, read_cred
+                    new_key = str(data["api_key"]).strip()
+                    if new_key and "YOUR" not in new_key:
+                        write_cred(MODEL_API_KEY_CRED, new_key)
+                        cfg["api_key"] = read_cred(MODEL_API_KEY_CRED) or new_key
+                except Exception:
+                    pass
+            cfg.pop("api_key", None)  # save_config 时不写明文
+            success = save_config(cfg)
+            reload_result = None
+            if success:
+                CONFIG_CACHE.update(cfg)
+                reload_result = push_bot_reload()  # 配置变更后通知 bot_core 热重载
+            self._send_json(200, {"success": success, "reload": reload_result})
+            return
+
+        if path == "/api/llama/test":
+            body = dict(data or {})
+            driver = (body.get("driver") or "").strip().lower()
+            model_path = (body.get("model_path") or "").strip()
+            port = int(body.get("port") or 8081)
+            model_name = (body.get("model_name") or "").strip()
+            use_local = bool(body.get("use_local_llm"))
+            try:
+                if not use_local:
+                    self._send_json(400, {"ok": False, "error": "未启用本地 LLM"})
+                    return
+                if driver == "ollama":
+                    base_url = f"http://127.0.0.1:{port}/v1/chat/completions"
+                    req = urllib.request.Request(base_url, data=json.dumps({"model": model_name or "llama3", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 4}).encode("utf-8"), headers={"Content-Type": "application/json"})
+                    with _local_open(req, timeout=15) as r:
+                        resp = json.loads(r.read().decode("utf-8"))
+                    self._send_json(200, {"ok": True, "driver": driver, "api_url": base_url, "model_name": model_name or "llama3", "error": None})
+                    return
+                if driver == "lmstudio":
+                    base_url = f"http://127.0.0.1:{port}/v1/chat/completions"
+                    req = urllib.request.Request(base_url, data=json.dumps({"model": model_name or "local-model", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 4}).encode("utf-8"), headers={"Content-Type": "application/json"})
+                    with _local_open(req, timeout=15) as r:
+                        resp = json.loads(r.read().decode("utf-8"))
+                    self._send_json(200, {"ok": True, "driver": driver, "api_url": base_url, "model_name": model_name or "local-model", "error": None})
+                    return
+                if driver == "llama-server":
+                    _LLAMA_SERVER_EXE = (body.get("exe_path") or "").strip()
+                    _LLAMA_MODEL = model_path or ""
+                    _LLAMA_PORT = port or 8081
+                    if not _LLAMA_SERVER_EXE:
+                        self._send_json(400, {"ok": False, "driver": driver, "error": "未填写 llama-server 可执行文件路径"})
+                        return
+                    if not os.path.exists(_LLAMA_SERVER_EXE):
+                        self._send_json(400, {"ok": False, "driver": driver, "error": f"llama-server 不存在: {_LLAMA_SERVER_EXE}"})
+                        return
+                    if not _LLAMA_MODEL:
+                        self._send_json(400, {"ok": False, "driver": driver, "error": "未填写模型 .gguf 路径"})
+                        return
+                    if not os.path.exists(_LLAMA_MODEL):
+                        self._send_json(400, {"ok": False, "driver": driver, "error": f"模型文件不存在: {_LLAMA_MODEL}"})
+                        return
+                    ready = False
+                    try:
+                        req = urllib.request.Request(f"http://127.0.0.1:{_LLAMA_PORT}/health")
+                        with _local_open(req, timeout=5) as resp:
+                            ready = resp.status == 200
+                    except Exception:
+                        ready = False
+                    if not ready:
+                        stderr_log = HERE / "llama-server-stderr.log"
+                        try:
+                            with open(stderr_log, "w", encoding="utf-8", errors="replace") as sf:
+                                p = subprocess.Popen(
+                                    [_LLAMA_SERVER_EXE, "--model", _LLAMA_MODEL, "--host", "127.0.0.1", "--port", str(_LLAMA_PORT), "-ngl", "999", "--cpu-moe", "--no-mmap", "--ctx-size", "32768"],
+                                    stdin=subprocess.DEVNULL,
+                                    stdout=subprocess.DEVNULL, stderr=sf,
+                                    creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+                                )
+                        except Exception as e:
+                            self._send_json(400, {"ok": False, "driver": driver, "error": f"llama-server 启动失败: {e}"})
+                            return
+                        for i in range(90):
+                            time.sleep(1)
+                            try:
+                                req = urllib.request.Request(f"http://127.0.0.1:{_LLAMA_PORT}/health")
+                                with _local_open(req, timeout=3) as resp:
+                                    if resp.status == 200:
+                                        ready = True
+                                        break
+                            except Exception as e:
+                                try:
+                                    with open(str(HERE / "llama-health-debug.log"), "a", encoding="utf-8") as db:
+                                        db.write(f"[{time.strftime('%H:%M:%S')}] iter {i} health err: {type(e).__name__}: {e}\n")
+                                except Exception:
+                                    pass
+                            if p.poll() is not None:
+                                break
+                        if not ready:
+                            tail = ""
+                            try:
+                                if stderr_log.exists():
+                                    lines = open(stderr_log, encoding="utf-8", errors="replace").read().splitlines()
+                                    tail = "\n".join(lines[-10:])
+                            except Exception:
+                                pass
+                            self._send_json(400, {"ok": False, "driver": driver, "api_url": f"http://127.0.0.1:{_LLAMA_PORT}/v1/chat/completions", "model_name": model_name or "", "error": f"llama-server 未就绪，请查看输出日志。\n{tail}"})
+                            return
+                    if ready:
+                        self._send_json(200, {"ok": True, "driver": driver, "api_url": f"http://127.0.0.1:{_LLAMA_PORT}/v1/chat/completions", "model_name": model_name or "qwen3.6", "error": None})
+                        return
+
+                self._send_json(400, {"ok": False, "error": f"不支持的驱动程序: {driver}"})
+            except Exception as e:
+                self._send_json(400, {"ok": False, "driver": driver, "error": str(e)})
+            return
+
+        if path == "/api/llama/start":
+            body = dict(data or {})
+            driver = (body.get("driver") or "").strip().lower()
+            model_path = (body.get("model_path") or "").strip()
+            port = int(body.get("port") or 8081)
+            model_name = (body.get("model_name") or "").strip()
+            use_local = bool(body.get("use_local_llm"))
+            try:
+                if not use_local:
+                    self._send_json(400, {"ok": False, "error": "未启用本地 LLM"})
+                    return
+                if driver != "llama-server":
+                    self._send_json(400, {"ok": False, "error": "仅支持 llama-server 手动启停"})
+                    return
+                _LLAMA_SERVER_EXE = (body.get("exe_path") or "").strip()
+                _LLAMA_MODEL = model_path or ""
+                _LLAMA_PORT = port or 8081
+                if not _LLAMA_SERVER_EXE:
+                    self._send_json(400, {"ok": False, "driver": driver, "error": "未填写 llama-server 可执行文件路径"})
+                    return
+                if not os.path.exists(_LLAMA_SERVER_EXE):
+                    self._send_json(400, {"ok": False, "driver": driver, "error": f"llama-server 不存在: {_LLAMA_SERVER_EXE}"})
+                    return
+                if not _LLAMA_MODEL:
+                    self._send_json(400, {"ok": False, "driver": driver, "error": "未填写模型 .gguf 路径"})
+                    return
+                if not os.path.exists(_LLAMA_MODEL):
+                    self._send_json(400, {"ok": False, "driver": driver, "error": f"模型文件不存在: {_LLAMA_MODEL}"})
+                    return
+                ready = False
+                try:
+                    req = urllib.request.Request(f"http://127.0.0.1:{_LLAMA_PORT}/health")
+                    with _local_open(req, timeout=5) as resp:
+                        ready = resp.status == 200
+                except Exception:
+                    ready = False
+                if ready:
+                    self._send_json(200, {"ok": True, "driver": driver, "api_url": f"http://127.0.0.1:{_LLAMA_PORT}/v1/chat/completions", "model_name": model_name or "qwen3.6", "error": None, "started": False})
+                    return
+                stderr_log = HERE / "llama-server-stderr.log"
+                try:
+                    with open(stderr_log, "w", encoding="utf-8", errors="replace") as sf:
+                        p = subprocess.Popen(
+                            [_LLAMA_SERVER_EXE, "--model", _LLAMA_MODEL, "--host", "127.0.0.1", "--port", str(_LLAMA_PORT), "-ngl", "999", "--cpu-moe", "--no-mmap", "--ctx-size", "32768"],
+                            stdin=subprocess.DEVNULL,
+                            stdout=subprocess.DEVNULL, stderr=sf,
+                            creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+                        )
+                except Exception as e:
+                    self._send_json(400, {"ok": False, "driver": driver, "error": f"llama-server 启动失败: {e}"})
+                    return
+                for i in range(120):
+                    time.sleep(1)
+                    try:
+                        req = urllib.request.Request(f"http://127.0.0.1:{_LLAMA_PORT}/health")
+                        with _local_open(req, timeout=3) as resp:
+                            if resp.status == 200:
+                                ready = True
+                                break
+                    except Exception:
+                        pass
+                    if p.poll() is not None:
+                        break
+                if ready:
+                    self._send_json(200, {"ok": True, "driver": driver, "api_url": f"http://127.0.0.1:{_LLAMA_PORT}/v1/chat/completions", "model_name": model_name or "qwen3.6", "error": None, "started": True})
+                    return
+                tail = ""
+                try:
+                    if stderr_log.exists():
+                        lines = open(stderr_log, encoding="utf-8", errors="replace").read().splitlines()
+                        tail = "\n".join(lines[-10:])
+                except Exception:
+                    pass
+                self._send_json(400, {"ok": False, "driver": driver, "api_url": f"http://127.0.0.1:{_LLAMA_PORT}/v1/chat/completions", "model_name": model_name or "qwen3.6", "error": f"llama-server 启动后未就绪，请查看输出日志。\n{tail}"})
+                return
+            except Exception as e:
+                self._send_json(400, {"ok": False, "driver": driver, "error": str(e)})
+            return
+
+        if path == "/api/llama/scan":
+            try:
+                body2 = dict(data or {})
+                user_root = (body2.get("root") or "").strip()
+                exes, models = [], []
+                seen_exe, seen_model = set(), set()
+                # 用户指定目录优先；留空则全盘常见位置
+                if user_root:
+                    if os.path.isdir(user_root):
+                        search_roots = [user_root]
+                    else:
+                        self._send_json(400, {"ok": False, "error": f"目录不存在: {user_root}"})
+                        return
+                else:
+                    search_roots = [HERE]
+                    import string as _string
+                    for ch in _string.ascii_uppercase:
+                        root = f"{ch}:\\"
+                        if os.path.exists(root):
+                            search_roots.append(root)
+                    for base in (os.path.expanduser("~"),
+                                 os.environ.get("ProgramFiles") or os.environ.get("ProgramW6432") or "",
+                                 os.environ.get("ProgramFiles(x86)") or ""):
+                        if os.path.isdir(base):
+                            search_roots.append(base)
+                for p in search_roots:
+                    for part in os.listdir(p) if os.path.isdir(p) else []:
+                        full = os.path.join(p, part)
+                        name = part.lower()
+                        if os.path.isfile(full) and name in ("llama-server.exe", "llama-server", "ollama.exe", "ollama"):
+                            if full not in seen_exe:
+                                seen_exe.add(full)
+                                exes.append(full)
+                        elif os.path.isfile(full) and name.endswith(".gguf"):
+                            if full not in seen_model:
+                                seen_model.add(full)
+                                models.append(full)
+                        elif os.path.isdir(full) and any(k in name for k in ("llama", "qwen", "model", "gguf")):
+                            try:
+                                for root2, dirs2, files2 in os.walk(full):
+                                    dirs2[:] = [d for d in dirs2 if not d.startswith(".__")]
+                                    for fn in files2:
+                                        fl = fn.lower()
+                                        if fl in ("llama-server.exe",) or fl.endswith(".gguf"):
+                                            fp = os.path.join(root2, fn)
+                                            cap = 400
+                                            if fl.endswith(".gguf") and len(models) >= cap:
+                                                continue
+                                            if fl == "llama-server.exe" and len(exes) >= cap:
+                                                continue
+                                            if fl.endswith(".gguf"):
+                                                if fp not in seen_model:
+                                                    seen_model.add(fp)
+                                                    models.append(fp)
+                                            else:
+                                                if fp not in seen_exe:
+                                                    seen_exe.add(fp)
+                                                    exes.append(fp)
+                            except Exception:
+                                pass
+                exes = list(dict.fromkeys(exes))
+                models = list(dict.fromkeys(models))
+                def _fmt_model(m):
+                    try:
+                        return {"path": m, "size": os.path.getsize(m)}
+                    except Exception:
+                        return {"path": m, "size": 0}
+                self._send_json(200, {
+                    "ok": True,
+                    "llama_servers": exes[:10],
+                    "models": [_fmt_model(m) for m in models[:60]],
+                })
+            except Exception as e:
+                self._send_json(500, {"ok": False, "error": str(e)})
+            return
+
+        if path == "/api/llama/stop":
+            body = dict(data or {})
+            port = int(body.get("port") or 8081)
+            try:
+                url = f"http://127.0.0.1:{port}/shutdown"
+                req = urllib.request.Request(url, method="POST")
+                with _local_open(req, timeout=10) as r:
+                    self._send_json(200, {"ok": True})
+                    return
+            except Exception as e:
+                self._send_json(200, {"ok": True, "note": "shutdown request failed: " + str(e)})
+            return
+
+        if path == "/api/llama/open":
+            body = dict(data or {})
+            port = int(body.get("port") or 8081)
+            url = f"http://127.0.0.1:{port}"
+            try:
+                if sys.platform == "win32":
+                    os.startfile(url)
+                else:
+                    import webbrowser
+                    webbrowser.open(url)
+            except Exception:
+                pass
+            self._send_json(200, {"ok": True, "url": url})
+            return
+
+        # ── 群/好友管理转发（T8）──
+        #  MCP 写端点（T2）：load/test 会起 MCP 子进程握手（mcp_hub 内部可等 90~120s），
+        #  代理超时单独放宽，否则 webui 先断、前端看不到真实错误。
+        if path.startswith("/api/groups") or path.startswith("/api/friends") \
+                or path.startswith("/api/admin/") or path.startswith("/api/mcp/"):
+            _pto = 150.0 if path in ("/api/mcp/load", "/api/mcp/test") else 30.0
+            self._proxy_bot_core(path, dict(data or {}), timeout=_pto)
+            return
+
+        # ── 前端版本切换（T8）──────────────────────────────────────────
+        #  写操作，故只接受 POST（且已在 do_POST 顶部过 Origin 闸门）。
+        #  设计意图：新版视觉未定稿前，必须能一键切回旧版对照接口，
+        #  所以这不是临时调试口，而是交付物的一部分。
+        if path == "/api/ui/version":
+            v = str((data or {}).get("version") or "").strip().lower()
+            if _frontend_file(v) is None:
+                avail = [k for k in FRONTENDS if FRONTENDS[k].is_file()]
+                self._send_json(200, {"ok": False,
+                                      "error": "版本不存在: " + (v or "(空)"),
+                                      "available": avail})
+                return
+            try:
+                _UI_VERSION_FILE.write_text(v, encoding="utf-8")
+                _load_html()
+                self._send_json(200, {"ok": True, "version": v})
+            except Exception as e:
+                self._send_json(200, {"ok": False, "error": str(e)})
+            return
+
+        if path == "/api/providers/models":
+            body = dict(data or {})
+            # 参数别名：向导/卡片历史上用 provider/api_url 传参，处理器读的是
+            # provider_id/base_url —— 两套都认，否则向导"拉取模型"一直是空转
+            provider_id = (body.get("provider_id") or body.get("provider") or "").strip()
+            base_url = (body.get("base_url") or body.get("api_url") or "").strip().rstrip("/")
+            api_key = (body.get("api_key") or "").strip()
+            api_key_label = "set" if api_key else "empty"
+            try:
+                with open(str(HERE / 'model-debug.log'), 'a', encoding='utf-8') as df:
+                    df.write(f'[RUNTIME] module={Path(__file__).resolve()} api_key={api_key_label}\n')
+            except Exception:
+                pass
+            models = []
+            provider_type = _detect_provider_type(base_url, provider_id)
+            # 前端显式声明的协议优先（提供商编辑弹窗可选），避免中转/网关被 URL 误判
+            proto_override = (body.get("protocol") or "").strip().lower()
+            if proto_override and proto_override != 'auto' and proto_override in (
+                    'openai', 'anthropic', 'gemini', 'ollama', 'lmstudio', 'deepseek', 'custom'):
+                provider_type = proto_override
+            candidate_urls = _model_candidate_urls(base_url, provider_type)
+            local_models = []
+            try:
+                providers_path = PROJECT / "webui" / "providers.json"
+                if providers_path.exists():
+                    all_providers = json.loads(providers_path.read_text(encoding="utf-8"))
+                else:
+                    all_providers = []
+                if provider_id:
+                    found = next((p for p in all_providers if p.get("id") == provider_id), None)
+                    if found:
+                        local_models = [{"id": m.get("id", ""), "name": m.get("name", m.get("id", ""))} for m in found.get("models", []) if m.get("id")]
+                        local_models.sort(key=lambda x: x["id"])
+            except Exception as e:
+                local_models = []
+                try:
+                    with open(str(HERE / 'model-debug.log'), 'a', encoding='utf-8') as df:
+                        df.write('[LOCAL PARSE ERROR] ' + str(e) + '\n')
+                except Exception:
+                    pass
+            models = local_models
+            if candidate_urls and (not api_key or _is_redacted_key(api_key)):
+                # 前端不回传明文 key：服务端按「提供商专属凭据 → 全局 Key」顺序解析
+                try:
+                    from config import get_provider_api_key
+                    api_key = get_provider_api_key(provider_id) or ""
+                except Exception:
+                    api_key = ""
+                if not api_key:
+                    try:
+                        from config import get_api_key as _gak
+                        api_key = _gak() or ""
+                    except Exception:
+                        api_key = ""
+                if not api_key:
+                    try:
+                        with open(str(HERE / 'model-debug.log'), 'a', encoding='utf-8') as df:
+                            df.write('[SKIP] api_key empty\n')
+                    except Exception:
+                        pass
+                    self._send_json(400, {"models": models, "provider_type": provider_type, "error": "未配置 API Key"})
+                    return
+            last_err = None
+            per_timeout = 6 if provider_type == 'custom' else 15
+            if candidate_urls:
+                for url in candidate_urls:
+                    try:
+                        with open(str(HERE / 'model-debug.log'), 'a', encoding='utf-8') as df:
+                            df.write('[TRY] ' + url + '\n')
+                        # ★ 2026-11-02 真机：OpenCode 的网关在 Cloudflare 后面，
+                        #   urllib 默认 UA 是 `Python-urllib/3.x` —— Cloudflare 直接
+                        #   回 `HTTP 403: ERROR CODE: 1010`（banned user agent）。
+                        #   拉模型列表也要带正常 UA；opencode 还要会话头。
+                        req = urllib.request.Request(
+                            url, headers=_llm_headers(api_key, url, provider_id))
+                        with urllib.request.urlopen(req, timeout=per_timeout) as r:
+                            data = json.loads(r.read().decode("utf-8"))
+                            raw = data.get("data") or data.get("models") or []
+                            remote = []
+                            for m in raw:
+                                mid = m.get("id") or m.get("name") or ""
+                                if mid:
+                                    remote.append({"id": mid, "name": m.get("name", mid)})
+                            remote.sort(key=lambda x: x["id"])
+                            if remote:
+                                models = remote
+                                last_err = None
+                                break
+                    except Exception as e:
+                        last_err = _classify_error(e)
+                        try:
+                            with open(str(HERE / 'model-debug.log'), 'a', encoding='utf-8') as df:
+                                df.write('[FAIL] ' + url + ' -> ' + str(e) + '\n')
+                        except Exception:
+                            pass
+                        continue
+            status = 200
+            error = None
+            if not models and last_err:
+                status = 400 if "地址不可达" in last_err else 500
+                error = last_err
+            # 拉取成功即自动持久化到该 provider 的 models：
+            # 一次拉取永久记住，topbar / catalog / 设置页共享同一数据源，无需静态兑底
+            if models and provider_id:
+                try:
+                    _cfg = load_config()
+                    _changed = False
+                    for _p in (_cfg.get("providers") or []):
+                        if isinstance(_p, dict) and str(_p.get("id") or "") == provider_id and _p.get("models") != models:
+                            _p["models"] = models
+                            _changed = True
+                    if _changed:
+                        if save_config(_cfg):
+                            CONFIG_CACHE.update(_cfg)
+                except Exception:
+                    pass
+            try:
+                with open(str(HERE / 'model-debug.log'), 'a', encoding='utf-8') as df:
+                    df.write(f'[RESPONSE] type={provider_type} models={len(models)} status={status} error={error}\n')
+            except Exception:
+                pass
+            self._send_json(status, {"models": models, "provider_type": provider_type, "error": error,
+                                     "manual": provider_type == 'custom'})
+            return
+
+        
+        # --- Meme POST APIs ---
+        if path == "/api/memes/upload":
+            try:
+                import base64
+                data = json.loads(self.rfile.read(int(self.headers.get('Content-Length', 0))))
+                # 文件名必须取 basename 并限图片扩展名，防止 `..\..\evil.png` 向任意目录写文件
+                raw_name = str(data.get('name', 'unknown.jpg'))
+                name = Path(raw_name).name.strip()
+                if not name or name in ('.', '..') or Path(name).suffix.lower() not in {'.jpg', '.jpeg', '.png', '.gif', '.webp'}:
+                    self._send_json(200, {'success': False, 'error': '非法文件名或类型'})
+                    return
+                b64 = data.get('data', '')
+                tags = data.get('tags', [])
+                meme_dir = PROJECT / 'memes' / 'memes'
+                meme_dir.mkdir(parents=True, exist_ok=True)
+                dest = meme_dir / name
+                if b64 and ',' in b64:
+                    b64 = b64.split(',', 1)[1]
+                dest.write_bytes(base64.b64decode(b64))
+                tag_file = dest.with_suffix('.json')
+                tag_file.write_text(json.dumps({'tags': tags}, ensure_ascii=False), encoding='utf-8')
+                self._send_json(200, {'success': True, 'name': name})
+            except Exception as e:
+                self._send_json(200, {'success': False, 'error': str(e)})
+            return
+
+        if path == "/api/memes/delete":
+            try:
+                # ★ 2026-11-02 修：此前 `Path(raw_name).name` 会把 `collected/xxx.jpg`
+                #   削成 `xxx.jpg`，于是在 memes/memes/ 根下找不到 → 静默"成功"但没删。
+                #   现在按安全的**相对路径**删，并同步清 index.json / blocked.json。
+                safe = _safe_meme_rel(data.get('name', ''))
+                meme_dir = (PROJECT / 'memes' / 'memes').resolve()
+                target = (meme_dir / safe).resolve() if safe else None
+                if (not safe or not _within(target, meme_dir)
+                        or Path(safe).suffix.lower() not in {'.jpg', '.jpeg', '.png', '.gif', '.webp'}):
+                    self._send_json(200, {'success': False, 'error': '非法文件名或类型'})
+                    return
+                deleted = False
+                if target.exists() and target.is_file():
+                    target.unlink()
+                    deleted = True
+                tag_file = target.with_suffix('.json')
+                if tag_file.exists() and tag_file.is_file():
+                    tag_file.unlink()
+                # 同步索引与黑名单（不然列表/匹配里还留着 ghosts）
+                try:
+                    cbase = meme_dir / 'collected'
+                    ip = cbase / 'index.json'
+                    if ip.exists() and safe.startswith('collected/'):
+                        idx = json.loads(ip.read_text(encoding='utf-8')) or {}
+                        idx = {k: v for k, v in idx.items()
+                               if not (isinstance(v, dict)
+                                       and str(v.get('path') or '').replace('\\', '/') == safe)}
+                        ip.write_text(json.dumps(idx, ensure_ascii=False, indent=1), encoding='utf-8')
+                    bp = cbase / 'blocked.json'
+                    if bp.exists():
+                        blk = json.loads(bp.read_text(encoding='utf-8')) or {}
+                        blk = {k: v for k, v in blk.items()
+                               if not (isinstance(v, dict)
+                                       and str(v.get('rel') or '').replace('\\', '/') == safe)}
+                        bp.write_text(json.dumps(blk, ensure_ascii=False, indent=1), encoding='utf-8')
+                except Exception:
+                    pass
+                self._send_json(200, {'success': True, 'deleted': deleted, 'name': safe})
+            except Exception as e:
+                self._send_json(200, {'success': False, 'error': str(e)})
+            return
+
+        if path == "/api/memes/review":
+            # 批量审核：{"names": [...], "action": "approve|reject|delete"}
+            try:
+                names = data.get("names") or data.get("name") or []
+                if isinstance(names, str):
+                    names = [names]
+                names = [str(n) for n in names if str(n or "").strip()]
+                action = str(data.get("action") or "").lower()
+                if not names or action not in ("approve", "reject", "delete"):
+                    self._send_json(200, {"success": False,
+                                          "error": "需要 names 与 action(approve/reject/delete)"})
+                    return
+                sys.path.insert(0, str(PROJECT))
+                import meme_collect as _mc2
+                done, errors = 0, []
+                meme_dir = (PROJECT / "memes" / "memes").resolve()
+                if action == "delete":
+                    for n in names:
+                        safe = _safe_meme_rel(n)
+                        tgt = (meme_dir / safe).resolve() if safe else None
+                        if not safe or not _within(tgt, meme_dir):
+                            errors.append(n)
+                            continue
+                        try:
+                            if tgt.exists() and tgt.is_file():
+                                tgt.unlink()
+                            side = tgt.with_suffix(".json")
+                            if side.exists() and side.is_file():
+                                side.unlink()
+                            # 审核区删除必须把索引/标签一起摘掉；只 set_status
+                            # 会留下 ghost，页面刷新后还在待审列表里。
+                            try:
+                                _idx = _mc2._index()
+                                _idx = {k: v for k, v in _idx.items()
+                                        if not (isinstance(v, dict)
+                                                and str(v.get("path") or "").replace("\\", "/") == safe)}
+                                _mc2._save_index(_idx)
+                            except Exception:
+                                pass
+                            try:
+                                _tp = getattr(_mc2, "TAGS_FILE", "")
+                                if _tp and os.path.isfile(_tp):
+                                    _tags = json.loads(open(_tp, encoding="utf-8").read())
+                                    if isinstance(_tags, dict):
+                                        _tags.pop(safe, None)
+                                        open(_tp, "w", encoding="utf-8").write(
+                                            json.dumps(_tags, ensure_ascii=False, indent=1))
+                            except Exception:
+                                pass
+                            done += 1
+                        except Exception:
+                            errors.append(n)
+                else:
+                    st = _mc2.STATUS_APPROVED if action == "approve" else _mc2.STATUS_REJECTED
+                    # 2026-11-15：复核通过时一并采纳标签（人工填的优先，
+                    # 没填且勾了 use_suggest 就采纳自动打标建议），
+                    # 之后这张图才算「有标签 ∧ approved」进表情池。
+                    _use_suggest = bool(data.get("use_suggest"))
+                    _tags_map = data.get("tags") if isinstance(data.get("tags"), dict) else {}
+                    if action == "approve" and (_use_suggest or _tags_map):
+                        done = _mc2.apply_review_many(names, "approve", _tags_map, _use_suggest)
+                    else:
+                        done = _mc2.set_status_many(names, st)
+                    if action == "reject":
+                        # 拒绝 = 不再是候选 + 进黑名单（不再被采集回来）
+                        for n in names:
+                            try:
+                                _mc2.block(n, reason="review-rejected")
+                            except Exception:
+                                pass
+                self._send_json(200, {"success": True, "done": done,
+                                      "errors": errors, "action": action})
+            except Exception as e:
+                self._send_json(200, {"success": False, "error": str(e)})
+            return
+
+        if path in ("/api/memes/block", "/api/memes/unblock"):
+            # ★ 2026-11-02：表情包页的「不喜欢 / 恢复」。拉黑只写名单（不动文件）：
+            #   不再采集回来、match_meme 也挑不到；想恢复随时能撤。
+            try:
+                # ★ 2026-11-02：**不要再读一次 rfile** —— do_POST 开头已经把 body
+                #   读完放进 data 了。再 read(Content-Length) 会一直等剩余字节 →
+                #   接口 90 秒超时（真机踩过）。
+                raw = str(data.get('name', '') or '')
+                safe = _safe_meme_rel(raw)
+                if not safe:
+                    self._send_json(200, {'success': False, 'error': '非法的表情包名'})
+                    return
+                sys.path.insert(0, str(PROJECT))
+                import meme_collect as _mc
+                if path.endswith('unblock'):
+                    ok = _mc.unblock(safe)
+                else:
+                    ok = _mc.block(safe, reason=str(data.get('reason') or 'user-blocked'))
+                self._send_json(200, {'success': bool(ok), 'name': safe})
+            except Exception as e:
+                self._send_json(200, {'success': False, 'error': str(e)})
+            return
+
+        if path == "/api/memes/tags":
+            try:
+                data = json.loads(self.rfile.read(int(self.headers.get('Content-Length', 0))))
+                name = data.get('name', '')
+                tags = data.get('tags', [])
+                # P0-4：name 来自请求体且**用于写盘**。此前是裸的 `meme_dir / name`，
+                # name="../../bot_config" → with_suffix('.json') 会**覆盖 bot_config.json**
+                # （任意 .json 写的路径穿越，比读更严重）。这里双重校验后再写。
+                safe = _safe_meme_rel(name)
+                d_base = (PROJECT / 'memes' / 'memes').resolve()
+                target = (d_base / safe).resolve() if safe else None
+                if not safe or not _within(target, d_base):
+                    self._send_json(200, {'success': False, 'error': '非法的表情包名'})
+                    return
+                tag_file = target.with_suffix('.json')
+                if not _within(tag_file.resolve(), d_base):
+                    self._send_json(200, {'success': False, 'error': '非法的表情包名'})
+                    return
+                tag_file.write_text(json.dumps({'tags': tags}, ensure_ascii=False), encoding='utf-8')
+                self._send_json(200, {'success': True})
+            except Exception as e:
+                self._send_json(200, {'success': False, 'error': str(e)})
+            return
+
+        if path == "/api/memes/import":
+            try:
+                data = json.loads(self.rfile.read(int(self.headers.get('Content-Length', 0))))
+                src = Path(data.get('directory', '').strip())
+                meme_dir = PROJECT / 'memes' / 'memes'
+                imported = 0
+                if src.exists():
+                    for fpath in src.rglob('*'):
+                        if fpath.suffix.lower() in ('.png', '.jpg', '.jpeg', '.gif', '.webp'):
+                            rel_name = str(fpath.relative_to(src))
+                            dest = meme_dir / rel_name
+                            # P0-4：rel_name 由 relative_to 产出、理论安全，但仍做一次
+                            # 容器校验作为纵深防御（若将来改成别的取名方式不至于失守）。
+                            if not _within(dest.resolve(), meme_dir.resolve()):
+                                continue
+                            dest.parent.mkdir(parents=True, exist_ok=True)
+                            if not dest.exists():
+                                dest.write_bytes(fpath.read_bytes())
+                                imported += 1
+                self._send_json(200, {'success': True, 'imported': imported})
+            except Exception as e:
+                self._send_json(200, {'success': False, 'error': str(e)})
+            return
+
+        if path == "/api/bot/start":
+            result = start_bot()
+            self._send_json(200, result)
+            return
+
+        if path == "/api/bot/stop":
+            result = stop_bot()
+            self._send_json(200, result)
+            return
+
+        if path == "/api/plugins/toggle":
+            body = dict(data or {})
+            name = (body.get("name") or "").strip()
+            enabled = body.get("enabled", body.get("已启用", False))
+            if not name:
+                self._send_json(200, {"error": "missing name"})
+                return
+            state = load_plugin_state()
+            if not isinstance(state, dict):
+                state = {}
+            if "已启用" not in state or not isinstance(state["已启用"], dict):
+                state["已启用"] = {}
+            if "enabled" not in state or not isinstance(state["enabled"], dict):
+                state["enabled"] = {}
+            state["已启用"][name] = bool(enabled)
+            state["enabled"][name] = bool(enabled)
+            # Normalize to lowercase to avoid duplicate keys like "EGO"/"ego"
+            state["已启用"][name.lower()] = bool(enabled)
+            state["enabled"][name.lower()] = bool(enabled)
+            save_plugin_state(state)
+            try:
+                sys.path.insert(0, str(PROJECT))
+                from plugins.plugin_manager import init_plugin_manager, get_plugin_manager
+                init_plugin_manager()
+                pm = get_plugin_manager()
+                if pm:
+                    if enabled:
+                        pm.enable(name)
+                    else:
+                        pm.disable(name)
+            except Exception as e:
+                push_proto_log(f"[error] Plugin hook error: {e}")
+            with STATE_LOCK:
+                if enabled:
+                    S.plugin_active += 1
+                    S.add_activity("emerald", f"插件<b>{name}</b> 已启用")
+                else:
+                    S.plugin_active = max(0, S.plugin_active - 1)
+                    S.add_activity("rose", f"插件<b>{name}</b> 已停用")
+            self._send_json(200, {"success": True, "enabled": bool(enabled)})
+            return
+
+        if path == "/api/config/model":
+            # 快速切换模型：一次性更新 provider/url/model 三个字段并热重载（不碰其它配置）
+            body = dict(data or {})
+            m = str(body.get("model_name") or "").strip()
+            pid = str(body.get("api_provider") or "").strip()
+            if not m or not pid:
+                self._send_json(200, {"success": False, "error": "missing api_provider/model_name"})
+                return
+            cfg = load_config()
+            provs = cfg.get("providers") or []
+            prov = next((p for p in provs if isinstance(p, dict) and str(p.get("id")) == pid), None)
+            if not prov:
+                self._send_json(200, {"success": False, "error": "provider not found"})
+                return
+            cfg["api_provider"] = pid
+            cfg["api_url"] = str(prov.get("base_url") or "")
+            cfg["model_name"] = m
+            # 记住该提供商最近使用的模型（providers 随 save_config 落盘）
+            try:
+                prov["last_model"] = m
+            except Exception:
+                pass
+            success = save_config(cfg)
+            reload_result = None
+            if success:
+                CONFIG_CACHE.update(cfg)
+                reload_result = push_bot_reload()
+            self._send_json(200, {"success": success, "reload": reload_result, "model_name": m})
+            return
+
+        if path == "/api/llm/test":
+            # 真实连通性测试：优先用前端当前表单值（未保存也可测），缺省回落已保存配置；
+            # Key 掩码占位符视为无效，回退每提供商专属凭据 → 全局配置
+            cfg = load_config()
+            body_cfg = dict(data or {})
+            provider_id = str(body_cfg.get("api_provider") or cfg.get("api_provider") or "")
+            try:
+                from config import get_provider_api_key
+                api_key = get_provider_api_key(provider_id) or ""
+            except Exception:
+                api_key = ""
+            form_key = str(body_cfg.get("api_key") or "").strip()
+            if form_key and not _is_redacted_key(form_key):
+                api_key = form_key
+            if not api_key:
+                api_key = cfg.get("api_key") or ""
+            form_url = str(body_cfg.get("api_url") or "").strip()
+            api_url = form_url or (cfg.get("api_url") or "").strip()
+            form_model = str(body_cfg.get("model_name") or "").strip()
+            model = form_model or (cfg.get("model_name") or "").strip()
+            if not api_url or not api_key:
+                self._send_json(200, {"ok": False, "error": "未配置 API URL 或 API Key（请在 LLM 配置页填写）"})
+                return
+            # 注意：do_POST 是巨型函数，禁止在函数内局部 import urllib.request——
+            # 那会让 urllib 变成整个函数的局部变量，导致其它分支（如模型列表拉取）
+            # 报 UnboundLocalError。模块顶部已有全局 import。
+            # 推理模型会先消耗 reasoning tokens：Go 上的模型是**推理型**，64 tokens
+            # 会全被 reasoning 吃掉，正文空返回会被误判成"连上了但没回话"。
+            payload = {"model": model, "messages": [{"role": "user", "content": "你好"}],
+                       "max_tokens": 300}
+            req = urllib.request.Request(
+                api_url, data=json.dumps(payload).encode("utf-8"),
+                headers=_llm_headers(api_key, api_url, provider_id))
+            try:
+                with urllib.request.urlopen(req, timeout=20) as r:
+                    resp = json.loads(r.read().decode("utf-8"))
+                content = (resp.get("choices") or [{}])[0].get("message", {}).get("content", "") or ""
+                self._send_json(200, {"ok": True, "model": model, "url": api_url, "reply": str(content)[:80]})
+            except urllib.error.HTTPError as e:
+                body = ""
+                try:
+                    body = e.read().decode("utf-8", errors="replace")[:300]
+                except Exception:
+                    pass
+                self._send_json(200, {"ok": False, "error": f"HTTP {e.code}: {body}"})
+            except Exception as e:
+                self._send_json(200, {"ok": False, "error": str(e)})
+            return
+
+        if path == "/api/command":
+            cmd = data.get("command", "").strip().lower()
+            if cmd.startswith("/"):
+                cmd = cmd[1:]
+            output = ""
+            if cmd == "status":
+                uptime = int(time.time() - S.bot_start_time)
+                h, rem = divmod(uptime, 3600)
+                m, s = divmod(rem, 60)
+                uptime_str = f"{h:02d}:{m:02d}:{s:02d}"
+                sl = get_self_learning_stats()
+                output = f"状态: {'运行中' if S.bot_running else '已停止'} | 运行时长: {uptime_str} | 消息数: {S.messages_total} | 活跃群组: {S.groups_active} | 图片生成: {S.images_generated} | AI 调用: {S.api_calls_today} | 内存: {sl['total_messages']} entries"
+            elif cmd == "restart":
+                # 真实重启 bot_core（先前是模拟输出）
+                stop_result = stop_bot()
+                time.sleep(2)
+                start_result = start_bot()
+                output = f"重启完成: 停止={stop_result.get('output')} | 启动={start_result.get('output')}"
+            elif cmd == "config_reload":
+                reload_result = push_bot_reload()
+                output = "配置已热重载" if reload_result and reload_result.get("ok") else ("Bot 未运行，无法热重载" if reload_result is None else "热重载失败")
+            elif cmd == "help":
+                output = "可用指令: status | restart | config_reload"
+            elif cmd in ("memory_reload", "self_learn", "clear_sessions", "personality_reload"):
+                output = f"未实现: {cmd}（没有对应的后端动作，避免假装成功）"
+            else:
+                output = f"Unknown: {cmd}. Type 'help' for commands."
+            self._send_json(200, {"output": output})
+            return
+
+        if path == "/api/qq-path":
+            qq_path = data.get("qq_path", "")
+            cfg_path = PROJECT / "bot_config.json"
+            cfg = {}
+            if cfg_path.exists():
+                try:
+                    cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+                except Exception:
+                    cfg = {}
+            cfg["qq_path"] = qq_path
+            try:
+                open(str(cfg_path), "w", encoding="utf-8").write(json.dumps(cfg, ensure_ascii=False, indent=2))
+                CONFIG_CACHE.update(cfg)
+                self._send_json(200, {"success": True, "qq_path": qq_path})
+            except Exception as e:
+                self._send_json(200, {"success": False, "output": f"保存失败: {e}"})
+            return
+
+        if path == "/api/protocol/start_elevated":
+            _ok, _msg = _launch_snowluma_elevated()
+            self._send_json(200, {"success": bool(_ok), "output": _msg})
+            return
+
+        if path == "/api/protocol/start":
+            try:
+                # ★ 2026-11-03：幂等。此前每调一次就新建一个 ProtocolManager，
+                #   旧的既没 stop 也不再被引用 —— 它的事件桥却仍在跑，于是**每条
+                #   事件被投递多遍**。真机表现：戳一戳反戳两次、撤回反馈发两条、
+                #   日志里每条 [事件] 收到 都成对出现（message 有 message_id 去重
+                #   挡着看不出来，notice 类没有，就全暴露了）。
+                _existing = getattr(S, "_protocol_manager", None)
+                try:
+                    if _existing is not None and _existing.is_running():
+                        self._send_json(200, {"success": True,
+                                              "output": "协议层已在运行（未重复启动）。" + _protocol_start_diagnosis(3.0)})
+                        return
+                except Exception:
+                    pass
+                from protocol_manager import ProtocolManager
+                mgr = ProtocolManager()
+
+                mgr.set_status_callback(_protocol_status_callback)
+                mgr.start()
+                S._protocol_manager = mgr
+                self._send_json(200, {"success": True,
+                                      "output": _protocol_start_diagnosis()} )
+            except Exception as e:
+                self._send_json(200, {"success": False, "output": f"启动失败: {e}"})
+            return
+
+        if path == "/api/protocol/stop":
+            mgr = getattr(S, '_protocol_manager', None)
+            if mgr:
+                try:
+                    mgr.stop()
+                    self._send_json(200, {"success": True, "output": "协议层已停止"})
+                except Exception as e:
+                    self._send_json(200, {"success": False, "output": f"停止失败: {e}"})
+            else:
+                self._send_json(200, {"success": True, "output": "协议层未运行"})
+            return
+
+        if path == "/api/protocol/check":
+            try:
+                self._send_json(200, _protocol_check_items(str((data or {}).get("driver") or "")))
+            except Exception as e:
+                self._send_json(200, {"ok": False, "driver": "", "items": [], "error": f"自检失败: {e}"})
+            return
+
+        if path == "/api/protocol/switch":
+            driver = str(data.get("driver") or "").strip()
+            if not driver:
+                self._send_json(200, {"success": False, "output": "缺少 driver 参数"})
+                return
+            try:
+                from protocols import registry
+                if not registry.is_registered(driver):
+                    self._send_json(200, {"success": False, "output": f"协议驱动 {driver} 未注册"})
+                    return
+                # 风控：三个驱动均属非官方登录通道；SnowLuma 为手动登录（登录态主动控制），
+                # NapCat/LLOneBot 重启会重扫 QQ 登录态更易触发风控，切换需二次确认
+                if driver in ("napcat", "llonebot", "snowluma") and not data.get("confirm"):
+                    _warn = ("SnowLuma 由你手动打开 QQ+WebUI 登录，登录态主动控制，风控风险低；" if driver == "snowluma"
+                             else f"「{driver}」重启会重扫 QQ 登录态，频繁登录易被腾讯风控判定。")
+                    self._send_json(200, {
+                        "success": False,
+                        "need_confirm": True,
+                        "output": (
+                            f"「{driver}」属非官方登录通道。{_warn}如需继续请二次确认。"
+                        ),
+                    })
+                    return
+                old = getattr(S, '_protocol_manager', None)
+                if old:
+                    try:
+                        old.stop()
+                    except Exception as e:
+                        push_proto_log(f"[switch] 停止旧驱动失败: {e}")
+                    S._protocol_manager = None
+                    with STATE_LOCK:
+                        S.protocol_running = False
+                # 持久化 protocol_driver
+                cfg = load_config()
+                cfg["protocol_driver"] = driver
+                cfg["protocol_enabled"] = True
+                save_config(cfg)
+                push_proto_log(f"[switch] 已切换协议驱动: {driver}（未启动，请配置后手动启动）")
+                self._send_json(200, {"success": True, "output": f"已切换协议驱动「{driver}」，请填写驱动配置后点「启动协议层」"})
+            except Exception as e:
+                self._send_json(200, {"success": False, "output": f"切换失败: {e}"})
+            return
+
+        if path == "/api/protocol/detect":
+            self._send_json(200, _detect_protocol_paths())
+            return
+
+        if path == "/api/protocol/classify":
+            # 用户选中一个路径后，判断它属于哪个驱动（文件名/目录名启发式）
+            fp = str((data.get("path") or "")).strip()
+            self._send_json(200, _classify_driver_path(fp))
+            return
+
+        if path == "/api/protocol/open-site":
+            # 在系统默认浏览器打开站点（解决 Electron 窗口内 target=_blank 被 deny 打不开的问题）
+            url = str((data.get("url") or "")).strip()
+            allow = ("napneko.github.io", "llonebot.github.io", "snowluma.github.io",
+                     "github.com", "github.io", "localhost", "127.0.0.1", "::1")
+            bad = True
+            try:
+                if url.startswith(("http://", "https://")):
+                    host = (urlparse(url).hostname or "").lower()
+                    bad = not any(host == a or host.endswith("." + a) for a in allow)
+            except Exception:
+                bad = True
+            if bad:
+                self._send_json(200, {"ok": False, "error": "域名不在允许列表"})
+                return
+            try:
+                import webbrowser as _wb
+                threading.Thread(target=lambda: _wb.open(url), daemon=True).start()
+                self._send_json(200, {"ok": True})
+            except Exception as e:
+                self._send_json(200, {"ok": False, "error": str(e)})
+            return
+
+        if path == "/api/protocol/auto-detect":
+            try:
+                self._send_json(200, _auto_detect_protocol_drivers())
+            except Exception as e:
+                self._send_json(200, {"ok": False, "error": str(e)})
+            return
+
+        if path == "/api/protocol/fs":
+            p = str((data.get("path") or "")).strip()
+            if not p:
+                p = "C:\\"
+            try:
+                import os as _os
+                ap = _os.path.abspath(p)
+                if not _os.path.isdir(ap):
+                    self._send_json(200, {"ok": False, "error": f"不是有效目录: {p}"})
+                    return
+                entries = []
+                for name in sorted(_os.listdir(ap)):
+                    full = _os.path.join(ap, name)
+                    try:
+                        is_dir = _os.path.isdir(full)
+                        sz = 0 if is_dir else _os.path.getsize(full)
+                    except Exception:
+                        is_dir, sz = False, 0
+                    entries.append({"name": name, "path": full, "dir": is_dir, "size": sz})
+                dp = _os.path.dirname(ap)
+                parent = dp if dp != ap else ""
+                self._send_json(200, {"ok": True, "path": ap, "parent": parent, "entries": entries})
+            except Exception as e:
+                self._send_json(200, {"ok": False, "error": str(e)})
+            return
+
+        if path == "/api/protocol/config":
+            driver = str(data.get("driver") or "").strip()
+            config = data.get("config") or {}
+            if not driver:
+                self._send_json(200, {"success": False, "output": "缺少 driver 参数"})
+                return
+            if not isinstance(config, dict):
+                self._send_json(200, {"success": False, "output": "config 必须是对象"})
+                return
+            try:
+                cfg = load_config()
+                drivers = cfg.setdefault("protocol_drivers", {})
+                cur = drivers.setdefault(driver, {})
+                cur.update({k: v for k, v in config.items() if k not in ("qq_path",)})
+                # qq_path 存顶层，兼容旧面板逻辑
+                if config.get("qq_path"):
+                    cfg["qq_path"] = config["qq_path"]
+                    cur["qq_path"] = config["qq_path"]
+                save_config(cfg)
+                push_proto_log(f"[config] 已保存协议驱动配置: {driver}")
+                self._send_json(200, {"success": True, "output": f"{driver} 配置已保存"})
+            except Exception as e:
+                self._send_json(200, {"success": False, "output": f"保存失败: {e}"})
+            return
+
+        if path == "/api/protocol/logs":
+            limit = int(data.get("limit", 200)) if isinstance(data, dict) else 200
+            self._send_json(200, {"logs": _collect_logs(limit)})
+            return
+
+        if path == "/api/protocol/logs/clear":
+            global _LOG_CLEARED
+            with PROTO_LOG_LOCK:
+                PROTO_LOG.clear()
+                _LOG_CLEARED = True
+            self._send_json(200, {"ok": True})
+            return
+
+        if path == "/api/plugins/action":
+            body = dict(data or {})
+            plugin_id = (body.get("plugin_id") or "").strip()
+            action = (body.get("action") or "").strip()
+            params = body.get("params") or {}
+            debug = {'path': path, 'plugin_id': plugin_id, 'action': action}
+            try:
+                with open(str(HERE / 'model-debug.log'), 'a', encoding='utf-8') as df:
+                    df.write('[ACTION DEBUG] ' + repr(debug) + '\n')
+            except Exception:
+                pass
+            if not plugin_id or not action:
+                self._send_json(200, {"error": "missing plugin_id or action"})
+                return
+            _generic = _invoke_generic_plugin(plugin_id, action, body.get("params") or {})
+            if _generic is not None:
+                self._send_json(200, _generic)
+                return
+            if plugin_id == "slang_learner":
+                try:
+                    sys.path.insert(0, str(PROJECT))
+                    from plugins.ego.slang_learner import (
+                        start_learning, get_pending, get_injected, get_config as slang_config,
+                        set_config as slang_set_config, inject_selected, reject_selected, reject_all,
+                        inject_all, _learner, web_enrich, web_status as slang_web_status, add_manual as slang_add_manual,
+                        get_reply_templates, set_reply_template, delete_reply_template, import_reply_templates,
+                        get_prompt_templates as slang_get_templates,
+                        set_prompt_template as slang_set_template,
+                        delete_prompt_template as slang_del_template,
+                    )
+                    if action == "learn":
+                        topics = params.get("topics") or ["游戏圈", "直播圈", "抽象圈"]
+                        self._send_json(200, start_learning(topics))
+                        return
+                    if action == "llm_enrich":
+                        games = params.get("topics") or params.get("games") or ["明日方舟"]
+                        batch = int(params.get("batch") or 3)
+                        template = params.get("template") or ""
+                        try:
+                            result = web_enrich(games=games, batch=batch, fallback=True, template=template)
+                        except Exception as e:
+                            result = {"ok": False, "added": 0, "items": [], "errors": [str(e)]}
+                        self._send_json(200, result)
+                        return
+                    if action == "get_templates":
+                        self._send_json(200, slang_get_templates())
+                        return
+                    if action == "set_template":
+                        self._send_json(200, slang_set_template(
+                            (params.get("key") or "").strip(),
+                            (params.get("name") or "").strip(),
+                            (params.get("template") or ""),
+                        ))
+                        return
+                    if action == "delete_template":
+                        self._send_json(200, slang_del_template((params.get("key") or "").strip()))
+                        return
+                    if action == "web_status":
+                        self._send_json(200, slang_web_status())
+                        return
+                    if action == "add_manual":
+                        self._send_json(200, slang_add_manual(
+                            (params.get("term") or "").strip(),
+                            (params.get("meaning") or "").strip(),
+                            (params.get("source") or "手动输入").strip(),
+                            float(params.get("quality") or 0.9),
+                        ))
+                        return
+                    if action == "get_replies":
+                        self._send_json(200, get_reply_templates((params.get("term") or "").strip()))
+                        return
+                    if action == "set_reply":
+                        self._send_json(200, set_reply_template((params.get("term") or "").strip(), params.get("replies") or []))
+                        return
+                    if action == "delete_reply":
+                        self._send_json(200, delete_reply_template((params.get("term") or "").strip()))
+                        return
+                    if action == "import_replies":
+                        self._send_json(200, import_reply_templates(params.get("mapping") or {}))
+                        return
+                    if action == "pending":
+                        result = get_pending(
+                            (params.get("search") or "").strip(),
+                            (params.get("source") or "").strip(),
+                            float(params.get("min_quality") or 0),
+                        )
+                        self._send_json(200, {"pending": result})
+                        return
+                    if action == "injected":
+                        self._send_json(200, {"injected": get_injected(int(params.get("limit") or 100))})
+                        return
+                    if action == "history":
+                        self._send_json(200, {"history": getattr(_learner, "history", [])})
+                        return
+                    if action == "inject":
+                        self._send_json(200, inject_selected(list(params.get("ids") or [])))
+                        return
+                    if action == "inject_all":
+                        self._send_json(200, inject_all(float(params.get("min_quality") or 0)))
+                        return
+                    if action == "reject":
+                        self._send_json(200, reject_selected(list(params.get("ids") or [])))
+                        return
+                    if action == "reject_all":
+                        self._send_json(200, reject_all(float(params.get("min_quality") or 0)))
+                        return
+                    if action == "get_config":
+                        self._send_json(200, {"config": slang_config()})
+                        return
+                    if action == "set_config":
+                        self._send_json(200, {"config": slang_set_config(params.get("config") or {})})
+                        return
+                    if action == "clear_injected":
+                        _learner.injected = []
+                        with open(_learner.INJECTED_FILE, "w", encoding="utf-8") as f:
+                            import json as _json
+                            _json.dump(_learner.injected, f, ensure_ascii=False, indent=2)
+                        self._send_json(200, {"ok": True})
+                        return
+                    self._send_json(200, {"error": "unknown slang action: " + action})
+                    return
+                except Exception as e:
+                    self._send_json(200, {"error": str(e)})
+                    return
+            if plugin_id == "personality_engine":
+                try:
+                    sys.path.insert(0, str(PROJECT))
+                    from plugins.personality_engine import get_personality, save_personality, get_config, set_config, get_examples, save_examples
+                    if action == "get_personality":
+                        self._send_json(200, get_personality())
+                        return
+                    if action == "save_personality":
+                        params = body.get("params") or {}
+                        self._send_json(200, save_personality(params.get("sections") or {}, params.get("config") or {}))
+                        return
+                    if action == "get_config":
+                        self._send_json(200, get_config())
+                        return
+                    if action == "set_config":
+                        params = body.get("params") or {}
+                        set_config(params)
+                        self._send_json(200, {"ok": True, "config": get_config()})
+                        return
+                    if action == "get_examples":
+                        params = body.get("params") or {}
+                        self._send_json(200, get_examples((params.get("scene") or "").strip()))
+                        return
+                    if action == "save_examples":
+                        params = body.get("params") or {}
+                        self._send_json(200, save_examples(params.get("examples") or []))
+                        return
+                except Exception as e:
+                    self._send_json(200, {"error": str(e)})
+                    return
+            if plugin_id == "ego":
+                try:
+                    sys.path.insert(0, str(PROJECT))
+                    from plugins.ego import (
+                        get_personality, save_personality, get_config, set_config,
+                        get_examples, save_examples, memory_stats, memory_vector_stats,
+                        slang_start_learning, slang_get_pending,
+                        slang_inject_selected, slang_reject_selected, slang_get_stats,
+                        mood_get_config, mood_set_config, mood_get_moods, mood_reset_mood,
+                    )
+                    if action == "get_personality":
+                        self._send_json(200, get_personality())
+                        return
+                    if action == "save_personality":
+                        params = body.get("params") or {}
+                        self._send_json(200, save_personality(params.get("sections") or {}, params.get("config") or {}))
+                        return
+                    if action == "get_config":
+                        self._send_json(200, get_config())
+                        return
+                    if action == "set_config":
+                        params = body.get("params") or {}
+                        set_config(params)
+                        self._send_json(200, {"ok": True, "config": get_config()})
+                        return
+                    if action == "get_examples":
+                        params = body.get("params") or {}
+                        self._send_json(200, get_examples((params.get("scene") or "").strip()))
+                        return
+                    if action == "save_examples":
+                        params = body.get("params") or {}
+                        self._send_json(200, save_examples(params))
+                        return
+                    if action == "memory_stats":
+                        params = body.get("params") or {}
+                        stats = memory_stats((params.get("scope_id") or "default").strip())
+                        self._send_json(200, {"stats": stats})
+                        return
+                    if action == "memory_vector_stats":
+                        self._send_json(200, {"stats": memory_vector_stats()})
+                        return
+                    if action == "memory_persona":
+                        params = body.get("params") or {}
+                        persona = {}
+                        try:
+                            persona = __import__("plugins.ego", fromlist=["ego"])._memory.get_persona_export((params.get("scope_id") or "default").strip())
+                        except Exception:
+                            pass
+                        self._send_json(200, {"persona": persona})
+                        return
+                    if action == "memory_clear":
+                        params = body.get("params") or {}
+                        scope_id = (params.get("scope_id") or "default").strip()
+                        result = {"success": False}
+                        try:
+                            ego = __import__("plugins.ego", fromlist=["ego"])
+                            mem = ego._memory
+                            if hasattr(mem, "_init_db"):
+                                db_path = getattr(mem, "DB_PATH", None)
+                                if db_path and os.path.exists(db_path):
+                                    conn = sqlite3.connect(db_path)
+                                    conn.execute("DELETE FROM messages WHERE scope_id=?", (scope_id,))
+                                    conn.execute("DELETE FROM facts WHERE scope_id=?", (scope_id,))
+                                    conn.execute("DELETE FROM events WHERE scope_id=?", (scope_id,))
+                                    conn.commit()
+                                    conn.close()
+                                    result["success"] = True
+                        except Exception as e:
+                            result["error"] = str(e)
+                        self._send_json(200, result)
+                        return
+                    if action == "slang_clear_injected":
+                        result = {"success": False}
+                        try:
+                            ego = __import__("plugins.ego", fromlist=["ego"])
+                            slang = ego._slang
+                            if hasattr(slang, "_save_json"):
+                                slang._save_json(getattr(slang, "INJECTED_FILE", None) or str(PROJECT / "plugins" / "ego" / "slang_learner" / "injected.json"), [])
+                                result["success"] = True
+                        except Exception as e:
+                            result["error"] = str(e)
+                        self._send_json(200, result)
+                        return
+                    if action == "preview_prompt":
+                        params = body.get("params") or {}
+                        user_msg = (params.get("user_msg") or "").strip()
+                        scope_id = (params.get("scope_id") or "default").strip()
+                        prompt = ""
+                        try:
+                            ego = __import__("plugins.ego", fromlist=["ego"])
+                            state = ego.personality_engine.ConversationState()
+                            examples = []
+                            memory_ctx = ""
+                            try:
+                                personality = ego.personality_engine.get_personality()
+                                raw = ((personality.get("raw") or "") if isinstance(personality, dict) else "") or ""
+                                if raw.strip():
+                                    memory_ctx = "当前人格设定：\n" + raw.strip()
+                            except Exception:
+                                pass
+                            try:
+                                ex_data = ego.personality_engine.get_examples("")
+                                examples = (ex_data.get("examples") or []) if isinstance(ex_data, dict) else []
+                            except Exception:
+                                examples = []
+                            if hasattr(ego.personality_engine, "build_personality_prompt"):
+                                prompt = ego.personality_engine.build_personality_prompt(
+                                    state=state,
+                                    memory_ctx=memory_ctx,
+                                    examples=examples,
+                                    user_msg=user_msg,
+                                    user_id="preview",
+                                )
+                        except Exception as e:
+                            prompt = "preview error: " + str(e)
+                        self._send_json(200, {"prompt": prompt})
+                        return
+                    if action == "reload":
+                        result = {"success": False}
+                        try:
+                            pm = __import__("plugins.plugin_manager", fromlist=["plugin_manager"])
+                            if hasattr(pm, "get_plugin_manager"):
+                                manager = pm.get_plugin_manager()
+                                if manager and hasattr(manager, "reload"):
+                                    manager.reload("ego")
+                                    result["success"] = True
+                                elif hasattr(pm, "init_plugin_manager"):
+                                    pm.init_plugin_manager()
+                                    result["success"] = True
+                        except Exception as e:
+                            result["error"] = str(e)
+                        self._send_json(200, result)
+                        return
+                    # P0-5：本分支原只存在于 do_GET 的那份重复实现里（GET 侧已按
+                    # HTTP 语义收紧为 405），这里是**唯一**保留的处理点，确保能力不丢。
+                    if action == "style_features":
+                        params = body.get("params") or {}
+                        from plugins.ego import style_features as _style_features
+                        features = _style_features((params.get("scope_id") or "default").strip(), (params.get("user_id") or "").strip())
+                        self._send_json(200, {"features": features})
+                        return
+                    if action == "health":
+                        from plugins.ego import health_check
+                        self._send_json(200, health_check())
+                        return
+                    if action == "wizard_status":
+                        from plugins.ego import is_wizard_done
+                        self._send_json(200, {"done": is_wizard_done()})
+                        return
+                    if action == "wizard_done":
+                        from plugins.ego import set_wizard_done
+                        self._send_json(200, set_wizard_done())
+                        return
+                    if action == "wizard_reset":
+                        from plugins.ego import reset_wizard
+                        self._send_json(200, reset_wizard())
+                        return
+                    if action == "slang_learn":
+                        topics = body.get("topics") or ["游戏圈", "直播圈", "抽象圈"]
+                        if isinstance(topics, str):
+                            topics = [t.strip() for t in topics.split(",") if t.strip()]
+                        self._send_json(200, slang_start_learning(topics))
+                        return
+                    if action == "slang_pending":
+                        params = body.get("params") or {}
+                        result = slang_get_pending(
+                            search=(params.get("search") or "").strip(),
+                            source=(params.get("source") or "").strip(),
+                            min_quality=float(params.get("min_quality") or 0),
+                        )
+                        if isinstance(result, dict):
+                            result.setdefault("pending", result.get("pending", []))
+                        else:
+                            result = {"pending": list(result or [])}
+                        self._send_json(200, result)
+                        return
+                    if action == "slang_injected":
+                        injected = []
+                        try:
+                            injected = ego._slang.get_injected()
+                        except Exception:
+                            pass
+                        self._send_json(200, {"injected": injected})
+                        return
+                    if action == "slang_stats":
+                        self._send_json(200, {"stats": slang_get_stats()})
+                        return
+                    if action == "slang_inject":
+                        params = body.get("params") or {}
+                        ids = params.get("ids") or []
+                        self._send_json(200, slang_inject_selected([str(x) for x in ids]))
+                        return
+                    if action == "slang_inject_all":
+                        params = body.get("params") or {}
+                        min_quality = float(params.get("min_quality") or 0)
+                        self._send_json(200, __import__("plugins.ego", fromlist=["ego"])._slang.inject_all(min_quality))
+                        return
+                    if action == "slang_reject":
+                        params = body.get("params") or {}
+                        ids = params.get("ids") or []
+                        self._send_json(200, slang_reject_selected([str(x) for x in ids]))
+                        return
+                    if action == "slang_reject_all":
+                        params = body.get("params") or {}
+                        min_quality = float(params.get("min_quality") or 0)
+                        self._send_json(200, __import__("plugins.ego", fromlist=["ego"])._slang.reject_all(min_quality))
+                        return
+                    if action == "mood_config":
+                        self._send_json(200, {"config": mood_get_config()})
+                        return
+                    if action == "mood_set_config":
+                        params = body.get("params") or {}
+                        self._send_json(200, {"ok": True, "config": mood_set_config(params)})
+                        return
+                    if action == "mood_moods":
+                        self._send_json(200, {"moods": mood_get_moods()})
+                        return
+                    if action == "mood_reset":
+                        params = body.get("params") or {}
+                        self._send_json(200, mood_reset_mood((params.get("group_id") or "").strip()))
+                        return
+                except Exception as e:
+                    self._send_json(200, {"error": str(e)})
+                    return
+            if plugin_id == "web_operator":
+                try:
+                    sys.path.insert(0, str(PROJECT))
+                    import plugins.web_operator as wo
+                    params = body.get("params") or {}
+                    if action == "get_config":
+                        self._send_json(200, {"config": wo.get_config()})
+                        return
+                    if action == "set_config":
+                        self._send_json(200, wo.set_config(params))
+                        return
+                    if action == "toggle":
+                        cfg = wo.get_config()
+                        enabled = not bool(cfg.get("enabled", True))
+                        wo.set_config({"enabled": enabled})
+                        self._send_json(200, {"enabled": enabled})
+                        return
+                    if action == "get_history":
+                        limit = int(params.get("limit") or 50)
+                        self._send_json(200, wo.get_history(limit))
+                        return
+                    if action == "clear_history":
+                        self._send_json(200, wo.clear_history())
+                        return
+                    if action == "get_tasks":
+                        self._send_json(200, wo.get_tasks())
+                        return
+                    if action == "save_tasks":
+                        self._send_json(200, wo.save_tasks(params.get("name"), params.get("chain") or []))
+                        return
+                    if action == "delete_task":
+                        self._send_json(200, wo.delete_task(params.get("name")))
+                        return
+                    if action == "check_dependencies":
+                        self._send_json(200, {"dependencies": wo.check_dependencies()})
+                        return
+                    if action == "install_dependencies":
+                        self._send_json(200, wo.install_dependencies())
+                        return
+                    if action == "chain_run":
+                        self._send_json(200, wo.execute_task("chain.run", params))
+                        return
+                    if action == "web.autonomous":
+                        try:
+                            ctx = {"chat": _make_autonomous_chat()}
+                        except Exception as e:
+                            self._send_json(200, {"ok": False, "error": f"宿主模型未就绪: {e}"})
+                            return
+                        self._send_json(200, wo.execute_task(action, params, context=ctx))
+                        return
+                    self._send_json(200, wo.execute_task(action, params))
+                    return
+                except Exception as e:
+                    self._send_json(200, {"error": str(e)})
+                    return
+            # Generic plugin config fallback for plugins exposing get_config/set_config/toggle
+            try:
+                sys.path.insert(0, str(PROJECT))
+                mod = __import__(f"plugins.{plugin_id}", fromlist=["get_config"])
+                if action == "get_config":
+                    fn = getattr(mod, "get_config", None)
+                    if callable(fn):
+                        self._send_json(200, fn())
+                    else:
+                        self._send_json(200, {"error": "plugin has no get_config"})
+                    return
+                if action == "set_config":
+                    params = body.get("params") or {}
+                    fn = getattr(mod, "set_config", None)
+                    if callable(fn):
+                        self._send_json(200, fn(params))
+                    else:
+                        self._send_json(200, {"error": "plugin has no set_config"})
+                    return
+                if action == "toggle":
+                    fn = getattr(mod, "toggle", None)
+                    if callable(fn):
+                        self._send_json(200, fn())
+                    else:
+                        self._send_json(200, {"error": "plugin has no toggle"})
+                    return
+            except Exception as e:
+                try:
+                    with open(str(HERE / 'model-debug.log'), 'a', encoding='utf-8') as df:
+                        df.write('[ACTION FALLBACK ERROR] ' + str(e) + '\n')
+                except Exception:
+                    pass
+            self._send_json(404, {"error": "unknown plugin_id or action"})
+            return
+
+        self.send_response(404)
+        self.end_headers()
+
+
+# 
+#  Bot Control
+# 
+def _get_qq_path():
+    try:
+        p = PROJECT / 'bot_config.json'
+        if p.exists():
+            return json.loads(p.read_text(encoding='utf-8-sig')).get('qq_path', '')
+    except Exception:
+        pass
+    return ''
+
+def _get_bot_cmd():
+    if getattr(sys, 'frozen', False):
+        exe_dir = os.path.dirname(sys.executable)
+        core_exe = os.path.join(exe_dir, 'EggBloom_v3_Core.exe')
+        if not os.path.exists(core_exe):
+            core_exe = os.path.join(exe_dir, '_internal', 'EggBloom_v3_Core.exe')
+        if os.path.exists(core_exe):
+            return [core_exe], os.path.dirname(core_exe)
+        return None, None
+    else:
+        script = PROJECT / 'bot_core.py'
+        if script.exists():
+            return [sys.executable, str(script)], str(PROJECT)
+        return None, None
+
+def start_bot():
+    global _bot_process
+    with _bot_lock:
+        if _bot_process and _bot_process.poll() is None:
+            return {'success': False, 'output': 'Bot 已在运行'}
+        cfg = load_config()
+        if not cfg.get('api_key'):
+            pass  # Allow start without api_key, bot_core will handle
+        if not cfg.get('bot_qq'):
+            return {'success': False, 'output': '请先到配置中心填入 Bot QQ 号喵~'}
+        cmd, cwd = _get_bot_cmd()
+        if not cmd:
+            return {'success': False, 'output': '未找到 Bot 启动入口'}
+        env = os.environ.copy()
+        env['PYTHONUNBUFFERED'] = '1'
+        env['PYTHONIOENCODING'] = 'utf-8'
+        try:
+            _bot_process = subprocess.Popen(
+                cmd,
+                cwd=cwd,
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                stdin=subprocess.DEVNULL,
+                text=True, encoding='utf-8', errors='replace',
+                creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0,
+            )
+            with STATE_LOCK:
+                S.bot_running = True
+                S.bot_start_time = time.time()
+            # Start log reader thread
+            _start_bot_log_reader(_bot_process)
+            return {'success': True, 'output': 'Bot 已启动', 'pid': _bot_process.pid}
+        except Exception as e:
+            return {'success': False, 'output': f'启动失败: {e}'}
+
+def stop_bot():
+    global _bot_process
+    with _bot_lock:
+        if not _bot_process or _bot_process.poll() is not None:
+            _bot_process = None
+            with STATE_LOCK:
+                S.bot_running = False
+            return {'success': True, 'output': 'Bot 未运行'}
+        try:
+            _bot_process.terminate()
+            try:
+                _bot_process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                _bot_process.kill()
+        except Exception as e:
+            return {'success': False, 'output': f'停止失败: {e}'}
+        _bot_process = None
+        with STATE_LOCK:
+            S.bot_running = False
+        return {'success': True, 'output': 'Bot 已停止'}
+
+# ── 协议层在线探测（2026-10-19 修「协议开关显示未启用」）───────────────
+# 背景：前端那张卡片读 `protocol_enabled`（配置文件里的标记），而这个字段**只在
+# 「切换协议驱动」时**才被写成 True；点「启动协议层」不写它。
+# 于是用户明明启动了 NapCat（OneBot 3000 在线），界面却永远显示「未启用」。
+# 现改为**真实探测** OneBot API 是否可达 —— 这才是"协议有没有在工作"。
+_PROTO_PROBE = {"at": 0.0, "ok": False, "url": ""}
+
+
+def probe_protocol_online(timeout=0.4, ttl=3.0):
+    """协议层是否真的在线（OneBot /get_status 返回 online）。带缓存。
+
+    为什么缓存：`/api/bot/status` 被前端按秒轮询，探测虽快（本机 ~1ms），
+    但没必要每秒打三次。
+    为什么不用 `mgr._running`：那是"有没有从本界面点过启动"，外部启动的
+    NapCat 不经过它 —— 会误判成未启用。
+
+    ★ 2026-10-25：**配了地址就只探那一个，不再盲扫 4 个端口。**
+      原来无论配没配 onebot_url，都会把 3000~3003 全探一遍，每个 0.4s
+      超时 —— 协议没起来时首屏白等 1.6s。实测 `/api/protocol/status`
+      首次调用 1.716s，全是这四枪打空的。
+      用户配置里 `onebot_url` 本来就是 `http://127.0.0.1:3000`，
+      盲扫纯属多余。没配地址时才扫（给完全没配的新用户兜底）。
+
+      顺带：失败结果的缓存时间拉长到 10s。协议没起来是常态（正在启动、
+      或者用户压根没开），没必要每 3 秒重新打空一遍。
+    """
+    now = time.time()
+    # 在线用短 TTL（要能尽快发现掉线），离线用长 TTL（别反复打空）
+    _ttl = ttl if _PROTO_PROBE["ok"] else max(ttl, 10.0)
+    if now - _PROTO_PROBE["at"] < _ttl:
+        return _PROTO_PROBE["ok"], _PROTO_PROBE["url"]
+    ok, url = False, ""
+    try:
+        cands = []
+        try:
+            ob = str((load_config() or {}).get("onebot_url") or "").strip()
+            if ob:
+                cands.append(ob.rstrip("/"))
+        except Exception:
+            pass
+        if not cands:
+            # 没配地址才盲扫；配了就只认那一个
+            cands = [f"http://127.0.0.1:{p}" for p in (3000, 3001, 3002, 3003)]
+        for u in cands:
+            try:
+                with _local_open(u + "/get_status", timeout=timeout) as r:
+                    d = json.loads(r.read())
+                if (d.get("data") or {}).get("online"):
+                    ok, url = True, u
+                    break
+            except Exception:
+                continue
+    except Exception:
+        pass
+    _PROTO_PROBE.update({"at": now, "ok": ok, "url": url})
+    return ok, url
+
+
+def get_bot_status():
+    alive = False
+    pid = None
+    with _bot_lock:
+        if _bot_process and _bot_process.poll() is None:
+            alive = True
+            pid = _bot_process.pid
+    proto_ok, proto_url = probe_protocol_online()
+    with STATE_LOCK:
+        return {
+            'bot_running': alive if S.bot_running else False,
+            'pid': pid,
+            'uptime': int(time.time() - S.bot_start_time) if alive else 0,
+            'qq_path': _get_qq_path(),
+            'protocol_enabled': load_config().get('protocol_enabled', False),
+            # 真实在线状态（2026-10-19）：前端应优先用这个，而不是 protocol_enabled
+            'protocol_online': proto_ok,
+            'protocol_url': proto_url,
+        }
+
+def load_plugin_state():
+    try:
+        p = PROJECT / "plugins" / "plugin_state.json"
+        if p.exists():
+            return json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    return {}
+
+def save_plugin_state(state):
+    try:
+        p = PROJECT / "plugins" / "plugin_state.json"
+        open(str(p), "w", encoding="utf-8").write(json.dumps(state, ensure_ascii=False, indent=2))
+    except Exception:
+        pass
+
+
+# 
+#  Server Entry
+# 
+class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
+    daemon_threads = True
+
+def _port_free(p):
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        # HTTPServer/allow_reuse_address 会设 SO_REUSEADDR；探测口也必须设，
+        # 否则 TIME_WAIT 会被误判成“被占用”，WebUI 每次重启都漂到 8081。
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        s.bind(("127.0.0.1", p))
+        s.close()
+        return True
+    except OSError:
+        return False
+
+def pick_port(preferred=8080, tries=20):
+    for p in range(preferred, preferred + tries):
+        if _port_free(p):
+            return p
+    return preferred
+
+def run(host="127.0.0.1", port=8080):
+    global _LOG_CLEARED
+    # 端口冲突自适应：preferred 被占用则顺延，最多试探 tries 个端口
+    actual_port = pick_port(preferred=port)
+    if actual_port != port:
+        print(f"[WebUI] 端口 {port} 被占用，改用 {actual_port}")
+    # 记录实际端口，供 main_window / 前端查询
+    try:
+        last_port_dir = PROJECT / "webui"
+        last_port_dir.mkdir(exist_ok=True)
+        (PROJECT / "last_port.txt").write_text(str(actual_port), encoding="utf-8")
+    except Exception:
+        pass
+    # 每次服务器启动视为新会话：内存日志为空时显示空，而非回退到磁盘旧日志
+    with PROTO_LOG_LOCK:
+        PROTO_LOG.clear()
+        _LOG_CLEARED = True
+    server = ThreadedHTTPServer((host, actual_port), Handler)
+    print(f"EggBloom WebUI running on http://{host}:{actual_port}")
+    _uni_log(f"EggBloom WebUI running on http://{host}:{actual_port}")
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()
+
+if __name__ == "__main__":
+    run()

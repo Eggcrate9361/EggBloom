@@ -1,0 +1,19 @@
+{
+  "id": "memewiki",
+  "title": "梗百科",
+  "version": "1.0.0",
+  "description": "接 cnmeme.wiki：!梗 <词> 查出处/用法/标签，查不到直说，不瞎编",
+  "provides": [
+    "meme.lookup"
+  ],
+  "requires": [],
+  "budget": {
+    "max_chars": 400
+  },
+  "permissions": [
+    "network"
+  ],
+  "scope": "global",
+  "priority": 60,
+  "default_enabled": true
+}

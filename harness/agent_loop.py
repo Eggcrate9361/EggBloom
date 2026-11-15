@@ -1,0 +1,590 @@
+# -*- coding: utf-8 -*-
+"""harness/agent_loop.py —— Agent 运行时内核（主程序 agent 能力）。
+
+设计稿未随公开仓库分发（见仓库外归档）
+
+定位
+    这是主程序 agent 能力的**内核**，不是插件。两个入口共用它：
+      - 主程序 Agent 对话页（webui → bot_core 薄路由 → 这里）
+      - QQ 群内 Agent 模式（意图 + 权限双闸通过后 → 这里）
+    区别只在输入/输出适配层；循环本身完全一致。
+
+设计取舍（对齐 harness 高标准）
+    - **依赖注入**：chat_fn / tool_functions / logger 由调用方传入，
+      因此本模块**不 import bot_core**，可独立单测。
+    - **session_log 事件溯源**：每轮用户输入 / 工具调用 / 模型输出都 append 到日志；
+      历史从日志派生（可选）。铁律「模型可见即已记录」。
+    - **retention + spill**：工具返回超长时按预算有界保留；超预算落盘，
+      卡里给绝对路径 + read 提示，模型可再读（可恢复，不是简单截断）。
+    - **可中止**：每次循环检查 abort 标志（用于 UI 的 Esc 打断）。
+    - **步数软上限 + 成本硬闸**：步数默认不限；真正兜底的是总工具调用
+      次数硬闸（MAX_TOOL_CALLS）与 abort 中止 —— 绝不无限循环，也不会把
+      "工具已做完、只差总结"的任务误判成失败（超限时先兜底收敛再谈失败）。
+
+事件类型（写进 session_log，kind="agent"）
+    user_msg   用户/调用方输入
+    assistant  模型文字输出（中间或最终）
+    tool_call  一次工具调用（含参数摘要）
+    tool_result 一次工具结果（含是否 spill）
+    final      最终答复
+"""
+import time
+
+from . import session_log as _slog
+from . import tool_runner as _tr
+# `_spill` 保留为模块级别名：spill 是 agent 的存储约定，
+# 外部（测试/诊断）通过它拿到 SPILL_DIR 做隔离，属于既有接口，不要删。
+from . import spill as _spill  # noqa: F401
+
+# 事件类型
+EV_USER = "user_msg"
+EV_ASSISTANT = "assistant"
+EV_TOOL_CALL = "tool_call"
+# 模型思维链（reasoning_content）。只用于**展示**：既不进 messages，
+# 也不进对话历史 —— 回灌会让上下文污染且白烧 token。
+EV_THINKING = "thinking"
+EV_TOOL_RESULT = "tool_result"
+EV_FINAL = "final"
+
+#: 0 = **不限步数**（None 同义）。不再默认 12 ——
+#: 步数是"轮数"不是"成本"，曾把"工具已把事做完、只差模型总结"的运行
+#: 判成失败（2026-10-29 真机：说说已发布成功，页面却报
+#: 「达到步数上限 12，未收敛」，维护者："实际上发成功了，agent 不用做步数限制"）。
+#: 成本与无限循环由 MAX_TOOL_CALLS（总工具调用硬闸）+ abort 中止兜底。
+DEFAULT_MAX_STEPS = 0
+DEFAULT_MAX_TOOL_RESULT_TOKENS = _tr.DEFAULT_MAX_TOOL_RESULT_TOKENS  # 单点定义，避免两处漂移
+
+def _step_budget(messages, max_steps, step, floor=800):
+    """本步的工具结果预算 = 按**剩余上下文**算出来的（不是写死的常量）。
+
+    用户要求："去掉预算定制，不是给一个死的值，是尽量降低成本" ——
+    上下文越空给得越宽，越接近窗口上限收得越紧；剩下的步数越多，每步分到的越少。
+    步数不限时（max_steps<=0）分母没有"剩余步数"可用 → 用固定的适中值 4，
+    只影响每步分到的预算比例，不影响总量闸。
+    """
+    try:
+        left = int(max_steps) - int(step)
+        return _tr.adaptive_budget(messages, steps_left=max(1, left if left > 0 else 4))
+    except Exception:
+        return floor
+#: 单步（一次模型返回）里最多执行几个工具调用；0 = 不限（分离态）
+#: 整个 run 里最多执行几次工具调用（成本硬闸；主程序 agent 也用它）
+#: 分离态不设上限（0）：2026-11-07 方向重定，限制一律取消，由它自己决定何时停。
+#: 产品态维持 40，避免把 1.5.9 刚收紧的成本又放开。
+def _separation_active():
+    try:
+        from separation import active
+        return bool(active())
+    except Exception:
+        return False
+
+
+MAX_CALLS_PER_STEP = 0 if _separation_active() else 8
+MAX_TOOL_CALLS = 0 if _separation_active() else 40
+
+
+class AgentAborted(Exception):
+    """调用方请求中止当前 agent 运行。"""
+    pass
+
+
+class AgentResult:
+    """一次 agent 运行的最终结果。"""
+
+    __slots__ = ("ok", "answer", "steps", "trace", "error", "aborted",
+                 "usage_total", "session_id")
+
+    def __init__(self):
+        self.ok = False
+        self.answer = ""
+        self.steps = 0
+        self.trace = []
+        self.error = None
+        self.aborted = False
+        self.usage_total = {"input": 0, "output": 0, "total": 0}
+        self.session_id = ""
+
+    def to_dict(self):
+        return {
+            "ok": self.ok,
+            "answer": self.answer,
+            "steps": self.steps,
+            "trace": self.trace,
+            "error": self.error,
+            "aborted": self.aborted,
+            "usage_total": self.usage_total,
+            "session_id": self.session_id,
+        }
+
+
+def _accumulate_usage(acc, usage):
+    if not isinstance(usage, dict):
+        return
+    acc["input"] += int(usage.get("prompt_tokens") or usage.get("input_tokens") or 0)
+    acc["output"] += int(usage.get("completion_tokens") or usage.get("output_tokens") or 0)
+    acc["total"] += int(usage.get("total_tokens") or 0)
+
+
+def _normalize_chat_return(ret):
+    """兼容 (content, tool_calls, usage[, reasoning]) 元组 或 字典。
+
+    ★ reasoning：推理模型（deepseek-v4-flash 等）会把思维链放在
+      `reasoning_content` 里。此前这里只取前三个字段 → **思维链被直接丢弃**，
+      前端永远看不到"详细思考过程"（用户反馈过这条）。现在一并取出。
+    """
+    if isinstance(ret, dict):
+        return (ret.get("content") or "", ret.get("tool_calls") or [],
+                ret.get("usage") or {},
+                ret.get("reasoning") or ret.get("reasoning_content") or "")
+    content, tool_calls, usage, reasoning = (list(ret) + [None, None, None, None])[:4]
+    return (content or ""), (tool_calls or []), (usage or {}), (reasoning or "")
+
+
+# 参数解析复用单点实现（避免与 tool_runner 各写一份）
+_parse_args = _tr._parse_args
+
+
+def run_agent(*, session_id, user_input, chat_fn, tool_functions,
+              system_prompt="", history=None, max_steps=DEFAULT_MAX_STEPS,
+              on_event=None, should_abort=None, logger=None,
+              max_tool_result_tokens=DEFAULT_MAX_TOOL_RESULT_TOKENS,
+              persist=True, extra_tools=None, tool_loader=None,
+              tool_schemas=None, display_input=None, thinking_events=True,
+              on_capability_gap=None):
+    """跑一次 agent 循环，返回 AgentResult。
+
+    参数（全部依赖注入，故本模块不依赖 bot_core）
+      session_id           : 会话标识（用于 session_log 命名空间与回放）
+      user_input           : 本次用户输入（**发给模型**的版本）
+      display_input        : 记录/回放用的版本。调用方若往 user_input 里拼了
+                             时效指令、本体记忆 prefetch 这类机器注入前缀，
+                             就把用户原话传这里，日志与前端展示才不会被污染。
+                             缺省 None = 与 user_input 相同。
+      chat_fn(messages, tools) -> (content, tool_calls, usage)
+                             tools 可以是 name 列表，也可以是完整 schema 列表
+      tool_functions       : {tool_name: callable(args_dict) -> result}
+      system_prompt        : 系统提示词（调用方负责组装；本模块不碰）
+      history              : 已有 messages（[{role,content}]），可为 None
+      max_steps            : 工具轮数软上限；**0/None = 不限**（成本由
+                             MAX_TOOL_CALLS + abort 兜底）。到限时不再直接判失败，
+                             先做一轮"不给工具、直接给结论"的兜底收敛（见下）。
+      on_event(ev_type, data) : 事件回调（流式推给前端 / 群内进度）
+      should_abort() -> bool  : 中止检查
+      logger(msg)          : 日志
+      persist              : 是否写 session_log（单测可关）
+      tool_loader(names) -> schemas
+                           : **按需加载**。给定工具名 → 返回 OpenAI schema 列表，
+                             顺序由 loader 保证稳定（见 harness.tool_registry）。
+                             轮内只调用并缓存一次 → 保前缀缓存。
+      tool_schemas         : 直接给定 schema 列表（与 tool_loader 二选一）
+      on_capability_gap(gap) -> str
+                           : 检测到工具缺失/依赖失败时回调；返回的提示会作为
+                             一条 system 消息插进本轮，让模型自己决定用
+                             autonomy_* 去补能力（设计 §10.2）。
+
+    工具名来源（三合一，稳定拼接）
+      1. tool_functions.keys()（本会话可用实现）
+      2. extra_tools（调用方额外追加）
+      3. tool_loader 的返回（若给了 loader 且 tool_functions 中缺 schema 时）
+
+    返回 AgentResult。
+    """
+    t0 = time.time()
+    res = AgentResult()
+    res.session_id = str(session_id)
+    log = logger or (lambda m: None)
+
+    def _emit(ev_type, data):
+        if on_event:
+            try:
+                on_event(ev_type, data)
+            except Exception as e:
+                log(f"[agent] on_event 回调异常（已隔离）: {e}")
+
+    def _check_abort():
+        if should_abort and should_abort():
+            raise AgentAborted()
+
+    def _append_log(ev_type, payload):
+        if not persist:
+            return
+        try:
+            _slog.append("agent", session_id, ev_type, payload)
+        except Exception as e:
+            log(f"[agent] session_log 写入失败（不影响执行）: {e}")
+
+    def _finalize(res):
+        """返回前收尾：把本次运行的**轨迹**填进 result。
+
+        为什么在这里做：`AgentResult.trace` 原本永远是空的 —— 轨迹只落在
+        session_log 里，调用方（前端）只能再发一次 /trace 请求。run_agent 的
+        返回是**自包含**的更合理：一次 chat 响应就带全部执行留痕，前端无需
+        第二次往返（也避免"日志还没 flush 完就去读"的竞态）。
+        persist=True 时从日志回读（**以日志为准**，保证与回放一致）。
+        """
+        try:
+            if persist:
+                res.trace = replay(session_id)
+            else:
+                res.trace = list(res.trace or [])
+        except Exception:
+            pass
+        return res
+
+    # ── 组装 messages ──────────────────────────────────────────────
+    messages = []
+    if system_prompt:
+        messages.append({"role": "system", "content": system_prompt})
+    if history:
+        messages.extend(history)
+    messages.append({"role": "user", "content": user_input})
+
+    # ★ 记录给**人看**的那一版：调用方可能往 user_input 里拼了时效指令 /
+    #   本体记忆 prefetch 这类机器注入的前缀（为了保前缀缓存，见 agent_service）。
+    #   那些是脚手架，不是用户说的话 —— 写进日志会污染回放与历史展示，
+    #   也会让"用户到底说了什么"变得不可读。模型照旧收到完整版。
+    _log_input = display_input if display_input is not None else user_input
+    _append_log(EV_USER, {"content": _log_input})
+    _emit("user", {"content": _log_input})
+
+    tool_names = list(tool_functions.keys())
+    for t in (extra_tools or ()):
+        if t not in tool_names:
+            tool_names.append(t)
+
+    # ── 工具 schema 的**轮内一次性**解析 + 缓存 ─────────────────────
+    #  关键：同一轮内多次调用 chat_fn（含一轮多工具）绝不能重复解析，
+    #  也绝不能中途改变顺序 —— 否则前缀缓存失效。整个 run 只解析一次。
+    _schemas_cache = {"value": None, "names_sig": None}
+
+    def _resolve_schemas():
+        if _schemas_cache["value"] is not None:
+            return _schemas_cache["value"]
+        if tool_schemas is not None:
+            _schemas_cache["value"] = list(tool_schemas)
+        elif tool_loader is not None:
+            try:
+                _schemas_cache["value"] = list(tool_loader(tool_names) or [])
+            except Exception as e:
+                log(f"[agent] tool_loader 失败，退回名字列表: {e}")
+                _schemas_cache["value"] = list(tool_names)
+        else:
+            _schemas_cache["value"] = list(tool_names)
+        _schemas_cache["names_sig"] = ",".join(tool_names)
+        return _schemas_cache["value"]
+
+    def _tools_for_call():
+        """chat_fn 需要的工具参数：**有 schema 就传 schema，没有就传名字**。"""
+        v = _resolve_schemas()
+        if not v:
+            return []
+        first = v[0]
+        if isinstance(first, dict) and "function" in first:
+            return v
+        return tool_names
+
+    try:
+        total_tool_calls = 0
+        gap_hinted = False
+        # ★ 调用方没显式给预算（沿用默认常量）→ 改为每步按剩余上下文自适应
+        _auto_budget = (max_tool_result_tokens == DEFAULT_MAX_TOOL_RESULT_TOKENS)
+        # 步数上限：0/None = **不限**（成本由 MAX_TOOL_CALLS + abort 兜底）
+        _step_cap = int(max_steps) if (max_steps and int(max_steps) > 0) else 0
+
+        def _converge_anyway(msgs, why):
+            """预算耗尽时的**兜底收敛轮**：不给工具，请模型直接给结论。
+
+            为什么必须先做这一轮再谈失败：多步任务里"最后一个工具已经把事做完、
+            只差模型总结"占绝大多数 —— 直接判「未收敛失败」会把成功的任务报成
+            失败（2026-10-29 真机：说说已发布成功，页面却红字失败）。
+            兜底轮仍给不出文字（模型继续空转或仍要工具）→ 再按失败语义如实报告。
+            """
+            _msgs = list(msgs) + [{
+                "role": "system",
+                "content": ("（" + why + "）不再调用任何工具。请基于以上工具结果"
+                            "直接给出最终结论：完成了什么、还差什么，简洁说。"),
+            }]
+            try:
+                try:
+                    # ★ 2026-11-02：收敛轮要**更大的输出预算**。推理模型的思维链
+                    #   也吃 completion 预算；1500 在一份代码审查结论上会被思考
+                    #   吃光，content 直接空串（真机：deep_task 跑 35s 回空结论）。
+                    ret = chat_fn(_msgs, [], on_reasoning=None, max_tokens=2500)
+                except TypeError:
+                    try:
+                        ret = chat_fn(_msgs, [], on_reasoning=None)
+                    except TypeError:
+                        ret = chat_fn(_msgs, [])
+                _c, _tc, _u, _r = _normalize_chat_return(ret)
+                _accumulate_usage(res.usage_total, _u)
+                return (str(_c or "").strip() or None) if not _tc else None
+            except Exception:
+                return None
+
+        step = 0
+        while True:
+            _check_abort()
+            if _step_cap and step >= _step_cap:
+                _tail2 = _converge_anyway(messages, f"已达步数上限 {_step_cap}")
+                if _tail2:
+                    # 兜底轮给出的结论 → **成功**，不冤枉已完成的任务
+                    res.ok = True
+                    res.answer = _tail2
+                    _append_log(EV_FINAL, {"content": _tail2, "steps": step,
+                                           "reason": "steps_capped"})
+                    _emit("final", {"content": _tail2, "steps": step,
+                                    "elapsed": round(time.time() - t0, 2)})
+                else:
+                    res.ok = False
+                    res.error = f"达到步数上限 {_step_cap}，未收敛"
+                    res.answer = ""
+                    _append_log(EV_FINAL, {"content": "", "steps": res.steps,
+                                           "error": res.error})
+                    _emit("final", {"content": "", "steps": res.steps,
+                                    "error": res.error,
+                                    "elapsed": round(time.time() - t0, 2)})
+                return _finalize(res)
+            step_tool_count = 0
+
+            # ★ 思维链**实时流**：把 on_reasoning 交给 chat_fn（若它支持），
+            #   边生成边推增量事件；不支持的 chat_fn（老实现/单测假函数）会 TypeError，
+            #   自动退回原来的调用方式 —— 不会打断任何既有链路。
+            _live = []
+            _tlast = [0.0]
+
+            def _on_reason(chunk):
+                if not thinking_events or not chunk:
+                    return
+                _live.append(chunk)
+                now = time.time()
+                if now - _tlast[0] >= 0.25:          # 节流 250ms，避免每字一事件
+                    _tlast[0] = now
+                    _emit(EV_THINKING, {"content": "".join(_live), "step": step + 1,
+                                        "delta": True, "live": True})
+            try:
+                ret = chat_fn(messages, _tools_for_call(), on_reasoning=_on_reason)
+            except TypeError:
+                ret = chat_fn(messages, _tools_for_call())
+            content, tool_calls, usage, reasoning = _normalize_chat_return(ret)
+            _accumulate_usage(res.usage_total, usage)
+            res.steps = step + 1
+
+            # ★ 思维链单独发一个事件（只展示，不回灌 messages）；
+            #   推理模型每一步都会给，落进 session_log 后前端回放也能看到。
+            if reasoning and str(reasoning).strip() and thinking_events:
+                # ★ 必须**落盘**：此前只 _emit 不落盘 → 刷新页面/切会话/回放后
+                #   思维链全部消失，看起来就像"思维链还是没有"（2026-10-10 UI 重做时补）。
+                #   只存每步的完整终态（live 增量不落盘，避免日志爆量）。
+                _append_log(EV_THINKING, {"content": str(reasoning).strip(), "step": step + 1})
+                _emit(EV_THINKING, {"content": str(reasoning).strip(), "step": step + 1})
+
+            # 无工具调用 → 收敛，得到最终答复
+            if not tool_calls:
+                _ans = str(content or "").strip()
+                # ★ 2026-11-02 真机：模型这一轮只吐了 reasoning_content，
+                #   content 是空串却带 finish_reason=stop —— 旧代码直接
+                #   `ok=True, answer=""` 收尾，调用方（deep_task）只能报
+                #   「多步任务跑完了但没有结论」。先补一轮"只要结论"，
+                #   实在要不到才如实判失败（不再假装成功）。
+                if not _ans:
+                    _ans = (_converge_anyway(messages, "上一轮只输出了思考过程，没有正文")
+                            or "")
+                if not _ans and str(reasoning or "").strip():
+                    # 最后兜底：把思维链的尾部当"草稿结论"交出去，并标明来源
+                    _rs = str(reasoning).strip()
+                    _ans = ("（下面是我边想边写的，可能不完整）\n"
+                            + _rs[-1200:].strip())
+                # 设计 §10.2 第三类信号：模型自己说"没有 X 能力"。
+                # 有具体能力名才进循环；给不出就只算自知，不打断。
+                if on_capability_gap and not gap_hinted and _ans:
+                    try:
+                        from autonomy import capability_gap as _cg
+                        _need = _cg.infer_need(_ans)
+                        _gap = _cg.self_report(_ans, need=_need) if _need else None
+                        if _gap:
+                            _hint = on_capability_gap(_gap)
+                            if _hint:
+                                messages.append({"role": "assistant", "content": _ans})
+                                messages.append({"role": "system", "content": str(_hint)})
+                                gap_hinted = True
+                                step += 1
+                                _emit("capability_gap", {"need": _gap.need,
+                                                         "kind": _gap.kind,
+                                                         "evidence": _gap.evidence[:200]})
+                                continue
+                    except Exception as _ge:
+                        log(f"[agent] 自述缺口检测跳过: {_ge}")
+                if _ans:
+                    res.ok = True
+                    res.answer = _ans
+                    _append_log(EV_FINAL, {"content": res.answer, "steps": step + 1})
+                    _emit("final", {"content": res.answer, "steps": step + 1,
+                                    "elapsed": round(time.time() - t0, 2)})
+                else:
+                    res.ok = False
+                    res.error = "模型没有给出结论（只有思考过程）"
+                    res.answer = ""
+                    _append_log(EV_FINAL, {"content": "", "steps": step + 1,
+                                           "error": res.error})
+                    _emit("final", {"content": "", "steps": step + 1,
+                                    "error": res.error,
+                                    "elapsed": round(time.time() - t0, 2)})
+                return _finalize(res)
+
+            # 记录模型的中间文字（若有）
+            if content and str(content).strip():
+                _append_log(EV_ASSISTANT, {"content": str(content).strip()})
+
+            # ── 总工具预算已耗尽：不再空转，直接如实收敛 ──
+            #  模型还在要工具但预算没了 → 继续循环只会浪费 token，没有产出。
+            if MAX_TOOL_CALLS and total_tool_calls >= MAX_TOOL_CALLS:
+                # ★ 与步数上限同款兜底：模型最后一点文字都没有时，先要一次结论，
+                #   要不出来才如实判失败（工具可能已把事做完，只差总结）。
+                _tail = (str(content or "").strip()
+                         or _converge_anyway(messages, f"已达工具调用上限 {MAX_TOOL_CALLS}")
+                         or "")
+                res.ok = bool(_tail)
+                res.answer = _tail or "工具调用预算已用完，任务未完成。"
+                res.error = None if _tail else f"工具调用预算耗尽（{MAX_TOOL_CALLS} 次）"
+                _append_log(EV_FINAL, {"content": res.answer, "steps": step + 1,
+                                       "error": res.error, "reason": "tool_budget"})
+                _emit("final", {"content": res.answer, "steps": step + 1,
+                                "error": res.error, "elapsed": round(time.time() - t0, 2)})
+                return _finalize(res)
+
+            # 归一化 tool_calls（单点实现，主链共用同一套语义）
+            norm_calls = _tr.normalize_tool_calls(tool_calls, session_id=session_id, step=step)
+            if not norm_calls:
+                # 有 tool_calls 字段但结构全不可用 → 视作无工具，收敛
+                res.ok = True
+                res.answer = str(content or "").strip()
+                _append_log(EV_FINAL, {"content": res.answer, "steps": step + 1})
+                _emit("final", {"content": res.answer, "steps": step + 1,
+                                "elapsed": round(time.time() - t0, 2)})
+                return _finalize(res)
+            tool_calls = norm_calls
+
+            # 回灌 assistant 的工具调用消息
+            messages.append({"role": "assistant", "content": content or "",
+                             "tool_calls": [dict(tc) for tc in tool_calls]})
+
+            for tc in tool_calls:
+                _check_abort()
+                name = (tc.get("function") or {}).get("name") or ""
+                tc_id = tc.get("id") or ""
+
+                # 工具调用预算闸：单步调用数与总调用数双上限，防模型刷调用把成本打爆
+                if MAX_TOOL_CALLS and total_tool_calls >= MAX_TOOL_CALLS:
+                    raw_result = (f"已达本次任务工具调用上限 {MAX_TOOL_CALLS}，"
+                                  f"请用已有信息给出结论，不要再调用工具。")
+                    _append_log(EV_TOOL_RESULT, {"tool": name, "ok": False, "step": step + 1,
+                                                 "error": "tool_budget"})
+                    _emit("tool_result", {"tool": name, "ok": False, "step": step + 1,
+                                          "id": tc_id, "summary": raw_result})
+                    messages.append(_tr.make_tool_message(tc_id, raw_result))
+                    continue
+                if MAX_CALLS_PER_STEP and step_tool_count >= MAX_CALLS_PER_STEP:
+                    raw_result = (f"单步工具调用数超限（{MAX_CALLS_PER_STEP}），"
+                                  f"本次调用被忽略；请一次只调少量工具。")
+                    _append_log(EV_TOOL_RESULT, {"tool": name, "ok": False, "step": step + 1,
+                                                 "error": "per_step_budget"})
+                    _emit("tool_result", {"tool": name, "ok": False, "step": step + 1,
+                                          "id": tc_id, "summary": raw_result})
+                    messages.append(_tr.make_tool_message(tc_id, raw_result))
+                    continue
+                total_tool_calls += 1
+                step_tool_count += 1
+
+                _append_log(EV_TOOL_CALL, {"tool": name, "step": step + 1,
+                                           "args": _parse_args((tc.get("function") or {}).get("arguments"))})
+                _emit("tool_call", {"tool": name, "step": step + 1, "id": tc_id,
+                                    "args": _parse_args((tc.get("function") or {}).get("arguments"))})
+
+                # ── 执行（单点实现：越界防护 + 异常隔离 + retention/spill）──
+                r = _tr.execute_tool_call(
+                    tc, tool_functions=tool_functions,
+                    offered_names=None,          # agent 侧工具集由调用方控制，不做额外越界拦截
+                    session_id=session_id,       # 时效戳按会话隔离
+                    max_tokens=(_step_budget(messages, max_steps, step)
+                                if _auto_budget else max_tool_result_tokens),
+                    logger=log,
+                )
+
+                _append_log(EV_TOOL_RESULT, {
+                    "tool": name, "ok": r["ok"], "step": step + 1,
+                    "blocked": r["blocked"], "truncated": r["truncated"],
+                    "spilled": r["spilled"], "path": r["path"],
+                    "omitted_bytes": r["omitted_bytes"], "error": r["error"],
+                })
+                _emit("tool_result", {
+                    "tool": name, "ok": r["ok"], "step": step + 1, "id": tc_id,
+                    "summary": (r["full_text"] or "")[:200].replace("\n", " "),
+                    "elapsed": r["elapsed"], "truncated": r["truncated"],
+                    "spilled": r["spilled"], "path": r["path"],
+                    "omitted_bytes": r["omitted_bytes"],
+                    "full_text": r["full_text"] if not r["spilled"] else None,
+                })
+
+                messages.append(_tr.make_tool_message(tc_id, r["inline"]))
+
+                # 设计 §10.2：工具缺失/依赖失败 → 把缺口交给调用方，让模型
+                # 在同一轮里自己用 autonomy_* 补，而不是回复"我做不到"。
+                if on_capability_gap and not gap_hinted:
+                    try:
+                        from autonomy import capability_gap as _cg
+                        gap = None
+                        if r.get("blocked") == "unknown":
+                            gap = _cg.missing_tool(name, list(tool_functions.keys()))
+                        elif not r.get("ok"):
+                            gap = _cg.dependency_failure(
+                                str(r.get("error") or r.get("inline") or ""), need=name)
+                        if gap:
+                            hint = on_capability_gap(gap)
+                            if hint:
+                                messages.append({"role": "system", "content": str(hint)})
+                                gap_hinted = True
+                                _emit("capability_gap", {"need": gap.need,
+                                                         "kind": gap.kind,
+                                                         "evidence": gap.evidence[:200]})
+                    except Exception as _ge:
+                        log(f"[agent] 缺口检测跳过: {_ge}")
+
+            step += 1   # 本轮工具执行完毕，进入下一轮（while 循环由收敛/预算/中止兜底）
+
+    except AgentAborted:
+        res.aborted = True
+        res.ok = False
+        res.error = "已中止"
+        _emit("aborted", {"steps": res.steps})
+        return _finalize(res)
+    except Exception as e:
+        res.ok = False
+        res.error = f"{type(e).__name__}: {e}"
+        _emit("error", {"error": res.error})
+        return _finalize(res)
+
+
+def derive_history(session_id, *, limit=None):
+    """从 session_log 派生该 agent 会话的 messages（可回放）。"""
+    out = []
+    for ev in _slog.events_of("agent", session_id):
+        t = ev.get("type")
+        p = ev.get("payload") or {}
+        if t == EV_USER:
+            out.append({"role": "user", "content": p.get("content", "")})
+        elif t == EV_FINAL:
+            c = p.get("content")
+            if c:
+                out.append({"role": "assistant", "content": c})
+    if limit:
+        out = out[-int(limit):]
+    return out
+
+
+def replay(session_id, *, limit=None):
+    """回放 agent 会话的完整轨迹（含工具调用），用于 UI 重建。"""
+    events = _slog.events_of("agent", session_id)
+    if limit:
+        events = events[-int(limit):]
+    return [{"type": e.get("type"), "payload": e.get("payload"), "seq": e.get("seq")}
+            for e in events]

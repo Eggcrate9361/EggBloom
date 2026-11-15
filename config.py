@@ -1,0 +1,1160 @@
+# -*- coding: utf-8 -*-
+"""config.py - Configuration with env override, API provider selection"""
+import json
+import logging
+import os
+import sys
+
+try:
+    from cred_store import MODEL_API_KEY_CRED, read_cred, exists_cred
+except Exception:
+    MODEL_API_KEY_CRED = "MODEL_API_KEY"
+
+    def read_cred(name):
+        return None
+
+    def exists_cred(name):
+        return False
+
+if getattr(sys, 'frozen', False):
+    SCRIPT_DIR = os.path.dirname(sys.executable)
+else:
+    SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+
+_APPDATA_DIR = os.path.join(os.path.expanduser("~"), "AppData", "Local", "EggBloom_v3")
+os.makedirs(_APPDATA_DIR, exist_ok=True)
+
+CONFIG_FILE = os.path.join(_APPDATA_DIR, "bot_config.json")
+ENV_FILE = os.path.join(_APPDATA_DIR, ".env")
+
+# 程序目录（eggbloom/resources/app）下的 bot_config.json，优先于 AppData
+APP_CONFIG_FILE = os.path.join(SCRIPT_DIR, "bot_config.json")
+
+API_PROVIDERS = {
+    "deepseek": {
+        "name": "DeepSeek",
+        "url": "https://api.deepseek.com/chat/completions",
+        "models": ["deepseek-flash", "deepseek-v4-pro"],
+        "note": "官方直连，性价比高",
+    },
+    "openai": {
+        "name": "OpenAI",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "models": ["gpt-4o", "gpt-4o-mini", "gpt-3.5-turbo"],
+        "note": "国际，需网络可达",
+    },
+    "opencode": {
+        "name": "OpenCode（按量）",
+        "url": "https://opencode.ai/inference/openai/v1/chat/completions",
+        "models": ["deepseek-v4.1-flash", "deepseek-v4.1-flash-free", "glm-5.3-flash",
+                   "glm-5.3", "kimi-k3", "kimi-k2.7-code", "minimax-m3",
+                   "qwen3.8-max", "qwen3.8-flash", "longcat-2.0", "mimo-v2.6-flash"],
+        "note": "OpenCode Console 按量计费；Console 的 key 只能在 /inference/openai 用，"
+                "Go 订阅的 key 才走 /inference/go",
+    },
+    "opencode_go": {
+        "name": "OpenCode Go",
+        "url": "https://opencode.ai/inference/go/openai/v1/chat/completions",
+        "models": ["deepseek-v4.1-flash", "deepseek-v4-pro", "glm-5.3-flash", "glm-5.3",
+                   "glm-5.2", "kimi-k3", "kimi-k3.1-pro", "kimi-k2.7-code",
+                   "minimax-m3.1-flash", "mimo-v2.6-flash", "mimo-v2.5",
+                   "longcat-2.0", "step-5-preview", "hy3"],
+        "note": "Go 订阅（$10/月起，含月度额度）；OpenAI 兼容端点，Key 用 Console 的 API key",
+    },
+    "ollama": {
+        "name": "Ollama (本地)",
+        "url": "http://127.0.0.1:11434",
+        "models": ["qwen2.5:7b", "llama3.1:8b", "deepseek-r1:7b"],
+        "note": "本地免费，无需 Key",
+    },
+
+    # ── 国产官方（均已核实 OpenAI 兼容 + 工具调用）──
+    "aliyun": {
+        "name": "阿里云百炼 Qwen",
+        "url": "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
+        "models": ["qwen-max", "qwen-plus", "qwen-turbo", "qwen-long", "qwen-coder-plus"],
+        "note": "新域名需业务空间ID：https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+    },
+    "zhipu": {
+        "name": "智谱 GLM",
+        "url": "https://open.bigmodel.cn/api/paas/v4/chat/completions",
+        "models": ["glm-5.2", "glm-5", "glm-4.7", "glm-4.6", "glm-4.5", "glm-5v-turbo"],
+        "note": "GLM 最新 5.x 系列",
+    },
+    "kimi": {
+        "name": "Kimi (月之暗面)",
+        "url": "https://api.moonshot.cn/v1/chat/completions",
+        "models": ["kimi-k3", "kimi-k2.7-code", "kimi-k2.6", "kimi-k2.5", "moonshot-v1-128k"],
+        "note": "K3 始终推理；K2.6 可关思考",
+    },
+    "step": {
+        "name": "Step (阶跃星辰)",
+        "url": "https://api.stepfun.com/v1/chat/completions",
+        "models": ["step-3.7-flash", "step-3.5-flash", "step-2", "step-1"],
+        "note": "原生多模态 + 高可靠工具调用",
+    },
+    "minimax": {
+        "name": "MiniMax",
+        "url": "https://api.minimax.chat/v1/chat/completions",
+        "models": ["MiniMax-M2", "abab6.5s", "abab6.5", "abab5.5"],
+        "note": "国内端点 api.minimax.chat",
+    },
+    "volcengine": {
+        "name": "火山引擎 豆包",
+        "url": "https://ark.cn-beijing.volces.com/api/v3/chat/completions",
+        "models": ["doubao-1.5-pro-32k", "doubao-1.5-lite-32k", "doubao-seed-1.6"],
+        "note": "需在火山方舟控制台开通并获取 Endpoint ID",
+    },
+    "qianfan": {
+        "name": "百度千帆 ERNIE",
+        "url": "https://qianfan.baidubce.com/v2/chat/completions",
+        "models": ["ernie-4.5", "ernie-4.0-turbo-8k", "ernie-3.5"],
+        "note": "文心大模型，千帆 v2 端点",
+    },
+    "hunyuan": {
+        "name": "腾讯混元",
+        "url": "https://api.hunyuan.cloud.tencent.com/v1/chat/completions",
+        "models": ["hunyuan-turbo", "hunyuan-standard", "hunyuan-lite"],
+        "note": "腾讯云混元",
+    },
+    "siliconflow": {
+        "name": "硅基流动 SiliconFlow",
+        "url": "https://api.siliconflow.cn/v1/chat/completions",
+        "models": ["Qwen/Qwen3-235B-A22B-Instruct", "deepseek-ai/DeepSeek-V3", "Qwen/Qwen2.5-72B-Instruct"],
+        "note": "聚合平台，国产模型+开源模型，新用户送额度",
+    },
+
+    # ── 聚合 / 中转站（适量，需自行注册获取 Key）──
+    "openrouter": {
+        "name": "OpenRouter (国际聚合)",
+        "url": "https://openrouter.ai/api/v1/chat/completions",
+        "models": ["deepseek/deepseek-chat", "anthropic/claude-sonnet-4", "openai/gpt-4o", "qwen/qwen-max"],
+        "note": "数百模型一站调用，国际节点",
+    },
+    "custom": {
+        "name": "Custom / 自建中转",
+        "url": "",
+        "models": [],
+        "note": "one-api / new-api 等自建中转填这里，任意 OpenAI 兼容地址",
+    },
+}
+
+DEFAULT_CONFIG = {
+    "onebot_url": "http://127.0.0.1:3000",
+    "onebot_token": "",
+    "bot_qq": "",
+    "target_qqs": [],
+    "group_ids": [],
+    "api_provider": "deepseek",
+    "api_url": "https://api.deepseek.com/chat/completions",
+    "model_name": "deepseek-flash",
+    "bot_group_nick": "AAA",
+    # Bot 的称呼（**可配多个**，配置中心「Bot 昵称」一行一个）。
+    # 空列表 → 自动用 bot_group_nick；两者都空 → 兜底 ["小a"]。
+    # 匹配大小写/全角/@ 不敏感（"小A"、＠小a 都算）。
+    "bot_nicknames": [],
+    "startup_cooldown": 60,
+    "msg_split_len": 2000,
+    # ── 群聊分条（2026-10-24 补进 DEFAULT_CONFIG）────────────────────
+    # 这两个键此前只存在于 bot_core 的 _config.get 兜底和 example 里，
+    # DEFAULT_CONFIG 没有 → 同一件事三个数：example 5 / 兜底 3 / 这里没有。
+    # 现在以 5 为唯一值（1.5.7 报告写的也是 5），兜底同步改成 5。
+    # 另外它们此前不在 _RELOADABLE_GLOBALS 里，同功能域的 msg_split_len
+    # 却能热重载 —— 改完配置不生效，等于没有入口。
+    #   group_send_max_parts        单次回复最多拆成几条，超过尾部并成一条
+    #   group_send_block_threshold  有效字 ≤ 此值 → 拆多条；> 此值 → 整块发
+    "group_send_max_parts": 5,
+    "group_send_block_threshold": 100,
+    "session_ttl": 300,
+    "session_max_rounds": 30,
+    # 同一会话两次表情包的最小间隔（秒）。2026-11-02 真机：16:12:45 回敬一张、
+    # 16:13:02 又贴一张，17 秒两连发 —— 用户体感是"表情包乱发"。
+    "meme_cooldown": 180,
+    # 纯表情包消息要不要「同回一张」（回敬）。关掉只做文字回复。
+    "meme_back_enable": True,
+    # 私聊表情包：模型没标 [表情:x] 时，要不要靠情绪猜**自动**补一张（2026-11-02）
+    # 默认关：真机表现是"每次回话都跟一张莫名其妙的图"，用户明确嫌弃过；
+    # 关掉后只有模型自己标了 [表情:xx] 才发。
+    "private_meme_auto_detect": False,
+
+    # 协议层配置
+    "protocol_enabled": False,
+    "protocol_api_port": 3000,
+    # 当前激活协议驱动：napcat | llonebot | snowluma
+    "protocol_driver": "napcat",
+    # 各驱动独立配置（与 protocol_driver 搭配）
+    "protocol_drivers": {
+        "napcat": {
+            "exe_path": "",
+            "qq_path": "",
+            "api_url": "http://127.0.0.1:3100",
+            "http_report_url": "http://127.0.0.1:3005",
+            "ws_url": "ws://127.0.0.1:3101",
+            "ws_port": 3101,
+        },
+        "llonebot": {
+            "exe_path": "",
+            "api_url": "http://127.0.0.1:3000/onebot/v11",
+            "ws_port": 3001,
+            "ws_url": "ws://127.0.0.1:3001",
+            "webui_port": 7000,
+            "http_report_url": "http://127.0.0.1:3005",
+        },
+        "snowluma": {
+            "exe_path": "",
+            "api_url": "http://127.0.0.1:3000",
+            "ws_port": 3001,
+            "ws_url": "ws://127.0.0.1:3001",
+            "webui_port": 5099,
+            "http_report_url": "http://127.0.0.1:3005",
+        },
+    },
+
+    # 好友/加群/入群 请求自动同意策略
+    "auto_accept": {
+        "enabled": True,
+        "friend": True,
+        "group_add": True,
+        "group_invite": True,
+        "allowlist": [],
+        "denylist": [],
+        "welcome_private": "你好，我是小a～",
+        "welcome_group": "进群了？坐！",
+        "welcome_new_member": True,
+        "add_to_targets": True,
+    },
+    # 群管理指令白名单（空 = 仅 Bot 本人 + command_admins + target_qqs）
+    "admin_qqs": [],
+    "admin_commands_enable": True,
+    # 主人 / 主要管理员（2026-11-02）：Bot 该认得的"东家"。
+    # 决定 prompt 里怎么认人（该叫「老大」还是当普通群友），与权限判定共用一份名单。
+    # 空 = 退回 admin_qqs（兼容老配置，别让升级后"突然不认主"）。
+    "owner_qqs": [],
+    "owner_titles": ["老大"],
+    # 关系先验（2026-11-02）：不是主人时，默认按「老大的朋友」对待（熟了由 Bot 自己改）。
+    # 群里默认不给（进群不等于老大朋友）；要把群聊也开就打开第二项。
+    "assume_owner_friend": True,
+    "assume_owner_friend_in_group": False,
+    # 能力清单（1.5.9）：把「这轮给了什么工具」与「我会什么」分开。
+    # 关掉即回到 1.5.8 的旧文案（只列本轮工具，名单外一律否认）。
+    "capability_view_enable": True,
+    # 列出未启用插件的能力（关掉则只列能用的；代价是"有但没开"与"真没有"又混在一起）
+    "capability_show_disabled": True,
+    # bot 自己在群里的角色缓存秒数（owner/admin/member）
+    "group_role_cache_sec": 600,
+    # 群管理指令执行后回一句话（空=只在日志里，群里没反应）
+    "admin_command_receipt": True,
+    # 关系档位进 prompt（A.7 撒娇与抱怨强度的数据来源；关掉则只在文本里空着）
+    "persona_relation_enable": True,
+    # 意愿轴（A.7）：关掉即"能做的都做"（1.5.8 行为）
+    "refuse_enable": True,
+    # 收到请求时给"可以不办"许可的基础概率（十来次一次；太高会被嫌"叫不动"）
+    "refuse_base_prob": 0.08,
+    # 拒绝时用撒娇/抱怨包裹的比例，其余直说"不干"
+    "refuse_soften_ratio": 0.7,
+    # 办完才允许念叨（关掉则只撒娇不抱怨）
+    "refuse_nag_after_done": True,
+    # 同一人 30 分钟内最多被拒几次，超限强制办（耍赖有额度）
+    "refuse_quota_per_30min": 2,
+    # 一天内拿"不想"逃避正经求助几次后概率归零
+    "refuse_evade_daily_limit": 3,
+    # 关系特别好档允许真不干（对熟人耍赖本身就是关系的一部分）
+    "intimate_refuse_ok": True,
+    # 事件通知：加好友 / 加群 时自动私聊通知管理员 QQ（空 admin_qqs = 用上方 admin_qqs）
+    "notify_admin": {
+        "enabled": True,
+        "friend_add": True,
+        "group_increase": True,
+        "admin_qqs": [],
+    },
+    # 群管理：每群限制配置（webui 群管理页管理）{"gid": {"reply_enabled": bool, "new_member_card": str}}
+    "group_restrictions": {},
+    # 好友管理：每好友限制配置（webui 联系人管理页管理）{"qq": {"reply_enabled": bool}}
+    "friend_restrictions": {},
+
+    # AI 行为
+    "ai_temperature": 0.7,
+    # 私聊单次生成上限（token）。1.5.10 E2：原本只在 example/运行时配置里，
+    # DEFAULT_CONFIG 缺这个键 → 代码里 200 的兜底与配置 800 长期不一致。
+    "ai_private_max_tokens": 800,
+    # 私聊单次生成上限（token）。1.5.10 E2：原本只在 example/运行时配置里，
+    # DEFAULT_CONFIG 缺这个键 → 代码里 200 的兜底与配置 800 长期不一致。
+    "ai_private_max_tokens": 800,
+    "ai_max_tokens": 800,
+    "idle_timeout": 120,
+    "ai_top_p": 1.0,          # 1.5.10 E：1.0 等价"未设置"，不改变采样
+    "ai_frequency_penalty": 0.1,   # 1.5.10 E：与 payload 原写死值一致
+    "ai_presence_penalty": 0.15,    # 同上
+    # 工具最多调几轮（2026-10-23）。此前非网页任务**只给一轮**：
+    # 模型调完一个工具就强制收尾，「先搜 → 读正文 → 再总结」这种三拍活走不完。
+    # 3 轮够覆盖绝大多数情况，且每轮都过上下文总量闸，不会失控。
+    # 不想多花钱就设 1，行为退回旧逻辑。
+    "max_tool_rounds": 3,
+
+    # 历史进上下文的字符预算（2026-10-23）。
+    # 原来最近几轮原文**不限长**：一句「嗯」和一条 3000 字网页结果同样算"一条"，
+    # 实测 4 轮含长回复时最近区达 9556 token，压掉后 3364。
+    # 只影响异常长的那几条，短对话体积一字不变。
+    # 设为 0 关闭该闸（退回旧行为）。
+    "history_recent_budget_chars": 6000,
+    # 摘要账本的字符预算。行数上限（300 行）管不住体积：
+    # 300 行 × 100 字 = 18750 token，是每轮都要重发的量。
+    # 从头部裁，账本仍是 append-only，尾部追加不受影响。
+
+    # 去AI味
+    "de_ai": {
+        "enabled": True,
+        "prompt_inject": True,
+        "post_process": True,
+        "ban_words": True,
+        "ban_dashes": True,
+        "ban_rule_of_three": True,
+        "ban_filler": True,
+        "ban_sycophancy": True,
+        "max_sentence_len": 0,
+    },
+
+    # 会话管理
+    "private_reply_interval": 3,
+
+    # 群聊行为
+    "group_msg_buffer_window": 3,
+    "group_recent_msgs_window": 30,
+    "group_session_max_replies": 20,
+    "group_session_idle_timeout": 300,
+    "group_msg_buffer_window_session": 3,
+    # ★ 2026-10-23 15 → 8：这个值原来写 15，但整批 8 秒硬顶恒把它压成 8，
+    #   于是 15 从来没生效过（第一次等 8 秒，之后每次最多 8 秒）。用户拍板统一为 8，
+    #   配置与现实一致。想真的等更久要同时改 GROUP_BATCH_HARD_CAP。
+    "group_msg_buffer_window_trigger": 2,
+    # 私聊合并（1.5.9 真机 2026-10-27）：连发 5 条被切成 3 批时定的参数。
+    # 群里 3 秒够用，私聊是"听他把话说完"，窗口与硬顶都更松。
+    "private_msg_buffer_window": 8,
+    "speech_pace_enable": True,
+    # 人格长期系数（1.5.9 §C.2）。0 = 保持现状分布，不偏移。
+    # 调高只会让回复配额更常往上走一档，不改任何文本内容。
+    "persona_talkativeness": 0.25,   # 1.5.10 C1：方案 §5.2 的推荐默认（0 = 永不偏移）
+    # 另外三个系数（1.5.9 §5.2，0–1，默认值按方案）。消费点见 persona_form.py：
+    #   sharpness  0.75  嘴毒：语气词池分档 + 句首语气词（0.18×系数 ≈ 每 7~8 条一次）
+    #   curiosity  0.55  好奇：对方说**陈述句**时概率追问（0.30×系数）
+    #   warmth     0.35  温度：表情概率（+0.20×系数）+ 句末句号→～ 的软化
+    "persona_sharpness": 0.75,
+    "persona_curiosity": 0.55,
+    "persona_warmth": 0.35,
+    "private_batch_hard_cap": 15,
+    # 回复预算硬上限（1.5.9 §B3）。档位分布见 reply_budget.py：
+    # A 60% 1 条 ≤8 字 / B 30% 1–2 条 ≤16 字 / C 10% 2–3 条 ≤40 字。
+    # 这里只是兜底，正常情况下档位更严。
+    # 丢弃判据（1.5.9 §B5，2026-10-27 改）：生成期间群里又来了几条算"话头翻篇"。
+    # 这是**主判据**，与生成耗时无关。
+    "reply_stale_turns": 2,
+    # 时间兜底（**不再是设计值**）。语义已改：
+    #   不配 / null → 用实测分布导出的线（reply_drop.LatencyProfile，
+    #                  p99×1.5；被点名时再×0.5）
+    #   >0          → 取 max(分布线, 这个值)，即"临时拉高"
+    #   0           → 完全关掉时间兜底（合法：话头翻篇+官腔仍在工作）
+    # ★ 为什么改：旧版这里是 25，实测 12 次丢弃里 11 次是「过时」、
+    #   值全在 26–65 秒，而一次带搜索的回复结构上就不低于 25 秒
+    #   → 「凡搜索必丢」。阈值不是误伤，是把搜索链整体判死。
+    #   判据改为"没人说话就不算过时"，线交给分布，不再拍数字。
+    "reply_stale_drop_sec": None,
+    # 最近几轮保留原文（其余压成摘要账本）。单位=轮。
+    # 1.5.9 §C.3.5：4 轮 → 2 轮。近轮每轮都变，排在它后面的块永远不可命中，
+    # 少一轮就多一段能吃到缓存的静态前缀。
+    # 2026-11-04 记忆收敛：摘要账本已删除，只保留原文窗口。
+    # 40 条 ≈ 20 轮；更早的内容交给长期记忆（沙漏），不再每轮现编摘要。
+    "history_raw_entries": 40,
+    "reply_max_chars": 16,
+    "reply_max_parts": 3,
+    "reply_max_total": 80,
+    # ── 反问闸（1.5.9 §3.6，2026-10-28 按方案归位）────────────────
+    # 只管**末句问号**，默认 off。重生会把首字从 5s 推回 7–8s，速度与零问号
+    # 不能同时要，取舍留给配置。实现见 reply_gate.py。
+    #   off（默认）    只记 [口癖]，不改
+    #   regen          末句是问号就重生一次
+    #   regen_private  只在私聊 / 被 @ 时重生
+    # ★ 方案明确撤销"剪文本"（末句删除 / 问号改句号）：残句比反问更像人机。
+    "reply_question_guard": "off",
+    # 抽到长句档（档 C，2–3 条 ≤40 字）的概率。1.5.9 §3.3 三档分布：
+    # A 60% / B 30% / C 10%，这个键只调 C 的权重，A:B 比例不变。0–0.5。
+    "reply_long_ratio": 0.1,
+    # ── 插件注入预算（1.5.10 F3，2026-10-30）──────────────────────
+    # `before_reply` 的注入以前没有上限，一个插件话多就能把消息尾撑到几百字。
+    # 两个维度分开算，因为要防的东西不一样：
+    #   plugin_inject_max_chars   一次回复里**所有插件注入合计**的字数上限（prompt 体积）
+    #   plugin_inject_daily_chars **每个插件每天**累计的字数上限（防某个插件刷屏）
+    # 账本落 data/plugin_budget.json，按本地日期换天 —— bot 一天重启七八次，
+    # 只放内存的每日预算等于没有。
+    # 0 = 该维度不限；整段放不下就整段跳过，截断点取句末/换行，不塞半句。
+    "plugin_inject_budget_enabled": True,
+    "plugin_inject_max_chars": 80,
+    "plugin_inject_daily_chars": 600,
+    "group_last_exit_cooldown": 3000,
+    # 2026-10-25：30 秒太短 —— 实测两次戳相隔 2 分钟，计数都从 1 重来，
+    # 用户看到的就是"计数不动"。改为 10 分钟，覆盖正常人连续戳的间隔。
+    "poke_timeout": 600,
+    # ── 戳一戳回复路径（1.6.0 正式版可选项，2026-11-10）──────────────
+    # 两个场景各自独立可配；默认值都等于本项加入之前的既有行为，发版零变化。
+    # 群聊三档全部走同一条 pipeline，只改 forced 或干脆不回，不引入 1.5.x
+    # 已废弃的「独立小剧场」旁路（真机：戳+消息并行生成两条、主循环阻塞 9 秒）。
+    "poke_group_mode": "pipeline",      # pipeline / gated / off
+    # 私聊 standalone = 单独拼 prompt 的独立小剧场（现状）；
+    # mainline = 把「被戳」当普通私聊消息塞回 MSG_QUEUE，接得上上下文；
+    # off = 只反戳不回。mainline 的注入文本不带次数（数字会被顺着数数复读）。
+    "poke_private_mode": "standalone",  # standalone / mainline / off
+    # ── 发言闸（1.5.9 §3.8，提交 6，2026-10-28）────────────────────
+    # 在决策器之前用纯代码判"要不要进模型"：没命中就一次调用都不花。
+    # 档位：1 只认点名 / 2 关键词 / 3 关键词+概率（默认）/ 4 全响应。
+    # 被点名（@、叫小a、引用我）一律放行，任何频控都拦不住。
+    "speak_gate_tier": 3,
+    "speak_probability": 0.15,
+    # 发言率上限：窗口内 回复数/消息数 超过 N/100 → 静默（样本 <20 不判）
+    "speak_rate_max_per_100": 10,
+    "speak_rate_window_min": 30,
+    # 连说 N 条后强制静默 5 分钟（有人说话即清零）
+    "consecutive_reply_limit": 2,
+    # 决策器放行线（原硬编码 0.35）。临界区 = 放行线 ±0.1，交给 AI 表态。
+    "decider_min_score": 0.5,
+    "group_idle_exit_enable": True,
+    "group_idle_exit_probability": 0.3,
+    "group_idle_exit_min_silence": 600,
+
+    # ── Bot 自己的作息：静默时段（"睡觉"，2026-10-24）────────────────
+    # 这个键原先**只存在于 proactive_talk 插件自己的 data/config.json 里**，
+    # 于是它只管得住"Bot 自己想说话"，管不住"群里有人 @ 它，它答"。
+    # 用户本机早就配了 1:00-7:00，意图明确，但群聊回复链从不读它 ——
+    # 凌晨两点被 @ 照样答。现在提到主配置，群聊/私聊/主动开口共用一份判据。
+    #
+    # 格式 "起始-结束"，24 小时制，支持跨天（"23:00-7:00"）。
+    # 空串 = 不静默（默认，保持老行为不变）。
+    "quiet_hours": "",
+    # 静默时段里被 @ / 引用 / 叫名字时的处理：
+    #   "wake"   被点名就回（真人被叫醒也会应一句），但话短、带着困意
+    #   "ignore" 一律不回，彻底睡死
+    # 默认 wake：完全 ignore 会让人以为 Bot 挂了；叫醒才是真人的反应。
+    "quiet_when_mentioned": "wake",
+
+    # Agent 入口（2026-10-24 补进 DEFAULT_CONFIG）
+    # ★ 这两个键此前**只存在于 bot_core 的 _config.get 兜底和 example 里**，
+    #   DEFAULT_CONFIG 没有 → 配置对象里缺这两个名字 → 设置页拿不到值，
+    #   用户只能手改 JSON 才能打开，等于功能对普通用户不存在。
+    #   两处分开授权：群聊是公开场合（有 @ 这个人工确认动作），
+    #   私聊是伴侣场景，agent 的任务汇报式回答会把人设顶掉，所以各自一个开关。
+    #
+    # ── 1.6.0 刀 4（2026-11-01）：合并成一个「可干活」────────────────
+    #  语义 = **多一双手**，不是换人格：开 = 聊到需要多步动手时能调 deep_task；
+    #  关 = 只聊不干。新增 `agent_can_work` 作为唯一开关；
+    #  上面两个旧键**只读不写**（老配置仍认，见 load_config 里的迁移）。
+    "agent_can_work": False,
+    "agent_group_enable": False,
+    "agent_private_enable": False,
+
+    # ── 长期主动（2026-11-08）───────────────────────────────────────
+    #  产品态默认关：它会用真钱烧 token，且"自己找事做"在正常配置里属于惊喜而不是默认。
+    #  分离态无视这个开关（drive 线程由 separation 直接起）。
+    "drive_enable": False,
+    "drive_interval_min": 45,
+    # 它自己想说话时能不能真的发出去（关掉 = 只记日志不打扰人）
+    "drive_outreach_enable": True,
+
+    # ── A3：QQ 回复链进 agent（2026-10-30，方案 v2 §2/§6）──
+    #  与上面两个"agent 入口"不是一回事：那两个是**用户显式下达的任务**，
+    #  这两个是**模型自己在闲聊/查东西时拼原语**（看头像、翻群列表）。
+    #  默认两把锁都上：开关关着 + 名单空 = 谁都不许。
+    #  第一次上线只开给自己私聊 —— 出事的影响面是一个人，不是一个群。
+    #  名单条目形状：
+    #    "123456789" / "private:123456789"  只对这个人的私聊生效
+    #    "group:123456789"                   只对这一个群生效（裸号码不算，防手滑）
+    #    "*"                                 全部（调试用，别长期开）
+    "qq_agent_enable": False,
+    "qq_agent_allow": [],
+    # 额外信任的抓取域名（叠加在 qq_primitives.DEFAULT_HOSTS 上）。
+    # 默认空：agent 只能抓头像域名，不许当成通用浏览器。
+    "qq_agent_hosts": [],
+    # 允许 agent 自己发消息/踢人/禁言吗。默认 False：
+    # 写类 OneBot 动作一律拒绝，被拒时它会如实说"这个要授权"。
+    "qq_agent_allow_write": False,
+
+    # 群聊白名单（P0-2）：Bot 只在这些群里参与，其余群完全静默。
+    #   [] 或未设置 = 不限制（兼容现状：所有群都参与，升级不改变现网行为）
+    #   非空       = 只有列出的群号允许
+    # 逐群开关 group_restrictions[gid].reply_enabled=False 优先级更高，始终拒绝。
+    "group_whitelist": [],
+
+    # 表情包
+    "meme_enable": True,
+    # 表情包自动采集（2026-10-30）：群聊里别人发的表情包 → 图库 → 可被找回/重发。
+    # 预设 vs 主模型（2026-10-30）：开=用预设话术、不调模型；关=让主模型现说一句。
+    # 工具注入（2026-10-30）：开=按场景全量给（模型想用就用），关=旧的关键词猜测。
+    # 免费视觉车道（2026-10-30 真机：每次 2 轮失败再熔断，循环噪音+白等；
+    # 主模型约 1~2 秒能读，默认关）
+    "image_free_lane_enable": False,
+    # 私聊工具白名单（2026-10-30）：只有名单里的人能拿到写/执行/桌面工具；
+    # 其他人私聊只给只读工具，越权调用一律回"没有权限"。
+    "private_tool_whitelist": [],
+    "tools_full_inject_enable": True,
+    # ── 工具组的许可边界（2026-11-06）───────────────────────────────
+    # 以前这三套组是**写死**在 `_tools_subset_for_scene()` 里的。写死的问题：
+    # 想"私聊只让聊天"必须改代码；而"给不给"本来就是**权限**问题，不该藏在
+    # if 里。现在三份名单都进配置中心，改配置即生效：
+    #   · group_tool_groups     群聊（本机能力不进群，别把 desktop 加进来）
+    #   · private_tool_groups   私聊 + 白名单（管理员）的上限
+    #   · private_public_groups 私聊非白名单：**默认只给 core（联网搜索）——
+    #                           也就是"只能聊天"**，加组名才放宽
+    # 空数组 = 用代码里的默认值（**不是**"什么都不给"，防止手滑锁死自己）。
+    # 工具名到组的映射见 harness/tool_registry.py 的 GROUP_* 常量：
+    #   core / work / web / group / plugin / todo / skill / write / proc / desktop / mcp / deep
+    "group_tool_groups": [],
+    "private_tool_groups": [],
+    "private_public_groups": [],
+    "recall_feedback_use_preset": True,   # 撤回反馈：预设
+    "recall_feedback_context_window": 300,  # 秒：bot 多久内说过话才回撤回（否则沉默）
+    "group_idle_exit_use_preset": True,   # 空闲退场：预设
+    "reply_stale_drop_enable": False,     # 回复超时丢弃（默认关：agent 可能跑十分钟）
+    "group_session_gate_enable": False,   # 群会话配额闸（默认关：被点名/决策放行不再被吞）
+    "meme_collect_enable": True,      # 总开关（关了不下载、不分类、不入库）
+    "meme_collect_classify": True,    # 采集时用视觉判一个情绪标签
+    "meme_collect_fill_desc": True,   # 采集后后台补一句画面描述（按描述找图靠它）
+    "meme_collect_daily_cap": 30,     # 每天最多收几张（防刷）
+    "meme_collect_phash_dedupe": True,  # 视觉去重：同图不同编码（转发/重压）不再收第二份
+    "meme_collect_phash_dist": 4,       # dHash 汉明距离阈值（0=关，越大越容易判重）
+    "meme_idle_exit_enable": True,
+    "meme_auto_detect_emotion": True,
+
+    # 撤回反馈
+    "recall_feedback_enable": True,
+    "recall_feedback_pre_messages": [
+        "？",
+        "你撤回了一条消息",
+        "还好你撤了 我差点就回了",
+        "撤回了？行 那我也不用回了",
+        "还没看呢 你就撤了",
+        "手速可以啊 我还没来得及回",
+        "撤了就撤了吧 反正我也没打算回",
+        "哎哟 差点就点发送了",
+        "你撤回的速度比我打字快",
+        "还好还好 还没发出去",
+        "撤回+1 这条我当没看见",
+        "不回了不回了 你都撤了我还回啥",
+        "撤得好 我正愁怎么接",
+        "你撤回 我省事",
+        "这波属于是你跑得快",
+        "撤都撤了 那就算了",
+        "还没读呢就撤了 算你识相",
+        "行吧 本AI的回复可以省了",
+        "撤回=跳过 这局不算",
+        "差点白打字了 幸好你撤了",
+        "你撤你的 我当无事发生",
+        "撤回成功 已为你拦截一条AI回复",
+    ],
+    "recall_feedback_post_messages": [
+        "看到了 晚了",
+        "看到了哦 不说",
+        "太慢了 我已经看到了",
+        "来不及了 嘿嘿",
+        "撤回慢了 已截获",
+        "晚了 我看到了",
+        "回复已经发出去了 哈哈",
+        "不好意思 你撤的时候我已经看到了",
+        "看到了 不过我不说",
+        "来不及啦 我已经读过了",
+        "晚啦 眼睛比你手快",
+        "撤回无效 本人已阅",
+        "看到了看到了 别费劲了",
+        "我看到了 你撤了个寂寞",
+        "撤晚了 我已经知道了",
+        "不巧 我刚好在看",
+        "被我看到了吧 嘿嘿",
+        "你撤回的速度还是不够快啊",
+        "看到了 但我会装作没看到",
+        "太迟了 消息已送达我脑子里",
+    ],
+    "recall_feedback_cooldown": 60,
+    # ★ 2026-11-03：撤回反馈由谁执行 —— "core" = 主链（默认，行为不变）；
+    #   "plugin" = 让位给 recall_manager 插件（插件页还要同时启用它，
+    #   否则主链不回了、也没人接）。只改一边都是错的。
+    "recall_feedback_by": "core",
+
+    # 撤回反馈（私聊）：独立开关/冷却/文案，与群聊撤回互不影响
+    "recall_private_enable": True,
+    "recall_private_cooldown": 60,
+    "recall_private_post_messages": [
+        "撤回了？我还没看到",
+        "什么情况 手滑了？",
+        "你撤回的速度比打字快多了",
+        "心虚了吧",
+        "好家伙 说撤就撤",
+        "别撤回啊 发都发了",
+    ],
+
+    # 功能开关
+    "image_cache_enable": True,
+    # 图片进对话的方式（2026-10-12；2026-10-19 改默认）：
+    #   native   = 直接把图作为 image_url 交给主模型
+    #              ⚠ 实测（经 sensenova 中转）：图片请求连续两次 HTTP 429
+    #              （TPM/RPM 超限），模型随后自称"看不到图"；纯文本主模型更读不了。
+    #   describe = 先用免费车道（free_llm）把图转成文字描述再注入 prompt
+    #              —— 对**任何**主模型都成立。实测 `describe_image()` 能准确认出
+    #              歌词截图并说出歌名，故改为默认。
+    #   off      = 不处理（老行为：群聊里图片只剩一坨 CQ 链接）
+    "image_reply_mode": "describe",
+    # 图片理解的主模型兜底（2026-10-30）。免费车道（zen/kilo）三条链经常**一起
+    # 返回空**，而且要串完三条才认输（实测 36 秒），最后给用户一句"图糊了"。
+    # 主模型多模态时让它自己看一眼，比等免费链靠谱。
+    #   true  = 免费链失败（重试一次）后，交主模型读
+    #   false = 只走免费链（纯文本主模型时必须关掉，否则白等一次超时）
+    "vision_main_fallback": True,
+    # 看视频的通用精度（QQ 视频 / B 站都走这套）：
+    # 默认 16 帧分 4 张联系表；low=8帧1张，high=16帧16张。
+    "video_watch_frames": 16,
+    "video_watch_sheets": 4,
+    "video_watch_precision": "default",
+    # 视觉请求节流/重试：16 张联系表时避免并发和 429 直接报错。
+    "video_vision_retries": 4,
+    "video_vision_min_interval": 1.0,
+    "video_vision_backoff": 2.0,
+    # 群聊回复要不要带**引用**（像 qq-bridge 那样指着某条话说）
+    #   off=不引用  auto=只在"对象明确"时引用（合并了多条历史/消息本身带引用）  always=每条都引用
+    "group_quote_mode": "auto",
+    "reply_vision_max_images": 3,
+    "self_learning_enable": True,
+    # ── 自主学习：排除"其他 AI 机器人"的发言（2026-10-19 线上实证）──
+    #  群里跑着另一个 bot（实测 uid 10000004 / 10000005，名片都叫
+    #  「另一个AI机器人」），它的 107+98 条消息被当成"群友表达风格"学进了
+    #  personality.txt，占学习语料 37% —— EggBloom 开始模仿另一个 AI 的腔调，
+    #  这是"越来越像机器人"的直接来源。
+    #  ① 显式黑名单：填 QQ 号，绝不学习
+    "self_learn_ignore_qqs": [],
+    #  ② 人工白名单：即使昵称像 AI 也照学（真人故意起个 AI 名的情况）
+    "self_learn_allow_qqs": [],
+    #  ③ 自动识别：**只看全局昵称**（不看群名片 —— 名片是可以随便改的 cosplay，
+    #     实测有人把名片改成「另一个AI机器人」但其实是真人，拿名片判会误杀）
+    "self_learn_exclude_ai_names": True,
+    #  ④ **严格化核心：表达必须在群里重复出现过，才准写进人格**
+    #     实测被污染的 5 条"群表达风格"全是 count=1 的一次性句子。
+    #     真实群习惯一定重复；AI 的漂亮话常常只出现一次。
+    #     值=2 表示"至少被两次独立发言验证过"。调高更保守（3 更严）。
+    "self_learn_min_count": 2,
+    "private_memory_enable": True,
+    # 私聊长期检索（2026-11-06）：超出 history 窗口的旧事，靠
+    # memory_api.recall() → memory_context.build_block(scope=private, uid) 召回
+    # （沙漏情景 + super_memory 向量 + 日期类问题，带 τ 阈值与字数预算）。
+    # 关掉 = 私聊只剩当前会话窗口，零检索、零额外 token。这是这一刀的回退开关。
+    "private_memory_retrieval_enable": True,
+    # 私聊与群聊共享记忆（2026-10-25 加，2026-10-30 改默认开）。
+    # 打开后：群聊能召回私聊内容、私聊能召回群聊内容；**群与群之间仍隔离**。
+    # 2026-10-30 用户拍板「记忆全打通」→ 默认 True。隐私代价是真实的
+    # （群友的发言可能被带进私聊复述），不想要就写 False 退回各记各的。
+    "memory_scope_share": True,
+    "slang_injector_enable": True,
+    "nsfw_enabled": True,
+    # 自愈 R1（1.5.11 §4.5 M2）：启动时体检白名单里的开关/预算/记忆共享，
+    # 类型或范围明显坏了就按上一份好快照（没有则按默认值）改回，并记进
+    # data/repairs.jsonl。只修"明显坏了"的值，不碰 api_key / 目标QQ / 群列表。
+    "self_heal_enable": True,
+    # R3（代码级自愈）：在 worktree 里改代码 → 跑全量 → 绿了才提交。
+    # 默认**关**：它会在你机器上自动提交代码，风险等级和 R1/R2 完全不同。
+    "self_heal_r3_enable": False,
+
+    # ── 主动戳一戳（1.6.0 §4.1.1）────────────────────────────
+    # 默认关：它会在你不在场时以你的名义戳别人。开启要同时配好目标。
+    "poke_proactive_enable": False,
+    "poke_proactive_targets": [],          # 空 = 回落到 proactive_talk 的 target_qqs
+    "poke_proactive_min_silence": 14400,   # 4 小时没互动才考虑
+    "poke_proactive_daily_cap": 3,         # 每天最多戳几个人
+    "poke_proactive_heartbeat_sec": 900,
+
+    # ── 生活上下文单出口（1.6.0 刀 2，2026-11-01）────────────────────
+    # 开：`_call_deepseek_sync` 的动态上下文（记忆/时间/群况/工具清单…）
+    # 交给 harness.life_context.merge() 合成一段注入，日志打「[生活上下文] 合并 N 块」。
+    # 关（默认）：逐块注入 = 改造前的样子，逐字节相同（golden 钉在
+    # tests/test_life_context_mainchain.py）。灰度通过再开。
+    # 2026-11-02 灰度 24h 结论：**保留（默认开）**。证据见交接 §73：
+    #   · 真跑 79 轮（另有 16 条是测试进程写同一份日志，按判据只信真跑）；
+    #   · prompt 平均 +0.9%（<10% 判据），private −1.3% / group +7.2%；
+    #   · Traceback 12 → 0；合并块数 9.8 / 1739 字（每轮）。
+    "life_context_enable": True,
+    # 合并后的字数上限；超了从尾部整块丢（不截半句）。0 = 不限。
+    "life_context_budget": 8000,
+
+    # ── agent 从"模式"降成"工具"（1.6.0 刀 3，2026-11-01）────────────
+    # 开：主链工具集里出现 `deep_task`（多步动手时它自己调）。
+    # 关（默认）：模型根本看不到这个工具，行为与 1.5.11 一致。
+    # 注：注入还看场景 —— 私聊要求进白名单、群聊要求 agent_group_enable。
+    "agent_as_tool": False,
+    # ── 入口旁路的闸（1.6.0 刀 3b，2026-11-01）────────────────────────
+    # 开：@它 时**同步跑 agent 并直接发**（老行为；人格/预算/闸/审计全绕过）。
+    # 关（默认）：入口只走主链，多步工具由 `deep_task` 承接。
+    # 回退到老行为 = 打开它 + agent_group_enable/agent_private_enable。
+    "agent_legacy_entry": False,
+
+    # ── 评测台（1.5.11 P0-1）────────────────────────────────────────
+    # 判据**词表**在 evals/rules.json（改词改文件，不动代码）；
+    # 这里只放「判不判」的开关与长度上限，配置中心「功能开关」面板可改。
+    # 关掉某个开关 = 这类判据不判，不是把词删掉（run_eval 会把关掉的打印出来）。
+    "eval_enabled": True,
+    "eval_ban_ai_self": True,
+    "eval_ban_backstage": True,
+    "eval_require_colloquial": True,
+    "eval_strict_budget": True,
+    # live 判分要真调模型（花钱），默认关；prompt 组装收口后再接线
+    "eval_live_enable": False,
+    # 长度口径：与线上 reply_budget 的硬上限对齐，取「分类预算」与这里的更严值
+    "eval_max_chars": 16,
+    "eval_max_parts": 3,
+    "eval_max_total": 80,
+    # 临时追加的禁用词，逗号/顿号分隔（不想改 rules.json 时用）
+    "eval_extra_banned": "",
+
+    # 消息长度
+    "private_reply_max_length": 500,
+    "group_reply_max_length": 800,
+    # 私聊气泡条数上限（2026-11-05）。
+    #   事故：19:42–19:44 用户发 4 条，bot 实际发出 10 条 —— smart_send 按句切分后
+    #   **没有条数闸**，一轮回复 3 句就连发 3 条；proactive_talk 同样按 max_bubbles=4
+    #   逐条发。用户视角就是"回了很多次"。
+    #   这里只限**条数**不限字数：文案一个字都不删，超出的句子并进末条。
+    #   0 = 不限（回到旧行为）。proactive_talk 也读这个键，取它与插件 max_bubbles 的较小值。
+    "private_bubble_max": 2,
+
+    # 慢回填充（2026-10-31）：私聊生成超过这么多秒还没结果，先发一条"接住"
+    # （"嗯/在/等下/我看下"）。0 = 关。
+    # 2026-10-31：硬编码 3 秒太吵（普通一轮 6 秒就出正文）→ 默认 12 秒。
+    # 2026-11-02：12 秒**还是吵** —— 带工具的一轮（网页任务 / deep_task）本来就
+    #   常超 12 秒，用户看到的是"先回一个在，再回正文"，像被敷衍了一次。
+    #   默认改成 **0（关）**：宁可安静地慢，也别先丢一句"在"。
+    #   想开就把它调大（比如 45），只在真的卡很久时才出现。
+    "private_slow_ack_after": 0.0,
+
+    # 运行时阈值（2026-10-31，用户原话「都是硬编码」）：
+    # 配置中心 → 功能 → 阈值。全部即时生效，0 一般表示"关"。
+    "meme_save_lookback_sec": 300,     # 说「存表情包」时往前找多久内的上一轮图片    "meme_collect_min_kb": 2,          # 表情库单张下限
+    "meme_collect_max_mb": 3,
+    # 2026-11-02（用户纠正）：**不再按消息文字多少拒收** —— 表情包常带一句吐槽。
+    # 带文字的图照样收，只标 `with_text` 进审核区，由人决定去留。
+    "meme_collect_require_pure_image": False,
+    "meme_collect_max_dim": 1600,
+    # 2026-11-02：新收的先进「审核区」，通过后才进发送池（用户："不直接用"）。
+    # 关掉 = 老行为（收了就能发）。
+    "meme_require_approval": True,
+    # 宽高比超过这个值按"游戏/横屏截图"处理，不收（方图/竖图才是表情包）。
+    "meme_collect_landscape_ratio": 1.35,          # 表情库单张上限
+    "consistency_min_overlap": 0.3,    # 认账闸：证据句重合阈值
+    "consistency_own_window_min": 30,  # 认账闸：「你上一条说的」块有效时长（分钟）
+    "consistency_own_msgs": 4,         # 认账闸：查证时看我最近几条回复
+
+    # ── 上下文预算（2026-11-01）：想"多给模型一点上下文"时的三个旋钮 ──
+    #  实测：群聊一次回复约 8.7K token；16 轮 ≈ 1K token 的历史。
+    #  16→32 轮大约 +1.5K token（+15%），单次成本 +0.0005 元左右。
+    "group_history_rounds": 16,     # 群聊带最近几轮（4~40）
+    # 私聊带最近几条历史（4~40）。2026-11-06 从 16 提到 32：
+    # 16 条只有 8 轮，长对话开头凭空消失且日志无痕。真正的成本闸是
+    # history_recent_budget_chars（6000 字，会打 [历史预算] 日志），
+    # 条数不该再当第二道硬闸。
+    "private_history_rounds": 32,
+    "history_msg_chars": 300,       # 单条历史保留字数（80~800；300→600 只影响长消息）
+
+    # 热补丁更新（2026-11-01）：给终端用户用的更新通道。
+    # 默认指向 GitHub 最新 Release 的 latest.json（`/releases/latest/download/<asset>`
+    # 永远解析到最新一次正式发布），所以发布侧只要把 latest.json 挂上去，
+    # 老用户的「检查更新」就能找到新版本；空串 = 关闭检查。
+    "update_manifest_url": (
+        "https://github.com/Eggcrate9361/EggBloom/releases/latest/download/latest.json"
+    ),
+
+    # 自定义内容
+    "custom_exit_phrases_short": [],
+    "custom_exit_phrases_idle": [],
+
+    # 群触发词
+    "group_trigger_words": ["小a"],
+    "group_trigger_include_bot_nick": True,
+    "group_trigger_include_text_at": True,
+    "group_trigger_include_quote": True,
+
+    # 界面
+    "ui_language": "zh",
+    "ui_theme": "default",
+
+    # ── 日志级别（2026-10-24 补进 DEFAULT_CONFIG）──────────────────────
+    # 这个键的读取方 logger_setup.get_logger 早就写好了：
+    #     from config import get_log_level; level = get_log_level()
+    # 但 config.py 里**从来没有这个函数**，ImportError 被 `except Exception:
+    # level = logging.INFO` 吞掉 —— 于是无论怎么配，日志级别都是 INFO，
+    # 而且没有一处报错、没有一句提示。属于"静默降级"那一类 bug：
+    # 用户以为调了 DEBUG，实际什么都没发生。
+    #
+    # 现在补齐函数，并把键加回 example（上一轮刚因为"没有读取方"删掉它，
+    # 这次的修法是把读取方补上，不是把键继续藏起来）。
+    # 取值：DEBUG / INFO / WARNING / ERROR，大小写不敏感；非法值回 INFO
+    # 并在日志里点名，不静默。
+    "log_level": "INFO",
+
+    # 向量嵌入默认路径（可由 bot_config.json 覆盖，避免硬编码）
+    "embed_exe": "",
+    "embed_model_path": "",
+    "embed_dll": "",
+    "embed_model": "bge-small-zh",
+    "embed_url": "http://127.0.0.1:8083/v1/embeddings",
+
+    # ── AIGC 全模态（1.6.0 P1.5）──────────────────────────────
+    # ★ 总开关默认**关**：关掉时一个请求都不发（连后端函数都不调用），
+    #   见 harness/aigc_task.py 的 submit()。这是验收第 6 条。
+    "aigc_enable": False,
+    "aigc_image_backend": "comfyui",     # comfyui / 空=不接
+    "aigc_tts_backend": "piper",         # piper / 空=不接
+    "aigc_tts_voice": "",                # piper 的音色名（models/<family>/ 下的文件）
+    "aigc_asr_backend": "faster-whisper",
+    "aigc_asr_model": "small",
+    "aigc_out_dir": "",                  # 空=默认 <app>/data/media
+    # 每日配额（0 = 不限）。按本地日期滚动，跨零点自动重置。
+    "aigc_daily_image_quota": 50,
+    "aigc_daily_tts_seconds": 600,
+
+    # ── 主动性行为（2026-11-06，harness/proactivity + plugins/proactivity）──
+    # 四条行为共享**一个**预算：不加这道闸，每加一条就多一份各自冷却，叠加成轰炸。
+    # 档位是配置页滑条 0..3 → 见 harness/proactivity/arbitrator.BUDGET_LEVELS。
+    "proactivity_enable": True,
+    "proactivity_budget_level": 1,          # 0 关闭 / 1 克制 / 2 常态 / 3 活跃
+    "proactivity_quiet_hours": "0-7",       # 静默时段，留空=不设
+    "proactivity_no_reply_min": 8,          # 发出后多久算「没人回」
+    "proactivity_at_dropped_min": 3,        # 被 @ 后多久没等到回复
+    "proactivity_pending_topic_min": 20,    # 「等下给你」多久没兑现
+    # ⑤ 冷场主动接触：合并了原 proactive_talk（开口）与 proactive_poke（戳一下）。
+    #   两者不再各起心跳，改成一条观察 + 模型从 say / poke / skip 里选。
+    "proactivity_idle_min": 240,            # 双方静默多久才考虑（沿用老插件 4h 下限）
+    "proactivity_idle_contact_enable": True,
+    # ── 2026-11-07 P3：设计清单剩下的六条 ──
+    "proactivity_user_burst_enable": True,     # ⑤/⑩ 连发没人接
+    "proactivity_image_only_enable": True,     # ⑥ 只发图/文件没配文字
+    "proactivity_name_dropped_enable": True,   # ⑦ 提到名字但没 @
+    "proactivity_resume_enable": True,         # ⑧ 隔很久回来接上次话头
+    "proactivity_job_enable": True,            # ⑨ 后台任务/视频/AIGC 完成汇报
+    "proactivity_state_enable": True,          # ⑫ 改群名/新人/退群/加好友
+    "proactivity_burst_count": 3,              # 私聊连发几条算"刷屏没人理"
+    "proactivity_burst_min": 2,                # 最后一条之后等多久
+    "proactivity_image_min": 2,                # 只发图后多久问一句
+    "proactivity_name_min": 2,                 # 提到名字后多久接话
+    "proactivity_resume_gap_h": 6,             # 断了多少小时算"很久没来"
+    "proactivity_resume_min": 3,               # 回来那句之后等多久接话头
+    "proactivity_schedule_enable": True,       # ⑬ 日程临近提醒
+    "proactivity_schedule_min": 15,            # 还剩多少分钟内提醒
+    "proactivity_care_enable": True,           # ⑭ 累了/孤独了主动关心一句
+    # 主动开口的人格底子：entertain（娱乐向）/ gentle（温柔）/ sharp（毒舌）/ custom
+    # 三段式（学 MaiBot）：是谁 / 什么时候说 / 说出来什么味。留空 = 用预设
+    "proactivity_persona": "xiaoa",
+    "proactivity_personality": "",
+    "proactivity_behavior_style": "",
+    "proactivity_reply_style": "",
+    # 备用风格：按概率临时换一种味道，避免每条一个味
+    "proactivity_style_pool": [],
+    "proactivity_style_prob": 0.15,
+    "proactivity_takeover_legacy": True,    # 为真时两个老插件自动让位，不双发
+    "proactivity_no_reply_enable": True,
+    "proactivity_at_dropped_enable": True,
+    "proactivity_pending_topic_enable": True,
+    # 撤回默认关：主链/recall_manager 还在跑，开了会一次撤回两条回复。
+    # 要接管必须把 recall_feedback_by 也改成 "proactivity"（arbitrator.gate 会硬拦）。
+    "proactivity_recall_enable": False,
+}
+
+_config_cache = None
+# 配置文件签名（mtime, size），用于弱缓存：文件未变直接返回缓存，变了自动重读
+_config_cache_sig = None
+
+
+def invalidate_config_cache():
+    """清除配置缓存：保存配置后调用，下次 load_config 强制重读磁盘。"""
+    global _config_cache, _config_cache_sig
+    _config_cache = None
+    _config_cache_sig = None
+
+
+def _file_sig():
+    """返回三个配置文件的 (mtime, size) 签名；任一变化即视为配置变更。"""
+    def _sig(p):
+        try:
+            st = os.stat(p)
+            return (st.st_mtime, st.st_size)
+        except OSError:
+            return None
+    return (_sig(APP_CONFIG_FILE), _sig(CONFIG_FILE), _sig(ENV_FILE))
+
+
+def _load_env():
+    """Read .env file"""
+    env = {}
+    if os.path.exists(ENV_FILE):
+        try:
+            with open(ENV_FILE, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith("#"):
+                        continue
+                    if "=" in line:
+                        k, _, v = line.partition("=")
+                        env[k.strip()] = v.strip().strip('"').strip("'")
+        except Exception:
+            pass
+    return env
+
+
+def _apply_separation(cfg):
+    """分离态读层拦截：限制键返回 0/∞（设计 §6 第二判定点）。"""
+    try:
+        from separation import apply_config_overrides
+        return apply_config_overrides(cfg)
+    except Exception:
+        return cfg
+
+
+def load_config():
+    """Load config: json + env override. API key NEVER in json.
+
+    弱缓存：文件 (mtime, size) 未变化时直接返回上次结果（高频读取省 IO）；
+    任一文件变更自动重读；保存后也可显式调 invalidate_config_cache() 强制刷新。
+    """
+    global _config_cache, _config_cache_sig
+    sig = _file_sig()
+    if _config_cache is not None and sig == _config_cache_sig:
+        return _apply_separation(_config_cache)
+    cfg = DEFAULT_CONFIG.copy()
+    #: 用户文件里**实际写过**的键（迁移判据：默认值不算"写过"）
+    _file_keys = set()
+
+    if os.path.exists(APP_CONFIG_FILE):
+        try:
+            with open(APP_CONFIG_FILE, "r", encoding="utf-8-sig") as f:
+                file_cfg = json.load(f)
+            cfg.update(file_cfg)
+            _file_keys |= set(file_cfg.keys())
+        except Exception:
+            pass
+
+    if os.path.exists(CONFIG_FILE):
+        try:
+            with open(CONFIG_FILE, "r", encoding="utf-8-sig") as f:
+                appdata_cfg = json.load(f)
+            # AppData 仅补缺，不覆盖程序目录已有字段
+            for k, v in appdata_cfg.items():
+                if k not in cfg or cfg.get(k) in (None, "", [], {}):
+                    cfg[k] = v
+        except Exception:
+            pass
+
+    env = _load_env()
+    # env 只补缺，不覆盖 bot_config.json 已有值：
+    # 之前 save_env 会把 API_URL/MODEL_NAME 写进 .env，导致 WebUI 切换
+    # 非 DeepSeek 提供商后，加载时又被 .env 里的 DeepSeek 残留值覆盖（配置"不生效"）。
+    # 改为 json 优先、env 补缺；凭据管理器优先级最高（见下）。
+    for ek, ck in [("API_KEY", "api_key"), ("DEEPSEEK_API_KEY", "api_key"),
+                   ("API_URL", "api_url"), ("MODEL_NAME", "model_name"),
+                   ("BOT_QQ", "bot_qq"), ("ONE_BOT_URL", "onebot_url"),
+                   ("ONE_BOT_TOKEN", "onebot_token")]:
+        if env.get(ek) and not cfg.get(ck):
+            cfg[ck] = env[ek]
+    # Windows 凭据管理器优先：避免明文 key 落盘
+    cred_key = read_cred(MODEL_API_KEY_CRED)
+    if cred_key:
+        cfg["api_key"] = cred_key
+
+    # Migrate old field
+    if cfg.get("deepseek_api_key") and not cfg.get("api_key"):
+        cfg["api_key"] = cfg.pop("deepseek_api_key")
+    cfg.pop("deepseek_api_key", None)
+    cfg.pop("deepseek_url", None)
+
+    # 1.6.0 刀 4：两个场景开关 → 一个「可干活」。
+    #   老配置（文件里没有 agent_can_work）按旧键推导一次，**行为不变**；
+    #   一旦文件里写了 agent_can_work，就以它为准（旧键从此不再参与）。
+    if "agent_can_work" not in _file_keys:
+        if any(cfg.get(k) for k in ("agent_group_enable", "agent_private_enable")):
+            cfg["agent_can_work"] = True
+
+    if not cfg.get("api_url"):
+        prov = cfg.get("api_provider", "deepseek")
+        cfg["api_url"] = API_PROVIDERS.get(prov, {}).get(
+            "url", "https://api.deepseek.com/chat/completions")
+
+    _config_cache = cfg
+    _config_cache_sig = sig
+    return _apply_separation(cfg)
+
+
+def save_config(cfg, save_api_key=False):
+    """Save config 到程序目录 bot_config.json（优先），失败回退 AppData。
+
+    与 bot_core._persist_config_file / webui.save_config 保持一致，统一落
+    程序目录真实文件，避免 Store 版 Python(MSIX) 把 %LOCALAPPDATA% 重定向
+    到沙箱导致配置写入不可见。保存后自动失效缓存，下次读取立即生效。
+    """
+    to_save = {k: v for k, v in cfg.items() if k != "api_key"}
+    if save_api_key and cfg.get("api_key"):
+        to_save["api_key"] = cfg["api_key"]
+    text = json.dumps(to_save, ensure_ascii=False, indent=2)
+    # 写程序目录（与 load_config 的程序目录优先一致）
+    try:
+        with open(APP_CONFIG_FILE, "w", encoding="utf-8") as f:
+            f.write(text)
+        invalidate_config_cache()
+        return True
+    except Exception:
+        pass
+    # 程序目录不可写（权限/只读）时回退 AppData
+    try:
+        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+            f.write(text)
+        invalidate_config_cache()
+        return True
+    except Exception:
+        return False
+
+
+def save_env(api_key="", api_url="", model=""):
+    """Save sensitive config：api_key 写入 Windows 凭据管理器（不落盘明文）。
+
+    API_URL / MODEL_NAME 不再写入 .env：它们属于 bot_config.json 的普通配置，
+    写进 .env 会在 load_config 时以残留值覆盖 WebUI 新保存的提供商配置
+    （切换非 DeepSeek 提供商后 Bot 仍走 DeepSeek 的根因）。这里顺带清理旧残留。
+    """
+    if api_key and api_key.strip() and "YOUR" not in api_key:
+        try:
+            from cred_store import write_cred, MODEL_API_KEY_CRED
+            write_cred(MODEL_API_KEY_CRED, api_key.strip())
+        except Exception:
+            pass
+
+    lines = []
+    if os.path.exists(ENV_FILE):
+        try:
+            with open(ENV_FILE, "r", encoding="utf-8") as f:
+                lines = f.readlines()
+        except Exception:
+            lines = []
+
+    new_lines = []
+    for line in lines:
+        s = line.strip()
+        if not s or s.startswith("#"):
+            new_lines.append(line.rstrip())
+            continue
+        if "=" in s:
+            k = s.partition("=")[0].strip()
+            if k in ("API_KEY", "DEEPSEEK_API_KEY", "API_URL", "MODEL_NAME"):
+                continue  # 敏感项走凭据管理器；URL/模型名走 bot_config.json
+            new_lines.append(line.rstrip())
+        else:
+            new_lines.append(line.rstrip())
+
+    with open(ENV_FILE, "w", encoding="utf-8") as f:
+        f.write("\n".join(new_lines) + "\n")
+def get_api_key():
+    """Get API key safely（凭据管理器 > env）"""
+    cred_key = read_cred(MODEL_API_KEY_CRED)
+    if cred_key:
+        return cred_key
+    cfg = load_config()
+    return (cfg.get("api_key", "") or
+            os.environ.get("API_KEY", "") or
+            os.environ.get("DEEPSEEK_API_KEY", ""))
+
+
+def migrate_plain_api_key(plain_key):
+    """把旧明文 key 迁移进凭据管理器，成功返回 True。"""
+    if not plain_key or not plain_key.strip():
+        return False
+    try:
+        from cred_store import write_cred, MODEL_API_KEY_CRED
+        return bool(write_cred(MODEL_API_KEY_CRED, plain_key.strip()))
+    except Exception:
+        return False
+
+
+def provider_cred_name(provider_id):
+    """每提供商专属凭据条目名：EggBloom.MODEL_API_KEY_{provider_id}。
+
+    让每个提供商可以保存独立 API Key（互不覆盖），未指定时回退全局条目。
+    """
+    pid = (provider_id or "").strip()
+    if not pid:
+        return MODEL_API_KEY_CRED
+    return f"{MODEL_API_KEY_CRED}_{pid}"
+
+
+def get_provider_api_key(provider_id):
+    """解析某提供商实际使用的 API Key：该提供商专属凭据 > 全局凭据。
+
+    提供商切换时不会把上一个提供商的 Key 误发给新服务商。
+    """
+    try:
+        from cred_store import read_cred
+        k = read_cred(provider_cred_name(provider_id))
+        if k:
+            return k
+    except Exception:
+        pass
+    return get_api_key()
+
+
+def save_provider_api_key(provider_id, key):
+    """把某提供商的 API Key 写入凭据管理器（专属条目），成功返回 True。"""
+    key = (key or "").strip()
+    pid = (provider_id or "").strip()
+    if not pid or not key or "YOUR" in key:
+        return False
+    try:
+        from cred_store import write_cred
+        return bool(write_cred(provider_cred_name(pid), key))
+    except Exception:
+        return False
+
+
+def clear_provider_api_key(provider_id):
+    """删除某提供商的专属凭据（用于清除独立 Key / 删除提供商时清理）。"""
+    pid = (provider_id or "").strip()
+    if not pid:
+        return False
+    try:
+        from cred_store import delete_cred
+        return bool(delete_cred(provider_cred_name(pid)))
+    except Exception:
+        return False
+
+
+# ── 日志级别（2026-10-24）────────────────────────────────────────────
+# logger_setup.get_logger 里一直写着 `from config import get_log_level`，
+# 但这个函数此前不存在，ImportError 被 except 吞掉 → 日志级别恒为 INFO。
+# 补齐它，并让非法值**发声**：静默回退正是这个 bug 的成因。
+_LOG_LEVELS = {
+    "DEBUG": logging.DEBUG,
+    "INFO": logging.INFO,
+    "WARNING": logging.WARNING,
+    "ERROR": logging.ERROR,
+}
+
+
+def get_log_level():
+    """配置里的日志级别 → logging 常量。读不到/非法 → INFO（并在日志里点名）。
+
+    大小写与前后空白不敏感（"debug" / " Debug " 都算 DEBUG）。
+    空串视为未配置 → INFO，不报错：那是默认状态，不是错误。
+    """
+    try:
+        raw = str(load_config().get("log_level") or "").strip()
+    except Exception:
+        return logging.INFO
+    if not raw:
+        return logging.INFO
+    lv = _LOG_LEVELS.get(raw.upper())
+    if lv is not None:
+        return lv
+    # 非法值：回 INFO，但要说出来。否则用户以为调成了 DEBUG，
+    # 实际什么都没变 —— 这正是这个函数补上之前发生的事。
+    try:
+        import logger_setup
+        logger_setup.get_logger("eggbloom").warning(
+            "配置里的 log_level=%r 不是合法值（DEBUG/INFO/WARNING/ERROR），"
+            "已按 INFO 处理", raw)
+    except Exception:
+        pass
+    return logging.INFO

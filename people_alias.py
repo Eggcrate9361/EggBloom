@@ -1,0 +1,364 @@
+# -*- coding: utf-8 -*-
+"""people_alias.py —— 跨场景的「称呼」与「约定」（P0-4 的存储层，2026-10-30）。
+
+## 真机现象（10-29 18:13–18:22）
+
+    18:18 你现在暂时叫我拉普兰德
+    18:18 「拉普兰德？行吧，你爱叫啥叫啥」      ← 嘴上答应
+    18:18 「等会儿在那边艾特我，我张口就来」    ← 承诺了跨场景行为
+    18:22 「唉，你还是不记得呢」                ← 一次都没用过
+
+以及：
+
+    18:13 等会儿在群里戳你，艾特你说"天王盖地虎"，你答"小a炖蘑菇"
+    18:13 「行啊，暗号我记住了」
+    18:22 暗号测试 → 失败
+
+根因不是模型不听话，是**答应之后没有任何写回动作**：`chat_history` 按会话分键，
+群里另起一份，私聊里说的别名与暗号从来没有进入群聊的 prompt。
+
+## 这一层只做两件事
+
+1. 从话里认出「让我叫你 X」「说 A 就答 B」，写进 `data/people_aliases.json`。
+2. 把存下来的东西变成一句 prompt（`prompt_line`），私聊群聊都用同一个出口。
+
+过期策略：称呼 7 天、约定 30 天 —— 「暂时」不该变成永久人设，
+但也不该明天就忘。过期条目在读取时忽略，写入时顺手清掉。
+
+**不做**（写清楚）：不做语义理解、不猜暗示。只认显式说法，认不出就不存 ——
+宁可少记，也别把「别叫我老板」记成「叫我老板」。
+"""
+from __future__ import annotations
+
+import json
+import os
+import re
+import time
+from typing import Dict, List, Optional, Tuple
+
+#: 运行态数据（与 data/people.json 同级）。测试可用 `set_store_path` 改。
+DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+STORE_NAME = "people_aliases.json"
+
+ALIAS_TTL = 7 * 24 * 3600          # 「暂时叫我 X」的合理寿命
+AGREEMENT_TTL = 30 * 24 * 3600
+MAX_ALIAS_LEN = 12
+MAX_TRIGGER_LEN = 16
+MAX_AGREEMENTS = 5
+
+_LOCK = None
+_STORE_PATH = os.path.join(DATA_DIR, STORE_NAME)
+_MEM: Optional[Dict[str, dict]] = None
+
+# ── 解析 ────────────────────────────────────────────────────────
+#: 「（以后/暂时/就）叫我 X」。X 到空白或标点为止，允许被引号包着。
+_ALIAS_RE = re.compile(
+    r"(?:以后|暂时|暫且|先|就|可以|都)?\s*(?:叫我|喊我|称呼我)\s*"
+    r"[「\"“'『]?\s*([^\s，。,.!?！？、；;：「」\"“”'『』]{1,12})"
+)
+#: 否定：「别叫我 X」「不要叫我 X」—— 命中就不存（方向正好相反）。
+_ALIAS_NEG_RE = re.compile(r"(?:别|不要|不用|别在|别再|甭)\s*(?:叫我|喊我|称呼我)")
+
+#: 「说 A，你答 B」（A/B 带引号或明文）。
+#: A 用**懒惰**匹配：`说天王盖地虎你答小a炖蘑菇` 里没有逗号，贪婪版会把「你」
+#: 吃进 A（触发词存成「天王盖地虎你」），懒惰版先试短的，正好停在「你」前面。
+_PAIR_RE = re.compile(
+    r"(?:说|讲|喊)\s*[「\"“'『]?\s*([^「」\"“”'『』\s，。,.!?！？]{1,16}?)\s*[」\"”'』]?"
+    r"\s*[，,、]?\s*(?:你|bot|它)?\s*(?:就)?\s*(?:答|说|回|接)\s*"
+    r"[「\"“'『]?\s*([^「」\"“”'『』\s，。,.!?！？]{1,16})\s*[」\"”'』]?"
+)
+#: 「暗号是 X」—— 只知道触发词，回答待定
+_SECRET_RE = re.compile(
+    r"暗号\s*(?:是|就是|：|:)\s*[「\"“'『]?\s*"
+    r"([^\s，。,.!?！？、；;：「」\"“”'『』]{1,16})"
+)
+#: 「说一句，A，你再回答我 B」—— 真机说法（2026-10-30 14:35）：
+#:   「然后艾特你说一句，天王盖地虎，你再回答我小a炖蘑菇」
+#:   旧 _PAIR_RE 要求"说 A 你答 B"紧挨着，中间夹个逗号就漏了。
+_PAIR_RE2 = re.compile(
+    r"(?:说|讲|喊)[^，。,.!?！？\n]{0,10}[，,]\s*"
+    r"[「\"“'『]?([^「」\"“”'『』\s，。,.!?！？]{2,16})[」\"”'』]?\s*[，,]\s*"
+    r"你\s*(?:再|就)?\s*(?:回答|答|回复|回|说)\s*(?:我)?\s*"
+    r"[「\"“'『]?([^「」\"“”'『』\s，。,.!?！？]{1,16})[」\"”'』]?"
+)
+
+#: 这些"触发词/回答"其实是口语碎片，不是约定 —— 宁可不存。
+_STOP_AGREE = {"你要", "一句", "什么", "的话", "这个", "那个", "然后",
+               "现在", "时候", "暗号", "意思", "事情", "东西"}
+
+_STOP_ALIAS = {"我", "你", "他", "她", "它", "什么", "啥", "个", "嘛", "吧"}
+
+#: 程序给消息加的壳：bot_core 会把引用消息拼成
+#: `[引用:某人｜…] 原文\n[当前] 这次说的话`。这些**不是用户说的话**，
+#: 解析称呼 / 约定之前必须剥掉 —— 2026-11-09 真机：
+#: 「明天记得叫我\n[当前] 你没发」被存成了「称呼 = [当前]」。
+_ANNOT_LINE_RE = re.compile(r"(?m)^\s*\[(?:引用|当前)[^\]\n]*\]")
+
+#: 称呼里不该出现的东西：方括号包起来的都是壳（`[当前]`、`【系统】`）
+_BAD_NAME_CHARS = set("[]【】［］")
+
+
+def strip_annotations(text: str) -> str:
+    """剥掉程序拼的 `[引用…]`/`[当前]` 壳，只留用户这次说的话。
+
+    有 `[当前]` 就取它后面那段（前面是引用他的旧话，不是这次说的）；
+    没有就按行删掉 `[引用:…]` 开头的壳行。
+    """
+    t = str(text or "")
+    if not t:
+        return ""
+    m = re.search(r"\n?\[当前\]\s*", t)
+    if m:
+        return t[m.end():].strip()
+    return _ANNOT_LINE_RE.sub("", t).strip()
+
+
+def parse_alias(text: str) -> str:
+    """从话里认出「让我叫你 X」。认不出返回空串。
+
+    宁可漏判：`别叫我老板` 是明确的反向意愿，绝不能变成「称呼=老板」。
+    """
+    t = strip_annotations(text)
+    if not t or _ALIAS_NEG_RE.search(t):
+        return ""
+    m = _ALIAS_RE.search(t)
+    if not m:
+        return ""
+    name = m.group(1).strip().strip("「」\"“”'『』")
+    # 句尾语气词不是名字的一部分（「叫我小a吧」→ 小a）
+    while len(name) > 1 and name[-1] in "吧啊呀哦呢啦嘛哈":
+        name = name[:-1]
+    # 带方括号的一律不是名字：那是程序壳（`[当前]`）或表情标签残留
+    if any(ch in _BAD_NAME_CHARS for ch in name):
+        return ""
+    if not name or name in _STOP_ALIAS:
+        return ""
+    if len(name) > MAX_ALIAS_LEN:
+        return ""
+    return name
+
+
+def _ok_pair(trig: str, reply: str) -> bool:
+    """一对「触发词 → 回答」是否像真的约定（不是口语碎片）。"""
+    if not trig or not reply or trig == reply:
+        return False
+    if trig in _STOP_AGREE or reply in _STOP_AGREE:
+        return False
+    if len(trig) > MAX_TRIGGER_LEN or len(reply) > MAX_TRIGGER_LEN:
+        return False
+    return True
+
+
+def parse_agreement(text: str) -> Tuple[str, str]:
+    """认出「说 A 就答 B」或「暗号是 X」。返回 (触发词, 回答)；没有返回 ("","")."""
+    t = strip_annotations(text)
+    if not t:
+        return "", ""
+    m = _PAIR_RE.search(t)
+    if m:
+        trig = m.group(1).strip().strip("「」\"“”'『』")
+        reply = m.group(2).strip().strip("「」\"“”'『』")
+        if _ok_pair(trig, reply):
+            return trig, reply
+    m2 = _PAIR_RE2.search(t)
+    if m2:
+        trig = m2.group(1).strip().strip("「」\"“”'『』")
+        reply = m2.group(2).strip().strip("「」\"“”'『』")
+        if _ok_pair(trig, reply):
+            return trig, reply
+    m = _SECRET_RE.search(t)
+    if m:
+        trig = m.group(1).strip().strip("「」\"“”'『』")
+        if trig and trig not in _STOP_AGREE and len(trig) <= MAX_TRIGGER_LEN:
+            return trig, ""
+    return "", ""
+
+
+# ── 存储 ────────────────────────────────────────────────────────
+def _lock():
+    global _LOCK
+    if _LOCK is None:
+        import threading
+        _LOCK = threading.Lock()
+    return _LOCK
+
+
+def set_store_path(path: str) -> None:
+    """换存储文件（测试用）。会清内存缓存。"""
+    global _STORE_PATH, _MEM
+    _STORE_PATH = str(path)
+    _MEM = None
+
+
+def store_path() -> str:
+    return _STORE_PATH
+
+
+def _load() -> Dict[str, dict]:
+    global _MEM
+    if _MEM is not None:
+        return _MEM
+    d: Dict[str, dict] = {}
+    try:
+        with open(_STORE_PATH, "r", encoding="utf-8") as f:
+            raw = json.load(f)
+        if isinstance(raw, dict):
+            for k, v in raw.items():
+                if isinstance(v, dict):
+                    d[str(k)] = v
+    except Exception:
+        d = {}
+    _MEM = d
+    return d
+
+
+def _save() -> bool:
+    d = _load()
+    tmp = _STORE_PATH + ".tmp"
+    try:
+        os.makedirs(os.path.dirname(_STORE_PATH) or ".", exist_ok=True)
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(d, f, ensure_ascii=False, indent=1)
+        try:
+            os.replace(tmp, _STORE_PATH)
+        except Exception:
+            import shutil
+            shutil.copyfile(tmp, _STORE_PATH)
+            os.remove(tmp)
+        return True
+    except Exception:
+        try:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+        except Exception:
+            pass
+        return False
+
+
+#: 只有遮罩/占位符的"称呼"不算称呼（存量数据里还躺着 `**`）
+_MASK_CHARS = set("*＊·•・×✕…—-_=~ \t\u3000")
+
+
+def alias_usable(alias: str) -> bool:
+    """这个称呼能不能用（读侧与写侧共用）。
+
+    ★ 2026-11-02 真机：主动消息把 1000000006 叫成 `**` —— 11-01 用户说
+      「叫我 **」时把遮罩当称呼写进了库。判据只有一条：
+      **去掉遮罩/空白后还要剩下东西**。不要求它像人名 ——
+      「(・_・)」「😀」这类本来就是真网名，别误杀。
+    """
+    a = str(alias or "").strip()
+    if not a:
+        return False
+    # 带方括号的是程序壳（`[当前]`），存量数据里躺着也照样拦住
+    if any(ch in _BAD_NAME_CHARS for ch in a):
+        return False
+    return bool("".join(ch for ch in a if ch not in _MASK_CHARS))
+
+
+def _prune(rec: dict, now: float) -> dict:
+    alias_at = float(rec.get("alias_at") or 0)
+    if rec.get("alias") and alias_at and (now - alias_at) > ALIAS_TTL:
+        rec.pop("alias", None)
+        rec.pop("alias_at", None)
+    ags = []
+    for a in (rec.get("agreements") or []):
+        if not isinstance(a, dict):
+            continue
+        at = float(a.get("at") or 0)
+        if at and (now - at) > AGREEMENT_TTL:
+            continue
+        ags.append(a)
+    if ags:
+        rec["agreements"] = ags[-MAX_AGREEMENTS:]
+    else:
+        rec.pop("agreements", None)
+    return rec
+
+
+def get_alias(qq, *, now: Optional[float] = None) -> str:
+    n = time.time() if now is None else float(now)
+    rec = _load().get(str(qq or ""))
+    if not rec:
+        return ""
+    rec = _prune(dict(rec), n)
+    alias = str(rec.get("alias") or "").strip()
+    if not alias:
+        return ""
+    if float(rec.get("alias_at") or 0) and n - float(rec.get("alias_at")) > ALIAS_TTL:
+        return ""
+    # 读侧拦住存量垃圾（11-01 那次「叫我 **」把 `**` 写进了库）
+    if not alias_usable(alias):
+        return ""
+    return alias
+
+
+def set_alias(qq, alias: str, *, now: Optional[float] = None) -> bool:
+    q = str(qq or "").strip()
+    a = str(alias or "").strip()
+    if not q or not a or len(a) > MAX_ALIAS_LEN:
+        return False
+    # 写侧也拦：纯遮罩/纯符号不当称呼（1.5.x 的既有口径，这里补到入口）
+    if not alias_usable(a):
+        return False
+    n = time.time() if now is None else float(now)
+    with _lock():
+        d = _load()
+        rec = _prune(dict(d.get(q) or {}), n)
+        rec["alias"] = a
+        rec["alias_at"] = n
+        d[q] = rec
+        return _save()
+
+
+def agreements_for(qq, *, now: Optional[float] = None) -> List[dict]:
+    n = time.time() if now is None else float(now)
+    rec = _load().get(str(qq or ""))
+    if not rec:
+        return []
+    rec = _prune(dict(rec), n)
+    return [a for a in (rec.get("agreements") or []) if isinstance(a, dict)]
+
+
+def add_agreement(qq, trigger: str, reply: str = "",
+                  *, now: Optional[float] = None) -> bool:
+    q = str(qq or "").strip()
+    trig = str(trigger or "").strip()
+    if not q or not trig or len(trig) > MAX_TRIGGER_LEN:
+        return False
+    n = time.time() if now is None else float(now)
+    with _lock():
+        d = _load()
+        rec = _prune(dict(d.get(q) or {}), n)
+        ags = [a for a in (rec.get("agreements") or [])
+               if str(a.get("trigger") or "") != trig]
+        ags.append({"trigger": trig, "reply": str(reply or "").strip()[:MAX_TRIGGER_LEN],
+                    "at": n})
+        rec["agreements"] = ags[-MAX_AGREEMENTS:]
+        d[q] = rec
+        return _save()
+
+
+def prompt_line(qq, *, now: Optional[float] = None) -> str:
+    """喂给模型的称呼/约定说明。没有就返回空串（不占 token）。"""
+    alias = get_alias(qq, now=now)
+    ags = agreements_for(qq, now=now)
+    parts = []
+    if alias:
+        parts.append(f"他让你叫他「{alias}」——就用这个称呼，别叫成别的。")
+    for a in ags:
+        trig = str(a.get("trigger") or "")
+        rep = str(a.get("reply") or "")
+        if trig and rep:
+            parts.append(f"他说「{trig}」你就答「{rep}」（这是你们约好的，别忘）。")
+        elif trig:
+            parts.append(f"他提过一句暗号「{trig}」，但没说你要怎么答 —— 别自己编回答。")
+    if not parts:
+        return ""
+    return "【称呼与约定】" + "".join(parts)
+
+
+__all__ = ["DATA_DIR", "STORE_NAME", "ALIAS_TTL", "AGREEMENT_TTL",
+           "parse_alias", "parse_agreement", "strip_annotations",
+           "set_store_path", "store_path", "alias_usable",
+           "get_alias", "set_alias", "agreements_for", "add_agreement", "prompt_line"]

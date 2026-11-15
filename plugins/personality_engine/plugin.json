@@ -1,0 +1,7 @@
+{
+  "id": "personality_engine",
+  "title": "personality_engine",
+  "description": "personality_engine 插件",
+  "priority": 50,
+  "default_enabled": true
+}

@@ -1,0 +1,571 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>EGGBLOOM 1.6.0 · 一个大脑，一个出口</title>
+<style>
+@font-face{font-family:'FusionPixel';src:url('../webui/fonts/fusion-pixel-12px-sc.woff2') format('woff2');font-display:swap}
+@font-face{font-family:'Silkscreen';src:url('../webui/fonts/silkscreen-latin-400.woff2') format('woff2');font-display:swap}
+@font-face{font-family:'PressStart';src:url('../webui/fonts/press-start-2p-latin-400.woff2') format('woff2');font-display:swap}
+
+:root{
+  --bg:#0E0C0A;
+  --panel:#15120E;
+  --panel2:#1A1611;
+  --line:#2A241D;
+  --line2:#3A3229;
+  --gold:#C9A96E;
+  --gold-dim:#8A7448;
+  --text:#EDE9E2;
+  --body:#C6BFB3;
+  --muted:#877F73;
+  --rust:#A8553C;
+  --px:'FusionPixel','Microsoft YaHei',sans-serif;
+  --ss:'Microsoft YaHei','PingFang SC','Noto Sans SC',sans-serif;
+  --en:'Silkscreen','FusionPixel',monospace;
+  --ps:'PressStart','Silkscreen',monospace;
+}
+
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{
+  margin:0;background:var(--bg);color:var(--body);
+  font-family:var(--ss);font-size:14px;line-height:1.95;
+  -webkit-font-smoothing:antialiased;
+  background-image:
+    linear-gradient(180deg,rgba(201,169,110,.05),transparent 520px),
+    repeating-linear-gradient(90deg,rgba(255,255,255,.014) 0 1px,transparent 1px 96px);
+  background-attachment:fixed;
+}
+::selection{background:rgba(201,169,110,.24);color:#fff}
+
+.wrap{max-width:1180px;margin:0 auto;padding:0 40px}
+@media(max-width:720px){.wrap{padding:0 20px}}
+
+/* ── 顶部条 ── */
+.topbar{
+  position:sticky;top:0;z-index:40;
+  background:rgba(14,12,10,.86);backdrop-filter:blur(8px);
+  border-bottom:1px solid var(--line);
+}
+.topbar .in{display:flex;align-items:center;justify-content:space-between;height:52px}
+.brand{font-family:var(--en);font-size:11px;letter-spacing:.28em;color:var(--gold)}
+.topbar .meta{font-family:var(--en);font-size:9px;letter-spacing:.2em;color:var(--muted)}
+
+/* ── Hero ── */
+.hero{position:relative;padding:96px 0 72px;overflow:hidden;border-bottom:1px solid var(--line)}
+.hero .stamp{
+  font-family:var(--en);font-size:9px;letter-spacing:.32em;color:var(--gold-dim);
+  display:flex;gap:18px;align-items:center;margin-bottom:34px;
+}
+.hero .stamp i{display:block;width:54px;height:1px;background:var(--line2)}
+.ver{
+  font-family:var(--en);line-height:.86;letter-spacing:.02em;
+  font-size:clamp(72px,14vw,168px);
+  color:transparent;-webkit-text-stroke:1px var(--gold-dim);
+  margin:0 0 6px -6px;
+}
+@supports not (-webkit-text-stroke:1px #000){.ver{color:var(--gold-dim)}}
+.hero h1{
+  font-family:var(--px);font-weight:400;font-size:clamp(26px,3.6vw,44px);
+  color:var(--text);letter-spacing:.08em;margin:0 0 18px;line-height:1.5;
+}
+.hero h1 em{font-style:normal;color:var(--gold)}
+.hero .lede{max-width:640px;font-size:14.5px;color:var(--body);margin:0}
+.hero .en{font-family:var(--en);font-size:10px;letter-spacing:.3em;color:var(--muted);margin-top:26px}
+
+.kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--line);margin-top:56px;border:1px solid var(--line)}
+.kpi{background:var(--bg);padding:18px 20px 16px}
+.kpi b{display:block;font-family:var(--en);font-size:30px;color:var(--gold);line-height:1.2;font-weight:400}
+.kpi span{display:block;font-size:11.5px;color:var(--muted);letter-spacing:.12em;margin-top:6px}
+@media(max-width:760px){.kpis{grid-template-columns:repeat(2,1fr)}}
+
+/* ── 章节骨架 ── */
+section{padding:88px 0;border-bottom:1px solid var(--line)}
+.shead{display:flex;gap:22px;align-items:flex-start;margin-bottom:40px}
+.sidx{
+  font-family:var(--en);font-size:12px;color:var(--gold-dim);letter-spacing:.1em;
+  border:1px solid var(--line2);padding:4px 8px;margin-top:4px;flex:none;
+}
+.stitle{font-family:var(--px);font-weight:400;font-size:clamp(20px,2.4vw,28px);color:var(--text);margin:0;letter-spacing:.1em;line-height:1.5}
+.ssub{font-family:var(--en);font-size:9px;letter-spacing:.26em;color:var(--muted);margin-top:8px}
+.snote{margin:0 0 28px;color:var(--muted);font-size:12.5px;max-width:760px}
+.rule{height:1px;background:var(--line);margin:44px 0}
+
+/* ── 卡片 ── */
+.cards{display:grid;grid-template-columns:repeat(3,1fr);gap:18px}
+@media(max-width:900px){.cards{grid-template-columns:1fr}}
+.card{
+  position:relative;background:var(--panel);border:1px solid var(--line);
+  padding:26px 24px 24px;
+}
+.card::before,.card::after{content:'';position:absolute;width:12px;height:12px;pointer-events:none}
+.card::before{top:-1px;left:-1px;border-top:1px solid var(--gold-dim);border-left:1px solid var(--gold-dim)}
+.card::after{bottom:-1px;right:-1px;border-bottom:1px solid var(--gold-dim);border-right:1px solid var(--gold-dim)}
+.card .no{font-family:var(--en);font-size:9px;letter-spacing:.24em;color:var(--gold-dim)}
+.card h3{font-family:var(--px);font-weight:400;font-size:17px;color:var(--text);margin:10px 0 12px;letter-spacing:.08em}
+.card p{margin:0;font-size:13px;color:var(--body);line-height:1.85}
+.card .foot{font-family:var(--en);font-size:9px;letter-spacing:.16em;color:var(--muted);margin-top:18px;padding-top:14px;border-top:1px dashed var(--line)}
+
+/* ── 表 ── */
+.tw{overflow-x:auto;border:1px solid var(--line);margin:0}
+table{width:100%;border-collapse:collapse;min-width:680px;background:var(--panel)}
+th{
+  font-family:var(--en);font-size:9px;letter-spacing:.16em;color:var(--muted);
+  text-align:left;padding:12px 14px;border-bottom:1px solid var(--line2);
+  background:var(--panel2);font-weight:400;white-space:nowrap;
+}
+td{padding:13px 14px;border-bottom:1px solid var(--line);font-size:12.5px;vertical-align:top;line-height:1.8;color:var(--body)}
+tr:last-child td{border-bottom:none}
+tbody tr:hover td{background:rgba(201,169,110,.035)}
+td.n{font-family:var(--en);font-size:9px;color:var(--gold-dim);letter-spacing:.08em;white-space:nowrap;padding-top:16px}
+td.k{color:var(--text);white-space:nowrap}
+td.num{font-family:var(--en);font-size:10px;color:var(--gold);white-space:nowrap}
+.mono{font-family:var(--en);font-size:9.5px;letter-spacing:.06em;color:var(--gold-dim)}
+
+.tag{display:inline-block;font-family:var(--px);font-size:10px;letter-spacing:.1em;padding:1px 6px;border:1px solid var(--line2);color:var(--muted);white-space:nowrap}
+.tag.now{border-color:var(--gold-dim);color:var(--gold)}
+.tag.done{color:#9FB08A;border-color:#3D4A33}
+.tag.later{color:#7E7466;border-style:dashed}
+
+/* ── 三线 ── */
+.lanes{display:grid;gap:1px;background:var(--line);border:1px solid var(--line)}
+.lane{background:var(--panel);display:grid;grid-template-columns:120px 1fr;gap:26px;padding:26px 24px}
+@media(max-width:760px){.lane{grid-template-columns:1fr;gap:12px}}
+.lane .ln{font-family:var(--en);font-size:11px;letter-spacing:.18em;color:var(--gold)}
+.lane .ln small{display:block;font-family:var(--px);font-size:10px;letter-spacing:.08em;color:var(--muted);margin-top:8px}
+.lane h3{font-family:var(--px);font-weight:400;font-size:16px;color:var(--text);margin:0 0 8px;letter-spacing:.06em}
+.lane p{margin:0;font-size:13px;color:var(--body)}
+.lane .impl{font-family:var(--en);font-size:9px;letter-spacing:.1em;color:var(--muted);margin-top:12px}
+
+/* ── 插件网格 ── */
+.plugs{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:var(--line);border:1px solid var(--line)}
+@media(max-width:980px){.plugs{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:620px){.plugs{grid-template-columns:1fr}}
+.plug{background:var(--panel);padding:20px 20px 18px;min-height:132px;position:relative}
+.plug:hover{background:var(--panel2)}
+.plug .pid{font-family:var(--en);font-size:10px;color:var(--gold-dim);letter-spacing:.12em}
+.plug h4{font-family:var(--px);font-weight:400;font-size:14px;color:var(--text);margin:8px 0 8px;letter-spacing:.06em}
+.plug p{margin:0;font-size:12px;color:var(--muted);line-height:1.8}
+.plug .off{position:absolute;top:18px;right:18px;font-family:var(--px);font-size:9px;color:var(--rust);letter-spacing:.1em}
+
+/* ── 页面网格 ── */
+.pages{display:flex;flex-wrap:wrap;gap:8px}
+.pages span{font-family:var(--px);font-size:11.5px;color:var(--body);border:1px solid var(--line);padding:6px 10px;letter-spacing:.06em}
+.pages span b{font-family:var(--en);font-size:8.5px;color:var(--gold-dim);margin-right:7px;font-weight:400}
+
+/* ── 成本 ── */
+.nums{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:var(--line);border:1px solid var(--line);margin-bottom:36px}
+@media(max-width:880px){.nums{grid-template-columns:1fr}}
+.numbox{background:var(--panel);padding:28px 24px 24px;position:relative}
+.numbox b{display:block;font-family:var(--en);font-size:44px;line-height:1;color:var(--gold);font-weight:400;letter-spacing:.02em}
+.numbox b small{font-size:18px;color:var(--gold-dim);margin-left:4px}
+.numbox span{display:block;font-size:12px;color:var(--muted);margin-top:14px;letter-spacing:.04em}
+.numbox em{display:block;font-style:normal;font-family:var(--en);font-size:8.5px;letter-spacing:.2em;color:var(--line2);margin-top:10px}
+
+/* ── 路线 ── */
+.road{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--line);border:1px solid var(--line)}
+@media(max-width:900px){.road{grid-template-columns:1fr 1fr}}
+@media(max-width:560px){.road{grid-template-columns:1fr}}
+.step{background:var(--panel);padding:22px 20px}
+.step .sv{font-family:var(--en);font-size:22px;color:var(--text)}
+.step.now .sv{color:var(--gold)}
+.step p{font-size:12px;color:var(--muted);margin:10px 0 0;line-height:1.8}
+.step .st{font-family:var(--en);font-size:8.5px;letter-spacing:.2em;color:var(--gold-dim);margin-top:12px}
+
+/* ── 引言块 ── */
+.quote{border-left:1px solid var(--gold-dim);padding:6px 0 6px 26px;margin:0}
+.quote p{font-family:var(--px);font-size:clamp(16px,2vw,22px);line-height:1.9;color:var(--text);margin:0;letter-spacing:.05em}
+.quote cite{display:block;font-family:var(--en);font-size:9px;letter-spacing:.2em;color:var(--muted);font-style:normal;margin-top:16px}
+
+/* ── 边界 / 注释 ── */
+.notes{display:grid;grid-template-columns:repeat(2,1fr);gap:1px;background:var(--line);border:1px solid var(--line)}
+@media(max-width:820px){.notes{grid-template-columns:1fr}}
+.note{background:var(--panel);padding:18px 20px;font-size:12.5px;color:var(--body);display:flex;gap:14px}
+.note b{font-family:var(--px);font-size:11px;color:var(--gold-dim);letter-spacing:.08em;flex:none;font-weight:400;min-width:74px}
+
+footer{padding:56px 0 72px;color:var(--muted);font-size:12px}
+footer .fl{display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap;font-family:var(--en);font-size:9px;letter-spacing:.2em}
+footer .fn{margin-top:18px;line-height:2}
+
+.reveal{opacity:0;transform:translateY(14px);transition:opacity .7s ease,transform .7s ease}
+.reveal.in{opacity:1;transform:none}
+@media(prefers-reduced-motion:reduce){.reveal{opacity:1;transform:none;transition:none}}
+
+@media(max-width:760px){
+  section{padding:64px 0}
+  .hero{padding:64px 0 52px}
+  .shead{gap:14px;margin-bottom:28px}
+}
+</style>
+</head>
+<body>
+
+<div class="topbar"><div class="wrap in">
+  <div class="brand">EGGBLOOM</div>
+  <div class="meta">BUILD 1.6.0 &nbsp;/&nbsp; 2026.11 &nbsp;/&nbsp; WINDOWS &nbsp;/&nbsp; MIT</div>
+</div></div>
+
+<header class="hero"><div class="wrap">
+  <div class="stamp"><i></i><span>RELEASE NOTE — 1.6.0</span></div>
+  <div class="ver">1.6.0</div>
+  <h1>一个大脑，<em>一个出口</em>。</h1>
+  <p class="lede">1.5.x 一直在解决「像不像人」：人格只剩一个文件、记忆按人隔离、说过的话要认。
+  1.6.0 换的是骨架——agent 不再是模式而是工具，所有消息走同一条生成链；出口收成一个队列；
+  生图、语音、转写共用一套任务层，而且都在本地跑。</p>
+  <div class="en">ONE MIND &nbsp;·&nbsp; ONE OUTLET &nbsp;·&nbsp; FULL MODALITY</div>
+
+  <div class="kpis">
+    <div class="kpi"><b>1</b><span>条生成链</span></div>
+    <div class="kpi"><b>1</b><span>个出站队列</span></div>
+    <div class="kpi"><b>3</b><span>条通道 QQ / PC / 浏览器</span></div>
+    <div class="kpi"><b>4</b><span>种模态 图 / 声 / 字 / 视频接口</span></div>
+  </div>
+</div></header>
+
+<!-- 01 主线 -->
+<section><div class="wrap reveal">
+  <div class="shead">
+    <div class="sidx">01</div>
+    <div><h2 class="stitle">这一版换的是骨架</h2><div class="ssub">THREE LINES</div></div>
+  </div>
+  <div class="lanes">
+    <div class="lane">
+      <div class="ln">P0<small>通路</small></div>
+      <div>
+        <h3>一个大脑</h3>
+        <p>删掉「agent 模式」。群里 @ 它干活，和 @ 它闲聊，走同一条生成链：人格、记忆、预算、闸、审计、出口，一套。开关从「换人格」变成「多一双手」。</p>
+        <div class="impl">harness/life_context.py · deep_task · agent_can_work · reply_budget</div>
+      </div>
+    </div>
+    <div class="lane">
+      <div class="ln">P1<small>出口</small></div>
+      <div>
+        <h3>一个出口</h3>
+        <p>文本、图片、表情、戳一戳，全部进一个队列：串行、限频、去重、重试、留日志。插件再多也绕不过去，漏发与抢话第一次变得可以定位。</p>
+        <div class="impl">harness/outbound.py · Channel · plugin manifest · 4 个生命周期钩子</div>
+      </div>
+    </div>
+    <div class="lane">
+      <div class="ln">P1.5<small>扩展位</small></div>
+      <div>
+        <h3>一组 AIGC 扩展位</h3>
+        <p>「生图 / ComfyUI」扩成「AIGC / 扩展位」：图、语音、视频、素材四个页签，共用一套任务模型与产物目录。后端留给使用者自己接，默认全关，不是本版能力。</p>
+        <div class="impl">harness/aigc_task.py · piper · faster-whisper · data/media</div>
+      </div>
+    </div>
+  </div>
+</div></section>
+
+<!-- 02 坐标 -->
+<section><div class="wrap reveal">
+  <div class="shead">
+    <div class="sidx">02</div>
+    <div><h2 class="stitle">版本坐标</h2><div class="ssub">WHERE IT SITS</div></div>
+  </div>
+  <p class="snote">1.6.0 是全量版：P0 + P1 + P1.5 与四件套、自愈 R3、Channel 抽象、语义记忆收口、分离态只读态一起并入。仓库不再按小版本排期，未交付项直接列在边界里。</p>
+  <div class="tw"><table>
+    <thead><tr><th>版本</th><th>范围</th><th>状态</th><th>交付物</th></tr></thead>
+    <tbody>
+      <tr><td class="k">1.5.10</td><td>agent 通路、视觉 / 视频、B 站、记忆打通</td><td><span class="tag done">已发布</span></td><td class="mono">v1.5.10</td></tr>
+      <tr><td class="k">1.5.11</td><td>人格与记忆冻结、评测台、自愈 M1/M2、事实管线、热补丁</td><td><span class="tag done">已发布</span></td><td class="mono">v1.5.11</td></tr>
+      <tr><td class="k">1.6.0</td><td><strong style="color:var(--text)">一个大脑 + 一个出口 + AIGC 扩展位；主动性 / 视频理解 / 四件套 / 自愈 R3 / Channel / 语义记忆收口 / 分离只读态</strong></td><td><span class="tag now">本版</span></td><td>整包，不打补丁</td></tr>
+      <tr><td class="k">1.6.0 之后</td><td>插件市场、非 QQ 通道真实驱动、AIGC 开箱后端、分离态真启用</td><td><span class="tag later">未排期</span></td><td>—</td></tr>
+    </tbody>
+  </table></div>
+</div></section>
+
+<!-- 03 能力矩阵 -->
+<section><div class="wrap reveal">
+  <div class="shead">
+    <div class="sidx">03</div>
+    <div><h2 class="stitle">能力矩阵</h2><div class="ssub">CAPABILITY MATRIX</div></div>
+  </div>
+  <div class="tw"><table>
+    <thead><tr><th>能力域</th><th>1.5.11</th><th>1.6.0</th><th>变化</th></tr></thead>
+    <tbody>
+      <tr><td class="k">对话生成链</td><td>闲聊一条，agent 另一条</td><td>一条，agent 变工具</td><td class="num">合</td></tr>
+      <tr><td class="k">上下文</td><td>散在四处拼装</td><td><code class="mono">compose()</code> 单一入口</td><td class="num">收</td></tr>
+      <tr><td class="k">人格</td><td>单文件 + 出口硬约束</td><td>不变（冻结）</td><td class="num">稳</td></tr>
+      <tr><td class="k">记忆</td><td><code class="mono">recall() / remember()</code> 单口</td><td>不变（冻结）</td><td class="num">稳</td></tr>
+      <tr><td class="k">出口</td><td>多处直发</td><td>单队列 + 3 通道</td><td class="num">收</td></tr>
+      <tr><td class="k">插件</td><td>15 个，ABI v2</td><td>+ manifest + 4 个钩子</td><td class="num">扩</td></tr>
+      <tr><td class="k">模态</td><td>图（只理解）</td><td>图生成 + 语音 + 视频接口</td><td class="num">扩</td></tr>
+      <tr><td class="k">权限</td><td>私聊白名单</td><td>L0–L3 四级裁决 + 账本</td><td class="num">扩</td></tr>
+      <tr><td class="k">观测</td><td>日志 + trace</td><td>同一 trace 贯穿回复与工具</td><td class="num">深</td></tr>
+      <tr><td class="k">评测</td><td>40 机械 + 13 自主</td><td>+ live 真调模型判分</td><td class="num">深</td></tr>
+      <tr><td class="k">成本</td><td>无统一口径</td><td>分档计价 + AIGC 配额</td><td class="num">清</td></tr>
+    </tbody>
+  </table></div>
+</div></section>
+
+<!-- 04 详细功能 -->
+<section><div class="wrap reveal">
+  <div class="shead">
+    <div class="sidx">04</div>
+    <div><h2 class="stitle">详细功能</h2><div class="ssub">P0 / P1 / P1.5</div></div>
+  </div>
+  <p class="snote">成本图例：<span class="mono">0</span> 本地算力（只有电费）；<span class="mono">≈¥0.003/次</span> 一次主模型回复；<span class="mono">—</span> 不产生调用。</p>
+
+  <h3 style="font-family:var(--px);font-weight:400;font-size:15px;color:var(--gold);letter-spacing:.12em;margin:0 0 14px">P0 · 通路：一个大脑</h3>
+  <div class="tw"><table>
+    <thead><tr><th>#</th><th>功能</th><th>解决什么</th><th>状态</th><th>成本</th></tr></thead>
+    <tbody>
+      <tr><td class="n">A1</td><td class="k">统一上下文 <code class="mono">compose()</code></td><td>人格、记忆、插件注入、场感、时间锚散在四处，改一处漏三处</td><td><span class="tag now">1.6.0</span></td><td class="num">—</td></tr>
+      <tr><td class="n">A2</td><td class="k">灰度开关 <code class="mono">life_context_enable</code></td><td>换心脏不能停机：关掉时输出逐字节等于旧版</td><td><span class="tag now">1.6.0</span></td><td class="num">—</td></tr>
+      <tr><td class="n">A3</td><td class="k">deep_task：agent 变工具</td><td>以前开 agent 就换人格；现在模型自己决定要不要多一双手</td><td><span class="tag now">1.6.0</span></td><td class="num">≈¥0.003 起</td></tr>
+      <tr><td class="n">A4</td><td class="k">两开关合并 <code class="mono">agent_can_work</code></td><td>「私聊能干活」「群聊能干活」是两个看不见的开关</td><td><span class="tag now">1.6.0</span></td><td class="num">—</td></tr>
+      <tr><td class="n">A5</td><td class="k">agent 并入四道闸</td><td>干活时绕过预算与发言闸，一开口就是长文</td><td><span class="tag now">1.6.0</span></td><td class="num">省</td></tr>
+      <tr><td class="n">A6</td><td class="k">同一 trace 贯穿</td><td>「这句是它说的」和「这件事是它干的」对不上号</td><td><span class="tag done">已交付</span></td><td class="num">—</td></tr>
+      <tr><td class="n">A7</td><td class="k">Sense→Decide 心跳</td><td>没人说话时自己判断要不要动，而不是概率掷骰子</td><td><span class="tag now">1.6.0</span></td><td class="num">≈¥0.001</td></tr>
+      <tr><td class="n">A8</td><td class="k">出口四道防线</td><td>号码、露后台、简历折叠、编造状态</td><td><span class="tag done">已交付</span></td><td class="num">0</td></tr>
+    </tbody>
+  </table></div>
+
+  <div class="rule"></div>
+
+  <h3 style="font-family:var(--px);font-weight:400;font-size:15px;color:var(--gold);letter-spacing:.12em;margin:0 0 14px">P1 · 出口：一个队列</h3>
+  <div class="tw"><table>
+    <thead><tr><th>#</th><th>功能</th><th>解决什么</th><th>状态</th><th>成本</th></tr></thead>
+    <tbody>
+      <tr><td class="n">B1</td><td class="k">outbound 单队列</td><td>谁都能直发，漏发、重发、抢话查不出源头</td><td><span class="tag now">1.6.0</span></td><td class="num">0</td></tr>
+      <tr><td class="n">B2</td><td class="k">smart_send 退化为薄封装</td><td>三条发送路径三套切句规则，问号就是这么丢的</td><td><span class="tag now">1.6.0</span></td><td class="num">0</td></tr>
+      <tr><td class="n">B3</td><td class="k">Channel：QQ / PC / 浏览器</td><td>「在哪说」和「说什么」耦合，加平台要改主链</td><td><span class="tag now">1.6.0</span></td><td class="num">0</td></tr>
+      <tr><td class="n">B4</td><td class="k">manifest 标准化</td><td>插件声明不了自己要什么权限、占多少预算、有什么副作用</td><td><span class="tag now">1.6.0</span></td><td class="num">—</td></tr>
+      <tr><td class="n">B5</td><td class="k">四个生命周期钩子</td><td>插件只能「回完」之后插手，插不进计划与发送</td><td><span class="tag now">1.6.0</span></td><td class="num">—</td></tr>
+      <tr><td class="n">B6</td><td class="k">手册从注册表渲染</td><td>手册手写，工具一改就骗模型</td><td><span class="tag now">1.6.0</span></td><td class="num">0</td></tr>
+      <tr><td class="n">B7</td><td class="k">评测台 live 判分</td><td>离线判分判不出「这句话像不像人」</td><td><span class="tag now">1.6.0</span></td><td class="num">≈¥0.1 / 40 题</td></tr>
+      <tr><td class="n">B8</td><td class="k">假平台全链路用例</td><td>「支持新平台」是嘴上说的，没有验收</td><td><span class="tag now">1.6.0</span></td><td class="num">0</td></tr>
+    </tbody>
+  </table></div>
+
+  <div class="rule"></div>
+
+  <h3 style="font-family:var(--px);font-weight:400;font-size:15px;color:var(--gold);letter-spacing:.12em;margin:0 0 14px">P1.5 · AIGC 扩展位：留给使用者的接线位</h3>
+  <div class="tw"><table>
+    <thead><tr><th>#</th><th>功能</th><th>解决什么</th><th>状态</th><th>成本</th></tr></thead>
+    <tbody>
+      <tr><td class="n">C1</td><td class="k">生图页 → AIGC / 扩展位</td><td>本版不承诺「能画能说能听」，只留任务层与四个 API</td><td><span class="tag done">已交付</span></td><td class="num">—</td></tr>
+      <tr><td class="n">C2</td><td class="k">四页签 生图 / 语音 / 视频 / 素材</td><td>四种产物四套轮询、四套目录、四套删除</td><td><span class="tag now">1.6.0</span></td><td class="num">—</td></tr>
+      <tr><td class="n">C3</td><td class="k">统一任务模型</td><td>任务状态散落各处，重启就丢</td><td><span class="tag now">1.6.0</span></td><td class="num">—</td></tr>
+      <tr><td class="n">C4</td><td class="k">/api/aigc/* 四接口</td><td>前端只能盯一个 ComfyUI 接口</td><td><span class="tag now">1.6.0</span></td><td class="num">—</td></tr>
+      <tr><td class="n">C5</td><td class="k">piper 离线 TTS</td><td>云端按字收费，声音还不是自己的</td><td><span class="tag now">1.6.0</span></td><td class="num">0</td></tr>
+      <tr><td class="n">C6</td><td class="k">faster-whisper 离线 ASR</td><td>群里的语音只落一句「听不到，别猜」</td><td><span class="tag now">1.6.0</span></td><td class="num">0</td></tr>
+      <tr><td class="n">C7</td><td class="k">TTS→ASR 闭环自验</td><td>「生成了但全是静音」肉眼查不出来</td><td><span class="tag now">1.6.0</span></td><td class="num">0</td></tr>
+      <tr><td class="n">C8</td><td class="k">产物规范 + 元数据</td><td>生成完不知道参数、耗时、来源</td><td><span class="tag now">1.6.0</span></td><td class="num">—</td></tr>
+      <tr><td class="n">C9</td><td class="k">依赖 / 权重 / 二进制三落点</td><td>装个 TTS 把主解释器搞崩</td><td><span class="tag now">1.6.0</span></td><td class="num">—</td></tr>
+      <tr><td class="n">C10</td><td class="k">配额与开关</td><td>生图能把一天预算烧光；关掉必须零请求</td><td><span class="tag now">1.6.0</span></td><td class="num">硬上限</td></tr>
+      <tr><td class="n">C11</td><td class="k">插件插图（首测用例）</td><td>验「prompt → 文件 → 发送 → 展示」整条</td><td><span class="tag now">1.6.0</span></td><td class="num">0</td></tr>
+      <tr><td class="n">C12</td><td class="k">视频页签</td><td>先别做，但别把接口堵死</td><td><span class="tag later">预留</span></td><td class="num">—</td></tr>
+    </tbody>
+  </table></div>
+</div></section>
+
+<!-- 05 地基 -->
+<section><div class="wrap reveal">
+  <div class="shead">
+    <div class="sidx">05</div>
+    <div><h2 class="stitle">已经打好的地基</h2><div class="ssub">1.5.11 · FROZEN</div></div>
+  </div>
+  <p class="snote">1.6.0 不动这三层：人格、记忆、诚实。它们已在 1.5.11 收口，本版只改接线，不改内容。</p>
+  <div class="cards">
+    <div class="card"><div class="no">D1—D2</div><h3>人格只剩一个文件</h3><p>提示词、规则、人格曾经三处各写一份，互相打脸。现在只有 <code class="mono">personality.txt</code>，分【我是谁】【怎么说话】【不许】三层；出口再加一道 <code class="mono">reply_guard</code>，号码、露后台、念简历由代码兜底。</p><div class="foot">0 COST</div></div>
+    <div class="card"><div class="no">D3—D5</div><h3>记忆按人、按场景</h3><p>QQ 是主键，别名 &gt; 群名片 &gt; 昵称 &gt; 裸号；同群重名能列出两个 uid。跨场景双向：群里说过的事私聊接得上，但只注入说话人自己的内容，别人的一字不进。</p><div class="foot">+约 1K TOKEN / 轮</div></div>
+    <div class="card"><div class="no">D6—D7</div><h3>说过的话要认</h3><p>事实抽取带 <code class="mono">src</code> 与置信度，低置信度不进 prompt、只进待确认队列。认账闸在发送前拦「我没说过」——自述账本 + 否认检测，私聊群聊同一判据。</p><div class="foot">≈¥0.001 / 轮</div></div>
+  </div>
+  <div class="notes" style="margin-top:18px">
+    <div class="note"><b>记忆保险</b>启动快照，按天留 14 份；恢复前先给当前文件留档。</div>
+    <div class="note"><b>人格蒸馏</b>L0–L4 分级，多源取证 → 人工审核 → 保存；一次 L2 约 31.4 万 token。</div>
+    <div class="note"><b>阈值可配</b>慢回填充、存图回看、表情上下限、认账三项，全部即时生效。</div>
+    <div class="note"><b>热补丁</b>4 MB 级增量，只覆盖代码与页面；人格、自建插件、数据、配置一律不动。</div>
+  </div>
+</div></section>
+
+<!-- 06 插件 -->
+<section><div class="wrap reveal">
+  <div class="shead">
+    <div class="sidx">06</div>
+    <div><h2 class="stitle">插件矩阵</h2><div class="ssub">15 PLUGINS</div></div>
+  </div>
+  <p class="snote">不是「市场」，是「复制目录即可用」：带 manifest、生命周期、测试、README 的最小骨架。15 个插件页逐个打开，无 JS 报错、无失败请求。</p>
+  <div class="plugs">
+    <div class="plug"><div class="pid">EGO</div><h4>人格引擎</h4><p>人格 / 记忆 / 节奏 / 说话方式 / 黑话，六个子模块一个壳。</p></div>
+    <div class="plug"><div class="pid">SUPER_MEMORY</div><h4>超级记忆</h4><p>主动召回、关键事实、人格沉淀、行为驱动。</p></div>
+    <div class="plug"><div class="pid">GROUP_CHAT_DECIDER</div><h4>群聊决策器</h4><p>话题流 + 群画像 + 记忆匹配 + 情绪感知，先判该不该接。</p></div>
+    <div class="plug"><div class="pid">PROACTIVE_TALK</div><h4>主动消息</h4><p>没人说话时按状态开口；多目标轮转、好友勾选、每人一个称呼。</p></div>
+    <div class="plug"><div class="pid">VITALS</div><h4>疾病与精神疾病</h4><p>互动有后果：感冒、失眠、孤独、受伤、倦怠，只改形式不动人格。</p></div>
+    <div class="plug"><div class="pid">SCHEDULE</div><h4>日程表</h4><p>上课、实验、值班进 prompt，「刚下课」有依据。</p></div>
+    <div class="plug"><div class="pid">SCHEDULER</div><h4>定时调度</h4><p>全项目只留一处 sleep，到点广播事件。</p></div>
+    <div class="plug"><div class="pid">QZONE</div><h4>QQ 空间</h4><p>9 个动作分四层：读、互动、写、管；发说说有频率硬上限。</p></div>
+    <div class="plug"><div class="pid">BILI</div><h4>B 站</h4><p>四路读（信息 / 字幕 / 弹幕 / 热评）+ 五样写（默认全关）+ 评论草稿。</p></div>
+    <div class="plug"><div class="pid">WEB_SEARCH</div><h4>联网搜索</h4><p>需要查证时强制联网，减少幻觉；去重、同站交错、引擎冷却。</p></div>
+    <div class="plug"><div class="pid">WEB_OPERATOR</div><h4>浏览器操作</h4><p>CDP 无障碍树 + ref 定位 + 自愈 + 视觉兜底 + 自主 Agent。</p></div>
+    <div class="plug"><div class="pid">CAPABILITIES</div><h4>能力面板</h4><p>闲置 OneBot 扩展动作手动触发，显示原始返回。</p></div>
+    <div class="plug"><div class="pid">AUTONOMY</div><h4>自主性</h4><p>L0–L3 权限裁决 + 心跳 + 账本；策略层已锁 38 条单测，本版接线。</p><span class="off">默认关</span></div>
+    <div class="plug"><div class="pid">DISTILL</div><h4>人格蒸馏</h4><p>多源取证 → L0–L4 分级 → 人工审核 → 保存；伦理两勾是设计不是坑。</p><span class="off">默认关</span></div>
+    <div class="plug"><div class="pid">BOARD_VOICE</div><h4>语音看板</h4><p>《控制》里 The Board 的斜杠口音。</p><span class="off">默认关</span></div>
+    <div class="plug"><div class="pid">DEMO / ECHO</div><h4>示例插件</h4><p>插件 ABI 的最小可跑样例，写插件先抄它。</p></div>
+  </div>
+</div></section>
+
+<!-- 07 控制台与工程 -->
+<section><div class="wrap reveal">
+  <div class="shead">
+    <div class="sidx">07</div>
+    <div><h2 class="stitle">控制台与工程</h2><div class="ssub">15 PAGES · 368 TESTS</div></div>
+  </div>
+  <div class="pages">
+    <span><b>01</b>仪表盘</span><span><b>02</b>协议</span><span><b>03</b>群管理</span><span><b>04</b>表情包</span>
+    <span><b>05</b>AIGC</span><span><b>06</b>群聊行为</span><span><b>07</b>Token</span><span><b>08</b>配置中心</span>
+    <span><b>09</b>Bot</span><span><b>10</b>日志</span><span><b>11</b>通知</span><span><b>12</b>控制台</span>
+    <span><b>13</b>记忆</span><span><b>14</b>插件</span><span><b>15</b>Agent</span>
+  </div>
+  <div class="notes" style="margin-top:24px">
+    <div class="note"><b>368</b> 条测试，`run_all_tests.py` 一条命令跑完；已知红不设永久豁免，登记须写原因。</div>
+    <div class="note"><b>53</b>条评测：reply 40/40、autonomy 13/13，判据从 `rules.json` 读，不硬编码。</div>
+    <div class="note"><b>21/21</b>配置一致性：150 字段 / 18 面板，改了字段不接页面会当场红。</div>
+    <div class="note"><b>15/15</b>插件页无 JS 报错、无失败请求，逐个打开验过。</div>
+    <div class="note"><b>495</b>个 `.py` / 14.5 万行（含 233 个测试文件）。</div>
+    <div class="note"><b>MIT</b>许可；出包前 `LICENSE` / `THIRD_PARTY.md` / `licenses/` 硬校验。</div>
+  </div>
+</div></section>
+
+<!-- 08 成本 -->
+<section><div class="wrap reveal">
+  <div class="shead">
+    <div class="sidx">08</div>
+    <div><h2 class="stitle">成本</h2><div class="ssub">MEASURED, NOT GUESSED</div></div>
+  </div>
+  <p class="snote">不是「总 token × 一个系数」。按厂商分档：缓存命中 / 未命中 / 输出三个价，工作日高峰翻倍。</p>
+
+  <div class="nums">
+    <div class="numbox"><b>¥0.0056</b><span>一次回复（7.4K token，缓存命中率 55.6%）</span><em>PER REPLY</em></div>
+    <div class="numbox"><b>¥6.56</b><span>29 天 · 1167 次真实调用（均值 ¥0.0056 / 次）</span><em>29 DAYS ACTUAL</em></div>
+    <div class="numbox"><b>0<small>元</small></b><span>本地 TTS / ASR / 生图，每次调用</span><em>LOCAL INFERENCE</em></div>
+  </div>
+
+  <div class="tw"><table>
+    <thead><tr><th>项</th><th>数值</th><th>说明</th></tr></thead>
+    <tbody>
+      <tr><td class="k">deepseek-flash 空闲</td><td class="num">0.02 / 1 / 4</td><td>元每百万 token：缓存命中 / 未命中 / 输出</td></tr>
+      <tr><td class="k">deepseek-flash 高峰</td><td class="num">0.04 / 2 / 8</td><td>周一至周五 9:00–12:00、14:00–18:00</td></tr>
+      <tr><td class="k">单条语音（TTS）</td><td class="num">0</td><td>piper 本地离线，只有电费</td></tr>
+      <tr><td class="k">单次转写（ASR）</td><td class="num">0</td><td>faster-whisper 本地，默认 base 模型</td></tr>
+      <tr><td class="k">单张生图</td><td class="num">&lt;¥0.01</td><td>ComfyUI 本地，按 10–30 秒 / 200W 估算电费</td></tr>
+      <tr><td class="k">一次 L2 蒸馏</td><td class="num">≈¥0.4</td><td>24 次调用 / 31.4 万 token / 565 秒 / 覆盖 5 层</td></tr>
+      <tr><td class="k">表情包补描述</td><td class="num">≈¥0.003</td><td>每张；关掉仍入库，只能按标签找</td></tr>
+      <tr><td class="k">评测台 live</td><td class="num">≈¥0.1</td><td>40 题一轮，只在发布前跑，不进 CI</td></tr>
+    </tbody>
+  </table></div>
+
+  <div class="rule"></div>
+
+  <div class="tw"><table>
+    <thead><tr><th>场景</th><th>每天回复</th><th>每天</th><th>每月</th></tr></thead>
+    <tbody>
+      <tr><td class="k">小群自用</td><td>100 条</td><td class="num">¥0.56</td><td class="num">¥16.85</td></tr>
+      <tr><td class="k">活跃群</td><td>500 条</td><td class="num">¥2.81</td><td class="num">¥84.26</td></tr>
+      <tr><td class="k">多群 / 高强度</td><td>2000 条</td><td class="num">¥11.23</td><td class="num">¥337.03</td></tr>
+    </tbody>
+  </table></div>
+  <p class="snote" style="margin-top:14px">只算主模型对话，按实测均价线性外推。AIGC 扩展位默认关，不启用不产生任何调用；自接本地后端只有电费。</p>
+</div></section>
+
+<!-- 09 对比 -->
+<section><div class="wrap reveal">
+  <div class="shead">
+    <div class="sidx">09</div>
+    <div><h2 class="stitle">对比</h2><div class="ssub">FEATURE &amp; COST</div></div>
+  </div>
+
+  <h3 style="font-family:var(--px);font-weight:400;font-size:15px;color:var(--gold);letter-spacing:.12em;margin:0 0 14px">1.6.0 vs 1.5.11</h3>
+  <div class="tw"><table>
+    <thead><tr><th>维度</th><th>1.5.11</th><th>1.6.0</th><th>差在哪</th></tr></thead>
+    <tbody>
+      <tr><td class="k">生成链</td><td>闲聊 / agent 两条</td><td>一条</td><td>人格与预算不再分叉</td></tr>
+      <tr><td class="k">上下文</td><td>四处拼装</td><td>一个 <code class="mono">compose()</code></td><td>改一处生效一处</td></tr>
+      <tr><td class="k">出口</td><td>多点直发</td><td>单队列 + 3 通道</td><td>漏发 / 重发可定位</td></tr>
+      <tr><td class="k">插件</td><td>ABI v2</td><td>+ manifest + 4 钩子</td><td>能声明权限与预算</td></tr>
+      <tr><td class="k">模态</td><td>图（只理解）</td><td>图生成 + 语音 + 视频接口</td><td>从「看得懂」到「做得出」</td></tr>
+      <tr><td class="k">权限</td><td>私聊白名单</td><td>L0–L3 + 账本</td><td>越权在结构上被拒</td></tr>
+      <tr><td class="k">评测</td><td>40 + 13（离线）</td><td>+ live 判分</td><td>「像不像人」有数</td></tr>
+      <tr><td class="k">包</td><td>6.3 MB / 215.8 MB</td><td>整包，同样两档</td><td>不打补丁</td></tr>
+    </tbody>
+  </table></div>
+
+  <div class="rule"></div>
+
+  <h3 style="font-family:var(--px);font-weight:400;font-size:15px;color:var(--gold);letter-spacing:.12em;margin:0 0 14px">成本：自建 vs 订阅 vs 云 API</h3>
+  <div class="tw"><table>
+    <thead><tr><th>方案</th><th>钱花在哪</th><th>量级</th><th>你能改什么</th></tr></thead>
+    <tbody>
+      <tr><td class="k" style="color:var(--gold)">EggBloom 自建</td><td>API 按量 + 电费</td><td class="num">29 天 ¥6.56；活跃群约 ¥84/月</td><td>人格、记忆、插件、出口，全部源码</td></tr>
+      <tr><td class="k">商业 AI 订阅</td><td>固定月费</td><td class="num">Plus 档 $20（约 ¥145）/月</td><td>只能改「自定义指令」</td></tr>
+      <tr><td class="k">AI 伴侣 App 会员</td><td>固定月费</td><td class="num">约 ¥30–98/月</td><td>人格与记忆归平台，导不出</td></tr>
+      <tr><td class="k">云 TTS</td><td>按字</td><td class="num">¥0.8–2 / 万字</td><td>声音是别人的</td></tr>
+      <tr><td class="k">云 ASR</td><td>按时长</td><td class="num">¥0.3–2 / 小时</td><td>同上</td></tr>
+      <tr><td class="k">云生图</td><td>按张</td><td class="num">¥0.1–0.5 / 张</td><td>同上</td></tr>
+      <tr><td class="k">云服务器托管</td><td>月租 + 流量</td><td class="num">¥30–100/月</td><td>要自己运维</td></tr>
+    </tbody>
+  </table></div>
+  <p class="snote" style="margin-top:14px">第三方价格为公开报价量级，随汇率与活动变动，只作横向参照。</p>
+
+  <div class="rule"></div>
+
+  <div class="quote">
+    <p>订阅制买的是「用一次」，<br>自建买的是「它属于你」。</p>
+    <cite>ONE MIND · ONE OUTLET</cite>
+  </div>
+</div></section>
+
+<!-- 10 路线与边界 -->
+<section><div class="wrap reveal">
+  <div class="shead">
+    <div class="sidx">10</div>
+    <div><h2 class="stitle">路线与边界</h2><div class="ssub">ROADMAP &amp; LIMITS</div></div>
+  </div>
+
+  <div class="road">
+    <div class="step now"><div class="sv">1.6.0</div><p>一个大脑 + 一个出口 + AIGC 扩展位；四件套 / 自愈 R3 / Channel / 语义记忆收口 / 分离只读态全部并入</p><div class="st">THIS RELEASE</div></div>
+    <div class="step"><div class="sv">未排期</div><p>插件市场、非 QQ 通道真实驱动、AIGC 开箱后端、分离态真启用</p><div class="st">LATER</div></div>
+  </div>
+
+  <div class="rule"></div>
+
+  <div class="notes">
+    <div class="note"><b>平台</b>只支持 Windows；QQ 走 OneBot v11（SnowLuma / NapCat / LLOneBot），非官方通道，可能违反腾讯协议。</div>
+    <div class="note"><b>主机</b>需要一台常开的机器；生图与语音吃 CPU / GPU。</div>
+    <div class="note"><b>模型</b>自备 API Key；DeepSeek / OpenAI / Ollama / LM Studio / llama-server。</div>
+    <div class="note"><b>1.6.0 不含</b>子 Agent、workflow、调度器四件套、自愈 R3、手机通道、内容平台、分离。</div>
+    <div class="note"><b>未真机</b>B 站写动作只有干跑与闸门测试；视频页签只有接口。</div>
+    <div class="note"><b>不可逆</b>分离态启用后本地没有回滚路径，恢复只能重装发行包。本版只有只读状态页，源码库与常规发行包都不落 lock。</div>
+  </div>
+</div></section>
+
+<footer><div class="wrap">
+  <div class="quote" style="margin-bottom:36px">
+    <p>它不是「会回消息的脚本」，<br>是一个有连续性的运行时。</p>
+  </div>
+  <div class="fl">
+    <span>EGGBLOOM 1.6.0 / 2026.11</span>
+    <span>WINDOWS · PYTHON 3.13 · ONEBOT V11 · MIT</span>
+  </div>
+  <div class="fn">
+    成本按 DeepSeek 官方 2026-10-30 价目折算，不是账单截图。实测样本 2026-08-13 → 11-06，1167 次调用 / 29 个活跃日，
+    取自运行副本 <code class="mono">logs/token_stats.jsonl</code>。条目范围以 CHANGELOG 与 README §4.3 / §9 为准。
+  </div>
+</div></footer>
+
+<script>
+(function(){
+  var els=document.querySelectorAll('.reveal');
+  if(!('IntersectionObserver' in window)){els.forEach(function(e){e.classList.add('in')});return;}
+  var io=new IntersectionObserver(function(es){
+    es.forEach(function(e){if(e.isIntersecting){e.target.classList.add('in');io.unobserve(e.target);}});
+  },{rootMargin:'0px 0px -8% 0px',threshold:.05});
+  els.forEach(function(e){io.observe(e)});
+})();
+</script>
+</body>
+</html>

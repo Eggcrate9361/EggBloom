@@ -1,0 +1,1048 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>EGO 插件</title>
+<style>
+/* ═══════════════════════════════════════════════════════════════════════
+   兼容层：页面结构已换成 kit v2 的 .pv-* 原语；
+   但页面脚本动态生成的标记仍是旧类名（list-item / tag / quality /
+   empty-state / stat-grid / slang-check …），这里只把这些旧类名
+   接到 --pv-* token 上，JS 一个字符都不改。
+   ═══════════════════════════════════════════════════════════════════════ */
+:root{color-scheme:dark}
+*{box-sizing:border-box}
+
+.wrap{max-width:1060px;margin:0 auto}
+
+/* 页内 Tab：JS 靠 .tab / .active 点亮，外观对齐 .pv-seg button */
+.pv-seg .tab{border:0;background:transparent;box-shadow:none}
+.pv-seg .tab.active{background:var(--pv-gold-soft);color:var(--pv-gold);font-weight:600}
+.pv-seg .tab.active:hover{color:var(--pv-gold)}
+.pv-seg .tab:active{transform:none}
+
+/* 子模块开关：整行可点，文字在左、kit 开关在右 */
+.pv-switch.ego-switch{display:flex;flex-direction:row-reverse;justify-content:space-between;
+  width:100%;gap:var(--pv-3);padding:var(--pv-3) var(--pv-4);
+  background:var(--pv-surface-2);border:1px solid var(--pv-line);border-radius:var(--pv-r);
+  transition:border-color .18s var(--pv-ease),background .18s var(--pv-ease)}
+.pv-switch.ego-switch:hover{border-color:var(--pv-line-2);background:var(--pv-surface-3)}
+.pv-switch.ego-switch .pv-track{flex:none}
+.pv-switch.ego-switch .pv-switch-label{display:flex;flex-direction:column;gap:2px;min-width:0}
+.pv-switch.ego-switch .pv-switch-label b{color:var(--pv-ink);font-size:var(--pv-fs);font-weight:600}
+.pv-switch.ego-switch .pv-hint{margin:0}
+
+/* 批量操作条 */
+.pv-batch{padding:var(--pv-2) var(--pv-3);background:var(--pv-surface-2);
+  border:1px solid var(--pv-line);border-radius:var(--pv-r-sm)}
+
+/* 网格里的表单块不需要额外下边距 */
+.pv-grid>.pv-field{margin:0}
+
+/* ── JS 动态生成的列表 / 标签 / 空态 / 统计 ─────────────────────────── */
+.list-root{color:var(--pv-ink-3);font-size:var(--pv-fs-sm)}
+.list-root .list-item{color:var(--pv-ink)}
+.list-item{display:flex;align-items:flex-start;gap:var(--pv-3);
+  padding:var(--pv-3) var(--pv-2);border-bottom:1px solid var(--pv-line);border-radius:var(--pv-r-sm);
+  transition:background .18s var(--pv-ease)}
+.list-item:hover{background:var(--pv-surface-2)}
+.list-item:last-child{border-bottom:0}
+.list-item>div:first-child{flex:1;min-width:0;word-break:break-word}
+.list-item>div:last-child{display:flex;align-items:center;gap:var(--pv-2);flex:none}
+.list-item strong{font-size:var(--pv-fs);font-weight:600;color:var(--pv-ink)}
+.list-item .muted{margin-top:2px}
+.tag{display:inline-flex;align-items:center;margin:0 var(--pv-1);padding:2px 8px;
+  border-radius:var(--pv-r-full);background:var(--pv-surface-3);color:var(--pv-ink-2);
+  font-size:var(--pv-fs-xs);vertical-align:middle;white-space:nowrap}
+.quality{font-family:var(--pv-mono);font-size:var(--pv-fs-xs);color:var(--pv-gold);
+  margin-left:var(--pv-1);font-variant-numeric:tabular-nums}
+.muted{color:var(--pv-ink-3);font-size:var(--pv-fs-xs);margin-top:3px;line-height:1.6}
+
+/* 批量选择框：自定义方框，点击区 20px，不挤窄列 */
+.slang-check{appearance:none;-webkit-appearance:none;position:relative;flex:none;
+  width:20px;height:20px;margin:0 2px;border-radius:6px;cursor:pointer;
+  background:var(--pv-surface-2);border:1px solid var(--pv-line-2);
+  transition:border-color .15s var(--pv-ease),background .15s var(--pv-ease)}
+.slang-check:hover{border-color:var(--pv-gold-2)}
+.slang-check:checked{background:var(--pv-gold-soft);border-color:var(--pv-gold)}
+.slang-check:checked::after{content:"";position:absolute;left:6px;top:3px;width:5px;height:9px;
+  border:2px solid var(--pv-gold);border-top:0;border-left:0;transform:rotate(42deg)}
+.slang-check:focus-visible{outline:none;box-shadow:var(--pv-ring)}
+
+.empty-state{display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;
+  padding:var(--pv-6) var(--pv-4);border:1px dashed var(--pv-line-2);border-radius:var(--pv-r);
+  background:var(--pv-surface-2);color:var(--pv-ink-3)}
+.empty-state-icon{font-size:26px;line-height:1;margin-bottom:var(--pv-2);opacity:.7}
+.empty-state-title{font-size:var(--pv-fs);font-weight:600;color:var(--pv-ink-2);margin-bottom:4px}
+.empty-state-desc{font-size:var(--pv-fs-xs);color:var(--pv-ink-3)}
+
+.stat-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(128px,1fr));gap:var(--pv-3)}
+.stat-card{background:linear-gradient(180deg,var(--pv-surface-2),var(--pv-surface));
+  border:1px solid var(--pv-line);border-radius:var(--pv-r);padding:var(--pv-3) var(--pv-4);min-width:0}
+.stat-value{font-family:var(--pv-mono);font-size:22px;color:var(--pv-gold);line-height:1.25;
+  font-variant-numeric:tabular-nums}
+.stat-label{color:var(--pv-ink-3);font-size:var(--pv-fs-xs);margin-top:4px;letter-spacing:.06em}
+
+/* ── 日志 / 预览 / 返回 ─────────────────────────────────────────────── */
+.log{background:var(--pv-surface-2);border:1px solid var(--pv-line);border-radius:var(--pv-r);
+  padding:var(--pv-3) var(--pv-4);font-family:var(--pv-mono);font-size:var(--pv-fs-xs);
+  color:var(--pv-ink-2);white-space:pre-wrap;word-break:break-word;line-height:1.75;
+  max-height:200px;overflow:auto;scrollbar-width:thin;scrollbar-color:var(--pv-surface-3) transparent}
+.pv-preview{background:var(--pv-surface-2);border:1px solid var(--pv-line);border-radius:var(--pv-r);
+  padding:var(--pv-3) var(--pv-4);margin-top:var(--pv-4);font-family:var(--pv-mono);
+  font-size:var(--pv-fs-sm);color:var(--pv-ink-2);line-height:1.8;white-space:pre-wrap;
+  word-break:break-word;max-height:420px;overflow:auto;
+  scrollbar-width:thin;scrollbar-color:var(--pv-surface-3) transparent}
+.ego-back{display:inline-flex;align-items:center;gap:6px;margin-top:var(--pv-1);
+  color:var(--pv-gold);font-size:var(--pv-fs);cursor:pointer;user-select:none;
+  transition:opacity .15s var(--pv-ease)}
+.ego-back:hover{opacity:.8}
+
+/* ── 轻提示（JS 会重写 className，只能挂 .toast + 状态类） ─────────── */
+.toast{position:fixed;top:var(--pv-4);right:var(--pv-4);z-index:999;
+  display:flex;align-items:center;gap:var(--pv-2);padding:9px 14px;
+  background:var(--pv-surface-2);border:1px solid var(--pv-line-2);
+  border-left:3px solid var(--pv-gold);border-radius:var(--pv-r);
+  color:var(--pv-ink);font-size:var(--pv-fs);overflow:hidden;
+  opacity:0;transform:translateY(-8px);pointer-events:none;box-shadow:var(--pv-shadow);
+  transition:opacity .2s var(--pv-ease),transform .2s var(--pv-ease)}
+.toast.show{opacity:1;transform:none}
+.toast.success{border-left-color:var(--pv-ok)}
+.toast.error{border-left-color:var(--pv-bad)}
+.toast.info{border-left-color:var(--pv-gold)}
+.toast::before{content:attr(data-icon);width:18px;text-align:center;font-size:13px;line-height:1}
+.toast::after{content:'';position:absolute;left:0;bottom:0;height:2px;width:100%;
+  transform:scaleX(0);transform-origin:left;animation:toastProgress 2s linear forwards;
+  background:var(--pv-gold)}
+.toast.success::after{background:var(--pv-ok)}
+.toast.error::after{background:var(--pv-bad)}
+@keyframes toastProgress{to{transform:scaleX(1)}}
+
+/* JS 的点击涟漪需要按钮作为定位容器 */
+button{position:relative;overflow:hidden}
+.btn-ripple{position:absolute;border-radius:50%;background:var(--pv-gold);opacity:.22;
+  transform:scale(0);pointer-events:none;animation:rippleAnim 550ms ease-out forwards}
+@keyframes rippleAnim{to{transform:scale(3);opacity:0}}
+
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;
+    transition-duration:.01ms!important}
+}
+</style>
+<style id="pv-kit">/*PV-KIT*/
+/* ═══════════════════════════════════════════════════════════════════════
+   EggBloom 插件 UI 套件 v2（2026-10-29）
+   ---------------------------------------------------------------------
+   和 v1 的区别：v1 只是"统一配色"，v2 是一套**可用的前端规范**：
+     · 设计 token（颜色 / 间距 / 圆角 / 阴影 / 动效曲线）全部成体系
+     · 组件带完整状态：hover / active / focus-visible / disabled / loading
+     · 布局原语：pv-split / pv-grid / pv-toolbar，窄屏自动降级
+     · 语义组件：pv-kpi / pv-seg / pv-switch / pv-chip / pv-timeline
+   旧类名（pv-panel / pv-table / pv-msg …）保留并重绘，老页面不用改也能变好看。
+   ═══════════════════════════════════════════════════════════════════════ */
+:root{
+  /* 色板：暖黑底 + 米金主色 + 三个语义色 */
+  --pv-bg:#0f0e0c;
+  --pv-surface:#181512;
+  --pv-surface-2:#1f1b16;
+  --pv-surface-3:#262119;
+  --pv-line:rgba(232,226,214,.08);
+  --pv-line-2:rgba(232,226,214,.14);
+  --pv-ink:#efe9dd;
+  --pv-ink-2:#b9b0a0;
+  --pv-ink-3:#7d7466;
+  --pv-gold:#d8b877;
+  --pv-gold-2:#b8914f;
+  --pv-gold-soft:rgba(216,184,119,.12);
+  --pv-ok:#8fc4a0;
+  --pv-ok-soft:rgba(143,196,160,.12);
+  --pv-warn:#d9a15f;
+  --pv-warn-soft:rgba(217,161,95,.12);
+  --pv-bad:#d97b6c;
+  --pv-bad-soft:rgba(217,123,108,.12);
+
+  /* 间距 4 的倍数 */
+  --pv-1:4px; --pv-2:8px; --pv-3:12px; --pv-4:16px; --pv-5:22px; --pv-6:32px; --pv-7:44px;
+  /* 圆角 */
+  --pv-r-sm:6px; --pv-r:10px; --pv-r-lg:14px; --pv-r-full:999px;
+  /* 阴影 / 光 */
+  --pv-shadow:0 1px 0 rgba(255,255,255,.03) inset, 0 8px 24px rgba(0,0,0,.35);
+  --pv-ring:0 0 0 1px var(--pv-gold), 0 0 0 4px var(--pv-gold-soft);
+  --pv-ease:cubic-bezier(.22,.61,.36,1);
+
+  --pv-font:'Segoe UI Variable Text','Segoe UI','Microsoft YaHei UI',system-ui,sans-serif;
+  --pv-mono:'Cascadia Mono','Consolas',monospace;
+  --pv-fs-xs:11px; --pv-fs-sm:12px; --pv-fs:13px; --pv-fs-lg:15px; --pv-fs-xl:19px;
+}
+
+*,*::before,*::after{box-sizing:border-box}
+html,body{background:var(--pv-bg)!important;color:var(--pv-ink)}
+body{
+  margin:0;padding:var(--pv-5) var(--pv-5) var(--pv-7)!important;
+  font:var(--pv-fs)/1.65 var(--pv-font)!important;
+  -webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility;
+  background-image:radial-gradient(1200px 500px at 15% -10%,rgba(216,184,119,.055),transparent 60%)!important;
+}
+::selection{background:var(--pv-gold-soft);color:var(--pv-gold)}
+h1,h2,h3,h4{margin:0;font-weight:600;line-height:1.3;letter-spacing:.01em;color:var(--pv-ink)}
+h1{font-size:var(--pv-fs-xl);letter-spacing:.02em}
+h2{font-size:var(--pv-fs-sm);letter-spacing:.14em;text-transform:uppercase;color:var(--pv-ink-3);font-weight:600}
+h3{font-size:var(--pv-fs)}
+a{color:var(--pv-gold);text-decoration:none}
+a:hover{text-decoration:underline}
+code,.mono{font-family:var(--pv-mono);font-size:var(--pv-fs-sm);font-variant-numeric:tabular-nums}
+hr{border:0;border-top:1px solid var(--pv-line);margin:var(--pv-4) 0}
+
+/* ── 页头 ───────────────────────────────────────────────────────── */
+.pv-head{display:flex;align-items:flex-start;gap:var(--pv-4);margin:0 0 var(--pv-5)}
+.pv-head .pv-head-body{flex:1;min-width:0}
+.pv-head .pv-eyebrow{font-size:var(--pv-fs-xs);letter-spacing:.18em;text-transform:uppercase;
+  color:var(--pv-gold-2);margin-bottom:6px}
+.pv-sub{color:var(--pv-ink-3);font-size:var(--pv-fs);margin-top:6px;max-width:72ch}
+.pv-hero-icon{width:46px;height:46px;flex:none;border-radius:var(--pv-r);display:grid;place-items:center;
+  background:linear-gradient(145deg,var(--pv-surface-2),var(--pv-surface));
+  border:1px solid var(--pv-line-2);box-shadow:var(--pv-shadow);color:var(--pv-gold);font-size:20px}
+
+/* ── 布局原语 ───────────────────────────────────────────────────── */
+.pv-split{display:grid;grid-template-columns:minmax(0,1.55fr) minmax(260px,.85fr);gap:var(--pv-4)}
+.pv-grid{display:grid;gap:var(--pv-4)}
+.pv-grid.cols-2{grid-template-columns:repeat(2,minmax(0,1fr))}
+.pv-grid.cols-3{grid-template-columns:repeat(3,minmax(0,1fr))}
+.pv-toolbar{display:flex;align-items:center;gap:var(--pv-2);flex-wrap:wrap}
+.pv-spacer{flex:1}
+@media (max-width:900px){
+  .pv-split{grid-template-columns:1fr}
+  .pv-grid.cols-2,.pv-grid.cols-3{grid-template-columns:1fr}
+}
+
+/* ── 卡片 ───────────────────────────────────────────────────────── */
+.pv-panel{
+  position:relative;background:var(--pv-surface);border:1px solid var(--pv-line);
+  border-radius:var(--pv-r-lg);padding:var(--pv-4) var(--pv-4) var(--pv-4);
+  box-shadow:var(--pv-shadow);margin:0 0 var(--pv-4);
+}
+.pv-panel-h{display:flex;align-items:center;gap:var(--pv-3);margin:0 0 var(--pv-3)}
+.pv-panel-h h2{flex:none}
+.pv-rule{flex:1;height:1px;background:linear-gradient(90deg,var(--pv-line-2),transparent)}
+.pv-count{color:var(--pv-ink-3);font-size:var(--pv-fs-xs);letter-spacing:.06em;white-space:nowrap}
+.pv-card{background:var(--pv-surface-2);border:1px solid var(--pv-line);border-radius:var(--pv-r);
+  padding:var(--pv-3) var(--pv-4)}
+.pv-card:hover{border-color:var(--pv-line-2)}
+
+/* ── 按钮 ───────────────────────────────────────────────────────── */
+button,.pv-btn{
+  --_bg:var(--pv-surface-2);--_fg:var(--pv-ink);--_bd:var(--pv-line-2);
+  display:inline-flex;align-items:center;justify-content:center;gap:6px;
+  background:var(--_bg);color:var(--_fg);border:1px solid var(--_bd);
+  border-radius:var(--pv-r-sm);padding:8px 14px;cursor:pointer;
+  font:500 var(--pv-fs)/1 var(--pv-font);letter-spacing:.02em;white-space:nowrap;
+  transition:background .18s var(--pv-ease),border-color .18s var(--pv-ease),
+             color .18s var(--pv-ease),transform .06s var(--pv-ease);
+}
+button:hover,.pv-btn:hover{--_bg:var(--pv-surface-3);--_bd:var(--pv-gold-2);--_fg:var(--pv-gold)}
+button:active,.pv-btn:active{transform:translateY(1px)}
+button:focus-visible,.pv-btn:focus-visible{outline:none;box-shadow:var(--pv-ring)}
+button:disabled{opacity:.4;cursor:not-allowed;transform:none}
+button.primary,.pv-btn.primary{--_bg:linear-gradient(180deg,#e3c68a,#c9a463);--_fg:#161310;--_bd:transparent;
+  box-shadow:0 1px 0 rgba(255,255,255,.35) inset,0 6px 16px rgba(201,164,99,.18);font-weight:600}
+button.primary:hover{--_bg:linear-gradient(180deg,#ecd299,#d5af6d);--_fg:#161310}
+button.ghost{--_bg:transparent;--_bd:transparent;--_fg:var(--pv-ink-2)}
+button.ghost:hover{--_bg:var(--pv-surface-2);--_fg:var(--pv-ink)}
+button.danger{--_fg:var(--pv-bad);--_bd:rgba(217,123,108,.35)}
+button.danger:hover{--_bg:var(--pv-bad-soft);--_bd:var(--pv-bad);--_fg:var(--pv-bad)}
+button.sm{padding:5px 10px;font-size:var(--pv-fs-xs)}
+
+/* ── 表单 ───────────────────────────────────────────────────────── */
+.pv-field{margin:0 0 var(--pv-4)}
+.pv-label{display:block;color:var(--pv-ink-2);font-size:var(--pv-fs-sm);margin-bottom:6px}
+.pv-input,.pv-textarea,.pv-select{
+  width:100%;background:var(--pv-surface-2);color:var(--pv-ink);
+  border:1px solid var(--pv-line-2);border-radius:var(--pv-r-sm);
+  padding:9px 11px;font:var(--pv-fs-sm)/1.6 var(--pv-mono);outline:none;
+  transition:border-color .18s var(--pv-ease),box-shadow .18s var(--pv-ease),background .18s var(--pv-ease);
+}
+.pv-textarea{min-height:110px;resize:vertical;font-family:var(--pv-mono)}
+.pv-input::placeholder,.pv-textarea::placeholder{color:var(--pv-ink-3)}
+.pv-input:hover,.pv-textarea:hover,.pv-select:hover{border-color:rgba(232,226,214,.22)}
+.pv-input:focus,.pv-textarea:focus,.pv-select:focus{border-color:var(--pv-gold);box-shadow:var(--pv-ring)}
+.pv-hint{color:var(--pv-ink-3);font-size:var(--pv-fs-xs);margin-top:6px;line-height:1.65}
+.pv-input.mono{font-family:var(--pv-mono)}
+
+/* 开关（checkbox 改造）*/
+.pv-switch{display:inline-flex;align-items:center;gap:10px;cursor:pointer;user-select:none}
+.pv-switch input{position:absolute;opacity:0;width:0;height:0}
+.pv-switch .pv-track{width:36px;height:20px;border-radius:var(--pv-r-full);background:var(--pv-surface-3);
+  border:1px solid var(--pv-line-2);position:relative;transition:background .2s var(--pv-ease),border-color .2s var(--pv-ease)}
+.pv-switch .pv-track::after{content:"";position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;
+  background:var(--pv-ink-3);transition:transform .2s var(--pv-ease),background .2s var(--pv-ease)}
+.pv-switch input:checked+.pv-track{background:var(--pv-gold-soft);border-color:var(--pv-gold-2)}
+.pv-switch input:checked+.pv-track::after{transform:translateX(16px);background:var(--pv-gold)}
+.pv-switch input:focus-visible+.pv-track{box-shadow:var(--pv-ring)}
+.pv-switch .pv-switch-label{font-size:var(--pv-fs-sm);color:var(--pv-ink-2)}
+
+/* 分段控件 */
+.pv-seg{display:inline-flex;background:var(--pv-surface-2);border:1px solid var(--pv-line-2);
+  border-radius:var(--pv-r-sm);padding:3px;gap:2px}
+.pv-seg button{background:transparent;border:0;padding:6px 14px;border-radius:4px;
+  color:var(--pv-ink-3);font-size:var(--pv-fs-sm)}
+.pv-seg button:hover{color:var(--pv-ink);--_bg:transparent}
+.pv-seg button.on{background:var(--pv-gold-soft);color:var(--pv-gold);font-weight:600}
+
+/* ── 数据展示 ───────────────────────────────────────────────────── */
+.pv-kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(128px,1fr));gap:var(--pv-3)}
+.pv-kpi{background:linear-gradient(180deg,var(--pv-surface-2),var(--pv-surface));
+  border:1px solid var(--pv-line);border-radius:var(--pv-r);padding:var(--pv-3) var(--pv-4);min-width:0}
+.pv-kpi .k{display:block;color:var(--pv-ink-3);font-size:var(--pv-fs-xs);letter-spacing:.1em;text-transform:uppercase}
+.pv-kpi b{display:block;margin-top:6px;font-size:24px;font-weight:600;letter-spacing:-.01em;
+  color:var(--pv-ink);font-variant-numeric:tabular-nums;line-height:1.2}
+.pv-kpi .d{font-size:var(--pv-fs-xs);color:var(--pv-ink-3);margin-top:4px}
+.pv-kpi .d.ok{color:var(--pv-ok)} .pv-kpi .d.bad{color:var(--pv-bad)} .pv-kpi .d.warn{color:var(--pv-warn)}
+.pv-kpi.hero b{color:var(--pv-gold)}
+
+/* 兼容旧统计块 */
+.pv-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(128px,1fr));gap:var(--pv-3)}
+.pv-stat{background:linear-gradient(180deg,var(--pv-surface-2),var(--pv-surface));
+  border:1px solid var(--pv-line);border-radius:var(--pv-r);padding:var(--pv-3) var(--pv-4);text-align:left}
+.pv-stat b{display:block;font-size:22px;color:var(--pv-gold);font-variant-numeric:tabular-nums;line-height:1.25}
+.pv-stat span{display:block;color:var(--pv-ink-3);font-size:var(--pv-fs-xs);margin-top:4px;letter-spacing:.06em}
+
+/* 进度/状态条 */
+.pv-rows{display:grid;gap:var(--pv-3)}
+.pv-row{display:grid;grid-template-columns:110px 1fr 58px;align-items:center;gap:var(--pv-3)}
+.pv-row .pv-lab{color:var(--pv-ink-2);font-size:var(--pv-fs-sm);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pv-bar{position:relative;height:6px;background:var(--pv-surface-3);border-radius:var(--pv-r-full);overflow:hidden}
+.pv-bar>i{display:block;height:100%;width:0;border-radius:inherit;
+  background:linear-gradient(90deg,var(--pv-gold-2),var(--pv-gold));transition:width .5s var(--pv-ease)}
+.pv-bar.warn>i{background:linear-gradient(90deg,#a9763f,var(--pv-warn))}
+.pv-bar.bad>i{background:linear-gradient(90deg,#a05a4e,var(--pv-bad))}
+.pv-val{text-align:right;font-family:var(--pv-mono);font-size:var(--pv-fs-sm);color:var(--pv-ink-2);font-variant-numeric:tabular-nums}
+
+/* 表格 */
+.pv-table{width:100%;border-collapse:separate;border-spacing:0;font-size:var(--pv-fs-sm)}
+.pv-table th{color:var(--pv-ink-3);font-weight:500;font-size:var(--pv-fs-xs);letter-spacing:.1em;
+  text-transform:uppercase;text-align:left;padding:0 10px 8px;border-bottom:1px solid var(--pv-line-2);white-space:nowrap}
+.pv-table td{padding:10px;border-bottom:1px solid var(--pv-line);vertical-align:top}
+.pv-table tbody tr:hover td{background:rgba(232,226,214,.025)}
+.pv-table tbody tr:last-child td{border-bottom:0}
+.pv-table td.k{color:var(--pv-gold);white-space:nowrap}
+.pv-scroll{overflow:auto;max-height:380px}
+
+/* 标签 / 胶囊 */
+.pv-tag{display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border-radius:var(--pv-r-full);
+  border:1px solid var(--pv-line-2);color:var(--pv-ink-2);font-size:var(--pv-fs-xs);letter-spacing:.03em;white-space:nowrap}
+.pv-tag.ok{border-color:rgba(143,196,160,.4);color:var(--pv-ok);background:var(--pv-ok-soft)}
+.pv-tag.warn{border-color:rgba(217,161,95,.4);color:var(--pv-warn);background:var(--pv-warn-soft)}
+.pv-tag.bad{border-color:rgba(217,123,108,.4);color:var(--pv-bad);background:var(--pv-bad-soft)}
+.pv-tag.gold{border-color:rgba(216,184,119,.45);color:var(--pv-gold);background:var(--pv-gold-soft)}
+
+/* 空态 / 提示 */
+.pv-empty{color:var(--pv-ink-3);font-size:var(--pv-fs-sm);text-align:center;padding:var(--pv-6) var(--pv-4);
+  border:1px dashed var(--pv-line-2);border-radius:var(--pv-r);background:rgba(255,255,255,.012)}
+.pv-msg{font-size:var(--pv-fs-sm);margin-top:var(--pv-3);min-height:18px;color:var(--pv-ink-3)}
+.pv-msg.ok{color:var(--pv-ok)} .pv-msg.err{color:var(--pv-bad)}
+.pv-flex{display:flex;gap:var(--pv-2);flex-wrap:wrap;align-items:center}
+.pv-muted{color:var(--pv-ink-3)}
+
+/* 时间线 */
+.pv-timeline{list-style:none;margin:0;padding:0 0 0 16px;border-left:1px solid var(--pv-line-2)}
+.pv-timeline li{position:relative;padding:0 0 var(--pv-3) 14px}
+.pv-timeline li::before{content:"";position:absolute;left:-21px;top:6px;width:7px;height:7px;border-radius:50%;
+  background:var(--pv-surface-3);border:1px solid var(--pv-line-2)}
+.pv-timeline li.hot::before{background:var(--pv-gold);border-color:var(--pv-gold);box-shadow:0 0 0 4px var(--pv-gold-soft)}
+.pv-timeline .t{font-family:var(--pv-mono);font-size:var(--pv-fs-xs);color:var(--pv-ink-3)}
+.pv-timeline .tx{color:var(--pv-ink-2);font-size:var(--pv-fs-sm);margin-top:3px}
+
+/* 周网格 */
+.pv-grid7{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:var(--pv-2)}
+.pv-day{background:var(--pv-surface);border:1px solid var(--pv-line);border-radius:var(--pv-r);padding:var(--pv-2)}
+.pv-day h3{font-size:var(--pv-fs-xs);color:var(--pv-ink-3);letter-spacing:.12em;text-transform:uppercase;margin:2px 0 var(--pv-2)}
+.pv-day .pv-slot{font-size:var(--pv-fs-xs);line-height:1.55;color:var(--pv-ink-2);padding:5px 0;
+  border-bottom:1px dashed var(--pv-line)}
+.pv-day .pv-slot:last-child{border-bottom:0}
+.pv-day .pv-slot em{color:var(--pv-ink-3);font-style:normal;font-family:var(--pv-mono);font-size:10px}
+.pv-day.today{border-color:rgba(216,184,119,.5);background:linear-gradient(180deg,var(--pv-gold-soft),transparent 70%)}
+.pv-day.now .pv-slot.cur{color:var(--pv-gold)}
+@media (max-width:900px){.pv-grid7{grid-template-columns:repeat(2,minmax(0,1fr))}}
+
+/* SVG 趋势图容器 */
+.pv-chart{width:100%;height:120px;display:block}
+.pv-chart .grid{stroke:rgba(232,226,214,.06)}
+.pv-chart .line{fill:none;stroke:var(--pv-gold);stroke-width:1.6;stroke-linejoin:round;stroke-linecap:round}
+.pv-chart .area{fill:url(#pv-grad);opacity:.5}
+.pv-chart .dot{fill:var(--pv-bg);stroke:var(--pv-gold);stroke-width:1.4}
+
+/* 骨架屏 */
+.pv-skeleton{height:12px;border-radius:4px;
+  background:linear-gradient(90deg,var(--pv-surface-2) 25%,var(--pv-surface-3) 37%,var(--pv-surface-2) 63%);
+  background-size:400% 100%;animation:pv-sk 1.4s ease infinite}
+@keyframes pv-sk{0%{background-position:100% 0}100%{background-position:0 0}}
+
+/* 细节 */
+.pv-panel>.pv-panel-h+.pv-hint{margin-top:-6px}
+.pv-inline-code{background:var(--pv-surface-2);border:1px solid var(--pv-line);border-radius:4px;
+  padding:1px 5px;font-family:var(--pv-mono);font-size:var(--pv-fs-xs)}
+.pv-truncate{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="pv-head">
+      <div class="pv-head-body">
+        <div class="pv-eyebrow">EGO · v0.1.0</div>
+        <h1>人格 / 记忆 / 节奏 / 说话方式 / 黑话</h1>
+        <div class="pv-sub">统一人格与记忆中枢。下面所有按钮都已接真实接口，保存后即时生效。</div>
+      </div>
+    </div>
+
+    <div class="pv-panel">
+      <div class="pv-panel-h"><h2>EGO</h2><i class="pv-rule"></i></div>
+      <div class="pv-toolbar">
+        <label class="pv-switch">
+          <input type="checkbox" id="ego-enabled" checked>
+          <span class="pv-track"></span>
+          <span class="pv-switch-label">启用 EGO</span>
+        </label>
+        <label class="pv-switch" style="margin-left:var(--pv-4)">
+          <input type="checkbox" id="example-enabled" checked>
+          <span class="pv-track"></span>
+          <span class="pv-switch-label">启用 few-shot 示例</span>
+        </label>
+        <span class="pv-spacer"></span>
+        <button class="primary" id="btn-save-top" onclick="saveTopConfig()">保存顶层开关</button>
+      </div>
+    </div>
+
+    <div class="pv-panel">
+      <div class="pv-panel-h"><h2>子模块开关</h2><i class="pv-rule"></i><span class="pv-count">所有开关实时写入配置</span></div>
+      <div class="pv-grid cols-2">
+        <label class="pv-switch ego-switch">
+          <input type="checkbox" id="ego-memory" checked>
+          <span class="pv-track"></span>
+          <span class="pv-switch-label"><b>记忆</b><span class="pv-hint">事实 / 事件 / 人格 / 好感度</span></span>
+        </label>
+        <label class="pv-switch ego-switch">
+          <input type="checkbox" id="ego-style" checked>
+          <span class="pv-track"></span>
+          <span class="pv-switch-label"><b>说话风格</b><span class="pv-hint">学习群友风格并注入</span></span>
+        </label>
+        <label class="pv-switch ego-switch">
+          <input type="checkbox" id="ego-rhythm" checked>
+          <span class="pv-track"></span>
+          <span class="pv-switch-label"><b>拟人节奏</b><span class="pv-hint">随机延迟 / 打字感</span></span>
+        </label>
+        <label class="pv-switch ego-switch">
+          <input type="checkbox" id="ego-slang" checked>
+          <span class="pv-track"></span>
+          <span class="pv-switch-label"><b>黑话学习</b><span class="pv-hint">候选 / 注入 / 过滤</span></span>
+        </label>
+      </div>
+      <div class="pv-toolbar" style="margin-top:var(--pv-4)">
+        <button class="primary" id="btn-save-module" onclick="saveModuleConfig()">保存子模块开关</button>
+        <button class="ghost" id="btn-refresh-module" onclick="loadModuleConfig()">刷新状态</button>
+      </div>
+    </div>
+
+    <div class="pv-panel">
+      <div class="pv-panel-h"><h2>记忆</h2><i class="pv-rule"></i><span class="pv-count">scope 会影响统计和人格导出范围。</span></div>
+      <div class="pv-stats">
+        <div class="pv-stat"><b id="ego-mem-msg">-</b><span>消息</span></div>
+        <div class="pv-stat"><b id="ego-mem-fact">-</b><span>事实</span></div>
+        <div class="pv-stat"><b id="ego-mem-event">-</b><span>事件</span></div>
+        <div class="pv-stat"><b id="ego-mem-persona">-</b><span>人格条目</span></div>
+      </div>
+      <div class="pv-toolbar" style="margin-top:var(--pv-4)">
+        <input type="text" class="pv-input" id="memory-scope" placeholder="scope_id，默认 default" style="max-width:220px">
+        <button id="btn-mem-stats" onclick="loadMemoryStats()">刷新统计</button>
+        <button id="btn-export-persona" onclick="exportPersona()">导出人格</button>
+        <button class="danger" id="btn-clear-memory" onclick="clearMemory()">清空记忆</button>
+      </div>
+    </div>
+
+    <div class="pv-panel">
+      <div class="pv-panel-h"><h2>黑话学习</h2><i class="pv-rule"></i></div>
+      <div class="pv-seg">
+        <button class="tab active" id="tab-pending">候选池</button>
+        <button class="tab" id="tab-injected">已注入</button>
+        <button class="tab" id="tab-stats">统计</button>
+      </div>
+      <div id="slang-pending">
+        <div class="pv-toolbar" style="margin-top:var(--pv-4)">
+          <input type="text" class="pv-input" id="slang-search" placeholder="搜索黑话..." style="max-width:220px">
+          <select class="pv-select" id="slang-source" style="max-width:160px">
+            <option value="">全部来源</option>
+            <option value="游戏圈">游戏圈</option>
+            <option value="直播圈">直播圈</option>
+            <option value="抽象圈">抽象圈</option>
+            <option value="电竞圈">电竞圈</option>
+            <option value="弹幕圈">弹幕圈</option>
+          </select>
+          <input type="number" class="pv-input" id="slang-min-quality" placeholder="最低质量" value="0" min="0" max="1" step="0.1" style="max-width:110px">
+          <button id="btn-slang-refresh" onclick="loadSlangPending()">刷新</button>
+          <button class="primary" id="btn-slang-learn" onclick="learnSlang()">开始学习</button>
+          <span class="pv-spacer"></span>
+          <a class="pv-btn" href="/page?plugin_id=slang_learner" target="_self">打开黑话学习完整页</a>
+        </div>
+        <div class="pv-toolbar pv-batch" style="margin-top:var(--pv-3)">
+          <button class="primary" id="btn-batch-inject" onclick="batchInject()">批量注入选中</button>
+          <button class="danger" id="btn-batch-reject" onclick="batchReject()">批量拒绝选中</button>
+          <button class="ghost" id="btn-select-all" onclick="toggleSelectAll()">全选 / 反选</button>
+          <span class="pv-hint" style="margin:0">只对候选池列表里的复选框生效</span>
+        </div>
+        <div id="slang-pending-list" class="list-root" style="margin-top:var(--pv-3)">加载中...</div>
+      </div>
+      <div id="slang-injected" style="display:none">
+        <div class="pv-toolbar" style="margin-top:var(--pv-4)">
+          <button class="danger" id="btn-clear-injected" onclick="clearInjected()">清空已注入</button>
+        </div>
+        <div id="slang-injected-list" class="list-root" style="margin-top:var(--pv-3)">加载中...</div>
+      </div>
+      <div id="slang-stats" style="display:none">
+        <div id="slang-stats-box" class="list-root" style="margin-top:var(--pv-4)">加载中...</div>
+      </div>
+    </div>
+
+    <div class="pv-panel">
+      <div class="pv-panel-h"><h2>人格编辑</h2><i class="pv-rule"></i></div>
+      <div class="pv-hint">按 section 编辑，可单段保存、导入导出、重置默认人格。</div>
+      <div class="pv-grid cols-2">
+        <div class="pv-field">
+          <label class="pv-label" for="sec-你是谁">【你是谁】</label>
+          <textarea class="pv-textarea" id="sec-你是谁" placeholder="18岁男生，喜欢计算机..."></textarea>
+        </div>
+        <div class="pv-field">
+          <label class="pv-label" for="sec-日常">【日常】</label>
+          <textarea class="pv-textarea" id="sec-日常" placeholder="阴间作息，晚上精神..."></textarea>
+        </div>
+        <div class="pv-field">
+          <label class="pv-label" for="sec-性格">【性格】</label>
+          <textarea class="pv-textarea" id="sec-性格" placeholder="懒散但对感兴趣的事认真..."></textarea>
+        </div>
+        <div class="pv-field">
+          <label class="pv-label" for="sec-说话方式">【说话方式】</label>
+          <textarea class="pv-textarea" id="sec-说话方式" placeholder="短句为主，口语化..."></textarea>
+        </div>
+        <div class="pv-field">
+          <label class="pv-label" for="sec-群聊行为">【群聊行为】</label>
+          <textarea class="pv-textarea" id="sec-群聊行为" placeholder="只在被@或叫小a时回复..."></textarea>
+        </div>
+        <div class="pv-field">
+          <label class="pv-label" for="sec-遇到各种事">【遇到各种事】</label>
+          <textarea class="pv-textarea" id="sec-遇到各种事" placeholder="- 被问身份/年龄/在哪 → ..."></textarea>
+        </div>
+        <div class="pv-field">
+          <label class="pv-label" for="sec-口头禅">【口头禅】</label>
+          <textarea class="pv-textarea" id="sec-口头禅" placeholder="好家伙、笑死、略"></textarea>
+        </div>
+        <div class="pv-field">
+          <label class="pv-label" for="sec-绝对不能说的话">【绝对不能说的话】</label>
+          <textarea class="pv-textarea" id="sec-绝对不能说的话" placeholder="任何不想让bot说的话"></textarea>
+        </div>
+      </div>
+      <div class="pv-toolbar" style="margin-top:var(--pv-4)">
+        <button class="primary" id="btn-save-all-personality" onclick="saveAllPersonality()">保存全部人格</button>
+        <button id="btn-save-sec-你是谁" onclick="saveOnePersonality('你是谁')">保存你是谁</button>
+        <button id="btn-save-sec-日常" onclick="saveOnePersonality('日常')">保存日常</button>
+        <button id="btn-save-sec-性格" onclick="saveOnePersonality('性格')">保存性格</button>
+        <button id="btn-export-personality" onclick="exportPersonality()">导出人格</button>
+        <button id="btn-import-personality" onclick="importPersonality()">导入人格</button>
+        <input type="file" id="personality-import" accept=".json" style="display:none">
+      </div>
+    </div>
+
+    <div class="pv-panel">
+      <div class="pv-panel-h"><h2>示例库</h2><i class="pv-rule"></i></div>
+      <div class="pv-hint">few-shot 示例，会注入 prompt。可新增、删除、按场景过滤。</div>
+      <div class="pv-toolbar">
+        <input type="text" class="pv-input" id="example-scene" placeholder="场景名，留空=全部" style="max-width:220px">
+        <button id="btn-load-examples" onclick="loadExamples()">刷新</button>
+        <button class="primary" id="btn-add-example" onclick="addExample()">新增示例</button>
+        <button id="btn-save-examples-top" onclick="saveExamples()">保存全部</button>
+      </div>
+      <div id="example-list" class="list-root" style="margin-top:var(--pv-3)">加载中...</div>
+      <div class="pv-field" style="margin-top:var(--pv-4)">
+        <textarea class="pv-textarea" id="example-json" placeholder="JSON 直接编辑，保存后即时生效"></textarea>
+        <div class="pv-toolbar" style="margin-top:var(--pv-2);justify-content:flex-end">
+          <button class="primary" id="btn-save-examples-json" onclick="saveExamples()">保存 JSON</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="pv-panel">
+      <div class="pv-panel-h"><h2>实时预览</h2><i class="pv-rule"></i></div>
+      <div class="pv-hint">当前人格 + 记忆 + 示例 + 风格 + 黑话的拼接结果。</div>
+      <div class="pv-toolbar">
+        <input type="text" class="pv-input" id="preview-user" placeholder="输入一条用户消息预览效果" style="max-width:320px">
+        <input type="text" class="pv-input" id="preview-scope" placeholder="scope_id" value="default" style="max-width:160px">
+        <button id="btn-update-preview" onclick="updatePreview()">刷新预览</button>
+      </div>
+      <div id="preview" class="pv-preview">点击刷新预览</div>
+    </div>
+
+    <div class="pv-panel">
+      <div class="pv-panel-h"><h2>运行日志</h2><i class="pv-rule"></i></div>
+      <div id="ego-log" class="log">暂无日志</div>
+      <div class="pv-toolbar" style="margin-top:var(--pv-3)">
+        <button id="btn-clear-log" onclick="clearLog()">清空日志</button>
+        <button id="btn-reload-module" onclick="reloadModule()">重载模块</button>
+      </div>
+    </div>
+
+    <div class="ego-back" id="btn-back">← 返回插件列表</div>
+  </div>
+
+  <div id="toast" class="toast"></div>
+
+<script>
+const API = window.location.origin + '/api/plugins/action';
+function toast(msg, type){type = type || 'info';const t=egoRoot('#toast');if(!t)return;t.textContent=msg;t.setAttribute('data-icon', type==='success'?'✓':(type==='error'?'✕':'ℹ'));t.className='toast ' + type + ' show';setTimeout(()=>t.className='toast', 2000)}
+function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;')}
+function egoRoot(id){const clean=(id||'').replace(/^#/, '');let el=document.getElementById(clean);if(el)return el;try{if(window.parent&&window.parent!==window){const f=window.parent.document.getElementById('pluginFrame');if(f&&f.contentDocument)return f.contentDocument.getElementById(clean);}}catch(e){}return null;}
+function egoRoota(s){let nodes=document.querySelectorAll(s);if(nodes&&nodes.length)return nodes;try{const f=(window.parent&&window.parent.document.getElementById('pluginFrame'))||document.getElementById('pluginFrame');if(f&&f.contentDocument)return f.contentDocument.querySelectorAll(s);}catch(e){}return nodes||[];}
+
+async function api(path,opts={}){try{const r=await fetch(path,Object.assign({headers:{'Content-Type':'application/json'}},opts));if(!r.ok){const t=await r.text();throw new Error(r.status+' '+r.statusText+' '+t);}return await r.json();}catch(e){console.error('[api]',path,e);throw e;}}
+function log(msg){const el=egoRoot('#ego-log');if(!el)return;const line=new Date().toLocaleTimeString()+': '+String(msg);el.textContent=(el.textContent?el.textContent+'\\n':'')+line;el.scrollTop=el.scrollHeight}
+
+async function loadModuleConfig(){
+  console.log('[ego] loadModuleConfig start');
+  const data=await api(API,{method:'POST',body:JSON.stringify({plugin_id:'ego',action:'get_config'})});
+  console.log('[ego] get_config data', data);
+  log('get_config='+JSON.stringify(data));
+  const cfg=(data&&(data.config||data))||{};
+  const setChecked=(id,k)=>{const el=egoRoot('#'+id);if(!el||!cfg)return;const v=cfg[k];if(typeof v==='boolean') el.checked=v; else el.checked=v!==false;};
+  setChecked('ego-enabled','enabled');
+  setChecked('ego-memory','memory_enabled');
+  setChecked('ego-style','style_enabled');
+  setChecked('ego-rhythm','rhythm_enabled');
+  setChecked('ego-slang','slang_enabled');
+  setChecked('example-enabled','example_enabled');
+  await loadMemoryStats();
+  await loadSlangPending();
+  await loadExamples();
+  await updatePreview();
+}
+async function saveTopConfig(){
+  console.log('[ego] saveTopConfig click');
+  const egoEnabled=egoRoot('#ego-enabled');
+  const payload={plugin_id:'ego',action:'set_config',params:{enabled:!!(egoEnabled&&egoEnabled.checked)}};
+  const data=await api(API,{method:'POST',body:JSON.stringify(payload)});
+  console.log('[ego] saveTopConfig data', data);
+  log('saveTopConfig='+JSON.stringify(data));
+  toast(data !== undefined && data !== null ? '已保存' : '保存失败', data !== undefined && data !== null ? 'success':'error');
+}
+async function saveModuleConfig(){
+  console.log('[ego] saveModuleConfig click');
+  const payload={plugin_id:'ego',action:'set_config',params:{
+    enabled:!!egoRoot('#ego-enabled').checked,
+    memory_enabled:!!egoRoot('#ego-memory').checked,
+    style_enabled:!!egoRoot('#ego-style').checked,
+    rhythm_enabled:!!egoRoot('#ego-rhythm').checked,
+    slang_enabled:!!egoRoot('#ego-slang').checked,
+    example_enabled:!!egoRoot('#example-enabled').checked
+  }};
+  const data=await api(API,{method:'POST',body:JSON.stringify(payload)});
+  console.log('[ego] saveModuleConfig data', data);
+  log('saveModuleConfig='+JSON.stringify(data));
+  toast(data !== undefined && data !== null ? '已保存' : '保存失败', data !== undefined && data !== null ? 'success':'error');
+}
+
+async function loadMemoryStats(){
+  console.log('[ego] loadMemoryStats start');
+  try{
+    const scope=egoRoot('#memory-scope')?egoRoot('#memory-scope').value.trim()||'default':'default';
+    const data=await api(API,{method:'POST',body:JSON.stringify({plugin_id:'ego',action:'memory_stats',params:{scope_id:scope}})});
+    console.log('[ego] memory_stats data', data);
+    log('memory_stats='+JSON.stringify(data));
+    const stats=(data&&data.stats)||{};
+    const set=(id,v)=>{const el=egoRoot('#'+id);if(el) el.textContent=v!=null?v:'-';};
+    set('ego-mem-msg',stats.messages);set('ego-mem-fact',stats.facts);set('ego-mem-event',stats.events);
+    const persona=await api(API,{method:'POST',body:JSON.stringify({plugin_id:'ego',action:'memory_persona',params:{scope_id:scope}})});
+    console.log('[ego] memory_persona data', persona);
+    set('ego-mem-persona',(persona&&persona.persona&&Object.keys(persona.persona).length)||'-');
+  }catch(e){console.error('[ego] memory error', e);log('memory error='+e)}
+}
+async function exportPersona(){
+  console.log('[ego] exportPersona click');
+  const scope=egoRoot('#memory-scope')?egoRoot('#memory-scope').value.trim()||'default':'default';
+  const data=await api(API,{method:'POST',body:JSON.stringify({plugin_id:'ego',action:'memory_persona',params:{scope_id:scope}})});
+  console.log('[ego] exportPersona data', data);
+  const persona=(data&&data.persona)||{};
+  const blob=new Blob([JSON.stringify(persona,null,2)],{type:'application/json'});
+  const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download='ego-persona-'+scope+'.json';a.click();URL.revokeObjectURL(url);
+  toast('已导出人格', 'success');
+}
+async function clearMemory(){
+  console.log('[ego] clearMemory click');
+  if(!confirm('确定清空该 scope 的记忆？此操作不可恢复。')) return;
+  const scope=egoRoot('#memory-scope')?egoRoot('#memory-scope').value.trim()||'default':'default';
+  const data=await api(API,{method:'POST',body:JSON.stringify({plugin_id:'ego',action:'memory_clear',params:{scope_id:scope}})});
+  console.log('[ego] clearMemory data', data);
+  log('memory_clear='+JSON.stringify(data));
+  toast(data && data.success!==false ? '已清空' : '清空失败', data && data.success!==false?'success':'error');
+  loadMemoryStats();
+}
+
+function switchSlangTab(btn,tab){
+  console.log('[ego] switchSlangTab', tab);
+  egoRoota('.tab').forEach(b=>b.classList.remove('active'));btn.classList.add('active');
+  egoRoot('#slang-pending').style.display=tab==='pending'?'':'none';
+  egoRoot('#slang-injected').style.display=tab==='injected'?'':'none';
+  egoRoot('#slang-stats').style.display=tab==='stats'?'':'none';
+  if(tab==='pending') loadSlangPending();
+  if(tab==='injected') loadSlangInjected();
+  if(tab==='stats') loadSlangStats();
+}
+async function learnSlang(){
+  console.log('[ego] learnSlang click');
+  const topics=[];
+  const el=egoRoot('#slang-source');
+  const raw=el ? el.value : '';
+  if(raw) topics.push(raw);
+  const pendingBefore = (await api(API,{method:'POST',body:JSON.stringify({plugin_id:'ego',action:'slang_pending',params:{search:'',source:'',min_quality:0}})})).pending || [];
+  const data=await api(API,{method:'POST',body:JSON.stringify({plugin_id:'ego',action:'slang_learn',topics:topics.length?topics:['游戏圈','直播圈','抽象圈']})});
+  console.log('[ego] slang_learn data', data);
+  log('slang_learn='+JSON.stringify(data));
+  const pendingAfter = (await api(API,{method:'POST',body:JSON.stringify({plugin_id:'ego',action:'slang_pending',params:{search:'',source:'',min_quality:0}})})).pending || [];
+  const delta = pendingAfter.length - pendingBefore.length;
+  if (data && data.ok) {
+    if (delta > 0) toast('已学习 ' + delta + ' 条', 'success');
+    else toast('已学习，目前没有新增候选', 'info');
+  } else {
+    toast('学习失败', 'error');
+  }
+  loadSlangPending();
+}
+function openCard(id){ window.open('about:blank','_blank'); }
+async function loadSlangPending(){
+  console.log('[ego] loadSlangPending start');
+  try{
+    const search=egoRoot('#slang-search')?egoRoot('#slang-search').value||'':'';
+    console.log('[ego] search input ok');
+    const source=egoRoot('#slang-source')?egoRoot('#slang-source').value||'':'';
+    console.log('[ego] source input ok');
+    const minQ=egoRoot('#slang-min-quality')?parseFloat(egoRoot('#slang-min-quality').value||0):0;
+    console.log('[ego] minQ input ok');
+    const data=await api(API,{method:'POST',body:JSON.stringify({plugin_id:'ego',action:'slang_pending',params:{search,source,min_quality:minQ}})});
+    console.log('[ego] slang_pending data', data);
+    log('slang_pending='+JSON.stringify(data));
+    const list=Array.isArray(data&&data.pending)?data.pending:[];
+    console.log('[ego] list ready len='+list.length);
+    let root=egoRoot('#slang-pending-list');let rootSrc='current';
+    if(!root){
+      try{
+        const frm=(window.parent&&window.parent.document.getElementById('pluginFrame'))||document.getElementById('pluginFrame');
+        if(frm&&frm.contentDocument){root=frm.contentDocument.getElementById('slang-pending-list');rootSrc='iframe';}
+      }catch(e){console.warn('[ego] iframe fallback failed',e);}
+    }
+    console.log('[ego] egoRoot root', root, 'source', rootSrc);
+    if(!root){console.warn('[ego] slang-pending-list missing');return;}
+    if(!list.length){root.innerHTML='<div class="empty-state"><div class="empty-state-icon">📭</div><div class="empty-state-title">暂无候选</div><div class="empty-state-desc">点击「开始学习」获取黑话候选</div></div>';console.log('[ego] slang-pending empty');return;}
+    const before=root.textContent;
+    console.log('[ego] before text len='+before.length);
+    root.innerHTML=list.map((item,idx)=>`<div class="list-item"><div style="flex:1"><div><strong>${esc(item.id)}</strong><span class="tag">${esc(item.source||'未知')}</span><span class="quality">${Number(item.quality||0).toFixed(2)}</span></div><div class="muted">${esc(item.meaning||'')}</div></div><div><button class="btn-open-card" data-id="${esc(item.id)}">打开</button><input type="checkbox" class="slang-check" data-id="${esc(item.id)}" data-idx="${idx}"><button class="btn-inject" data-id="${esc(item.id)}">注入</button><button class="btn-reject danger" data-id="${esc(item.id)}">拒绝</button></div></div>`).join('');
+    root.querySelectorAll('.btn-open-card').forEach(b=>b.addEventListener('click',()=>openCard(b.dataset.id)));
+    root.querySelectorAll('.btn-inject').forEach(b=>b.addEventListener('click',()=>injectOne(b.dataset.id)));
+    root.querySelectorAll('.btn-reject').forEach(b=>b.addEventListener('click',()=>rejectOne(b.dataset.id)));
+  }catch(e){console.error('[ego] loadSlangPending error', e);}
+}
+async function loadSlangInjected(){
+  console.log('[ego] loadSlangInjected start');
+  const data=await api(API,{method:'POST',body:JSON.stringify({plugin_id:'ego',action:'slang_injected'})});
+  console.log('[ego] slang_injected data', data);
+  log('slang_injected='+JSON.stringify(data));
+  const list=Array.isArray(data&&data.injected)?data.injected:[];
+  const root=egoRoot('#slang-injected-list');
+  if(!root){return;}
+  if(!list.length){root.innerHTML='<div class="empty-state"><div class="empty-state-icon">📥</div><div class="empty-state-title">暂无已注入</div><div class="empty-state-desc">从候选池中点击「注入」添加黑话</div></div>';return;}
+  root.innerHTML=list.slice(-50).reverse().map(item=>`<div class="list-item"><div style="flex:1"><div><strong>${esc(item.id)}</strong></div><div class="muted">${esc(item.meaning||'')}</div></div><div class="muted">${esc(item.injected_at||'')}</div></div>`).join('');
+}
+async function loadSlangStats(){
+  console.log('[ego] loadSlangStats start');
+  const data=await api(API,{method:'POST',body:JSON.stringify({plugin_id:'ego',action:'slang_stats'})});
+  console.log('[ego] slang_stats data', data);
+  log('slang_stats='+JSON.stringify(data));
+  const stats=(data&&data.stats)||{};
+  const box=egoRoot('#slang-stats-box');if(!box)return;
+  box.innerHTML=`<div class="stat-grid"><div class="stat-card"><div class="stat-value">${stats.pending??'-'}</div><div class="stat-label">候选</div></div><div class="stat-card"><div class="stat-value">${stats.injected??'-'}</div><div class="stat-label">已注入</div></div><div class="stat-card"><div class="stat-value">${stats.rejected??'-'}</div><div class="stat-label">已拒绝</div></div><div class="stat-card"><div class="stat-value">${stats.total_learned??'-'}</div><div class="stat-label">学习次数</div></div></div><div class="muted" style="margin-top:8px">来源：${esc((stats.sources||{}).toString())}</div>`;
+}
+async function injectOne(id){
+  console.log('[ego] injectOne', id);
+  const data=await api(API,{method:'POST',body:JSON.stringify({plugin_id:'ego',action:'slang_inject',params:{ids:[id]}})});
+  console.log('[ego] injectOne data', data);
+  log('inject='+JSON.stringify(data));
+  toast(data&&data.injected?'已注入':'注入失败', data&&data.injected?'success':'error');
+  loadSlangPending();loadSlangStats();
+}
+async function rejectOne(id){
+  console.log('[ego] rejectOne', id);
+  const data=await api(API,{method:'POST',body:JSON.stringify({plugin_id:'ego',action:'slang_reject',params:{ids:[id]}})});
+  console.log('[ego] rejectOne data', data);
+  log('reject='+JSON.stringify(data));
+  toast(data&&data.rejected?'已拒绝':'拒绝失败', data&&data.rejected?'success':'error');
+  loadSlangPending();loadSlangStats();
+}
+async function batchInject(){
+  console.log('[ego] batchInject click');
+  const root=egoRoot('#slang-pending-list');
+  console.log('[ego] batchInject root', root);
+  if(!root){toast('列表未就绪');return;}
+  const ids=[...root.querySelectorAll('.slang-check:checked')].map(el=>el.dataset.id);
+  if(!ids.length){toast('请先勾选', 'error');return;}
+  const data=await api(API,{method:'POST',body:JSON.stringify({plugin_id:'ego',action:'slang_inject',params:{ids}})});
+  console.log('[ego] batchInject data', data);
+  log('batch inject='+JSON.stringify(data));
+  toast(data&&data.injected?('已注入 '+data.injected+' 条'):'批量注入失败', data&&data.injected?'success':'error');
+  loadSlangPending();loadSlangStats();
+}
+async function batchReject(){
+  console.log('[ego] batchReject click');
+  const root=egoRoot('#slang-pending-list');
+  console.log('[ego] batchReject root', root);
+  if(!root){toast('列表未就绪');return;}
+  const ids=[...root.querySelectorAll('.slang-check:checked')].map(el=>el.dataset.id);
+  if(!ids.length){toast('请先勾选', 'error');return;}
+  const data=await api(API,{method:'POST',body:JSON.stringify({plugin_id:'ego',action:'slang_reject',params:{ids}})});
+  console.log('[ego] batchReject data', data);
+  log('batch reject='+JSON.stringify(data));
+  toast(data&&data.rejected?('已拒绝 '+data.rejected+' 条'):'批量拒绝失败', data&&data.rejected?'success':'error');
+  loadSlangPending();loadSlangStats();
+}
+function toggleSelectAll(){
+  const root=egoRoot('#slang-pending-list');
+  if(!root){toast('列表未就绪');return;}
+  const checks=[...root.querySelectorAll('.slang-check')];
+  const allChecked=[...checks].every(c=>c.checked);
+  checks.forEach(c=>c.checked=!allChecked);
+  toast(allChecked?'已反选':'已全选', 'info');
+}
+async function clearInjected(){
+  console.log('[ego] clearInjected click');
+  if(!confirm('确定清空所有已注入黑话？')) return;
+  const data=await api(API,{method:'POST',body:JSON.stringify({plugin_id:'ego',action:'slang_clear_injected'})});
+  console.log('[ego] clearInjected data', data);
+  log('slang_clear_injected='+JSON.stringify(data));
+  toast(data&&data.success!==false?'已清空':'清空失败', data&&data.success!==false?'success':'error');
+  loadSlangInjected();loadSlangStats();
+}
+
+async function loadPersonality(){
+  console.log('[ego] loadPersonality start');
+  const data=await api(API,{method:'POST',body:JSON.stringify({plugin_id:'ego',action:'get_personality'})});
+  console.log('[ego] get_personality data', data);
+  log('get_personality='+JSON.stringify(data));
+  const sections=(data&&data.sections)||{};
+  const fields=['你是谁','日常','性格','说话方式','群聊行为','遇到各种事','口头禅','绝对不能说的话'];
+  for(const key of fields){const el=egoRoot('#sec-'+key);if(el) el.value=sections['【'+key+'】']||'';}
+  const cfg=(data&&data.config)||{};
+  const exEl=egoRoot('#example-enabled');if(exEl) exEl.checked=cfg.example_enabled!==false;
+  updatePreview();
+}
+async function savePersonalitySection(key,value){
+  console.log('[ego] savePersonalitySection', key);
+  const sections={}; sections['【' + key + '】'] = value;
+  const data=await api(API,{method:'POST',body:JSON.stringify({plugin_id:'ego',action:'save_personality',params:{sections}})});
+  console.log('[ego] savePersonalitySection data', data);
+  log('savePersonalitySection='+JSON.stringify(data));
+  return data;
+}
+async function saveOnePersonality(key){
+  console.log('[ego] saveOnePersonality', key);
+  const el=egoRoot('#sec-'+key);if(!el) return;
+  const data=await savePersonalitySection(key,el.value||'');
+  toast(data&&data.success!==false?'已保存':'保存失败', data&&data.success!==false?'success':'error');
+}
+async function saveAllPersonality(){
+  console.log('[ego] saveAllPersonality click');
+  const sections={};
+  const fields=['你是谁','日常','性格','说话方式','群聊行为','遇到各种事','口头禅','绝对不能说的话'];
+  for(const key of fields){const el=egoRoot('#sec-'+key);if(el&&String(el.value).trim()) sections['【'+key+'】']=String(el.value).trim();}
+  const data=await api(API,{method:'POST',body:JSON.stringify({plugin_id:'ego',action:'save_personality',params:{sections}})});
+  console.log('[ego] saveAllPersonality data', data);
+  log('saveAllPersonality='+JSON.stringify(data));
+  toast(data&&data.success!==false?'已保存':'保存失败', data&&data.success!==false?'success':'error');
+  updatePreview();
+}
+async function exportPersonality(){
+  console.log('[ego] exportPersonality click');
+  const data=await api(API,{method:'POST',body:JSON.stringify({plugin_id:'ego',action:'get_personality'})});
+  console.log('[ego] exportPersonality data', data);
+  const blob=new Blob([JSON.stringify(data,null,2)],{type:'application/json'});
+  const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download='ego-personality.json';a.click();URL.revokeObjectURL(url);
+  toast('已导出人格', 'success');
+}
+async function importPersonality(e){
+  console.log('[ego] importPersonality change', e);
+  const file=e.target.files[0];if(!file) return;
+  const text=await file.text();let obj;try{obj=JSON.parse(text);}catch(err){toast('JSON 格式错误');return;}
+  const sections=obj&&obj.sections||obj;
+  const data=await api(API,{method:'POST',body:JSON.stringify({plugin_id:'ego',action:'save_personality',params:{sections}})});
+  console.log('[ego] importPersonality data', data);
+  log('importPersonality='+JSON.stringify(data));
+  toast(data&&data.success!==false?'已导入':'导入失败', data&&data.success!==false?'success':'error');
+  loadPersonality();
+}
+
+async function loadExamples(){
+  console.log('[ego] loadExamples start');
+  const scene=egoRoot('#example-scene')?egoRoot('#example-scene').value.trim():'';
+  const data=await api(API,{method:'POST',body:JSON.stringify({plugin_id:'ego',action:'get_examples',params:{scene}})});
+  console.log('[ego] get_examples data', data);
+  log('get_examples='+JSON.stringify(data));
+  const list=Array.isArray(data&&data.examples)?data.examples:[];
+  const exJson=egoRoot('#example-json');if(exJson)exJson.value=JSON.stringify(list,null,2);
+  const root=egoRoot('#example-list');
+  if(!root){return;}
+  if(!list.length){root.innerHTML='<div class="empty-state"><div class="empty-state-icon">📝</div><div class="empty-state-title">暂无示例</div><div class="empty-state-desc">点击「新增示例」添加 few-shot 样本</div></div>';return;}
+  root.innerHTML=list.map((ex,idx)=>`<div class="list-item"><div style="flex:1"><div class="muted">用户</div><div>${esc(ex.user||ex.input||'')}</div><div class="muted" style="margin-top:4px">小a</div><div>${esc(ex.bot||ex.reply||'')}</div></div><div><button class="danger btn-delete-example" data-idx="${idx}">删除</button></div></div>`).join('');
+  root.querySelectorAll('.btn-delete-example').forEach(b=>b.addEventListener('click',()=>deleteExample(Number(b.dataset.idx))));
+}
+async function saveExamples(){
+  console.log('[ego] saveExamples click');
+  const exEl=egoRoot('#example-json');
+  if(!exEl){toast('未找到示例编辑区', 'error');return;}
+  const raw=exEl.value||'[]';
+  let parsed;try{parsed=JSON.parse(raw);}catch(e){toast('JSON 格式错误');return;}
+  const data=await api(API,{method:'POST',body:JSON.stringify({plugin_id:'ego',action:'save_examples',params:{examples:parsed}})});
+  console.log('[ego] save_examples data', data);
+  log('save_examples='+JSON.stringify(data));
+  toast(data&&data.success!==false?'已保存':'保存失败', data&&data.success!==false?'success':'error');
+  loadExamples();
+}
+async function addExample(){
+  console.log('[ego] addExample click');
+  const user=prompt('用户消息：');if(user==null) return;
+  const bot=prompt('小a回复：');if(bot==null) return;
+  const raw=egoRoot('#example-json').value||'[]';let list;try{list=JSON.parse(raw);}catch(e){list=[];}
+  list.push({user,bot});
+  const exJson=egoRoot('#example-json');if(exJson)exJson.value=JSON.stringify(list,null,2);
+  await saveExamples();
+}
+async function deleteExample(idx){
+  console.log('[ego] deleteExample', idx);
+  if(!confirm('删除这条示例？')) return;
+  let raw=egoRoot('#example-json').value||'[]';let list;try{list=JSON.parse(raw);}catch(e){return;}
+  list.splice(idx,1);const exJson=egoRoot('#example-json');if(exJson)exJson.value=JSON.stringify(list,null,2);await saveExamples();
+}
+
+async function updatePreview(){
+  console.log('[ego] updatePreview start');
+  const scope=egoRoot('#preview-scope')?egoRoot('#preview-scope').value.trim()||'default':'default';
+  const user=egoRoot('#preview-user')?egoRoot('#preview-user').value.trim():'';
+  const data=await api(API,{method:'POST',body:JSON.stringify({plugin_id:'ego',action:'preview_prompt',params:{user_msg:user,scope_id:scope}})});
+  console.log('[ego] preview_prompt data', data);
+  log('preview_prompt='+JSON.stringify(data));
+  const prompt=(data&&data.prompt)||data||'暂无预览';
+  const previewEl=egoRoot('#preview');if(previewEl)previewEl.textContent=typeof prompt==='string'?prompt:JSON.stringify(prompt,null,2);
+}
+async function reloadModule(){
+  console.log('[ego] reloadModule click');
+  const data=await api(API,{method:'POST',body:JSON.stringify({plugin_id:'ego',action:'reload'})});
+  console.log('[ego] reload data', data);
+  log('reload='+JSON.stringify(data));
+  toast(data && data.success!==false ? '已重载' : '重载失败', data && data.success!==false?'success':'error');
+}
+
+function clearLog(){const el=egoRoot('#ego-log');if(el)el.textContent='暂无日志'}
+
+function bindRipple(){
+  document.addEventListener('click', function(e){
+    const btn = e.target.closest && e.target.closest('button');
+    if(!btn || btn.disabled) return;
+    const rect = btn.getBoundingClientRect();
+    const size = Math.max(rect.width, rect.height) * 1.2;
+    const ripple = document.createElement('span');
+    ripple.className = 'btn-ripple';
+    ripple.style.width = ripple.style.height = size + 'px';
+    ripple.style.left = (e.clientX - rect.left - size/2) + 'px';
+    ripple.style.top = (e.clientY - rect.top - size/2) + 'px';
+    btn.appendChild(ripple);
+    setTimeout(function(){ ripple.remove(); }, 600);
+  });
+}
+
+function bindDebugClicks(){
+  const map = {
+    'btn-save-top': 'saveTopConfig',
+    'btn-save-module': 'saveModuleConfig',
+    'btn-mem-stats': 'loadMemoryStats',
+    'btn-export-persona': 'exportPersona',
+    'btn-clear-memory': 'clearMemory',
+    'tab-pending': 'switchSlangTab-pending',
+    'tab-injected': 'switchSlangTab-injected',
+    'tab-stats': 'switchSlangTab-stats',
+    'btn-slang-refresh': 'loadSlangPending',
+    'btn-slang-learn': 'learnSlang',
+    'btn-batch-inject': 'batchInject',
+    'btn-batch-reject': 'batchReject',
+    'btn-clear-injected': 'clearInjected',
+    'btn-save-all-personality': 'saveAllPersonality',
+    'btn-save-sec-你是谁': 'saveOnePersonality-你是谁',
+    'btn-save-sec-日常': 'saveOnePersonality-日常',
+    'btn-save-sec-性格': 'saveOnePersonality-性格',
+    'btn-export-personality': 'exportPersonality',
+    'btn-import-personality': 'importPersonality',
+    'btn-load-examples': 'loadExamples',
+    'btn-add-example': 'addExample',
+    'btn-save-examples-top': 'saveExamples',
+    'btn-save-examples-json': 'saveExamples',
+    'btn-update-preview': 'updatePreview',
+    'btn-clear-log': 'clearLog',
+    'btn-reload-module': 'reloadModule',
+    'btn-back': 'back',
+    'btn-open-card': 'openCard'
+  };
+  Object.entries(map).forEach(([id, name])=>{
+    const el = egoRoot('#' + id);
+    if (!el) {
+      console.warn('[ego] bindDebugClicks missing', id, name);
+      return;
+    }
+    el.addEventListener('click', (e)=>{
+      console.log('[ego] click', id, name);
+      if (name === 'switchSlangTab-pending') switchSlangTab(el, 'pending');
+      else if (name === 'switchSlangTab-injected') switchSlangTab(el, 'injected');
+      else if (name === 'switchSlangTab-stats') switchSlangTab(el, 'stats');
+      else if (name === 'saveOnePersonality-你是谁') saveOnePersonality('你是谁');
+      else if (name === 'saveOnePersonality-日常') saveOnePersonality('日常');
+      else if (name === 'saveOnePersonality-性格') saveOnePersonality('性格');
+      else if (name === 'back') window.parent.postMessage({type:'ego-back'}, '*');
+      else if (name === 'importPersonality') el.click();
+      else if (name === 'openCard') { if (!e.target.closest('button')) window.open('about:blank','_blank'); }
+      else if (window[name]) window[name](e);
+    });
+  });
+  egoRoota('.list-item').forEach((item, idx)=>{
+    item.style.cursor = 'pointer';
+    item.setAttribute('data-open-card', '1');
+    item.addEventListener('click', (e)=>{
+      if (e.target.closest('button') || e.target.closest('input')) return;
+      window.open('about:blank','_blank');
+    });
+  });
+}
+
+(async function init(){
+  console.log('[ego] init start');
+  toast('EGO 插件初始化中...');
+  try{
+    bindDebugClicks();
+    bindRipple();
+    console.log('[ego] bindDebugClicks done');
+    await loadModuleConfig();
+    console.log('[ego] loadModuleConfig done');
+    await loadPersonality();
+    console.log('[ego] loadPersonality done');
+    await loadExamples();
+    console.log('[ego] loadExamples done');
+    await updatePreview();
+    console.log('[ego] updatePreview done');
+    toast('EGO 插件初始化完成');
+  }catch(e){
+    console.error('[ego] init error', e);
+    log('init error=' + e);
+    toast('初始化失败，请查看日志', 'error');
+  }
+})();
+</script>
+</body>
+</html>

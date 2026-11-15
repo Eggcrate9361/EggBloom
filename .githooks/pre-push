@@ -1,0 +1,64 @@
+#!/bin/sh
+# 推送闸（2026-11-13，11-14 收紧）：公开仓库只收「main 及其祖先」。
+#
+# 为什么要这一层：本地留着几条私有分支与旧标签，它们是 orphan 重建之前的
+# 开发史，里面躺着真实号码。这些号码没进公开仓库的唯一原因是「没人推过」——
+# 而 `git push --all` / `--mirror` 一条命令就能把整条旧史连号一起推上去。
+#
+# 11-14 补的洞：初版只按 ref 名拦（除 main 外的 refs/heads/* 一律拒），
+# 结果 `refs/tags/*` 是敞开的。实际上公开仓库上真挂着三个 tag
+# （v1.5.8 / v1.5.10 / v1.5.11）指向旧链的提交，25 / 9 / 19 个文件里有真号 ——
+# 分支干净而标签漏，等于闸只关了一扇门。
+# 现在改成按**提交**判：只放行 main 的祖先，tag 打在这条链上是发布动作，
+# 打在旧链上就是把旧提交重新暴露出去，一并拒。
+#
+# 放行方式（推私有仓库、或确认要归档）：
+#   EGGBLOOM_ARCHIVE_PUSH=1 git push server --all
+#
+# 删除远端 ref 不受限：删除不暴露任何东西。
+
+REMOTE="$1"
+
+# 非 origin 的远端（私有的 server）随便推
+if [ "$REMOTE" != "origin" ]; then
+    exit 0
+fi
+
+if [ "$EGGBLOOM_ARCHIVE_PUSH" = "1" ]; then
+    echo "[pre-push] EGGBLOOM_ARCHIVE_PUSH=1，放行（确认了目标仓库是私有的？）" >&2
+    exit 0
+fi
+
+bad=""
+while read -r local_ref local_sha remote_ref remote_sha; do
+    [ -z "$remote_ref" ] && continue
+
+    # main 自己：发布流程里允许强推
+    case "$remote_ref" in
+        refs/heads/main) continue ;;
+    esac
+
+    # local_sha 全 0 = 删除远端 ref，不暴露内容
+    case "$local_sha" in
+        *[!0]*) ;;
+        *) continue ;;
+    esac
+
+    # 只放行 main 的祖先（含 tag / notes 等任何指向它的 ref）
+    if git merge-base --is-ancestor "$local_sha" refs/heads/main 2>/dev/null; then
+        continue
+    fi
+
+    bad="$bad $remote_ref"
+done
+
+if [ -n "$bad" ]; then
+    echo "[pre-push] 拒绝推送：origin（公开仓库）只收 main 及其祖先。" >&2
+    echo "           这次要推的是：$bad" >&2
+    echo "           这些 ref 指向 orphan 重建之前的提交，里面含真实号码，" >&2
+    echo "           进了公开仓库就删不掉了。" >&2
+    echo "           真要推别的远端（私有仓库）：EGGBLOOM_ARCHIVE_PUSH=1 git push ..." >&2
+    exit 1
+fi
+
+exit 0

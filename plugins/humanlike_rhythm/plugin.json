@@ -1,0 +1,7 @@
+{
+  "id": "humanlike_rhythm",
+  "title": "humanlike_rhythm",
+  "description": "humanlike_rhythm 插件",
+  "priority": 50,
+  "default_enabled": true
+}

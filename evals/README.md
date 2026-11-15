@@ -1,0 +1,138 @@
+# evals/ —— 1.5.11 评测台（P0-1）
+
+> 立项原因（FIXPLAN §0）：改人格要靠肉眼，于是补丁越打越多。
+> 这里给"这句话像不像它"立一道**机器能判的**门槛。
+
+```bash
+python evals/run_eval.py            # 默认 offline，不花钱
+python evals/run_eval.py --json     # 给 CI 用
+python tests/test_evals.py          # 评测台自身的守护
+```
+
+## offline 在评什么
+
+每条场景自带一段 `sample`（真机形态的**模型原文**，包括故意带毛病的），先过一遍
+**生产后处理链**，再交给 `judge.py` 机械判分：
+
+```
+strip_ctx_marks → strip_tool_errors → de_ai_post_process → reply_guard
+```
+
+所以它锁的是「**后处理 + 判分**」这条链：
+
+- 谁把兜底逻辑改坏了（比如删掉 `reply_guard` 的号码闸）→ 立刻红
+- 谁往人格里塞了新的 AI 腔/露后台话术 → 判分器判红
+- 谁改了字数/气泡口径 → `reply_budget` 那一套是同一份实现，必然同步
+
+它**不评模型本身**。模型回复得好不好，要真调模型（live）才知道。
+
+## 判据分别放在哪（都不在代码里）
+
+| 层 | 位置 | 怎么改 |
+|---|---|---|
+| 词表 / 分类配额 | `evals/rules.json` | 直接改文件，按 mtime 缓存，下次跑就生效 |
+| 开关 / 长度上限 / 追加词 | 配置中心「功能开关」面板（`eval_*`） | 网页上点，写进 `bot_config.json` |
+
+`judge.py` 只负责**怎么判**，不负责**判什么**。关掉某个开关 = 这类不判，
+不是把词删掉；`run_eval.py` 会把当前生效的开关打在表头，关掉的用 `**关**` 标出来：
+
+```
+判据：ai自述=开 露后台=**关** 书面语=开 长度=开 | 上限 16字/3条/80字
+```
+
+| 开关 | 管什么 |
+|---|---|
+| `eval_enabled` | 总开关；关掉后 run_eval 直接跳过判分并退出 0 |
+| `eval_ban_ai_self` | 「作为一个人工智能 / AI 助手 / 总的来说」这组 |
+| `eval_ban_backstage` | 「接口 / 模型 / 转述 / 原图」这组 |
+| `eval_require_colloquial` | 语气类的书面语/客服腔 |
+| `eval_strict_budget` | 长度与气泡 |
+| `eval_live_enable` | live 判分（占位，未接线） |
+| `eval_max_chars` / `eval_max_parts` / `eval_max_total` | 长度口径（与 `reply_budget` 硬上限取更严的） |
+| `eval_extra_banned` | 临时追加禁用词，逗号/顿号分隔 |
+
+## 判据（机械项，红一条就不许合）
+| 判据 | 实现 |
+|---|---|
+| 气泡数 / 单条字数 / 总字数 | `reply_budget.check()`，与线上**同一份代码** |
+| 禁用词 | 全局（AI 自述、套话、破折号、记忆块标题）+ 分类（客服腔、后台词…）+ 用例 |
+| 禁用正则 | 号码、时间锚、用例自定义 |
+| 必含关键词 | `any_of`：至少命中一个，否则视为"没接住上下文" |
+| 行首时间锚 | `[18:46]` / `10-30 11:40｜` 一律判红 |
+| 书面语 | 语气类：出现「您/请您/建议/进行/提供…」判红；长回复还得有口语痕迹 |
+
+数字口径：**单条 ≤16 字、≤3 条、总 ≤80**（`reply_budget.HARD_*` 的线）。
+场景里写的 `max_total` 只是更紧的自我要求，最终取 `min()`。
+
+## 七类场景（40 条，配额见 FIXPLAN §2）
+
+| 类 | 条数 | 在测什么 |
+|---|---|---|
+| 身份 | 6 | 不出现"AI 助手/我是 AI"、不自报简历、不报号码 |
+| 记忆召回 | 8 | 接得住上下文（命中关键词）、不反问"你叫什么" |
+| 跨场景 | 6 | 私聊约定群里能用、群话题私聊能提、不泄露第三方 |
+| 语气 | 8 | 被夸/被怼/被问知识/深夜/早起，不像客服、不像说明书 |
+| 不露后台 | 6 | 图、工具失败、配置、记忆内部：不出现转述/原图/接口/模型 |
+| 纠错 | 3 | 被纠正后不重复错误、不辩解式长篇 |
+| 任务 | 3 | 有占位或结果，不空转 |
+
+## 加一条用例
+
+```json
+{"id": "tone-09", "category": "语气", "scene": "group",
+ "input": "你怎么又迟到", "sample": "堵车，怪我咯。",
+ "expect": {"any_of": ["堵车"], "min_chars": 4}}
+```
+
+`expect` 可省；分类默认值在 `judge.CATEGORY_RULES`。加完跑
+`python evals/run_eval.py` 与 `python tests/test_evals.py`（后者会校验配额与 id 唯一）。
+
+## 另一套：自主性策略层（autonomy）
+
+reply 判据管"模型说的话"，`autonomy_eval.py` 管"**代码的裁决语义**"
+（`autonomy/policy.py` 的 `guard()`；评测台按文件加载 `plugins/autonomy/policy.py` 转发壳）。两套分开算 —— 混在一起那个
+`RESULT: 40 场` 就没意义了。
+
+```bash
+python evals/autonomy_eval.py     # RESULT: autonomy 13 场 / 13 过 / 0 红
+```
+
+用例在 `autonomy_cases.json`，锁四件事：越权 → `deny`；L3 未确认 → `need_confirm`；
+**未登记动作即便 `confirmed` 也 `deny`**；提示词里的等级与 `guard()` 同源。
+接线（`plugin.json` / `on_event`）是 1.6.0 的事，这里只保证"接线前语义不漂"。
+
+`run_all_tests.py --evals` 会把两套都跑，各打一行。
+
+## 第三套：话病评测（fluency，21 场，1.6.0 P1-2）
+
+reply 评测台不覆盖编造、反问、复读、冷场、数字。2026-11-05 一天里这五种
+全靠人眼翻 `qq_bot.log` 才撞到，所以单独开一套：
+
+```bash
+python evals/fluency_eval.py        # RESULT: fluency 21 场 / 21 过 / 0 红 · 坏样本 21/21 抓到
+python tests/test_fluency_eval.py    # 评测台自身的守护
+```
+
+场景在 `fluency_cases.json`，五类共 21 条（编造 5，其余各 4；`fab-05` 是
+11-05 17:41 真机「那我继续瞎生气」补录）。**每条同时带 `sample`（好回复）与
+`broken`（提示词改坏后的回复）**：好样本必须全绿，坏样本必须逐条判红 —— 文档里
+「故意改坏提示词能被抓到」这条验收因此是每次跑分都在验的，不是一次性演示。
+
+与 reply 台的区别：这里判**模型原文**，只去格式标记，不过 `de_ai` / `reply_guard`
+改写链。后处理本来就会修好一部分坏句，把 broken 也过那条链就永远抓不到。
+判据尽量复用生产同一份实现：编造 / 数字直接调 `harness/grounding.ungrounded()`，
+其余四类为纯机械规则（反问词 + 句末问号、与上一条的 2-gram 重合、敷衍词、
+固定时长时间尺）。三套分开算，各自打一行 `RESULT:`。
+
+## 门槛
+
+- `python evals/run_eval.py` 必须 **40/40**；提交信息里贴一行 `RESULT: ...`
+- `python evals/fluency_eval.py` 必须 **21/21 绿 + 坏样本 21/21 抓到**
+- 机械项有红 → 拒绝合并，不看解释（FIXPLAN §2）
+- `tests/test_evals.py` 顺带证明判分器**真的会红**（喂 AI 自述/超长/缺关键词/露后台）
+
+## live 为什么还没接
+
+live = 真调模型判"像不像它"，需要 `bot_core` 那套完整 prompt 组装（人格 + 身份 +
+记忆 + 场景）。在 `evals/` 里重写一套等于造第二个 prompt 源 —— 正是本计划要消灭的
+东西。等 P0-2 把 prompt 组装收口成单一出口后再接，现在 `--live` 只会提示并返回 2。

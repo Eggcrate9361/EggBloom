@@ -1,0 +1,7 @@
+{
+  "id": "qzone",
+  "title": "qzone",
+  "description": "QQ 空间全套：9 个动作分四层（读/互动/写/管），默认全关；发说说有频率硬上限",
+  "priority": 40,
+  "default_enabled": false
+}

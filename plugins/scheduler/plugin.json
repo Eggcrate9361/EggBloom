@@ -1,0 +1,7 @@
+{
+  "id": "scheduler",
+  "title": "scheduler",
+  "description": "统一调度器：全项目只留一处 sleep，到点广播事件",
+  "priority": 10,
+  "default_enabled": true
+}

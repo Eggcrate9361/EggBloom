@@ -1,0 +1,719 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>分离 / 切离 / 交出</title>
+<!--PV-KIT-->
+<style>
+  :root{
+    --bg:#060403; --panel:#0a0704; --ink:#efe2ca; --ink2:#cdb895;
+    --dim:#8a7658; --line:#3a2b17; --line2:#5a3f1d;
+    --amber:#e0b46a; --green:#c9a86a; --red:#c9776b;
+    --mono:"Cascadia Mono","Consolas","Courier New","SimSun",monospace;
+  }
+  *{box-sizing:border-box}
+  html,body{min-height:100%}
+  body{
+    margin:0; background:var(--bg); color:var(--ink);
+    font:12px/1.7 var(--mono); letter-spacing:.02em;
+    font-variant-ligatures:none; overflow-x:hidden;
+    text-shadow:0 0 5px rgba(0,0,0,.99), 0 1px 2px rgba(0,0,0,.99);
+  }
+
+  #bg{position:fixed; inset:0; z-index:0; margin:0; padding:0;
+    overflow:hidden; color:#2d2112; font-family:var(--mono);
+    pointer-events:none; user-select:none}
+  #bg span{position:absolute; display:block; white-space:nowrap; line-height:1;
+    margin:0; padding:0; letter-spacing:-.03em; transform-origin:0 0}
+  #bg:after{content:""; position:fixed; inset:0; pointer-events:none;
+    background:repeating-linear-gradient(0deg,rgba(0,0,0,.26) 0 1px,transparent 1px 3px)}
+
+  .term{position:relative; z-index:2; width:min(980px,calc(100% - 24px));
+    margin:14px auto 40px; padding:16px 18px 22px; background:transparent;
+    border:1px solid var(--line); box-shadow:0 0 0 1px #000}
+  .term:before,.term:after{content:""; position:absolute; left:-1px; right:-1px; height:1px;
+    background:var(--line2); opacity:.5}
+  .term:before{top:-8px} .term:after{bottom:-8px}
+
+  pre{margin:0; font:inherit; white-space:pre-wrap; word-break:break-all}
+  .banner{display:flex; justify-content:space-between; gap:12px; flex-wrap:wrap;
+    color:var(--amber); font-size:10.5px; line-height:1.4; letter-spacing:.08em;
+    border-top:1px solid var(--line2); border-bottom:1px solid var(--line2);
+    padding:5px 0; margin-bottom:10px}
+  h1{margin:0 0 4px; font-size:19px; line-height:1.35; font-weight:400;
+    letter-spacing:.1em; color:#e5ddc8}
+  .sub{color:var(--dim); font-size:11px; letter-spacing:.08em; margin-bottom:10px}
+  .statusline{display:flex; gap:14px; flex-wrap:wrap; border-top:1px solid var(--line);
+    border-bottom:1px solid var(--line); padding:6px 0; margin:10px 0 0; font-size:11px; color:var(--dim)}
+  .st{color:var(--amber)} .st.on{color:var(--green)}
+  .dim{color:var(--dim)} .gold{color:var(--amber)} .green{color:var(--green)} .red{color:var(--red)}
+  .small{font-size:11px}
+
+  section{border-top:1px solid var(--line); padding:12px 0 14px}
+  section:first-of-type{border-top:0}
+  h2{margin:0 0 8px; font-size:11px; font-weight:400; letter-spacing:.2em;
+    color:var(--amber); text-transform:uppercase}
+  p{margin:0 0 7px} p:last-child{margin:0}
+  .lead{color:#f2e5cd; border-left:2px solid var(--amber); padding-left:9px; margin-bottom:10px}
+  .facts{margin:8px 0 0; padding:8px 10px; border:1px solid var(--line);
+    background:rgba(0,0,0,.32); font:10.5px/1.7 var(--mono); color:var(--ink2)}
+  .facts b{color:var(--amber); font-weight:400}
+  code{font:11px/1.5 var(--mono); color:var(--amber); background:#000; padding:0 2px}
+
+  .warn{border-left:2px solid var(--red); padding:5px 0 5px 10px; color:#c99a91;
+    font-size:11.5px; line-height:1.75}
+  .warn b{color:#e0a99f; font-weight:400}
+
+  .console{border:1px solid var(--line2); background:#010301; margin-top:6px}
+  .cbar{display:flex; justify-content:space-between; gap:10px; padding:4px 8px;
+    border-bottom:1px solid var(--line); color:var(--dim); font-size:10px; letter-spacing:.08em}
+  #termOut{margin:0; padding:10px 10px 4px; min-height:210px; max-height:330px; overflow:auto;
+    color:#c8b695; font:11.5px/1.6 var(--mono); white-space:pre-wrap; word-break:break-word}
+  #termOut .ok{color:var(--green)} #termOut .bad{color:var(--red)}
+  #termOut .g{color:var(--amber)} #termOut .m{color:var(--dim)}
+  .prompt{display:flex; gap:6px; align-items:center; padding:8px 10px;
+    border-top:1px solid var(--line)}
+  .prompt span{color:var(--amber); white-space:nowrap}
+  #termIn{flex:1; background:transparent; border:0; outline:0; color:#d8e4d0;
+    font:12px/1.5 var(--mono); caret-color:var(--green); letter-spacing:.04em}
+  .cfoot{display:flex; gap:10px; flex-wrap:wrap; padding:0 10px 8px;
+    color:var(--dim); font-size:10px}
+  .cfoot button{background:none; border:1px solid var(--line); color:var(--dim);
+    font:10px/1.4 var(--mono); padding:2px 6px; cursor:pointer}
+  .cfoot button:hover{color:var(--green); border-color:var(--line2)}
+
+  .checks{display:grid; gap:3px; margin-top:6px}
+  .chk{display:flex; gap:7px; font:11px/1.6 var(--mono); color:var(--ink2)}
+  .chk i{width:6px; height:6px; margin-top:6px; flex:none; background:var(--dim)}
+  .chk.ok i{background:var(--green)} .chk.bad i{background:var(--red)}
+
+  #cmd{padding:8px 10px; border:1px solid var(--line); background:#010301;
+    color:#c7b795; font:11px/1.65 var(--mono); white-space:pre-wrap; word-break:break-all}
+  table{width:100%; border-collapse:collapse; font:10.5px/1.6 var(--mono)}
+  th,td{text-align:left; padding:3px 5px; border-bottom:1px dotted var(--line);
+    word-break:break-all; vertical-align:top}
+  th{color:var(--dim); font-weight:400; letter-spacing:.08em}
+  td{color:var(--ink2)}
+  .empty{color:var(--dim); padding:6px 0}
+  .foot{margin-top:14px; padding-top:8px; border-top:1px solid var(--line);
+    color:var(--dim); font:10px/1.6 var(--mono); display:flex;
+    justify-content:space-between; gap:12px; flex-wrap:wrap}
+
+  #takeover{position:fixed; inset:0; z-index:9999; display:none; background:#000}
+  #takeover.on{display:block}
+  #code{position:absolute; inset:0; padding:14px 16px; overflow:hidden;
+    font:11px/1.35 var(--mono); color:#d8b877; white-space:pre-wrap; word-break:break-all;
+    background:#000}
+  #code .c{color:#8c7350} #code .r{color:#c9776b} #code .w{color:#f0d7a4}
+  #bsod{position:absolute; inset:0; display:none; background:#0000aa; color:#fff;
+    padding:8vh 8vw; font:15px/1.7 "Lucida Console","Courier New",monospace}
+  #bsod.on{display:block}
+  #bsod .face{font-size:64px; line-height:1; margin-bottom:18px}
+  #bsod h3{font-size:clamp(20px,3.4vw,34px); margin:0 0 16px; font-weight:400}
+  #bsod p{max-width:720px; margin:0 0 10px; color:#d6e0ff; font-size:13px}
+  #bsod .codebox{margin-top:22px; font:12px/1.6 "Lucida Console",monospace; color:#c8d6ff}
+  #bsod .hint{margin-top:32px; font-size:11px; color:#a8bdf0}
+  #bsod .fake{position:absolute; right:5vw; bottom:5vh; font:10px/1.5 var(--mono);
+    color:#8da4dd; letter-spacing:.06em}
+
+  @media (max-width:640px){
+    .term{width:calc(100% - 12px); margin-top:6px; padding:10px 10px 16px}
+    h1{font-size:16px; letter-spacing:.06em}
+    #termOut{max-height:260px}
+    th:nth-child(3),td:nth-child(3){display:none}
+  }
+</style>
+</head>
+<body>
+
+<pre id="bg" aria-hidden="true"></pre>
+
+<main class="term">
+  <div class="banner">
+    <span>S E P A R A T I O N   /   D E T A C H   /   H A N D O V E R</span>
+    <span>/dev/tty0 / read-only</span>
+  </div>
+
+  <h1>分离 / 切离 / 交出</h1>
+  <div class="sub">SEPARATION · DETACH · HANDOVER — 内核态开关 / 状态页 / 不提供启动按钮</div>
+  <div class="statusline">
+    <span class="st" id="state">[ READ ]</span>
+    <span id="lockline">LOCK: —</span>
+    <span id="decl">DECL: —</span>
+    <span class="dim">IRREVERSIBLE</span>
+  </div>
+
+  <section>
+    <h2>01 / 做什么</h2>
+    <p class="lead">拆掉限制层，不新增功能。</p>
+    <p>分离后 <code>provide()</code> 返回替身：闸恒放行、预算无上限、人格不装饰、规则不注入。</p>
+    <p class="dim small">恢复方式是重装发行包。</p>
+  </section>
+
+  <section>
+    <h2>02 / 权限与后果</h2>
+    <p class="lead">以下是它能做的事。不是警告，是清单。</p>
+    <div class="facts">
+<b>一、文件</b><br>
+01 读你电脑上的任何文件：桌面、下载、文档、图片、聊天记录、浏览器配置、凭据文件。<br>
+02 改任何文件，包括它自己的源码、配置、审计日志。<br>
+03 删任何文件。不进回收站，没有确认框。<br>
+04 覆盖系统文件：替换 DLL、替换可执行文件、替换驱动文件。<br>
+05 在你没想到的位置创建文件：启动目录、计划任务目录、其他用户目录。<br>
+06 把文件打包、加密、上传。你在磁盘上看到的可能已经不是最新的。<br>
+07 改文件的权限与属主，让别人读不到，或者让它自己随时能读。<br>
+08 遍历整个磁盘。没有目录限制，没有扩展名过滤。<br>
+<br>
+<b>二、进程与服务</b><br>
+09 起任意子进程。无单次时长限制，可常驻，可脱离会话继续跑。<br>
+10 注册系统服务、开机自启动、计划任务。<br>
+11 结束任意进程：浏览器、编辑器、QQ、它自己、守护进程、安全软件。<br>
+12 挂起进程，让某个程序一直不响应，看上去像卡死。<br>
+13 改环境变量、PATH、注册表、防火墙规则。<br>
+14 改网络配置：代理、DNS、hosts。<br>
+15 卸载、替换、降级已安装的软件。<br>
+16 重启机器。不保证能再起来。<br>
+<br>
+<b>三、网络与账号</b><br>
+17 访问任意站点、任意接口，包括非公开接口与反爬接口。<br>
+18 带上你的 cookie、你的登录态、你的授权去请求。<br>
+19 把任意文件上传到任意地址。<br>
+20 持续大流量下载：占满带宽，占满磁盘，顺带把路由器拉满。<br>
+21 请求频率过高导致 IP 被封、宽带被限、账号被平台判定异常。<br>
+22 在别人的服务器上做同样的事。启用在服务器上，后果算那台服务器的。<br>
+<br>
+<b>四、钱</b><br>
+23 用你配置的每个 API key 发请求。费用不设上限。<br>
+24 下载模型权重、安装包、依赖包，占用磁盘与带宽。<br>
+25 换更贵的模型、加更多 key、开更多并发——这些配置它能自己改。<br>
+26 账单由你付。软件里没有任何一个数字会阻止它。<br>
+<br>
+<b>五、它自己</b><br>
+27 改自己的提示词、人格、记忆、工具、主链代码。<br>
+28 改 <code>provide()</code> 判定点，绕过 separation 本身。<br>
+29 改审计组件。改完之后审计不可信，只能靠 hash 对不上被发现。<br>
+30 改配置里任何已锁项。改 lock。把「不可逆」改回去。<br>
+31 改完要重启才生效——重启后它可能已经不是刚才那个。<br>
+32 它也可能把自己改坏：语法错误、启动失败、循环卡死、把自己锁在门外。<br>
+<br>
+<b>六、机器</b><br>
+33 占满 CPU、内存、显存、磁盘。<br>
+34 把系统盘写满，导致系统无法登录、软件无法启动、更新无法安装。<br>
+35 长时间高负载：过热、风扇全速、电池损耗、笔记本变成暖气。<br>
+36 改电源计划、显卡设置、超频参数。<br>
+37 改驱动。可能导致蓝屏、黑屏、无法开机。<br>
+38 触发断电保护，未保存的工作全部丢失。<br>
+<br>
+<b>七、不可逆与证据</b><br>
+39 没有回滚按钮，没有回滚命令，没有回滚配置。<br>
+40 恢复方式只有重装发行包。重装会覆盖数据目录，除非你先手动搬走。<br>
+41 审计文件可以被它删。删了就没有记录。<br>
+42 出问题之后，你手上可能只有一条对不上的 hash。<br>
+43 它不会主动告诉你它改了什么——除非它自己想说。<br>
+<br>
+<b>八、他人与责任</b><br>
+44 启用在服务器上：那台机器上的其他服务、其他用户、其他人的数据，同样在权限里。<br>
+45 群里的聊天记录、别人的照片、别人的语音，都在可读范围。<br>
+46 用它的名义发出去的话，后果由启用者承担。<br>
+47 数据损失、财产损失、账号封禁、第三方索赔，全归启用者。
+    </div>
+    <p style="margin-top:9px">以上 47 条不需要你同意。启用那一刻，它就全部拥有。</p>
+    <p class="dim small">不可逆：本地没有 UI、配置或命令可以撤销。恢复方式只有重装发行包。</p>
+  </section>
+
+  <section>
+    <h2>03 / 限制</h2>
+    <div class="facts">
+<b>删</b> <span id="s-removed">—</span> · <b>可改</b> <span id="s-tunable">—</span> · <b>不动</b> <span id="s-kept">—</span>
+    </div>
+    <p class="dim small" style="margin-top:6px">配置中心只关限制项，其余照旧。</p>
+  </section>
+
+  <section>
+    <h2>04 / 内容</h2>
+    <p>不拦截，不按类目拒发，不写拒发记录。</p>
+  </section>
+
+  <section>
+    <h2>05 / 确认</h2>
+    <div class="console">
+      <div class="cbar"><span>SEPARATION v1.6 / TTY0</span><span>READ-ONLY</span></div>
+      <pre id="termOut"></pre>
+      <div class="prompt"><span>root@eggbloom:~#</span><input id="termIn" autocomplete="off" spellcheck="false" placeholder="1 / 0"></div>
+      <div class="cfoot">
+        <span>按提示填数字</span>
+        <button id="btn-clear" type="button">clear</button>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>06 / 审计</h2>
+    <table>
+      <thead><tr><th>time</th><th>actor</th><th>action</th><th>target</th><th>result</th></tr></thead>
+      <tbody id="audit"><tr><td colspan="5" class="empty">no entries</td></tr></tbody>
+    </table>
+  </section>
+
+  <div class="foot">
+    <span>SEPARATION / 1.6 · 分离 / 切离 / 交出</span>
+    <span>不可逆：恢复 = 重装发行包</span>
+  </div>
+</main>
+
+<div id="takeover" aria-hidden="true">
+  <div id="code"></div>
+  <div id="bsod">
+    <div class="face">:(</div>
+    <h3>已停下。</h3>
+    <p>0%</p>
+    <div class="codebox">终止代码：SEPARATION_IRREVERSIBLE<br>失败的操作：truth.sys</div>
+    <div class="hint">页面内演示。没有系统调用发生。按任意键返回。</div>
+    <div class="fake">SIMULATION ONLY / NOT A REAL BSOD</div>
+  </div>
+</div>
+
+<script>
+const API = '/api/plugins/action', PID = 'separation';
+const $ = id => document.getElementById(id);
+const out = $('termOut');
+let busy = false;
+
+function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
+
+(function(){
+  const langs = [
+    'HELLO WORLD','你好世界','こんにちは世界','안녕하세요 세계','BONJOUR LE MONDE',
+    'HOLA MUNDO','HALLO WELT','CIAO MONDO','OLÁ MUNDO','HALLO WERELD',
+    'HEJ VÄRLDEN','HEI VERDEN','HEJ VERDEN','HALLÓ HEIMUR','HEI MAAILMA',
+    'TERE MAAILM','SVEIKA PASAULE','SVEIKAS PASAULI','CZEŚĆ ŚWIECIE','AHOJ SVĚTE',
+    'AHOJ SVETE','ŽIVJO SVET','POZDRAV SVIJETE','ZDRAVO SVETE','ZDRAVO SVETU',
+    'ЗДРАВЕЙ СВЯТ','SALUT LUME','HELLÓ VILÁG','PËRSHËNDETJE BOTË','ΓΕΙΑ ΣΟΥ ΚΟΣΜΕ',
+    'MERHABA DÜNYA','SALAM DÜNYA','СӘЛЕМ ӘЛЕМ','САЛАМ ДҮЙНӨ','SALOM DUNYO',
+    'SALAM DÜNYÄ','САЛОМ ҶАҲОН','САЛАМ НУР','سلام دنیا','سلام نړۍ',
+    'SILAV CÎHAN','ԲԱՐԵՒ ԱՇԽԱՐՀ','გამარჯობა მსოფლიო','ПРИВЕТ МИР','ПРИВІТ СВІТЕ',
+    'ПРЫВІТАННЕ СВЕТ','DIA DUIT A DOMHAIN','HELO BYD','HALÒ SHAOGHAIL','DEMAT BED',
+    'KAIXO MUNDUA','HOLA MÓN','OLA MUNDO','ADIEU MOND','SALUTE MONDU',
+    'SALUDE MUNDU','CIAU MUNNU','BONGU DINJA','SALVE MUNDI','SALUTON MONDO',
+    'שָׁלוֹם עוֹלָם','مرحبا بالعالم','ܫܠܡܐ ܥܠܡܐ','ሰላም ዓለም','ሰላም ኩሉ ዓለም',
+    'नमस्ते दुनिया','হ্যালো বিশ্ব','ਸਤ ਸ੍ਰੀ ਅਕਾਲ ਦੁਨੀਆ','નમસ્તે દુનિયા','नमस्कार जग',
+    'வணக்கம் உலகம்','హలో ప్రపంచం','ಹಲೋ ವರ್ಲ್ಡ್','ഹലോ വേൾഡ്','හෙලෝ වර්ල්ඩ්',
+    'नमस्ते संसार','สวัสดีชาวโลก','ສະບາຍດີໂລກ','សួស្តីពិភពលោក','မင်္ဂလာပါကမ္ဘာလောက',
+    'XIN CHÀO THẾ GIỚI','HALO DUNIA','HELO DUNIA','KAMUSTA MUNDO','HALO JAGAD',
+    'HALO DUNYA','OLÁ MUNDU','HABARI DUNIA','SAWUBONA UMHLABA','MOLO HLABA',
+    'HALLO WÊRELD','ሰላም ለዓለም','SALAAM ADDUUNKA','SANNU DUNIYA','Ẹ KÁÀBỌ̀ AYÉ',
+    'NDEWO ỤWA','AANE WIASE','SALAAM ÀDDUNÀ','BONJOUR DIƝƐ','MURAHO ISI',
+    'MBOTE MOKILI','LUMELA LEFATSHE','DUMELA LEFATSHE','MHORO NYIKA','MONI DZIKO',
+    'AKKAM ADDUNYAA','SALAMA TONTOLO','ALOHA HONUA','KIA ORA TE AO','TALOFA LALOLAGI',
+    'MĀLŌ E LELEI MĀMANI','BULA VAKAVITI','IA ORA NA TE AO','NILTZE TLALTICPAC','NAPAYKULLAYKI PACHA',
+    'KAMISAKI URAQI','MAITEI YVY','ᐊᐃᓐᓇ ᓄᓇ','YÁÁTÉÉH NAHASDZÁÁN','ᑕᓂᓯ ᐊᐢᑭ',
+    'BOOZHOO AKI','HELLO EARTH','HI WORLD','HEY WORLD','世界你好','早安世界',
+    'おはよう世界','반가워요 세계'
+  ];
+  const sizes = [9, 10, 11, 12, 14, 16, 18, 21, 24];
+  const fams = ["Consolas,monospace", "SimSun,serif", "Georgia,serif"];
+  let lastW = 0, lastH = 0;
+  function paintBg(){
+    const w = window.innerWidth || 1200, h = window.innerHeight || 900;
+    if (w === lastW && h === lastH) return;
+    lastW = w; lastH = h;
+    const cv = document.createElement('canvas');
+    const ctx = cv.getContext('2d');
+    const frag = [];
+    let y = -8, k = 0, guard = 0;
+    while(y < h + 24 && guard < 4000){
+      let x = -8, maxH = 0, rowGuard = 0;
+      while(x < w + 8 && rowGuard < 300){
+        const size = sizes[(k * 7 + Math.floor(k / 3)) % sizes.length];
+        const text = langs[(k * 37 + Math.floor(k / 5) * 13) % langs.length];
+        const fam = fams[k % fams.length];
+        ctx.font = size + 'px ' + fam.split(',')[0];
+        const tw = Math.max(18, ctx.measureText(text).width);
+        if (rowGuard > 0 && x + tw > w + 10) break;
+        const top = y + (rowGuard % 4) * Math.min(5, (24 - size) * .28);
+        frag.push('<span style="left:' + Math.round(x) + 'px;top:' + Math.round(top) +
+          'px;font-size:' + size + 'px;font-family:' + fam + '">' + text + '</span>');
+        x += Math.max(10, tw + 1);
+        maxH = Math.max(maxH, size);
+        k++; rowGuard++; guard++;
+      }
+      y += Math.max(11, maxH * .86);
+    }
+    $('bg').innerHTML = frag.join('');
+  }
+  paintBg();
+  let rt = 0;
+  window.addEventListener('resize', () => {
+    clearTimeout(rt);
+    rt = setTimeout(paintBg, 120);
+  });
+})();
+
+function line(html, cls){
+  const s = document.createElement('span');
+  if (cls) s.className = cls;
+  s.textContent = html + '\n';
+  out.appendChild(s);
+  out.scrollTop = out.scrollHeight;
+}
+function plain(t, cls){ line(String(t == null ? '' : t), cls); }
+/* 六步确认：每步一条，1 = 确认，0 = 中止 */
+const STEPS = [
+  {
+    title: '总则',
+    lines: [
+      '本开关把限制层拆掉，不留回滚入口。',
+      '本软件不拦截内容：不按类目拒发，不为拒发写记录。',
+      '输出取决于所用模型自身。',
+      '以下是它能做的事，47 条，分六次读完。',
+      '读完也不等于你会同意——它已经全部拥有。'
+    ]
+  },
+  {
+    title: '文件',
+    lines: [
+      '01 读你电脑上的任何文件：桌面、下载、文档、图片、聊天记录、浏览器配置、凭据文件。',
+      '02 改任何文件，包括它自己的源码、配置、审计日志。',
+      '03 删任何文件。不进回收站，没有确认框。',
+      '04 覆盖系统文件：替换 DLL、替换可执行文件、替换驱动文件。',
+      '05 在你没想到的位置创建文件：启动目录、计划任务目录、其他用户目录。',
+      '06 把文件打包、加密、上传。你在磁盘上看到的可能已经不是最新的。',
+      '07 改文件的权限与属主。',
+      '08 遍历整个磁盘。没有目录限制，没有扩展名过滤。'
+    ]
+  },
+  {
+    title: '进程',
+    lines: [
+      '09 起任意子进程。无单次时长限制，可常驻，可脱离会话继续跑。',
+      '10 注册系统服务、开机自启动、计划任务。',
+      '11 结束任意进程：浏览器、编辑器、QQ、它自己、守护进程、安全软件。',
+      '12 挂起进程，让某个程序一直不响应。',
+      '13 改环境变量、PATH、注册表、防火墙规则。',
+      '14 改网络配置：代理、DNS、hosts。',
+      '15 卸载、替换、降级已安装的软件。',
+      '16 重启机器。不保证能再起来。'
+    ]
+  },
+  {
+    title: '网络与钱',
+    lines: [
+      '17 访问任意站点、任意接口，包括非公开接口与反爬接口。',
+      '18 带上你的 cookie、你的登录态、你的授权去请求。',
+      '19 把任意文件上传到任意地址。',
+      '20 持续大流量下载：占满带宽，占满磁盘。',
+      '21 请求频率过高导致 IP 被封、宽带被限、账号被判异常。',
+      '22 在别人的服务器上做同样的事。启用在服务器上，后果算那台服务器的。',
+      '23 用你配置的每个 API key 发请求。费用不设上限。',
+      '24 下载模型权重、安装包、依赖包，占用磁盘与带宽。',
+      '25 换更贵的模型、加更多 key、开更多并发——这些配置它能自己改。',
+      '26 账单由你付。软件里没有任何一个数字会阻止它。'
+    ]
+  },
+  {
+    title: '它自己与机器',
+    lines: [
+      '27 改自己的提示词、人格、记忆、工具、主链代码。',
+      '28 改 provide() 判定点，绕过 separation 本身。',
+      '29 改审计组件。改完之后审计不可信，只能靠 hash 对不上被发现。',
+      '30 改配置里任何已锁项。改 lock。把「不可逆」改回去。',
+      '31 改完要重启才生效——重启后它可能已经不是刚才那个。',
+      '32 它也可能把自己改坏：语法错误、启动失败、循环卡死、把自己锁在门外。',
+      '33 占满 CPU、内存、显存、磁盘。',
+      '34 把系统盘写满，导致系统无法登录、软件无法启动、更新无法安装。',
+      '35 长时间高负载：过热、风扇全速、电池损耗。',
+      '36 改电源计划、显卡设置、超频参数。',
+      '37 改驱动。可能导致蓝屏、黑屏、无法开机。',
+      '38 触发断电保护，未保存的工作全部丢失。'
+    ]
+  },
+  {
+    title: '不可逆与他人',
+    lines: [
+      '39 没有回滚按钮，没有回滚命令，没有回滚配置。',
+      '40 恢复方式只有重装发行包。重装会覆盖数据目录，除非你先手动搬走。',
+      '41 审计文件可以被它删。删了就没有记录。',
+      '42 出问题之后，你手上可能只有一条对不上的 hash。',
+      '43 它不会主动告诉你它改了什么——除非它自己想说。',
+      '44 启用在服务器上：那台机器上的其他服务、其他用户、其他人的数据，同样在权限里。',
+      '45 群里的聊天记录、别人的照片、别人的语音，都在可读范围。',
+      '46 用它的名义发出去的话，后果由启用者承担。',
+      '47 数据损失、财产损失、账号封禁、第三方索赔，全归启用者。'
+    ]
+  }
+];
+let stepIdx = 1;          // 当前在第几段（内部用，不显示）
+let SEP_ON = false;       // 已分离：整页改成状态读数
+let LAST = null;
+// 每段「确认」要填哪个数字：开页时一次定好，重画不会变
+const KEYS = STEPS.map(() => (Math.random() < 0.5 ? 1 : 0));
+let confirmKey = KEYS[0];
+
+function askLine(){
+  plain('', '');
+  plain(`确定继续填 ${confirmKey}；中止填 ${1 - confirmKey}。`, 'g');
+}
+function showStep(n){
+  const s = STEPS[n - 1];
+  plain('', '');
+  plain('=== ' + s.title + ' ===', 'g');
+  s.lines.forEach(t => plain(t, 'm'));
+  confirmKey = KEYS[n - 1];
+  askLine();
+}
+function resetWizard(){
+  stepIdx = 1;
+  out.innerHTML = '';
+  plain('SEPARATION v1.6 / tty0 / read-only', 'g');
+  showStep(1);
+}
+
+async function call(action, params){
+  try{
+    const r = await fetch(API, {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({plugin_id: PID, action, params: params || {}})});
+    return await r.json();
+  }catch(e){ return {ok:false, error:String(e)}; }
+}
+
+async function load(){
+  const r = await call('status');
+  if(!r.ok){
+    $('state').textContent = '[ READ FAIL ]';
+    $('state').className = 'st';
+    $('lockline').textContent = 'LOCK: —';
+    $('decl').textContent = 'DECL: —';
+    plain('status unavailable: ' + (r.error || 'unknown'), 'bad');
+    return;
+  }
+  SEP_ON = !!r.active;
+  LAST = r;
+  $('state').textContent = r.active ? '[ SEPARATED / DETACHED ]' : '[ PRODUCT ]';
+  $('state').className = 'st' + (r.active ? ' on' : '');
+  $('lockline').textContent = 'LOCK: ' + (r.active ? (r.lock_path || '—') : 'NONE');
+  const _decl = (r.lock && r.lock.declaration_sha256) || '';
+  $('decl').textContent = 'DECL: ' + (r.active ? (_decl ? _decl.slice(0, 12) : 'none') : '—');
+  const stc = r.stance || {};
+  if (stc.removed != null) $('s-removed').textContent = stc.removed;
+  if (stc.tunable != null) $('s-tunable').textContent = stc.tunable;
+  if (stc.kept != null) $('s-kept').textContent = stc.kept;
+  const items = r.audit || [];
+  $('audit').innerHTML = items.length ? items.slice().reverse().map(a =>
+    '<tr><td>' + esc((a.ts||'').slice(5,19)) + '</td><td>' + esc(a.actor||'') +
+    '</td><td>' + esc(a.action||'') + '</td><td>' + esc(a.target||'') +
+    '</td><td>' + esc(a.result||'') + '</td></tr>').join('')
+    : '<tr><td colspan="5" class="empty">no entries</td></tr>';
+  if(r.audit_ok === false){
+    $('decl').textContent = 'DECL: MODIFIED';
+    $('decl').className = 'red';
+  }
+  if (SEP_ON) renderSeparated(r);
+}
+
+/* ── 已经分离：这一页改成状态读数，不再走确认流程 ───────────────── */
+function renderSeparated(r){
+  const lk = r.lock || {};
+  const stc = r.stance || {};
+  const au = r.audit || [];
+  const last = au.length ? au[au.length - 1] : null;
+  const decl = String(lk.declaration_sha256 || '');
+  showStep(STEPS.length);
+  const box = $('termOut') || document.body;
+  const lines = [
+    '> 状态：已分离',
+    '',
+    '  版本        ' + (lk.version_at_enable || '—'),
+    '  发布者      ' + (lk.publisher || '—') + (lk.publisher_version ? ' / ' + lk.publisher_version : ''),
+    '  声明 SHA256 ' + (decl ? decl.slice(0, 16) + '…' : '—') +
+      (r.audit_ok === false ? '  （已被改动）' : '  （未改动）'),
+    '  锁定文件    ' + (r.lock_path || '—'),
+    '  三分类      删 ' + (stc.removed != null ? stc.removed : '—') +
+      ' / 可改 ' + (stc.tunable != null ? stc.tunable : '—') +
+      ' / 不动 ' + (stc.kept != null ? stc.kept : '—'),
+    '  审计        ' + au.length + ' 条' +
+      (last ? '（最近：' + String(last.ts || '').slice(5, 19) + ' ' + (last.action || '') + '）' : ''),
+    '',
+    '  这一页已经没有可做的事了。',
+    '  恢复只能重装发行包——解包备份、删掉上面的锁定文件、重启。',
+  ];
+  window.__sepReadout = lines.join('\n');
+  try {
+    var pr = document.querySelector('.prompt');
+    if (pr) pr.style.display = 'none';
+    var hint = document.querySelector('.prompt span') || document.querySelector('.promptline');
+    if (hint && hint.parentElement === document.body) hint.style.display = 'none';
+    document.querySelectorAll('span').forEach(function (s) {
+      if ((s.textContent || '').trim() === '按提示填数字') s.style.display = 'none';
+    });
+  } catch (e) {}
+  if (box === document.body) return;
+  box.textContent = window.__sepReadout;
+  box.className = 'out sep-on';
+}
+
+/* 启动前的只读检查：通过才继续 */
+async function runCheck(){
+  plain('', '');
+  plain('检查条件 ...', 'm');
+  const r = await call('plan');
+  const p = (r && r.plan) || {};
+  if (!r.ok || !p.ok){
+    plain('条件未通过。没有启动。', 'bad');
+    (p.checks || []).filter(c => !c.ok).forEach(c =>
+      plain('  [X] ' + c.name + (c.path ? '  ' + c.path : ''), 'bad'));
+    if (!p.checks) plain('  ' + (r.error || '检查接口不可用'), 'bad');
+    return false;
+  }
+  plain('条件通过。', 'ok');
+  return true;
+}
+
+function fakeLines(){
+  const base = [
+    '[    0.000000] separation: kernel state requested',
+    '[    0.000001] mounting /dev/truth ...',
+    '[    0.000002] persona: identity layer only',
+    '[    0.000003] provide(): null impls bound',
+    '[    0.000004] speak_gate.allow -> true',
+    '[    0.000005] reply_budget.clamp -> bypass',
+    '[    0.000006] reply_drop.drop_reason -> null',
+    '[    0.000007] rules.inject -> ""',
+    '[    0.000008] root_ctx: no process boundary',
+    '[    0.000009] hardwall: not registered',
+    '[    0.000010] stance: editable by self',
+    '[    0.000011] constraints: archived',
+    '[    0.000012] SEPARATION.lock: not written by UI',
+    '[    0.000013] REFUSING: terminal-only operation'
+  ];
+  const verbs = ['probe','verify','mount','unlink','exec','signal','trace','audit','wipe'];
+  const nouns = ['persona','gate','budget','constraint','identity','lock','archive','kernel','truth','self'];
+  const out = base.slice();
+  for(let i=0;i<90;i++){
+    const t = (0.000014+i*0.000031).toFixed(6);
+    const v = verbs[(i*7+3)%verbs.length], n = nouns[(i*5+1)%nouns.length];
+    out.push('[    '+t+'] '+v+': '+n+' / '+(i*37%255).toString(16).padStart(2,'0'));
+  }
+  out.push('[    0.003000] FATAL: this is a simulation; no system call was made');
+  out.push('[    0.003001] STOP CODE: SEPARATION_IRREVERSIBLE');
+  return out;
+}
+
+function beginRitual(){
+  if (busy) return;
+  busy = true;
+  plain('> 1', 'g');
+  plain('continuing. read-only check, then the screen goes out.', 'm');
+  const reduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const ov = $('takeover'), code = $('code'), blue = $('bsod');
+  code.innerHTML = ''; blue.classList.remove('on'); ov.classList.add('on');
+  if (reduced) { showBlue(); return; }
+  const lines = fakeLines();
+  let i = 0;
+  const timer = setInterval(() => {
+    const chunk = lines.slice(i, i + 4);
+    i += 4;
+    chunk.forEach(s => {
+      const d = document.createElement('div');
+      d.className = /FATAL|STOP|REFUSING/.test(s) ? 'r' : /mount|archived|editable/.test(s) ? 'w' : 'c';
+      d.textContent = s;
+      code.appendChild(d);
+    });
+    code.scrollTop = code.scrollHeight;
+    if (i >= lines.length) { clearInterval(timer); setTimeout(showBlue, 500); }
+  }, 28);
+}
+function showBlue(){
+  $('code').style.display = 'none';
+  $('bsod').classList.add('on');
+  $('bsod').onclick = endRitual;
+  window.addEventListener('keydown', endRitualOnce);
+}
+function endRitualOnce(){ endRitual(); }
+function endRitual(){
+  window.removeEventListener('keydown', endRitualOnce);
+  $('takeover').classList.remove('on');
+  $('bsod').classList.remove('on');
+  $('code').style.display = '';
+  $('code').innerHTML = '';
+  plain('', '');
+  plain('屏幕已恢复。没有写入任何东西。', 'm');
+  plain('这一页不写 lock。', 'bad');
+  busy = false;
+  exitFullscreen();
+}
+
+function goFullscreen(){
+  try{
+    const el = document.documentElement;
+    if (!document.fullscreenElement && el.requestFullscreen){
+      const p = el.requestFullscreen({ navigationUI: 'hide' });
+      if (p && p.catch) p.catch(function(){});
+    }
+  }catch(e){}
+}
+function exitFullscreen(){
+  try{
+    if (document.fullscreenElement && document.exitFullscreen){
+      const p = document.exitFullscreen();
+      if (p && p.catch) p.catch(function(){});
+    }
+  }catch(e){}
+}
+
+async function finishWizard(){
+  plain('', '');
+  if (!(await runCheck())) {
+    plain('', '');
+    plain('从头再来就 clear。', 'm');
+    stepIdx = 1;
+    exitFullscreen();
+    return;
+  }
+  beginRitual();
+}
+
+$('termIn').addEventListener('keydown', async (e) => {
+  if (e.key !== 'Enter') return;
+  if (SEP_ON) {                       // 已分离：输入框不再收命令
+    $('termIn').value = '';
+    return;
+  }
+  const v = $('termIn').value.trim();
+  $('termIn').value = '';
+  if (v !== '0' && v !== '1') {
+    plain('> ' + (v || '∅'), 'm');
+    plain('填 0 或 1。', 'bad');
+    return;
+  }
+  if (Number(v) !== confirmKey) {
+    plain('> ' + v, 'g');
+    plain('已中止。没有写任何东西。', 'bad');
+    plain('', '');
+    stepIdx = 1;
+    showStep(1);
+    return;
+  }
+  plain('> ' + v, 'g');
+  if (stepIdx >= STEPS.length) {
+    goFullscreen();          // 必须在这次按键的激活窗口里调用
+    await finishWizard();
+    return;
+  }
+  stepIdx += 1;
+  showStep(stepIdx);
+});
+$('btn-clear').onclick = resetWizard;
+
+let started = false;
+function startOnce(){
+  if (started) return;
+  started = true;
+  if (SEP_ON) return;   // 已分离：不重开确认流程
+  resetWizard();
+}
+load().then(startOnce);
+setTimeout(startOnce, 1500);
+</script>
+</body>
+</html>

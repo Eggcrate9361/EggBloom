@@ -1,0 +1,1124 @@
+# -*- coding: utf-8 -*-
+"""proactive_talk —— 主动消息引擎（真插件 ABI v1）
+
+无人触发时，按心跳 + 状态主动给目标私聊开口，补齐「被动响应」之外的另一半：
+  - 心跳定时评估：用户沉默冷却 / 两次开口最小间隔 / 静默时段 / 概率闸门
+  - 生成时注入：当前时段、沉默时长、最近对话摘录、上次主动说过的话、惦记的事
+  - 发送时按行切气泡，逐条 ctx.send_text + 打字延时，模拟真人发消息节奏
+
+人设中立（非恋爱向），可通过配置 persona_extra 追加定制；
+nickname 配置怎么称呼对方。
+
+遵守 ABI 三原则：不 import 主程序，只经 ctx 拿能力，声明式 manifest + hooks。
+发消息走 ctx.send_text → 主程序 outbound 队列（1.5.10 F1 起不再直连 OneBot）。
+"""
+from __future__ import annotations
+
+import json
+import os
+import random
+import re
+import threading
+import time
+from datetime import datetime
+
+from plugins.abi import PluginContext
+
+PLUGIN_SPEC = 1
+PLUGIN_MANIFEST = {
+    "name": "proactive_talk",
+    "version": "1.0.0",
+    "api_version": 1,
+    "author": "EggBloom",
+    "description": "主动消息引擎：私聊无人触发时按状态主动开口（拟人化，人设可配）",
+    "dependencies": [],
+    "priority": 90,
+    # 2026-10-21：用户明确要求启用。原本默认 False 是"不配就别乱开口"的保守设置，
+    # 现已配好 data/config.json（心跳 15 分钟、最小间隔 3 小时、
+    # 用户发言后 30 分钟内不打扰、1:00–7:00 静默、单次最多 2 个气泡）。
+    # 2026-11-05：气泡数 4 → 2。主配置 `private_bubble_max` 是总闸，这里只会更小。
+    # 想关就改这里回 False，或在 WebUI 插件页关掉。
+    "default_enabled": True,
+}
+
+_DIR = os.path.dirname(os.path.abspath(__file__))
+_CONFIG_PATH = os.path.join(_DIR, "data", "config.json")
+
+DEFAULT_CONFIG = {
+    "target_qq": "",            # 兼容旧配置：单个目标私聊 QQ
+    # ★ 2026-11-01：多目标。以前只能盯一个人（"主动为什么只有一个人"）。
+    #   列表里的每个人独立计时（各自的最小间隔），每轮心跳最多开口一次，
+    #   轮到谁按"谁最久没被搭话"排序 —— 不会同一个人连续霸屏。
+    #   空列表 = 退回 target_qq；再空 = 主配置 target_qqs 全部。
+    "target_qqs": [],
+    "nickname": "",             # 怎么称呼对方（可空；没有单独配置时兜底用）
+    # ★ 2026-11-01：每人一个称呼（好友勾选面板写入）。
+    #   {"1000000006": "Sample"} —— 生成时优先用这个人的称呼，不再全局一个。
+    "target_aliases": {},
+    "heartbeat_sec": 900,       # 心跳间隔（秒），每次心跳评估一次要不要开口
+    "min_interval_min": 180,    # 两次主动开口的最小间隔（分钟）
+    "active_cooldown_min": 30,  # 用户最近发言后多久内不打扰（分钟）
+    # ★ 2026-11-03：Decision 层模式（实现在 harness/proactive_gate.py）。
+    #   "live" = 真发（默认，行为与改造前逐字节一致）；
+    #   "auto" = 只记录不执行 —— 心跳照常评估、照常写日志，但不生成也不发送，
+    #   用来观察"它到底想什么时候开口"，也对应执行总表 §7.2 的「推断候选只记录不执行」。
+    "mode": "live",
+    # ★ 2026-11-06：开口判据。默认 drive = 本地冲动值（pending_topics / 沉默 /
+    #   距上次开口 / 每日上限）；要退回旧概率模式就设 "probability"。
+    "trigger_mode": "drive",
+    "urge_threshold": 0.62,     # 冲动值达到多少才开口（0~1）
+    "hard_min_interval_min": 20,  # 绝对最小间隔：再急也不能 20 分钟内连开两次
+    "max_per_day": 3,           # 每天最多主动开口次数
+    "max_ai_calls_per_day": 6,  # 每天最多为主动开口花几次模型调用（含失败/提炼）
+    "extract_pending": True,    # 开口后是否多花一次调用提炼"惦记的事"（受每日预算约束）
+    "speak_chance": 0.35,       # trigger_mode=probability 时的旧概率
+    "quiet_hours": "",          # 静默时段，如 "2:00-7:00"；空 = 不静默（凌晨也会说话）
+    # ★ 2026-10-24 作息乘子总开关（harness.bio_rhythm，一般精度）。
+    #   quiet_hours 是硬闸，但它默认为空 = 凌晨也照样说话。这个开关给一条
+    #   **软闸**：按时段给 speak_chance 乘子（凌晨 ×0.15、晚上 ×1.2）。
+    #   想恢复"全天一个概率"就设 False。硬闸仍然优先，不受这个开关影响。
+    "bio_rhythm": True,
+    "max_bubbles": 2,           # 一次最多发几个气泡（2026-11-05 由 4 降到 2）
+    "persona_extra": "",        # 追加人设（接在默认风格约束后面）
+    "recent_window": 6,         # 记录最近几条用户消息作为上下文
+    # ── 联动（经本机 HTTP，不 import 主程序）──
+    "webui_url": "http://127.0.0.1:8080",  # EggBloom WebUI 地址（联动通道）
+    "use_memory": True,         # 注入 super_memory 私聊历史（/api/memory/detail）
+    "memory_rounds": 3,         # 注入最近几轮私聊
+    "use_personality": True,    # 注入 personality_engine 的人设（与群聊里的它一致）
+    "use_mood": True,           # 注入 mood_engine 当前情绪，影响语气
+}
+
+_ctx: "PluginContext | None" = None
+_thread: "threading.Thread | None" = None
+_stop = threading.Event()
+_send_lock = threading.Lock()
+
+# ── 配置读写（插件自己的 data/config.json）────────────────
+
+
+def _load_config() -> dict:
+    cfg = dict(DEFAULT_CONFIG)
+    try:
+        if os.path.isfile(_CONFIG_PATH):
+            with open(_CONFIG_PATH, "r", encoding="utf-8") as f:
+                cfg.update(json.load(f))
+    except Exception:
+        pass
+    # ★ 2026-10-24：quiet_hours 现在有两个来源 —— 主配置 bot_config.json 与
+    #   本插件 data/config.json。主配置那份是给群聊回复链用的（凌晨别被叫醒），
+    #   这里必须跟它对齐，否则会出现"私聊静默 1:00-7:00、群聊静默 2:00-8:00"
+    #   这种同一件事两套时段。
+    #   规则：插件自己显式配了非空值 → 用插件的（尊重单插件覆盖）；
+    #         插件没配（空串/缺键）→ 继承主配置。默认两边都是空，行为不变。
+    if not str(cfg.get("quiet_hours") or "").strip():
+        try:
+            from config import load_config
+            cfg["quiet_hours"] = str(load_config().get("quiet_hours") or "")
+        except Exception:
+            pass
+    # ★ 2026-11-06 合并到 proactivity：接管开关在**主配置** bot_config.json 里，
+    #   而本函数默认只读插件私有的 data/config.json —— 不继承的话让位判断恒为假，
+    #   老心跳照常开口，和新的 idle_contact 双发。机制与上面的 quiet_hours 一样：
+    #   插件自己没显式配就继承主配置。
+    try:
+        from config import load_config as _main_cfg
+        _mc = _main_cfg() or {}
+        for _k in ("proactivity_enable", "proactivity_takeover_legacy",
+                   "proactivity_idle_contact_enable"):
+            if _k not in cfg:
+                cfg[_k] = _mc.get(_k)
+    except Exception:
+        pass
+    return cfg
+
+
+def _save_config(cfg: dict) -> bool:
+    try:
+        os.makedirs(os.path.dirname(_CONFIG_PATH), exist_ok=True)
+        merged = dict(DEFAULT_CONFIG)
+        merged.update(cfg or {})
+        with open(_CONFIG_PATH, "w", encoding="utf-8") as f:
+            json.dump(merged, f, ensure_ascii=False, indent=2)
+        return True
+    except Exception:
+        return False
+
+
+# ── 小工具 ────────────────────────────────────────────────
+
+
+def _log(msg: str, level: str = "info"):
+    if _ctx:
+        _ctx.log(msg, level)
+
+
+def _period(now: datetime) -> str:
+    """时段名。★ 2026-10-24：改为直接问 time_ctx，不再自带一份边界表。
+
+    原先这里写了一套 `h<5 凌晨 / h<9 早上 / h<12 上午 …` 的边界，与
+    `harness.time_ctx._PERIODS` 是**两套判据**。实测 24 小时里有 7 个小时
+    两边名字不同（05~08 清晨 vs 早上、11 中午 vs 上午、17~18 傍晚 vs 下午/晚上），
+    结果是同一时刻群聊 prompt 说「清晨」、私聊开口 prompt 说「早上」，
+    而 bio_rhythm 又按「清晨」算乘子 —— 三处各说各的。
+
+    现在只认 time_ctx 一份。取不到就退回空串，不猜。
+    """
+    try:
+        from harness.time_ctx import period_of
+        return period_of(now.timestamp())[0]
+    except Exception:
+        return ""
+
+
+def _in_quiet_hours(spec: str, now: datetime) -> bool:
+    """quiet_hours 形如 '23:00-7:00'，支持跨天。空串 = 不静默。
+
+    ★ 2026-10-24：解析逻辑移到 `harness.time_ctx.in_quiet_hours`。
+      群聊回复链现在也要用同一个判断（凌晨别被叫起来回话），
+      两处各写一份解析就是又一组"两套判据"。这里保留函数名只为
+      兼容既有测试与调用点，实现只剩转发。
+    """
+    try:
+        from harness.time_ctx import in_quiet_hours
+        return in_quiet_hours(spec, now.timestamp())
+    except Exception:
+        return False
+
+
+def _parse_qqs(raw) -> list:
+    """把 `target_qqs` 的各种形状（list / 逗号 / 换行字符串）规整成去重列表。"""
+    if isinstance(raw, str):
+        raw = re.split(r"[,，;；\s]+", raw)
+    if not isinstance(raw, (list, tuple, set)):
+        return []
+    seen, out = set(), []
+    for x in raw:
+        q = str(x or "").strip()
+        if q and q not in seen:
+            seen.add(q)
+            out.append(q)
+    return out
+
+
+def _resolve_targets(cfg: dict) -> list:
+    """这一轮要考虑的全部目标（有序）。
+
+    优先级：`target_qqs`（多目标）→ `target_qq`（旧单目标）→ 主配置 target_qqs。
+    2026-11-01 之前只有 `_resolve_target`（永远返回一个），所以"主动"只能盯一个人。
+    """
+    out = _parse_qqs(cfg.get("target_qqs"))
+    single = str(cfg.get("target_qq") or "").strip()
+    if single and single not in out:
+        out.append(single)
+    if not out and _ctx:
+        try:
+            out = _parse_qqs(_ctx.get_config("target_qqs", []))
+        except Exception:
+            out = []
+    return out
+
+
+def _resolve_target(cfg: dict) -> str:
+    """兼容旧调用：返回第一个目标。"""
+    ts = _resolve_targets(cfg)
+    return ts[0] if ts else ""
+
+
+def _last_ts_for(state: dict, target: str) -> float:
+    """这个人最后一次私聊说话的时间（没有就退回全局旧字段）。"""
+    m = state.get("last_user_ts_by") or {}
+    if isinstance(m, dict) and target:
+        try:
+            _v = m.get(str(target))
+            if _v:
+                return float(_v)
+        except Exception:
+            pass
+    return float(state.get("last_user_ts") or 0)
+
+
+def _silent_desc(last_user_ts: float) -> str:
+    if not last_user_ts:
+        return "你们有一阵子没说话了"
+    gap = max(0, time.time() - last_user_ts)
+    hours = int(gap // 3600)
+    mins = int((gap % 3600) // 60)
+    if hours >= 24:
+        return f"他上次说话是 {hours // 24} 天前"
+    if hours > 0:
+        return f"他上次说话是 {hours} 小时 {mins} 分钟前"
+    return f"他上次说话是 {mins} 分钟前"
+
+
+def _clean_bubbles(text, max_bubbles: int) -> list:
+    out = []
+    for raw in str(text or "").splitlines():
+        s = raw.strip().strip('"“”').strip()
+        s = re.sub(r"^[-*•\d]+[.、)）]?\s*", "", s)       # 去列表/编号前缀
+        s = re.sub(r"\[表情:[^\]]+\]", "", s).strip()      # 去表情包占位符
+        s = s.rstrip("。.")
+        if 2 <= len(s) <= 60:
+            out.append(s)
+    return out[: max(1, int(max_bubbles or 4))]
+
+
+def effective_bubble_cap(cfg: dict) -> int:
+    """本插件与主配置的气泡上限取小者（2026-11-05）。
+
+    事故：19:40 主动开口连发 3 条（「老大」/「礼物这事…」/「要不你许个愿…」），
+    每句之间还有 1~3 秒打字延时；叠上私聊回复自己拆的 2~3 条，用户十分钟里
+    收到十几条 —— 反馈是"还是回了很多次"。
+
+    主动开口和私聊回复是同一段对话里的两种发言，不该因为走了另一条代码路径
+    就多收几条。所以主配置 `private_bubble_max` 是总闸，插件 `max_bubbles`
+    只能比它更小（谁更克制听谁的）。读不到主配置就只用插件自己的值。
+    """
+    try:
+        cap = int(cfg.get("max_bubbles") or 4)
+    except (TypeError, ValueError):
+        cap = 4
+    try:
+        import bot_core as _bcx
+        main = int(_bcx._config.get("private_bubble_max", 0) or 0)
+        if main > 0:
+            cap = min(cap, main)
+    except Exception:
+        pass
+    return max(1, cap)
+
+
+# ── 联动：经 WebUI 通用通道 / 记忆 API 读 EggBloom 现有能力 ──
+# 原则：全部走本机 HTTP（ctx.http_get/post），不 import 主程序；
+# 任何一环失败都静默降级为 standalone，不影响主动开口主流程。
+
+_personality_cache = {"ts": 0.0, "text": ""}
+_MOOD_LABELS = {
+    "very_happy": "特别开心", "happy": "开心", "calm": "平静", "平静": "平静",
+    "sad": "有点丧", "down": "低落", "angry": "有点烦",
+}
+
+
+def _webui_base(cfg: dict) -> str:
+    return str(cfg.get("webui_url") or "http://127.0.0.1:8080").rstrip("/")
+
+
+def _plugin_action(cfg: dict, plugin_id: str, action: str, params: dict = None) -> dict:
+    """调 WebUI 的 /api/plugins/action 通用通道，失败返回 {}。"""
+    try:
+        resp = _ctx.http_post(
+            f"{_webui_base(cfg)}/api/plugins/action",
+            {"plugin_id": plugin_id, "action": action, "params": params or {}},
+            timeout=5,
+        )
+        return resp if isinstance(resp, dict) else {}
+    except Exception:
+        return {}
+
+
+def _fetch_personality(cfg: dict) -> str:
+    """personality_engine 的人设原文（10 分钟缓存）。空 = 不可用。"""
+    if not cfg.get("use_personality"):
+        return ""
+    now = time.time()
+    if _personality_cache["text"] and now - _personality_cache["ts"] < 600:
+        return _personality_cache["text"]
+    r = _plugin_action(cfg, "personality_engine", "get_personality")
+    raw = str(r.get("raw") or "").strip()
+    if raw:
+        _personality_cache.update({"ts": now, "text": raw[:1200]})
+    return _personality_cache["text"]
+
+
+def _fetch_mood(cfg: dict) -> str:
+    """mood_engine 当前情绪：取 |score| 最大的一条，翻译成中文。空 = 平静/不可用。"""
+    if not cfg.get("use_mood"):
+        return ""
+    moods = _plugin_action(cfg, "mood_engine", "get_moods")
+    if not isinstance(moods, dict) or not moods:
+        return ""
+    best, best_abs = None, 0.0
+    for scope, m in moods.items():
+        try:
+            s = abs(float((m or {}).get("score") or 0))
+        except Exception:
+            continue
+        if s > best_abs:
+            best, best_abs = (m or {}), s
+    if not best:
+        return ""
+    label = str(best.get("label") or "")
+    return _MOOD_LABELS.get(label, "") if best_abs >= 1 else ""
+
+
+#: 明确的收尾语（2026-11-04 用户要求）：说了这些就代表话题结束，别再主动开口。
+#  只列**明确语义**的，不含「嗯」「哦」这类——那些只是没接话，不是结束。
+_CLOSERS = (
+    "晚安", "睡了", "睡觉了", "我睡了", "拜拜", "88", "886", "再见", "去忙",
+    "先这样", "就这样吧", "不聊了", "下了", "离线", "回头聊", "改天聊",
+    "我走了", "撤了", "忙去了", "上班了", "到点", "收工",
+)
+
+
+def looks_finished(text: str) -> bool:
+    """这句话是不是一个明确的收尾。空/未识别都返回 False（= 不算结束）。"""
+    s = str(text or "").strip().lower()
+    if not s:
+        return False
+    # 长句里带收尾词往往只是**提到**（「他跟我说晚安的时候…」），不是自己在收尾。
+    # 阈值取 12：「先这样吧我去洗澡了」这类还认，「他跟我说晚安…」这种就不算。
+    if len(s) > 12:
+        return False
+    return any(k in s for k in _CLOSERS)
+
+
+def _fetch_memory_rounds(cfg: dict, qq: str) -> list:
+    """super_memory 私聊历史（WebUI /api/memory/detail），取最近 N 轮。"""
+    if not cfg.get("use_memory"):
+        return []
+    try:
+        limit = max(1, int(cfg.get("memory_rounds") or 3))
+        resp = _ctx.http_get(f"{_webui_base(cfg)}/api/memory/detail?qq={qq}", timeout=5)
+        rounds = (resp or {}).get("rounds") or []
+        return rounds[-limit:]
+    except Exception:
+        return []
+
+
+# ── OneBot 发送 ───────────────────────────────────────────
+
+
+def _send_private(qq: str, text: str) -> bool:
+    """走宿主统一出口（1.5.10 F1）：不再自己拼 OneBot HTTP。
+
+    直连 OneBot 发送接口会绕过 outbound 队列的串行/限频/去重/日志，
+    而且加载期静态扫描会直接拒绝这类插件。
+    """
+    try:
+        return bool(_ctx.send_text(text, target=str(qq)))
+    except Exception as e:
+        _log(f"发送失败 qq={qq}: {e}", "warn")
+        return False
+
+
+def _send_bubbles(qq: str, bubbles: list) -> int:
+    sent = 0
+    for i, b in enumerate(bubbles):
+        if _stop.is_set():
+            break
+        if _send_private(qq, b):
+            sent += 1
+        if i < len(bubbles) - 1:
+            _stop.wait(min(0.8 + 0.15 * len(b), 4.0))   # 打字延时，可被停止打断
+    return sent
+
+
+def _deliver(qq: str, bubbles: list) -> int:
+    """发送 + 记账。**日志顺序是判据，不是装饰。**
+
+    真机（2026-11-06 08:02）：「发送」在 08:02:36/40，「主动开口 → …」在 08:02:43。
+    气泡之间本来就有 0.8–4 秒打字延时，日志写在发送**之后** → 排查时看着像
+    "先发出去、后记日志"，甚至被误读成"两条消息不是它发的"。
+    现在先打**决定**（发什么给谁），再打**结果**（几条成功）；两行时间戳
+    分别对应"决定时刻"和"发完时刻"，中间那段就是真实打字延时。
+    """
+    joined = " / ".join(str(b) for b in (bubbles or []))
+    _log(f"主动开口 → {qq}: {joined[:60]}")
+    sent = _send_bubbles(qq, bubbles)
+    if sent < len(bubbles or []):
+        _log(f"主动开口结果 → {qq}: {sent}/{len(bubbles or [])} 条成功")
+    return sent
+
+
+# ── 生成 ──────────────────────────────────────────────────
+
+
+def _resolved_call_name(cfg: dict, target: str) -> str:
+    """这个人该怎么被称呼（按可信度从高到低）。
+
+    ★ 2026-11-02 真机事故：主动消息把 **1000000005** 叫成「Sample」——
+      而 Sample 是 **1000000006** 的名字（日志：`私聊 → Sample(1000000006)`）。
+      根因：配置里只有一个全局 `nickname`（多目标时代之前留下的），
+      多目标之后它被当成"通用称呼"套给所有人。
+
+    现在的顺序：
+      1. `target_aliases[qq]` —— 用户在插件页给这个人填的称呼（最准）；
+      2. `people_alias.get_alias(qq)` —— 他自己说过「叫我 X」；
+      3. 全局 `nickname` —— **只在只有一个目标时**才可信（那本来就指他；
+         用户显式配过，比自动抓来的网名更准）；
+      4. `people.display(qq)` —— 他自己的网名/群名片；
+      5. 都没有 → 空（不猜，宁可只说"你"）。
+    """
+    t = str(target or "").strip()
+    if not t:
+        return ""
+    aliases = cfg.get("target_aliases") or {}
+    if isinstance(aliases, dict):
+        name = str(aliases.get(t) or "").strip()
+        if name:
+            return name
+    try:
+        import people_alias as _pa
+        name = str(_pa.get_alias(t) or "").strip()
+        # 再验一道：get_alias 自己也会拦，但这里不依赖它的实现（存量 `**` 就吃过一次）
+        if name and not _pa.alias_usable(name):
+            name = ""
+        if name:
+            return name
+    except Exception:
+        pass
+    # 全局 nickname：多目标时**不可信**（它就是这次事故的来源）
+    try:
+        targets = [str(x) for x in (cfg.get("target_qqs") or []) if str(x or "").strip()]
+        if not targets and cfg.get("target_qq"):
+            targets = [str(cfg.get("target_qq"))]
+    except Exception:
+        targets = []
+    if len(targets) <= 1:
+        name = str(cfg.get("nickname") or "").strip()
+        if name:
+            return name
+    try:
+        import people as _pp
+        name = str(_pp.display(t) or "").strip()
+        if name:
+            return name
+    except Exception:
+        pass
+    return ""
+
+
+def _build_messages(cfg: dict, state: dict, target: str) -> list:
+    now = datetime.now()
+    # 2026-11-01：优先用这个人自己的称呼（target_aliases）；
+    # 2026-11-02：再加「叫我X」/ 他自己的网名，并且**多目标时不再用全局 nickname**。
+    nickname = _resolved_call_name(cfg, target)
+    extra = str(cfg.get("persona_extra") or "").strip()
+    max_bubbles = effective_bubble_cap(cfg)
+
+    # 联动：人设 / 情绪 / 私聊记忆（任一失败自动降级，不影响主流程）
+    # ★ 2026-11-04（一条 prompt 路径）：优先用主链拼好的静态提示词 ——
+    #   人格、能力边界、【没有耳朵】这些只在 bot_core 里维护一份。
+    #   拿不到再退回插件原始人设（老行为）：
+    persona_raw = ""
+    try:
+        import bot_core as _bcx
+        persona_raw = str(_bcx._build_static_prompt(False) or "").strip()
+    except Exception:
+        persona_raw = ""
+    if not persona_raw:
+        persona_raw = _fetch_personality(cfg)
+    mood = _fetch_mood(cfg)
+    memory_rounds = _fetch_memory_rounds(cfg, target)
+
+    sys_prompt = (
+        "你在 QQ 上和人私聊，是你自己想开口说点什么。\n"
+        "现在没有人发消息给你，是你自己想开口说点什么。\n"
+    )
+    if persona_raw:
+        sys_prompt += f"你的人设（和群聊里的你是同一个，保持一致）：\n{persona_raw}\n"
+    sys_prompt += (
+        "硬性要求：\n"
+        f"- 每行一条消息，就是一个 QQ 气泡，总共不超过 {max_bubbles} 行\n"
+        "- 每行 5~25 字，口语短句。句末的句号可以省，但问句要带问号、重语气用感叹号，"
+        "别写成读不通的一串字\n"
+        "- 不要列表、编号、引号、markdown\n"
+        "- 禁止 AI 腔：「作为AI」「有什么可以帮你的」「建议你」「希望你能」一律不准出现\n"
+        "- 可以损他、念叨他、分享刚想到的东西、接着之前的话茬、提醒他作息\n"
+        "- 只输出消息本身，每行一条，不要任何解释\n"
+        # ★ 2026-11-03：用户反馈"几乎每轮都在反问"。主动找人说话最容易变成查岗。
+        "- 【别用问句】默认陈述句收尾。主动说话不该像查岗：不许「你干嘛呢」「吃了吗」"
+        "「到底啥意思」这种一问一答；真要问，整条最多一个问号，且必须是真需要他回答的事\n"
+        "- 语气偏冷：不撒娇、不讨欢心、不反复催（「别装死」「等着验收」这种催法不许用）\n"
+        "- 没人接话时开口：说自己的状态、有点失落但别卖惨，也不用问「还聊不聊」"
+        " —— 问这句等于把压力甩给对方；自己把话说完，或者干脆只留一句就停。"
+        "- 你只有文字和图片：不许编「听到你那边的声响」「看见你在干嘛」，"
+        "也不许说「你刚说……」然后把没出现过的算到他头上 —— 拿不准就不提。"
+        
+    )
+    try:
+        import people as _people
+        _card = _people.card(target, private=True)
+        if _card:
+            sys_prompt += f"\n你对这个人的了解（只用于说话分寸，不要背出来）：\n{_card}\n"
+    except Exception:
+        pass
+    if nickname:
+        sys_prompt += f"\n- 你管他叫「{nickname}」"
+    if extra:
+        sys_prompt += f"\n追加人设：{extra}"
+
+    recent = (state.get("recent_msgs") or {}).get(target) or []
+    recent_lines = "\n".join(
+        f"  - [{m.get('via', '私聊')}] {m.get('text', '')[:50]}" for m in recent[-5:]
+    ) or "  （暂无）"
+    # 2026-10-30：主题/历史必须按目标隔离。旧版是全局 pending_topic，
+    # 给老大生成的「刷本」被拿去对 Sample 说 —— 跨人泄话。
+    _hmap = state.get("history_map") or {}
+    history = _hmap.get(target) or []
+    last_proactive = history[-1]["text"] if history else "（还没主动说过话）"
+    topic = _topic_for(state, target)
+    topic_line = f"你最近一直有点惦记的事：{topic}（可以接着想，也可以不想了）" if topic else ""
+
+    memory_line = ""
+    if memory_rounds:
+        frag = "\n".join(
+            f"  他：{str(r.get('user') or '')[:40]}\n  你：{str(r.get('bot') or '')[:40]}"
+            for r in memory_rounds
+        )
+        memory_line = f"你们之前在私聊里聊过的（长期记忆）：\n{frag}\n"
+
+    mood_line = f"你现在的心情：{mood}，说话的语气自然会带出来。\n" if mood else ""
+
+    user_prompt = (
+        f"现在是 {now.strftime('%H:%M')}（{_period(now)}）。\n"
+        f"{_silent_desc(_last_ts_for(state, target))}。\n"
+        f"{mood_line}"
+        f"{memory_line}"
+        f"他最近说过的话（私聊和群里的都有，群里的话可以私聊接着聊）：\n{recent_lines}\n"
+        f"你上次主动开口说的是：{last_proactive[:60]}\n"
+        f"{topic_line}\n"
+        "像真人想起什么就说什么，别重复上次说过的话。"
+    )
+    return [
+        {"role": "system", "content": sys_prompt},
+        {"role": "user", "content": user_prompt},
+    ]
+
+
+def _ai_text(messages: list, max_tokens: int = 300) -> str:
+    try:
+        res = _ctx.ai_chat(messages, max_tokens=max_tokens)
+    except Exception as e:
+        _log(f"ai_chat 异常: {e}", "warn")
+        return ""
+    if isinstance(res, str):
+        return res.strip()
+    if isinstance(res, dict):
+        for k in ("content", "text", "reply"):
+            if res.get(k):
+                return str(res[k]).strip()
+    return ""
+
+
+def _topic_for(state: dict, target: str) -> str:
+    """这个人专属的「惦记的事」。旧全局字段只在没有按人存储时兜底。"""
+    m = state.get("pending_topics") or {}
+    if isinstance(m, dict) and target and m.get(target):
+        return str(m[target]).strip()
+    return ""
+
+
+def _update_pending_topic(bubbles: list, target: str = ""):
+    """用一次小调用提炼「惦记的事」，按**这个人**存；失败保留旧值。"""
+    try:
+        topics = dict(_ctx.get_state("pending_topics", {}) or {})
+        stamps = dict(_ctx.get_state("pending_topics_ts", {}) or {})
+        msgs = [
+            {"role": "system", "content": "用 15 字以内的一句话总结这个 AI 此刻的心情或惦记的事，只输出这句话，不要标点"},
+            {"role": "user", "content": " / ".join(bubbles)},
+        ]
+        t = _ai_text(msgs, max_tokens=60)
+        if target and t:
+            topics[target] = t[:30]
+            stamps[target] = time.time()
+            _ctx.set_state("pending_topics", topics)
+            _ctx.set_state("pending_topics_ts", stamps)
+    except Exception:
+        pass
+
+
+# ── 决策闸门 ──────────────────────────────────────────────
+
+
+def _gate_mod():
+    """惰性取到三段式模块 —— 插件不在 import 期就把 harness 拉起来。"""
+    from harness import proactive_gate
+    return proactive_gate
+
+
+def _evaluate(cfg: dict, state: dict, force: bool = False, target: str = "") -> dict:
+    """决策闸门（2026-11-03：判据搬到 `harness/proactive_gate.py`，这里只转发）。
+
+    返回仍是旧形状 `{'ok', 'target', 'blocked_by'}`；`force=True` 跳过全部闸门。
+    判据**顺序**与**中文文案**由 `proactive_gate.evaluate()` 逐条保持：
+    目标 → force → 按人最小间隔 → 该人发言冷却 → 静默时段 → 概率（含作息乘子）→ AI 就绪。
+
+    顺序里有两条不能动：
+      · **静默时段是硬闸、作息乘子是软闸**，乘法排在硬闸之后，永远绕不过硬闸；
+      · **AI 可用性检查排在概率之后** —— 放在前面等于每次心跳都探测一遍模型状态；
+        只有"本来就要开口"的那一部分才该付这个成本。顺序反了会表现成
+        「心跳开口失败: AI 未产出可用消息」，看着像模型抽风，实际是根本没配。
+
+    等价性由 `tests/test_proactive_gate.py` 对着改造前那份实现逐字段比对。
+    """
+    pg = _gate_mod()
+    ev = pg.evaluate(
+        pg.make_trigger(pg.TRIGGER_MANUAL if force else pg.TRIGGER_HEARTBEAT,
+                        target=target, source="proactive_talk._evaluate"),
+        cfg, state,
+        force=force,
+        resolve=_resolve_targets,
+        last_user=_last_ts_for,
+        quiet_hours=_in_quiet_hours,
+        ai_ready=_ai_ready,
+    )
+    out = pg.project(ev)
+    if "urge" in ev:
+        out["urge"] = round(float(ev.get("urge") or 0.0), 3)
+    if ev.get("urge_reason"):
+        out["urge_reason"] = str(ev.get("urge_reason") or "")
+    return out
+
+
+def _ai_ready() -> bool:
+    """粗检 AI 是否可用。
+
+    注意 api_key 不一定在 bot_config.json 里 —— 它是 `config.load_config()`
+    从 Windows 凭据管理器 / .env 注入的，插件经 ctx.get_config 拿到的应已是合并后的值。
+    所以这里只做**明显不可用**的判定（连 url 都没有），其余一律放行，
+    让 _ai_text 自己去报真实错误 —— 宁可多试一次，也不要因为探测口径不对
+    把主动消息永久关死。
+    """
+    try:
+        url = str(_ctx.get_config("api_url", "") or "").strip() if _ctx else ""
+        return bool(url)
+    except Exception:
+        return True
+
+
+def _proactive_once(force: bool = False, target: str = "") -> dict:
+    """完整跑一轮：挑人 → 评估 → 生成 → 切气泡 → 发送 → 更新状态。
+
+    2026-11-01：多目标。每轮**最多开口一次**；在通过闸门的人里挑
+    「最久没被搭话」的那个，避免同一个人连续被找、其他人永远排不上。
+    """
+    global _ctx
+    if not _ctx:
+        return {"ok": False, "error": "插件未启用"}
+    with _send_lock:
+        cfg = _load_config()
+        # ★ 2026-11-06 合并：冷场主动开口已并入 plugins/proactivity 的
+        #   idle_contact 行为（模型从 say / poke / skip 里选）。两个心跳同时跑
+        #   会变成同一件事触发两次。手动强制触发（force=True）仍保留作回退。
+        #   用 `is True` 严格判断：老插件的离线用例传的是精简 fake cfg，
+        #   里面没有这些键时不能因为「默认 True」就把它们的判定链整条跳过。
+        if (not force and cfg.get("proactivity_takeover_legacy") is True
+                and cfg.get("proactivity_enable") is True
+                and cfg.get("proactivity_idle_contact_enable") is not False):
+            return {"ok": False, "skipped": True,
+                    "reason": "冷场开口已由 proactivity/idle_contact 接管"}
+        state = _ctx.get_state() or {}
+
+        if target:
+            candidates = [str(target)]
+            reasons = []
+        else:
+            candidates, reasons = [], []
+            for t in _resolve_targets(cfg):
+                d = _evaluate(cfg, state, force=force, target=t)
+                if d.get("ok"):
+                    candidates.append(t)
+                else:
+                    reasons.append(f"{t}: {d.get('blocked_by')}")
+        if not candidates:
+            return {"ok": False, "skipped": True,
+                    "reason": "；".join(reasons[:4]) or "没有可开口的目标"}
+
+        # 轮转公平：按上次和这个人说话的时间排，最久的优先
+        by = state.get("last_proactive_by") or {}
+        chosen = sorted(candidates, key=lambda t: float((by.get(t) if isinstance(by, dict) else 0) or 0))[0]
+
+        # ★ 2026-11-04（用户）：没有明确语义结束才开口；说了「晚安/睡了/先这样」
+        #   这类收尾语，就别再过几小时冒出来问「还聊不聊」—— 那是打扰，不是主动。
+        #   只拦**明确收尾**；「嗯」「哦」这种只是没接话，仍然算可以开口。
+        if not force:
+            try:
+                rounds = _fetch_memory_rounds(cfg, chosen)
+                last_user = ""
+                if rounds:
+                    last_user = str((rounds[-1] or {}).get("user_msg") or "")
+                if looks_finished(last_user):
+                    _log(f"主动开口跳过 {chosen}：上次明确收尾（{last_user[:20]}）")
+                    return {"ok": False, "skipped": True, "target": chosen,
+                            "reason": "上次已明确收尾"}
+            except Exception:
+                pass
+
+        # ★ 2026-11-03 Decision 层：`mode=auto`（或候选不来自配置/点名）时**只记录不执行**
+        #   —— 心跳照常评估、照常留日志，但不生成也不发送。默认 mode="live"，
+        #   所以这一层今天不改变任何既有行为。
+        pg = _gate_mod()
+        _dec = pg.decide(
+            {"ok": True, "target": chosen,
+             "admission": pg.admission(chosen, targets=_resolve_targets(cfg),
+                                       explicit=bool(target))},
+            mode=str(cfg.get("mode") or pg.MODE_LIVE),
+            waits_for_person=pg.waits_for_person(state, chosen),
+        )
+        if _dec.get("act") != "say":
+            _log(f"主动开口只记录不执行（{_dec.get('reason')}）→ {chosen}")
+            return {"ok": False, "skipped": True, "target": chosen, "recorded": True,
+                    "mode": _dec.get("mode"), "reason": _dec.get("reason")}
+
+        # 成本：只有真的走到生成才计一次；失败也算，避免失败重试风暴。
+        _daily = pg.daily_counts(state, time.time())
+        _cap_ai = int(cfg.get("max_ai_calls_per_day") or 6)
+        if not force and _daily["ai_calls"] >= _cap_ai:
+            _log(f"主动开口跳过 {chosen}：今天的模型预算用完了"
+                 f"（{_daily['ai_calls']}/{_cap_ai}）")
+            return {"ok": False, "skipped": True, "target": chosen,
+                    "reason": "今天的主动开口模型预算用完了"}
+        _daily["ai_calls"] += 1
+        _ctx.set_state("daily", _daily)
+
+        text = _ai_text(_build_messages(cfg, state, chosen), max_tokens=300)
+        bubbles = _clean_bubbles(text, effective_bubble_cap(cfg))
+        if not bubbles:
+            return {"ok": False, "error": "AI 未产出可用消息"}
+
+        # ── 事实围栏（2026-11-04）：无据的句子不发 ──────────────────
+        #   证据只能用"模型这一轮真能看到的东西"，否则围栏本身就在放水。
+        try:
+            from harness import grounding as _gr
+            _ev = []
+            for _m in ((state.get("recent_msgs") or {}).get(chosen) or [])[-5:]:
+                _ev.append(str(_m.get("text") or ""))
+            for _r in _fetch_memory_rounds(cfg, chosen):
+                _ev.append(str(_r.get("user") or ""))
+                _ev.append(str(_r.get("bot") or ""))
+            _hist = (state.get("history_map") or {}).get(chosen) or []
+            if _hist:
+                _ev.append(str(_hist[-1].get("text") or ""))
+            _kept = []
+            for _b in bubbles:
+                _nb, _dropped = _gr.sanitize(_b, _ev)
+                if _dropped:
+                    _log(f"事实围栏删句 → {chosen}: {_dropped}")
+                if _nb.strip():
+                    _kept.append(_nb.strip())
+            if _kept != bubbles:
+                bubbles = _kept
+            if not bubbles:
+                _log(f"事实围栏把整条都删了，本轮不发 → {chosen}")
+                return {"ok": False, "skipped": True, "target": chosen,
+                        "reason": "全部内容都无据（事实围栏）"}
+        except Exception as _ge:
+            _log(f"事实围栏跳过（不影响发送）: {_ge}")
+
+        sent = _deliver(chosen, bubbles)
+        if sent == 0:
+            return {"ok": False, "error": "发送失败（OneBot 未连接？）"}
+
+        joined = " / ".join(bubbles)
+        hmap = dict(state.get("history_map") or {})
+        hist = list(hmap.get(chosen) or [])
+        hist.append({"ts": time.time(), "text": joined[:120]})
+        hmap[chosen] = hist[-10:]
+        _ctx.set_state("history_map", hmap)
+        now = time.time()
+        by = dict(by) if isinstance(by, dict) else {}
+        by[chosen] = now
+        _ctx.set_state("last_proactive_by", by)
+        _ctx.set_state("last_proactive_ts", now)
+        _daily = pg.daily_counts(_ctx.get_state() or {}, now)
+        _daily["proactive"] += 1
+        _ctx.set_state("daily", _daily)
+        if cfg.get("extract_pending", True) and _daily["ai_calls"] < _cap_ai:
+            _daily["ai_calls"] += 1
+            _ctx.set_state("daily", _daily)
+            _update_pending_topic(bubbles, chosen)
+        return {"ok": True, "target": chosen, "bubbles": bubbles}
+
+
+# ── 心跳线程 ──────────────────────────────────────────────
+
+
+def _heartbeat_loop():
+    _log("心跳线程启动")
+    # 启动后先等一个短随机延迟，避免开机立刻开口
+    _stop.wait(random.uniform(60, 180))
+    while not _stop.is_set():
+        try:
+            r = _proactive_once(force=False)
+            if r.get("ok"):
+                _log(f"心跳开口成功: {r.get('bubbles')}")
+            elif not r.get("skipped"):
+                _log(f"心跳开口失败: {r.get('error')}", "warn")
+        except Exception as e:
+            _log(f"心跳异常: {e}", "warn")
+        cfg = _load_config()
+        _stop.wait(max(60, int(cfg.get("heartbeat_sec") or 900)))
+    _log("心跳线程退出")
+
+
+def _start_thread():
+    global _thread
+    if _thread and _thread.is_alive():
+        return
+    _stop.clear()
+    _thread = threading.Thread(target=_heartbeat_loop, daemon=True, name="proactive_talk")
+    _thread.start()
+
+
+def _stop_thread():
+    _stop.set()
+
+
+# ── 生命周期 ──────────────────────────────────────────────
+
+
+def on_load(ctx: PluginContext):
+    global _ctx
+    _ctx = ctx
+    ctx.log("proactive_talk loaded (ABI v1)，主动消息引擎待命中")
+    _start_thread()
+
+
+def on_enable(ctx: PluginContext):
+    global _ctx
+    _ctx = ctx
+    ctx.log("proactive_talk enabled")
+    _start_thread()
+
+
+def on_disable(ctx: PluginContext):
+    ctx.log("proactive_talk disabled，心跳停止")
+    _stop_thread()
+
+
+def on_unload(ctx: PluginContext):
+    _stop_thread()
+    ctx.log("proactive_talk unloaded")
+
+
+def on_message(ctx: PluginContext, event: dict):
+    """记录上下文（私聊 + 目标在群里的发言），永不干预消息流。
+
+    群聊为主的环境：target 的主要言行在群里，主动私聊开口要能接着群里的话茬。
+    注意 bot_core 在自我过滤之前就派发 on_message，必须自行排除 bot 消息。
+    """
+    try:
+        etype = (event or {}).get("type")
+        sender = str(event.get("sender") or "")
+        text = (event.get("text") or "").strip()
+        if not sender or not text:
+            return None
+        # 排除 bot 自己发的消息（此时 bot_core 尚未做自我过滤）
+        bot_qq = str(ctx.get_config("bot_qq", "") or "")
+        if bot_qq and sender == bot_qq:
+            return None
+        text = re.sub(r"\[CQ:[^\]]+\]", "", text).strip()   # 去 CQ 码（图片/at 等）
+        if not text:
+            return None
+
+        cfg = _load_config()
+        target = _resolve_target(cfg)
+
+        if etype == "private":
+            via = "私聊"
+            # ★ 2026-11-02：私聊必须按**发送者**分桶。
+            #   旧版用 `target`（配置里唯一的那个人）当 key，于是 B 发来的私聊
+            #   被记成「A 最近说过的话」，对 B 主动开口时引用了 A 的内容。
+            bucket = sender
+            # 冷却也按人算：谁刚说过话，就只冷却谁
+            ts_map = dict(ctx.get_state("last_user_ts_by") or {})
+            ts_map[sender] = time.time()
+            ctx.set_state("last_user_ts_by", ts_map)
+            ctx.set_state("last_user_ts", time.time())      # 兼容旧字段
+        elif etype == "group":
+            # 只记目标本人在群里的发言，其他群友的话不关主动私聊的事
+            if not target or sender != target:
+                return None
+            bucket = target
+            via = "群里"
+        else:
+            return None
+
+        window = int(cfg.get("recent_window") or 6)
+        recent = ctx.get_state("recent_msgs", {}) or {}
+        lst = list(recent.get(bucket) or [])
+        lst.append({"ts": time.time(), "text": text[:100], "via": via})
+        recent[bucket] = lst[-window:]
+        ctx.set_state("recent_msgs", recent)
+    except Exception:
+        pass
+    return None
+
+
+# ── WebUI 通用通道 ────────────────────────────────────────
+
+
+def get_config(params=None):
+    cfg = _load_config()
+    cfg["_resolved_target"] = _resolve_target(cfg) if _ctx else ""
+    cfg["_heartbeat_alive"] = bool(_thread and _thread.is_alive())
+    return cfg
+
+
+def set_config(params):
+    cfg = _load_config()
+    for k in DEFAULT_CONFIG:
+        if k in (params or {}):
+            cfg[k] = params[k]
+    ok = _save_config(cfg)
+    return {"ok": ok}
+
+
+def get_status(params=None):
+    state = (_ctx.get_state() or {}) if _ctx else {}
+    history = state.get("history") or []
+    cfg = _load_config()
+    try:
+        targets = _resolve_targets(cfg)
+    except Exception:
+        targets = []
+    try:
+        pg = _gate_mod()
+        daily = pg.daily_counts(state)
+        urges = {}
+        for _t in targets:
+            _u, _why = pg.compute_urge(cfg, state, _t)
+            urges[_t] = {"urge": round(_u, 3), "reason": _why}
+    except Exception:
+        daily, urges = {}, {}
+    return {
+        "ok": True,
+        "heartbeat_alive": bool(_thread and _thread.is_alive()),
+        "trigger_mode": str(cfg.get("trigger_mode") or "probability"),
+        "targets": targets,
+        "daily": daily,
+        "urges": urges,
+        "last_proactive_by": state.get("last_proactive_by") or {},
+        "last_proactive_ts": state.get("last_proactive_ts") or 0,
+        "last_user_ts": state.get("last_user_ts") or 0,
+        "pending_topics": state.get("pending_topics") or {},
+        "pending_topics_ts": state.get("pending_topics_ts") or {},
+        "history": history[-5:],
+    }
+
+
+def send_now(params=None):
+    """立即主动发一条（跳过所有闸门），后台线程执行。params.target 可指定谁。"""
+    if not _ctx:
+        return {"ok": False, "error": "插件未启用"}
+    _t = str((params or {}).get("target") or "").strip()
+
+    def _run():
+        r = _proactive_once(force=True, target=_t)
+        if not r.get("ok"):
+            _log(f"手动触发失败: {r.get('error') or r.get('reason')}", "warn")
+
+    threading.Thread(target=_run, daemon=True).start()
+    return {"ok": True, "msg": f"已触发（{_t or '自动挑人'}），稍后查看私聊"}
+
+
+def test_decision(params=None):
+    """干跑一轮决策，返回各闸门结果，不发送。"""
+    if not _ctx:
+        return {"ok": False, "error": "插件未启用"}
+    cfg = _load_config()
+    state = _ctx.get_state() or {}
+    targets = _resolve_targets(cfg)
+    decisions = []
+    for t in targets or [""]:
+        d = _evaluate(cfg, state, force=False, target=t)
+        d["target"] = t or d.get("target") or ""
+        decisions.append(d)
+    # 兼容旧前端：第一层 key 用"第一个能开口的"，没有就用第一条失败原因
+    d = next((x for x in decisions if x.get("ok")), decisions[0] if decisions else {"ok": False, "blocked_by": "未配置目标 QQ"})
+    out = dict(d)
+    out["targets"] = targets
+    out["decisions"] = decisions
+    out["resolved_target"] = targets[0] if targets else ""
+    out["chance"] = cfg.get("speak_chance")
+    out["trigger_mode"] = str(cfg.get("trigger_mode") or "probability")
+    try:
+        out["daily"] = _gate_mod().daily_counts(state)
+    except Exception:
+        out["daily"] = {}
+    # 作息状态一起回给前端：不暴露就没人知道乘子有没有生效，
+    # 而它是"凌晨少说话"这件事的唯一证据。开关关掉时 hint 说明原因。
+    try:
+        from harness.bio_rhythm import bio_state
+        _b = bio_state()
+        if not cfg.get("bio_rhythm", True):
+            _b = dict(_b, hint="作息乘子已关闭（bio_rhythm=False），全天同一概率")
+        out["bio"] = _b
+    except Exception as e:
+        out["bio"] = {"error": str(e)}
+    return out
+
+
+def get_api_status():
+    """插件列表连通状态检测：OneBot HTTP 是否可达。"""
+    try:
+        if not _ctx:
+            return {"ok": False, "status": "插件未启用", "detail": "no ctx"}
+        base = str(_ctx.get_config("onebot_url", "http://127.0.0.1:3000")).rstrip("/")
+        resp = _ctx.http_post(f"{base}/get_login_info", {}, timeout=5)
+        if resp and resp.get("retcode") == 0:
+            nick = (resp.get("data") or {}).get("nickname", "")
+            return {"ok": True, "status": f"OneBot 在线（{nick}）", "detail": "get_login_info ok"}
+        return {"ok": False, "status": "OneBot 不可达", "detail": str(resp)[:100]}
+    except Exception as e:
+        return {"ok": False, "status": "检测异常", "detail": str(e)}
+
+
+def list_friends(params=None):
+    """Bot 的好友列表（插件页勾选用，不用手打 QQ）。"""
+    if not _ctx:
+        return {"ok": False, "error": "插件未启用"}
+    try:
+        base = str(_ctx.get_config("onebot_url", "http://127.0.0.1:3000")).rstrip("/")
+        resp = _ctx.http_post(f"{base}/get_friend_list", {}, timeout=10)
+        if not resp or resp.get("retcode") != 0:
+            return {"ok": False, "error": f"拿不到好友列表：{str(resp)[:100]}"}
+        out = []
+        for f in (resp.get("data") or []):
+            qq = str(f.get("user_id") or "").strip()
+            if not qq:
+                continue
+            out.append({"qq": qq,
+                        "nick": str(f.get("remark") or f.get("nickname") or "").strip(),
+                        "name": str(f.get("nickname") or "").strip()})
+        out.sort(key=lambda x: x["qq"])
+        return {"ok": True, "friends": out, "count": len(out)}
+    except Exception as e:
+        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
+
+def test_links(params=None):
+    """检测三条联动通道：人设 / 情绪 / 私聊记忆。"""
+    if not _ctx:
+        return {"ok": False, "error": "插件未启用"}
+    cfg = _load_config()
+    target = _resolve_target(cfg)
+    persona = _fetch_personality({**cfg, "use_personality": True})
+    mood = _fetch_mood({**cfg, "use_mood": True})
+    rounds = _fetch_memory_rounds({**cfg, "use_memory": True}, target) if target else []
+    return {
+        "ok": True,
+        "personality": "已接通（%d 字）" % len(persona) if persona else "未取到（personality.txt 为空或插件未启用）",
+        "mood": f"已接通（当前：{mood}）" if mood else "已接通（当前平静）" if _plugin_action(cfg, "mood_engine", "get_moods") else "未取到（mood_engine 未启用）",
+        "memory": f"已接通（{len(rounds)} 轮私聊历史）" if rounds else "无私聊历史或 WebUI 不可达",
+    }
+
+
+PLUGIN_ACTIONS = {
+    "get_config": get_config,
+    "set_config": set_config,
+    "get_status": get_status,
+    "send_now": send_now,
+    "test_decision": test_decision,
+    "test_links": test_links,
+    "list_friends": list_friends,
+}
+
+PLUGIN_HOOKS = {
+    "on_load": on_load,
+    "on_enable": on_enable,
+    "on_disable": on_disable,
+    "on_unload": on_unload,
+    "on_message": on_message,
+}

@@ -1,0 +1,28 @@
+{
+  "_说明": [
+    "EggBloom MCP 配置模板。",
+    "用法：把这个文件复制到 <应用目录>/data/mcp.json，然后按需增删 mcpServers。",
+    "  · Windows: copy docs\\mcp.example.json resources\\app\\data\\mcp.json",
+    "  · 也支持放在 ~/.workbuddy/mcp.json（跨项目通用）。",
+    "默认全部注释掉/不写真实 server → 未配置时零成本（不会起任何进程）。"
+  ],
+
+  "mcpServers": {
+  },
+
+  "_示例_filesystem": {
+    "_说明": "取消注释并把 filesystem 移到上面的 mcpServers 即可启用。需要本机有 npx（Node.js）。",
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-filesystem", "D:\\workspace"],
+    "env": {}
+  },
+
+  "_示例_python_stdio": {
+    "_说明": "任何实现了 MCP stdio 协议的脚本都可接入；command 用绝对路径最稳。",
+    "command": "E:\\path\\to\\python.exe",
+    "args": ["E:\\path\\to\\your_mcp_server.py"],
+    "env": { "SOME_KEY": "value" }
+  },
+
+  "_依赖提示": "MCP 需要 python 包 `mcp`。在 EggBloom 的 python 环境里执行：python -m pip install mcp  （未安装时程序会明确提示，不会报错崩溃）"
+}

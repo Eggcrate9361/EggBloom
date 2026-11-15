@@ -1,0 +1,464 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>人格引擎</title>
+<style id="pv-kit">/*PV-KIT*/
+/* ═══════════════════════════════════════════════════════════════════════
+   EggBloom 插件 UI 套件 v2（2026-10-29）
+   ---------------------------------------------------------------------
+   和 v1 的区别：v1 只是"统一配色"，v2 是一套**可用的前端规范**：
+     · 设计 token（颜色 / 间距 / 圆角 / 阴影 / 动效曲线）全部成体系
+     · 组件带完整状态：hover / active / focus-visible / disabled / loading
+     · 布局原语：pv-split / pv-grid / pv-toolbar，窄屏自动降级
+     · 语义组件：pv-kpi / pv-seg / pv-switch / pv-chip / pv-timeline
+   旧类名（pv-panel / pv-table / pv-msg …）保留并重绘，老页面不用改也能变好看。
+   ═══════════════════════════════════════════════════════════════════════ */
+:root{
+  /* 色板：暖黑底 + 米金主色 + 三个语义色 */
+  --pv-bg:#0f0e0c;
+  --pv-surface:#181512;
+  --pv-surface-2:#1f1b16;
+  --pv-surface-3:#262119;
+  --pv-line:rgba(232,226,214,.08);
+  --pv-line-2:rgba(232,226,214,.14);
+  --pv-ink:#efe9dd;
+  --pv-ink-2:#b9b0a0;
+  --pv-ink-3:#7d7466;
+  --pv-gold:#d8b877;
+  --pv-gold-2:#b8914f;
+  --pv-gold-soft:rgba(216,184,119,.12);
+  --pv-ok:#8fc4a0;
+  --pv-ok-soft:rgba(143,196,160,.12);
+  --pv-warn:#d9a15f;
+  --pv-warn-soft:rgba(217,161,95,.12);
+  --pv-bad:#d97b6c;
+  --pv-bad-soft:rgba(217,123,108,.12);
+
+  /* 间距 4 的倍数 */
+  --pv-1:4px; --pv-2:8px; --pv-3:12px; --pv-4:16px; --pv-5:22px; --pv-6:32px; --pv-7:44px;
+  /* 圆角 */
+  --pv-r-sm:6px; --pv-r:10px; --pv-r-lg:14px; --pv-r-full:999px;
+  /* 阴影 / 光 */
+  --pv-shadow:0 1px 0 rgba(255,255,255,.03) inset, 0 8px 24px rgba(0,0,0,.35);
+  --pv-ring:0 0 0 1px var(--pv-gold), 0 0 0 4px var(--pv-gold-soft);
+  --pv-ease:cubic-bezier(.22,.61,.36,1);
+
+  --pv-font:'Segoe UI Variable Text','Segoe UI','Microsoft YaHei UI',system-ui,sans-serif;
+  --pv-mono:'Cascadia Mono','Consolas',monospace;
+  --pv-fs-xs:11px; --pv-fs-sm:12px; --pv-fs:13px; --pv-fs-lg:15px; --pv-fs-xl:19px;
+}
+
+*,*::before,*::after{box-sizing:border-box}
+html,body{background:var(--pv-bg)!important;color:var(--pv-ink)}
+body{
+  margin:0;padding:var(--pv-5) var(--pv-5) var(--pv-7)!important;
+  font:var(--pv-fs)/1.65 var(--pv-font)!important;
+  -webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility;
+  background-image:radial-gradient(1200px 500px at 15% -10%,rgba(216,184,119,.055),transparent 60%)!important;
+}
+::selection{background:var(--pv-gold-soft);color:var(--pv-gold)}
+h1,h2,h3,h4{margin:0;font-weight:600;line-height:1.3;letter-spacing:.01em;color:var(--pv-ink)}
+h1{font-size:var(--pv-fs-xl);letter-spacing:.02em}
+h2{font-size:var(--pv-fs-sm);letter-spacing:.14em;text-transform:uppercase;color:var(--pv-ink-3);font-weight:600}
+h3{font-size:var(--pv-fs)}
+a{color:var(--pv-gold);text-decoration:none}
+a:hover{text-decoration:underline}
+code,.mono{font-family:var(--pv-mono);font-size:var(--pv-fs-sm);font-variant-numeric:tabular-nums}
+hr{border:0;border-top:1px solid var(--pv-line);margin:var(--pv-4) 0}
+
+/* ── 页头 ───────────────────────────────────────────────────────── */
+.pv-head{display:flex;align-items:flex-start;gap:var(--pv-4);margin:0 0 var(--pv-5)}
+.pv-head .pv-head-body{flex:1;min-width:0}
+.pv-head .pv-eyebrow{font-size:var(--pv-fs-xs);letter-spacing:.18em;text-transform:uppercase;
+  color:var(--pv-gold-2);margin-bottom:6px}
+.pv-sub{color:var(--pv-ink-3);font-size:var(--pv-fs);margin-top:6px;max-width:72ch}
+.pv-hero-icon{width:46px;height:46px;flex:none;border-radius:var(--pv-r);display:grid;place-items:center;
+  background:linear-gradient(145deg,var(--pv-surface-2),var(--pv-surface));
+  border:1px solid var(--pv-line-2);box-shadow:var(--pv-shadow);color:var(--pv-gold);font-size:20px}
+
+/* ── 布局原语 ───────────────────────────────────────────────────── */
+.pv-split{display:grid;grid-template-columns:minmax(0,1.55fr) minmax(260px,.85fr);gap:var(--pv-4)}
+.pv-grid{display:grid;gap:var(--pv-4)}
+.pv-grid.cols-2{grid-template-columns:repeat(2,minmax(0,1fr))}
+.pv-grid.cols-3{grid-template-columns:repeat(3,minmax(0,1fr))}
+.pv-toolbar{display:flex;align-items:center;gap:var(--pv-2);flex-wrap:wrap}
+.pv-spacer{flex:1}
+@media (max-width:900px){
+  .pv-split{grid-template-columns:1fr}
+  .pv-grid.cols-2,.pv-grid.cols-3{grid-template-columns:1fr}
+}
+
+/* ── 卡片 ───────────────────────────────────────────────────────── */
+.pv-panel{
+  position:relative;background:var(--pv-surface);border:1px solid var(--pv-line);
+  border-radius:var(--pv-r-lg);padding:var(--pv-4) var(--pv-4) var(--pv-4);
+  box-shadow:var(--pv-shadow);margin:0 0 var(--pv-4);
+}
+.pv-panel-h{display:flex;align-items:center;gap:var(--pv-3);margin:0 0 var(--pv-3)}
+.pv-panel-h h2{flex:none}
+.pv-rule{flex:1;height:1px;background:linear-gradient(90deg,var(--pv-line-2),transparent)}
+.pv-count{color:var(--pv-ink-3);font-size:var(--pv-fs-xs);letter-spacing:.06em;white-space:nowrap}
+.pv-card{background:var(--pv-surface-2);border:1px solid var(--pv-line);border-radius:var(--pv-r);
+  padding:var(--pv-3) var(--pv-4)}
+.pv-card:hover{border-color:var(--pv-line-2)}
+
+/* ── 按钮 ───────────────────────────────────────────────────────── */
+button,.pv-btn{
+  --_bg:var(--pv-surface-2);--_fg:var(--pv-ink);--_bd:var(--pv-line-2);
+  display:inline-flex;align-items:center;justify-content:center;gap:6px;
+  background:var(--_bg);color:var(--_fg);border:1px solid var(--_bd);
+  border-radius:var(--pv-r-sm);padding:8px 14px;cursor:pointer;
+  font:500 var(--pv-fs)/1 var(--pv-font);letter-spacing:.02em;white-space:nowrap;
+  transition:background .18s var(--pv-ease),border-color .18s var(--pv-ease),
+             color .18s var(--pv-ease),transform .06s var(--pv-ease);
+}
+button:hover,.pv-btn:hover{--_bg:var(--pv-surface-3);--_bd:var(--pv-gold-2);--_fg:var(--pv-gold)}
+button:active,.pv-btn:active{transform:translateY(1px)}
+button:focus-visible,.pv-btn:focus-visible{outline:none;box-shadow:var(--pv-ring)}
+button:disabled{opacity:.4;cursor:not-allowed;transform:none}
+button.primary,.pv-btn.primary{--_bg:linear-gradient(180deg,#e3c68a,#c9a463);--_fg:#161310;--_bd:transparent;
+  box-shadow:0 1px 0 rgba(255,255,255,.35) inset,0 6px 16px rgba(201,164,99,.18);font-weight:600}
+button.primary:hover{--_bg:linear-gradient(180deg,#ecd299,#d5af6d);--_fg:#161310}
+button.ghost{--_bg:transparent;--_bd:transparent;--_fg:var(--pv-ink-2)}
+button.ghost:hover{--_bg:var(--pv-surface-2);--_fg:var(--pv-ink)}
+button.danger{--_fg:var(--pv-bad);--_bd:rgba(217,123,108,.35)}
+button.danger:hover{--_bg:var(--pv-bad-soft);--_bd:var(--pv-bad);--_fg:var(--pv-bad)}
+button.sm{padding:5px 10px;font-size:var(--pv-fs-xs)}
+
+/* ── 表单 ───────────────────────────────────────────────────────── */
+.pv-field{margin:0 0 var(--pv-4)}
+.pv-label{display:block;color:var(--pv-ink-2);font-size:var(--pv-fs-sm);margin-bottom:6px}
+.pv-input,.pv-textarea,.pv-select{
+  width:100%;background:var(--pv-surface-2);color:var(--pv-ink);
+  border:1px solid var(--pv-line-2);border-radius:var(--pv-r-sm);
+  padding:9px 11px;font:var(--pv-fs-sm)/1.6 var(--pv-mono);outline:none;
+  transition:border-color .18s var(--pv-ease),box-shadow .18s var(--pv-ease),background .18s var(--pv-ease);
+}
+.pv-textarea{min-height:110px;resize:vertical;font-family:var(--pv-mono)}
+.pv-input::placeholder,.pv-textarea::placeholder{color:var(--pv-ink-3)}
+.pv-input:hover,.pv-textarea:hover,.pv-select:hover{border-color:rgba(232,226,214,.22)}
+.pv-input:focus,.pv-textarea:focus,.pv-select:focus{border-color:var(--pv-gold);box-shadow:var(--pv-ring)}
+.pv-hint{color:var(--pv-ink-3);font-size:var(--pv-fs-xs);margin-top:6px;line-height:1.65}
+.pv-input.mono{font-family:var(--pv-mono)}
+
+/* 开关（checkbox 改造）*/
+.pv-switch{display:inline-flex;align-items:center;gap:10px;cursor:pointer;user-select:none}
+.pv-switch input{position:absolute;opacity:0;width:0;height:0}
+.pv-switch .pv-track{width:36px;height:20px;border-radius:var(--pv-r-full);background:var(--pv-surface-3);
+  border:1px solid var(--pv-line-2);position:relative;transition:background .2s var(--pv-ease),border-color .2s var(--pv-ease)}
+.pv-switch .pv-track::after{content:"";position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;
+  background:var(--pv-ink-3);transition:transform .2s var(--pv-ease),background .2s var(--pv-ease)}
+.pv-switch input:checked+.pv-track{background:var(--pv-gold-soft);border-color:var(--pv-gold-2)}
+.pv-switch input:checked+.pv-track::after{transform:translateX(16px);background:var(--pv-gold)}
+.pv-switch input:focus-visible+.pv-track{box-shadow:var(--pv-ring)}
+.pv-switch .pv-switch-label{font-size:var(--pv-fs-sm);color:var(--pv-ink-2)}
+
+/* 分段控件 */
+.pv-seg{display:inline-flex;background:var(--pv-surface-2);border:1px solid var(--pv-line-2);
+  border-radius:var(--pv-r-sm);padding:3px;gap:2px}
+.pv-seg button{background:transparent;border:0;padding:6px 14px;border-radius:4px;
+  color:var(--pv-ink-3);font-size:var(--pv-fs-sm)}
+.pv-seg button:hover{color:var(--pv-ink);--_bg:transparent}
+.pv-seg button.on{background:var(--pv-gold-soft);color:var(--pv-gold);font-weight:600}
+
+/* ── 数据展示 ───────────────────────────────────────────────────── */
+.pv-kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(128px,1fr));gap:var(--pv-3)}
+.pv-kpi{background:linear-gradient(180deg,var(--pv-surface-2),var(--pv-surface));
+  border:1px solid var(--pv-line);border-radius:var(--pv-r);padding:var(--pv-3) var(--pv-4);min-width:0}
+.pv-kpi .k{display:block;color:var(--pv-ink-3);font-size:var(--pv-fs-xs);letter-spacing:.1em;text-transform:uppercase}
+.pv-kpi b{display:block;margin-top:6px;font-size:24px;font-weight:600;letter-spacing:-.01em;
+  color:var(--pv-ink);font-variant-numeric:tabular-nums;line-height:1.2}
+.pv-kpi .d{font-size:var(--pv-fs-xs);color:var(--pv-ink-3);margin-top:4px}
+.pv-kpi .d.ok{color:var(--pv-ok)} .pv-kpi .d.bad{color:var(--pv-bad)} .pv-kpi .d.warn{color:var(--pv-warn)}
+.pv-kpi.hero b{color:var(--pv-gold)}
+
+/* 兼容旧统计块 */
+.pv-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(128px,1fr));gap:var(--pv-3)}
+.pv-stat{background:linear-gradient(180deg,var(--pv-surface-2),var(--pv-surface));
+  border:1px solid var(--pv-line);border-radius:var(--pv-r);padding:var(--pv-3) var(--pv-4);text-align:left}
+.pv-stat b{display:block;font-size:22px;color:var(--pv-gold);font-variant-numeric:tabular-nums;line-height:1.25}
+.pv-stat span{display:block;color:var(--pv-ink-3);font-size:var(--pv-fs-xs);margin-top:4px;letter-spacing:.06em}
+
+/* 进度/状态条 */
+.pv-rows{display:grid;gap:var(--pv-3)}
+.pv-row{display:grid;grid-template-columns:110px 1fr 58px;align-items:center;gap:var(--pv-3)}
+.pv-row .pv-lab{color:var(--pv-ink-2);font-size:var(--pv-fs-sm);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pv-bar{position:relative;height:6px;background:var(--pv-surface-3);border-radius:var(--pv-r-full);overflow:hidden}
+.pv-bar>i{display:block;height:100%;width:0;border-radius:inherit;
+  background:linear-gradient(90deg,var(--pv-gold-2),var(--pv-gold));transition:width .5s var(--pv-ease)}
+.pv-bar.warn>i{background:linear-gradient(90deg,#a9763f,var(--pv-warn))}
+.pv-bar.bad>i{background:linear-gradient(90deg,#a05a4e,var(--pv-bad))}
+.pv-val{text-align:right;font-family:var(--pv-mono);font-size:var(--pv-fs-sm);color:var(--pv-ink-2);font-variant-numeric:tabular-nums}
+
+/* 表格 */
+.pv-table{width:100%;border-collapse:separate;border-spacing:0;font-size:var(--pv-fs-sm)}
+.pv-table th{color:var(--pv-ink-3);font-weight:500;font-size:var(--pv-fs-xs);letter-spacing:.1em;
+  text-transform:uppercase;text-align:left;padding:0 10px 8px;border-bottom:1px solid var(--pv-line-2);white-space:nowrap}
+.pv-table td{padding:10px;border-bottom:1px solid var(--pv-line);vertical-align:top}
+.pv-table tbody tr:hover td{background:rgba(232,226,214,.025)}
+.pv-table tbody tr:last-child td{border-bottom:0}
+.pv-table td.k{color:var(--pv-gold);white-space:nowrap}
+.pv-scroll{overflow:auto;max-height:380px}
+
+/* 标签 / 胶囊 */
+.pv-tag{display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border-radius:var(--pv-r-full);
+  border:1px solid var(--pv-line-2);color:var(--pv-ink-2);font-size:var(--pv-fs-xs);letter-spacing:.03em;white-space:nowrap}
+.pv-tag.ok{border-color:rgba(143,196,160,.4);color:var(--pv-ok);background:var(--pv-ok-soft)}
+.pv-tag.warn{border-color:rgba(217,161,95,.4);color:var(--pv-warn);background:var(--pv-warn-soft)}
+.pv-tag.bad{border-color:rgba(217,123,108,.4);color:var(--pv-bad);background:var(--pv-bad-soft)}
+.pv-tag.gold{border-color:rgba(216,184,119,.45);color:var(--pv-gold);background:var(--pv-gold-soft)}
+
+/* 空态 / 提示 */
+.pv-empty{color:var(--pv-ink-3);font-size:var(--pv-fs-sm);text-align:center;padding:var(--pv-6) var(--pv-4);
+  border:1px dashed var(--pv-line-2);border-radius:var(--pv-r);background:rgba(255,255,255,.012)}
+.pv-msg{font-size:var(--pv-fs-sm);margin-top:var(--pv-3);min-height:18px;color:var(--pv-ink-3)}
+.pv-msg.ok{color:var(--pv-ok)} .pv-msg.err{color:var(--pv-bad)}
+.pv-flex{display:flex;gap:var(--pv-2);flex-wrap:wrap;align-items:center}
+.pv-muted{color:var(--pv-ink-3)}
+
+/* 时间线 */
+.pv-timeline{list-style:none;margin:0;padding:0 0 0 16px;border-left:1px solid var(--pv-line-2)}
+.pv-timeline li{position:relative;padding:0 0 var(--pv-3) 14px}
+.pv-timeline li::before{content:"";position:absolute;left:-21px;top:6px;width:7px;height:7px;border-radius:50%;
+  background:var(--pv-surface-3);border:1px solid var(--pv-line-2)}
+.pv-timeline li.hot::before{background:var(--pv-gold);border-color:var(--pv-gold);box-shadow:0 0 0 4px var(--pv-gold-soft)}
+.pv-timeline .t{font-family:var(--pv-mono);font-size:var(--pv-fs-xs);color:var(--pv-ink-3)}
+.pv-timeline .tx{color:var(--pv-ink-2);font-size:var(--pv-fs-sm);margin-top:3px}
+
+/* 周网格 */
+.pv-grid7{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:var(--pv-2)}
+.pv-day{background:var(--pv-surface);border:1px solid var(--pv-line);border-radius:var(--pv-r);padding:var(--pv-2)}
+.pv-day h3{font-size:var(--pv-fs-xs);color:var(--pv-ink-3);letter-spacing:.12em;text-transform:uppercase;margin:2px 0 var(--pv-2)}
+.pv-day .pv-slot{font-size:var(--pv-fs-xs);line-height:1.55;color:var(--pv-ink-2);padding:5px 0;
+  border-bottom:1px dashed var(--pv-line)}
+.pv-day .pv-slot:last-child{border-bottom:0}
+.pv-day .pv-slot em{color:var(--pv-ink-3);font-style:normal;font-family:var(--pv-mono);font-size:10px}
+.pv-day.today{border-color:rgba(216,184,119,.5);background:linear-gradient(180deg,var(--pv-gold-soft),transparent 70%)}
+.pv-day.now .pv-slot.cur{color:var(--pv-gold)}
+@media (max-width:900px){.pv-grid7{grid-template-columns:repeat(2,minmax(0,1fr))}}
+
+/* SVG 趋势图容器 */
+.pv-chart{width:100%;height:120px;display:block}
+.pv-chart .grid{stroke:rgba(232,226,214,.06)}
+.pv-chart .line{fill:none;stroke:var(--pv-gold);stroke-width:1.6;stroke-linejoin:round;stroke-linecap:round}
+.pv-chart .area{fill:url(#pv-grad);opacity:.5}
+.pv-chart .dot{fill:var(--pv-bg);stroke:var(--pv-gold);stroke-width:1.4}
+
+/* 骨架屏 */
+.pv-skeleton{height:12px;border-radius:4px;
+  background:linear-gradient(90deg,var(--pv-surface-2) 25%,var(--pv-surface-3) 37%,var(--pv-surface-2) 63%);
+  background-size:400% 100%;animation:pv-sk 1.4s ease infinite}
+@keyframes pv-sk{0%{background-position:100% 0}100%{background-position:0 0}}
+
+/* 细节 */
+.pv-panel>.pv-panel-h+.pv-hint{margin-top:-6px}
+.pv-inline-code{background:var(--pv-surface-2);border:1px solid var(--pv-line);border-radius:4px;
+  padding:1px 5px;font-family:var(--pv-mono);font-size:var(--pv-fs-xs)}
+.pv-truncate{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+</style>
+</head>
+<body>
+  <div class="pv-head">
+    <div class="pv-hero-icon">✎</div>
+    <div class="pv-head-body">
+      <div class="pv-eyebrow">EGO · PERSONALITY</div>
+      <h1>人格引擎</h1>
+      <div class="pv-sub">唯一写入口是 plugins/personality.txt。段名从后端读、不写死；保存时全量回传，漏一段等于删一段。</div>
+    </div>
+  </div>
+
+  <div class="pv-kpis" style="margin-bottom:16px">
+    <div class="pv-kpi"><span class="k">段落</span><b id="k-secs">—</b><div class="d">按【】切分</div></div>
+    <div class="pv-kpi hero"><span class="k">总字数</span><b id="k-chars">—</b><div class="d">当前生效</div></div>
+    <div class="pv-kpi"><span class="k">人格卡</span><b id="k-cards">—</b><div class="d">可应用 / 快照</div></div>
+    <div class="pv-kpi"><span class="k">示例注入</span><b id="k-ex">—</b><div class="d">few-shot</div></div>
+  </div>
+
+  <div class="pv-panel">
+    <div class="pv-panel-h"><h2>人格卡</h2><i class="pv-rule"></i>
+      <span class="pv-count">应用 = 覆盖人格（先自动备份）</span>
+      <button class="sm" id="save-card">存为卡</button></div>
+    <div id="cards"><div class="pv-empty">读取中…</div></div>
+  </div>
+
+  <div class="pv-panel">
+    <div class="pv-panel-h"><h2>人格段落</h2><i class="pv-rule"></i>
+      <span class="pv-count" id="secs-n">—</span></div>
+    <div class="pv-grid cols-2" id="grid"></div>
+    <div id="empty-tip"></div>
+  </div>
+
+  <div class="pv-panel">
+    <div class="pv-panel-h"><h2>保存</h2><i class="pv-rule"></i></div>
+    <div class="pv-flex">
+      <button class="primary" id="save">保存人格</button>
+      <button id="reload">重新读取</button>
+      <label class="pv-switch" style="margin-left:8px">
+        <input type="checkbox" id="ex">
+        <span class="pv-track"></span>
+        <span class="pv-switch-label">few-shot 示例注入</span>
+      </label>
+    </div>
+    <div class="pv-hint">保存全量回传所有段落；总字数暴跌会二次确认。段标题【】别改，下游按段名取值。</div>
+    <div class="pv-msg" id="msg"></div>
+  </div>
+
+  <div class="pv-panel">
+    <div class="pv-panel-h"><h2>示例库</h2><i class="pv-rule"></i>
+      <span class="pv-count">few-shot，保存后下一轮生效</span></div>
+    <textarea class="pv-textarea" id="examples" style="min-height:160px"></textarea>
+    <div class="pv-flex" style="margin-top:10px">
+      <button class="primary" id="save-ex">保存示例</button>
+      <button id="reload-ex">重新读取</button>
+    </div>
+    <div class="pv-msg" id="msg-ex"></div>
+  </div>
+
+<script>
+const ACT='/api/plugins/action';
+const CARDS='/api/persona/cards';
+const $=id=>document.getElementById(id);
+const msg=$('msg'), msgEx=$('msg-ex');
+let SECTIONS={}, TOTAL=0;
+
+async function post(url, body){
+  const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify(body)});
+  const t=await r.text(); try{return JSON.parse(t)}catch{return {raw:t}}
+}
+async function get(url){
+  const r=await fetch(url,{headers:{'Accept':'application/json'}});
+  const t=await r.text(); try{return JSON.parse(t)}catch{return {raw:t}}
+}
+function setMsg(el,t,ok){ el.className='pv-msg '+(ok?'ok':'err'); el.textContent=t||''; }
+function call(action,params){ return post(ACT,{plugin_id:'ego.personality_engine',action,params:params||{}}); }
+function esc(s){ return String(s==null?'':s).replace(/</g,'&lt;').replace(/"/g,'&quot;'); }
+
+function drawSections(){
+  const keys=Object.keys(SECTIONS);
+  $('secs-n').textContent=keys.length+' 段';
+  $('grid').innerHTML=keys.map(k=>{
+    const v=String(SECTIONS[k]||'');
+    const prev=v.replace(/\s+/g,' ').slice(0,140);
+    return '<div class="pv-card pc-card" data-k="'+encodeURIComponent(k)+'">'
+      +'<div class="pv-flex" style="justify-content:space-between">'
+      +  '<span class="pc-name">'+esc(k)+'</span>'
+      +  '<span class="pv-count pc-n">'+v.length+' 字</span></div>'
+      +'<div class="pc-prev">'+esc(prev||'（空段）')+'</div>'
+      +'<textarea class="pv-textarea" data-sec="'+esc(k)+'" hidden></textarea>'
+      +'<div class="pv-flex" style="margin-top:10px"><button class="sm" data-edit="1">编辑</button></div>'
+      +'</div>';
+  }).join('')||'<div class="pv-empty">没读到任何段落</div>';
+  document.querySelectorAll('textarea[data-sec]').forEach(ta=>{
+    ta.value=SECTIONS[ta.dataset.sec]||'';
+    ta.addEventListener('input',()=>{
+      SECTIONS[ta.dataset.sec]=ta.value;
+      const card=ta.closest('.pc-card');
+      card.querySelector('.pc-n').textContent=ta.value.length+' 字';
+      card.querySelector('.pc-prev').textContent=ta.value.replace(/\s+/g,' ').slice(0,140)||'（空段）';
+      refreshTotal();
+    });
+  });
+  document.querySelectorAll('[data-edit]').forEach(b=>b.onclick=()=>{
+    const card=b.closest('.pc-card');
+    const ta=card.querySelector('textarea');
+    const open=card.classList.toggle('open');
+    ta.hidden=!open; b.textContent=open?'收起':'编辑';
+    if(open){ ta.focus(); ta.selectionStart=ta.selectionEnd=0; }
+  });
+}
+function refreshTotal(){
+  TOTAL=Object.keys(SECTIONS).reduce((n,k)=>n+String(SECTIONS[k]||'').length,0);
+  $('k-chars').textContent=TOTAL;
+  $('k-secs').textContent=Object.keys(SECTIONS).length;
+}
+
+async function load(){
+  const r=await call('get_personality');
+  if(!r||r.error){ $('msg').className='pv-msg err'; $('msg').textContent='读取失败：'+((r&&r.error)||'未知'); return; }
+  SECTIONS=Object.assign({},r.sections||{});
+  $('k-ex').textContent=((r.config||{}).example_enabled===false)?'关':'开';
+  $('ex').checked=((r.config||{}).example_enabled!==false);
+  drawSections(); refreshTotal();
+  $('empty-tip').innerHTML=Object.keys(SECTIONS).length?''
+    :'<div class="pv-msg err">没读到段落，先别保存 —— 去 plugins/personality.txt 确认内容。</div>';
+  await loadCards();
+}
+function fmtTime(v){
+  const t=Number(v); if(!t||!isFinite(t)) return '—';
+  const d=new Date(t*1000), p=n=>String(n).padStart(2,'0');
+  return (d.getMonth()+1)+'-'+p(d.getDate())+' '+p(d.getHours())+':'+p(d.getMinutes());
+}
+async function loadCards(){
+  let r=null; try{ r=await get(CARDS); }catch(e){ return; }
+  const cards=(r&&r.cards)||[];
+  $('k-cards').textContent=cards.length;
+  const host=$('cards');
+  if(!cards.length){ host.innerHTML='<div class="pv-empty">还没有卡 —— 点右上「存为卡」把当前人格存成快照</div>'; return; }
+  host.innerHTML='<div class="pv-grid cols-3">'+cards.map(c=>
+    '<div class="pv-card">'
+    +'<div class="pv-flex" style="justify-content:space-between">'
+    +  '<b style="font-size:13px">'+esc(c.name)+'</b>'
+    +  '<span class="pv-count">'+(c.chars||0)+' 字</span></div>'
+    +(c.note?'<div class="pv-hint" style="margin-top:4px">'+esc(c.note)+'</div>':'')
+    +'<div class="pv-count" style="margin-top:6px">'+(c.sections_count||0)+' 段 · '
+    +  esc(fmtTime(c.updated))+'</div>'
+    +(((c.sections_count||0)<Object.keys(SECTIONS).length)
+      ? '<div class="pv-count" style="color:var(--pv-bad)">仅 '+(c.sections_count||0)
+        +' 段，当前 '+Object.keys(SECTIONS).length+' 段 —— 只换人格段，规则层自动保留</div>' : '')
+    +'<div class="pv-flex" style="margin-top:10px">'
+    +  '<button class="primary sm" data-apply="'+esc(c.id)+'">应用</button>'
+    +  '<button class="danger sm" data-del="'+esc(c.id)+'">删除</button></div>'
+    +'</div>').join('')+'</div>';
+  document.querySelectorAll('[data-apply]').forEach(b=>b.onclick=async()=>{
+    if(b.dataset.armed!=='1'){ b.dataset.armed='1'; b.textContent='确认应用？';
+      setTimeout(()=>{ b.textContent='应用'; },3000); return; }
+    const r2=await post(CARDS,{action:'apply',id:b.dataset.apply});
+    if(r2&&r2.ok){ setMsg(msg,'已应用'+(r2.warning?('（注意：'+r2.warning+'）'):'')+'，下一轮生效',true); await load(); }
+    else setMsg(msg,'应用失败：'+((r2&&r2.error)||'未知'),false);
+  });
+  document.querySelectorAll('[data-del]').forEach(b=>b.onclick=async()=>{
+    if(b.dataset.armed!=='1'){ b.dataset.armed='1'; b.textContent='确认删除';
+      setTimeout(()=>{ b.textContent='删除'; },3000); return; }
+    await post(CARDS,{action:'delete',id:b.dataset.del});
+    await loadCards();
+  });
+}
+$('save').onclick=async()=>{
+  const keys=Object.keys(SECTIONS);
+  if(!keys.length){ setMsg(msg,'没有段落，拒绝保存',false); return; }
+  const total=keys.reduce((n,k)=>n+String(SECTIONS[k]||'').length,0);
+  if(TOTAL>0 && total<TOTAL*0.5 && !confirm('总字数从 '+TOTAL+' 降到 '+total+'，确定保存？')) return;
+  const r=await post(ACT,{plugin_id:'ego.personality_engine',action:'save_personality',
+    params:{sections:SECTIONS,config:{example_enabled:$('ex').checked}}});
+  if(r&&r.success!==false){ setMsg(msg,'已保存（'+keys.length+' 段 / '+total+' 字）',true); refreshTotal(); }
+  else setMsg(msg,'保存失败：'+((r&&r.error)||'未知'),false);
+};
+$('save-card').onclick=async()=>{
+  const name=(prompt('卡名（如：小a-原版）')||'').trim();
+  if(!name) return;
+  const r=await post(CARDS,{action:'save',name,sections:SECTIONS});
+  if(r&&r.ok){ setMsg(msg,'已存为卡「'+name+'」',true); await loadCards(); }
+  else setMsg(msg,'存卡失败：'+((r&&r.error)||'未知'),false);
+};
+$('reload').onclick=load;
+$('ex').onchange=()=>{ $('k-ex').textContent=$('ex').checked?'开':'关'; };
+
+async function loadExamples(){
+  const r=await call('get_examples',{scene:''});
+  $('examples').value=JSON.stringify((r&&r.examples)||[],null,2);
+}
+$('reload-ex').onclick=loadExamples;
+$('save-ex').onclick=async()=>{
+  let arr; try{ arr=JSON.parse($('examples').value||'[]'); }
+  catch(e){ setMsg(msgEx,'JSON 不合法：'+e.message,false); return; }
+  const r=await call('save_examples',{examples:arr,scene:''});
+  setMsg(msgEx,r&&r.success!==false?'示例已保存':'保存失败：'+JSON.stringify(r), !!(r&&r.success!==false));
+};
+load();
+loadExamples();
+</script>
+</body>
+</html>

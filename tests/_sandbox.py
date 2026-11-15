@@ -1,0 +1,143 @@
+# -*- coding: utf-8 -*-
+"""tests/_sandbox.py —— 测试用沙漏路径隔离（**必须在 import 沙漏模块之前调用**）。
+
+## 为什么需要
+
+`test_memory_feed` / `test_memory_stage_a` / `test_memory_stage_b` /
+`test_sandglass_dedup` 等测试会调用 `sandglass_bridge.memory_feed` /
+`log_user_message`。这些函数在**记忆系统已就绪时会真的写盘** ——
+而本机 `~/.neurobase/sandglass.txt` 是生产记忆（4080 行、跨度 4 个月）。
+
+2026-10-19 实测踩到：跑一次全量回归，生产沙漏末尾多了 20 行探针
+（`帮我搜一下天气` / `答案` / `u` / `a` …）—— 全是测试写进去的。
+
+这些污染会进倒排索引与 FTS5 召回，等于**用测试数据训练生产记忆**。
+
+## 用法
+
+在各测试文件**最顶部**（import sandglass 相关模块之前）：
+
+    from _sandbox import sandbox_neurobase
+    sandbox_neurobase()
+
+它会：
+  1. 建立临时 NEXSANDBASE_HOME（tempfile.mkdtemp）
+  2. 设进 os.environ（沙漏路径解析的第一优先级）
+  3. 把环境变量写进 sandglass_lite / sandglass_paths 的模块级路径常量
+  4. 注册 atexit 清理
+
+若测试需要断言"格式与既有数据一致"，可用本模块返回的临时目录自己造样本。
+"""
+import atexit
+import os
+import shutil
+import sys
+import tempfile
+
+_TMPDIR = None
+
+
+def sandbox_neurobase(prefix="eggbloom_test_nb_") -> str:
+    """把沙漏数据根指向临时目录，返回该目录。可重复调用（幂等）。"""
+    global _TMPDIR
+    if _TMPDIR is not None:
+        return _TMPDIR
+
+    td = tempfile.mkdtemp(prefix=prefix)
+    _TMPDIR = td
+
+    # 1. 环境变量（沙漏路径解析的最高优先级）
+    os.environ["NEXSANDBASE_HOME"] = td
+    # 插件注入预算账本：测试跑 `_plan_plugin_inject` 会真的记账，写生产账本一天
+    # 就能把 ego 刷满（实测 594/600），之后注入被预算丢掉 → 别的测试假红。
+    os.environ["EGGBLOOM_PLUGIN_BUDGET"] = os.path.join(td, "plugin_budget.json")
+    # ★ 2026-11-04：数据目录（日志/状态/配置）也指到临时目录。
+    #   不这么做，测试的报错会写进真机的 qq_bot.log —— 用户翻日志会以为真出故障
+    #   （实测见到 FakePM / 磁盘已满（模拟） / 注册表炸了 这类测试桩的报错）。
+    os.environ["EGGBLOOM_USER_DATA"] = os.path.join(td, "userdata")
+    os.makedirs(os.environ["EGGBLOOM_USER_DATA"], exist_ok=True)
+    # ★ 2026-11-05：出站队列的落盘库也要隔离。
+    #   `harness/outbox.py` 默认写 `<app>/data/outbox.sqlite3`，本来就在仓库里、
+    #   全测试共享 —— 上一个用例落盘但没发出的任务，会被下一个用例
+    #   `_recover_from_disk()` 当成"重启恢复"再发一遍（实测 test_outbound
+    #   报「真的发出去了」失败，日志里多出 `[发送] 重启恢复 2 条未发出的消息`）。
+    #   这个键必须在 import harness.outbox 之前设好：_DEFAULT 是模块级常量。
+    os.environ["EGGBLOOM_OUTBOX_DB"] = os.path.join(td, "outbox.sqlite3")
+
+    # 2. 若模块已导入，改写其路径常量
+    #    （正常情况下本函数在 import 之前调用，这一步是兜底）
+    _repatch(td)
+
+    # 3. 建最小目录结构
+    for sub in ("", "persona", "archive", "scripts"):
+        try:
+            os.makedirs(os.path.join(td, sub), exist_ok=True)
+        except OSError:
+            pass
+
+    atexit.register(_cleanup)
+    return td
+
+
+def _repatch(td: str) -> None:
+    """改写已导入模块的路径常量（模块级 _NB / _SANDGLASS 等）。"""
+    txt = os.path.join(td, "sandglass.txt")
+    idx = os.path.join(td, "sandglass.idx")
+    shadow = os.path.join(td, "shadow_sand.db")
+    particles = os.path.join(td, "decision_particles.txt")
+
+    # ★ 2026-11-04：bot_core 的日志/状态/指令文件也要改。
+    #   有些测试先 import bot_core 再调沙箱，import 时路径已定死 ——
+    #   不改会导致测试报错写进用户的 qq_bot.log（真的污染过）。
+    _bc = sys.modules.get("bot_core")
+    if _bc is not None:
+        _ud = os.path.join(td, "userdata")
+        try:
+            os.makedirs(_ud, exist_ok=True)
+        except Exception:
+            pass
+        for attr, name in (("LOG_FILE", "qq_bot.log"),
+                           ("STATE_FILE", "qq_bot_state.json"),
+                           ("INSTRUCTION_FILE", "qq_instructions.json"),
+                           ("TEMP_DIR", "temp"),
+                           ("IMAGE_CACHE", "image_cache")):
+            if hasattr(_bc, attr):
+                p = os.path.join(_ud, name)
+                try:
+                    if name in ("temp", "image_cache"):
+                        os.makedirs(p, exist_ok=True)
+                except Exception:
+                    pass
+                setattr(_bc, attr, p)
+
+    for modname in ("sandglass_lite",):
+        m = sys.modules.get(modname)
+        if m is None:
+            continue
+        for attr, val in (("_NB", td), ("_SANDGLASS", txt), ("_INDEX", idx),
+                          ("_TRUST_DB", shadow), ("_PARTICLES", particles)):
+            if hasattr(m, attr):
+                setattr(m, attr, val)
+        m._idx_cache = None
+        m._idx_mtime = 0.0
+
+    # 出站队列库：模块已导入时改掉模块级常量，并丢掉已建好的单例连接
+    _obx = sys.modules.get("harness.outbox") or sys.modules.get("outbox")
+    if _obx is not None:
+        setattr(_obx, "_DEFAULT", os.path.join(td, "outbox.sqlite3"))
+        try:
+            _obx.reset_default()       # 让下一次 default() 用新路径重连
+        except Exception:
+            pass
+
+
+def temp_dir() -> str:
+    """当前临时目录（未初始化则先初始化）。"""
+    return _TMPDIR or sandbox_neurobase()
+
+
+def _cleanup():
+    global _TMPDIR
+    if _TMPDIR and os.path.isdir(_TMPDIR):
+        shutil.rmtree(_TMPDIR, ignore_errors=True)
+    _TMPDIR = None

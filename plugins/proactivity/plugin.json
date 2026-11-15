@@ -1,0 +1,12 @@
+{
+  "id": "proactivity",
+  "version": "0.1.0",
+  "title": "主动性行为",
+  "description": "观察会话状态（未回应 / 被@没回 / 未兑现话头 / 撤回），规则+模型混合判断后统一预算下主动反馈",
+  "provides": [],
+  "requires": [],
+  "permissions": ["read"],
+  "scope": "global",
+  "priority": 80,
+  "default_enabled": true
+}
