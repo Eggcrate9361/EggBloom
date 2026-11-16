@@ -593,8 +593,13 @@ def _protocol_check_items(driver: str = "") -> dict:
 # 本地 embedding 服务守护：llama-server 跑 BGE-small-zh，端口 8083
 # 未启动时自动拉起（失败静默，super_memory 会自动降级回传统检索）
 # 路径来源：super_memory data/config.json > bot_config.json(embed_*) > 内置默认（本机 LiGGUF/BGE 模型）
-_EMBED_DEFAULT_EXE = Path(str(load_config().get("embed_exe") or "")).resolve()
-_EMBED_DEFAULT_MODEL = Path(str(load_config().get("embed_model_path") or "")).resolve()
+_embed_exe_cfg = str(load_config().get("embed_exe") or "").strip()
+_embed_model_cfg = str(load_config().get("embed_model_path") or "").strip()
+# ★ 2026-11-16：空串不能再 `.resolve()` —— 那会把路径解析成**项目根目录**，
+# 看门狗每轮都拿根目录当 embedding 可执行文件去 Popen，报 "Permission denied"
+# 刷了一千多行。没配就是没配，给 None 让调用方走内置默认。
+_EMBED_DEFAULT_EXE = Path(_embed_exe_cfg).resolve() if _embed_exe_cfg else None
+_EMBED_DEFAULT_MODEL = Path(_embed_model_cfg).resolve() if _embed_model_cfg else None
 # 内置默认：模型随 EGO super_memory 打包分发（体量小）；llama-server 为 HTTP 兜底
 _EMBED_BUILTIN_MODEL = PROJECT / "plugins" / "ego" / "super_memory" / "models" / "bge-small-zh-v1.5-f16.gguf"
 _EMBED_BUILTIN_EXE = Path(r"D:\llama-b10068\llama-server.exe")
@@ -617,6 +622,18 @@ def _embed_config():
     except Exception:
         pass
     return {}
+
+
+_EMBED_WARNED: set = set()
+
+
+def _embed_warn_once(msg: str) -> None:
+    """同一句「拉不起来」只记一次。看门狗 15 分钟一轮，重复打印只是污染日志
+    （2026-11-16 真机：一条 Permission denied 刷了 1582 行）。"""
+    if msg in _EMBED_WARNED:
+        return
+    _EMBED_WARNED.add(msg)
+    print(f"[embed] {msg}")
 
 
 def _ensure_embed_server():
@@ -661,22 +678,27 @@ def _ensure_embed_server():
             return path
 
     def _resolve(p, fallback):
-        p = str(p or "")
+        p = str(p or "").strip()
         if p and not os.path.isabs(p):
             p = str(_sm_plugin / p)
-        return Path(p or str(fallback))
+        if p:
+            return Path(p)
+        return Path(fallback) if fallback else None
 
     exe = _resolve(cfg.get("embed_exe"), _EMBED_DEFAULT_EXE or _EMBED_BUILTIN_EXE)
     model = _resolve(cfg.get("embed_model_path"), _EMBED_DEFAULT_MODEL or _EMBED_BUILTIN_MODEL)
+    if not exe or not model:
+        _embed_warn_once("没配 embed_exe / embed_model_path，跳过拉起（向量检索降级）")
+        return False
     model = _ascii_mirror(model, exe.parent)
     # 2026-11-13 真机：exe 解析成仓库目录时 exists() 也为真，Popen 会去 exec 一个
     # 目录 → [Errno 13] Permission denied，再被 30s 看门狗刷了 7085 次。
     # 必须是「文件」且「可执行」，不能用 exists()（目录同样返回 True）。
     if not (os.path.isfile(str(exe)) and os.path.isfile(str(model))):
-        print(f"[embed] 服务未启动且找不到 embedding 程序/模型文件: {exe} / {model}")
+        _embed_warn_once(f"找不到 embedding 程序/模型文件: {exe} / {model}")
         return False
     if not os.access(str(exe), os.X_OK):
-        print(f"[embed] embedding 程序不可执行（目录或缺少执行权限）: {exe}")
+        _embed_warn_once(f"embedding 程序不可执行（目录或缺少执行权限）: {exe}")
         return False
     try:
         log_dir = exe.parent
