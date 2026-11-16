@@ -95,29 +95,52 @@ TOOLING_PREFIX = ("scripts/", "tests/", "tools/", ".github/", ".gitignore")
 
 
 def _drift(commit):
-    """自 commit 到 HEAD 的差异。返回 (是否祖先, 源码改动, 其余改动)。
+    """自 commit 到 HEAD 的差异。返回 (是否祖先, [(状态, 路径)] 源码, [路径] 其余)。
 
     为什么不要求 `source_commit == HEAD`：那要求「打包之后一个字都不能再提交」，
     改个错别字就得重打三档包。实际风险也不是「包旧了」，而是**包里的代码/文档
     与它在仓库里声称的那次提交对不上** —— 所以按文件类别分开判：
       * 源码变了 → 包跑的是旧代码，硬失败（这种包发出去就是「说一套跑一套」）；
       * 只有工具链/文档变了 → 包内容仍然自洽，只提示「重打才完全一致」。
+
+    状态位要留着（`A`/`M`/`D`）：**新增**的文件如果包里已经有同一份字节，
+    说明是「仓库刚补上、包早就带着」，不算落后 —— 这一条由 `scan_zip` 复核。
     """
     anc = subprocess.run(["git", "merge-base", "--is-ancestor", commit, "HEAD"],
                          cwd=ROOT, capture_output=True).returncode == 0
     if not anc:
         return False, [], []
-    changed = _git("diff", "--name-only", "%s..HEAD" % commit).decode(
+    changed = _git("diff", "--name-status", "%s..HEAD" % commit).decode(
         "utf-8", "replace").splitlines()
     src, other = [], []
-    for p in changed:
+    for line in changed:
+        parts = line.split("\t")
+        if len(parts) < 2:
+            continue
+        st, p = parts[0][:1], parts[-1]
         if p.startswith(TOOLING_PREFIX):
             continue
         if p.startswith(SOURCE_PREFIX) or ("/" not in p and p.endswith((".py", ".json", ".toml"))):
-            src.append(p)
+            src.append((st, p))
         else:
             other.append(p)
     return True, src, other
+
+
+def _pkg_has_same(z, top, rel):
+    """包里那份 `rel` 与 HEAD 是否逐字节一致（行尾归一后比）。"""
+    prefix = APP_ROOT.get(top, "")
+    arc = "%s/%s%s" % (top, prefix, rel)
+    try:
+        data = z.read(arc)
+    except Exception:
+        return False
+    try:
+        head = _git("show", "HEAD:%s" % rel)
+    except SystemExit:
+        return False
+    norm = lambda b: b.replace(b"\r\n", b"\n")
+    return norm(data) == norm(head)
 
 
 def _git(*args):
@@ -226,8 +249,14 @@ def scan_zip(path, commit=None, strict=False, check_commit=True):
                 rep["warns"].append((where, 0, "源码库没有这个文件", ""))
 
             # ── 判据 5：文件名里的长数字 ──
+            # `memes/` 下的是第三方表情包库，文件名里的号是**上游素材自带的群号**
+            # （`zhenxun_rl_<群号>_*.gif`），不是本项目泄漏的东西 —— 降为提示。
+            # 别处的长数字仍按警告算：`make_meme_sample.py` 的 BAD_NUM 也是同一口径。
             if NAME_NUM.search(arc.rsplit("/", 1)[-1]):
-                rep["warns"].append((where, 0, "文件名含 6 位以上数字", ""))
+                if rel.startswith("memes/"):
+                    rep["notes"].append((where, 0, "素材文件名含 6 位以上数字（上游自带）", ""))
+                else:
+                    rep["warns"].append((where, 0, "文件名含 6 位以上数字", ""))
 
             # ── 判据 1：内容（与工作树/历史同一套判据）──
             if info.file_size > MAX_TEXT or arc.lower().endswith(cs.BIN_EXTS):
@@ -243,23 +272,28 @@ def scan_zip(path, commit=None, strict=False, check_commit=True):
             for p, ln, name, val in cs.scan_text(where, text, blocked):
                 rep["findings"].append((p, ln, name, val))
 
-    if check_commit:
-        if not rep["commit"]:
-            rep["findings"].append(("VERSION", 0, "缺 VERSION", "无法确认包对应哪次提交"))
-        else:
-            anc, src, other = _drift(rep["commit"])
-            if not anc:
-                rep["findings"].append(("VERSION", 0, "source_commit 不在当前历史里",
-                                        rep["commit"]))
-            elif src:
-                rep["findings"].append(("VERSION", 0, "包内代码落后于 HEAD",
-                                        "%s 之后改了 %d 个源文件：%s"
-                                        % (rep["commit"], len(src), src[:4])))
-            if other:
-                # 只做提示，不升级成警告：文档比 HEAD 旧不是缺陷，重打一次就齐；
-                # 让它去卡 --strict，等于训练人忽略 --strict。
-                rep["notes"].append(("VERSION", 0, "包内文档/资源比 HEAD 旧",
-                                     "%d 个文件，重打才完全一致" % len(other)))
+        if check_commit:
+            if not rep["commit"]:
+                rep["findings"].append(("VERSION", 0, "缺 VERSION", "无法确认包对应哪次提交"))
+            else:
+                anc, src, other = _drift(rep["commit"])
+                # 新增文件若包里已有同一份字节，是「仓库刚补上、包早就带着」，不算落后
+                late = [(st, p) for st, p in src
+                        if not (st == "A" and _pkg_has_same(z, rep["top"], p))]
+                if not anc:
+                    rep["findings"].append(("VERSION", 0, "source_commit 不在当前历史里",
+                                            rep["commit"]))
+                elif late:
+                    rep["findings"].append(("VERSION", 0, "包内代码落后于 HEAD",
+                                            "%s 之后改了 %d 个源文件：%s"
+                                            % (rep["commit"], len(late),
+                                               [p for _, p in late][:4])))
+                if other:
+                    # 只做提示，不升级成警告：文档比 HEAD 旧不是缺陷，重打一次就齐；
+                    # 让它去卡 --strict，等于训练人忽略 --strict。
+                    rep["notes"].append(("VERSION", 0, "包内文档/资源比 HEAD 旧",
+                                         "%d 个文件，重打才完全一致" % len(other)))
+
     if strict and rep["warns"]:
         rep["ok"] = False
     if rep["findings"]:
@@ -353,14 +387,17 @@ def _selftest():
             "EggBloom-Lite/notes-local.md": "本地笔记\n",
             "EggBloom-Lite/memes/zhenxun_rl_22625868_002.gif": "GIF89a",
         })
-        cases.append(("本地文档+群号名", p, False, True, {"warns_min": 2}))
-        cases.append(("同上但 --strict", p, True, False, {"warns_min": 2}))
+        # 未跟踪的本地文档 = 警告；memes/ 下的群号文件名 = 提示（上游素材自带）
+        cases.append(("本地文档+素材群号名", p, False, True,
+                      {"warns_min": 1, "notes_min": 1}))
+        cases.append(("同上但 --strict", p, True, False, {"warns_min": 1}))
 
         bad = 0
         for label, path, strict, want_ok, want in cases:
             rep = scan_zip(path, strict=strict)
             names = {f[2] for f in rep["findings"]}
             wnames = {w[2] for w in rep["warns"]}
+            nnames = {n[2] for n in rep["notes"]}
             ok = rep["ok"] == want_ok
             if "names" in want:
                 ok = ok and want["names"] <= names
@@ -368,6 +405,8 @@ def _selftest():
                 ok = ok and len(rep["findings"]) == want["findings"]
             if "warns_min" in want:
                 ok = ok and len(wnames) >= want["warns_min"]
+            if "notes_min" in want:
+                ok = ok and len(nnames) >= want["notes_min"]
             print("  [%s] %-18s ok=%-5s 命中 %s %s" % (
                 "OK" if ok else "FAIL", label, rep["ok"],
                 sorted(names | wnames), "" if ok else "← 期望不符"))

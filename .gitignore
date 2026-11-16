@@ -29,7 +29,10 @@ personality_versions/
 image_cache/
 self_learning_db/
 logs/
-personality/
+# 人格数据（仓库根）——必须锚定到根：写成裸目录名 `personality/` 会连
+# `plugins/personality/` 一起吞掉，那是人格引擎要读的样例数据，
+# 结果包里带着它、库里没有（2026-11-16 包闸 --strict 报出来的）。
+/personality/
 plugins/state/
 plugins/conversation_state/
 plugins/plugin_state.json
