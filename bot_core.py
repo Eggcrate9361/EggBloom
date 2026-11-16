@@ -16767,6 +16767,13 @@ def _pipeline_upsert(group_id, *, sender, text, images=None, flags=None,
     #   每条真实消息都该被订阅方看到，不管它最后并进哪个批次。
     # ★ H5：一开始就给这条消息一个 trace_id，后续并批/生成/发送都沿用它。
     _tid = _new_trace_id()
+    # ★ 2026-11-16（路线图 3.1）：turn trace 起点。只记不判，写盘失败也不影响主链。
+    try:
+        from harness import turn_trace as _tt_in
+        _tt_in.begin(_tid, scene="group", target=str(group_id),
+                     user=str(sender), text_len=len(str(text or "")))
+    except Exception:
+        pass
     if source == "message":
         _emit_plugin_event("message.in", {
             "group_id": str(group_id),
@@ -17308,6 +17315,12 @@ def _pipeline_step(group_id):
         log(f"群[{group_id}] [跳过] 无触发条件，忽略消息"
             + (f" · 决策理由：{_why}" if _why else "")
             + f": {merged_text[:80]}")
+        try:
+            from harness import turn_trace as _tt_sk
+            _tt_sk.note(_cur_trace(), "SKIPPED", scene="group", target=str(group_id),
+                        why=(_why or "无触发条件")[:80])
+        except Exception:
+            pass
         return
     if _decision.get("reason") == "触发":
         log(f"群[{group_id}] [决策放行] 触发: {merged_text[:60]}{_trace_suffix()}")
@@ -17316,6 +17329,12 @@ def _pipeline_step(group_id):
         # 决策器放行后就不再处于"观察"状态（旧代码在 inject 分支里 pop）
         GROUP_OBSERVE.pop(group_id, None)
         log(f"群[{group_id}] [决策放行] 无触发消息，决策插件建议插话: {merged_text[:60]}")
+    try:
+        from harness import turn_trace as _tt_dec
+        _tt_dec.note(_cur_trace(), "DECIDED", scene="group", target=str(group_id),
+                     why=("触发" if _decision.get("reason") == "触发" else "decider插话"))
+    except Exception:
+        pass
     # 会话模式消息，确保 GROUP_SESSION 存在
     # 2026-10-30：这段以前会把"决策放行/被点名"的消息也吞掉（真机暗号没回）。
     # 现在只在显式开启 group_session_gate_enable 且非点名/非放行时才拦。
@@ -17556,6 +17575,10 @@ def _pipeline_step(group_id):
                     #   observe（缓存键靠它区分），排一个又一个观察 —— 无限观察。
                     #   决策插件那边 1797 行专门写过注释提醒，宿主这侧当时没跟上。
                     "observe_retry": bool(buffer.get("observe_retry")),
+                    # ★ 2026-11-16（路线图 4.1）：把本轮 trace 交给插件。
+                    #   插件自己的模型调用（决策器）在账本里原本 turn 是空的，
+                    #   拿到这个值才能串回「哪条消息花了几次调用」。
+                    "trace": _cur_trace(),
                 }
                 intervention = pm.execute_hooks("before_reply", message=merged_text, group_id=group_id, context=_plugin_ctx)
                 # ── typed 并列派发 → **并入同一个 intervention 列表** ──
@@ -18263,7 +18286,12 @@ def _pipeline_step(group_id):
                         _dup = _prev
                         break
                 if _dropped:
-                    pass
+                    try:
+                        from harness import turn_trace as _tt_dr
+                        _tt_dr.note(_cur_trace(), "DROPPED", scene="group",
+                                    target=str(group_id), why="丢弃闸")
+                    except Exception:
+                        pass
                 elif _dup:
                     log(f"群[{group_id}] 与 2 分钟内的回复重复，跳过发送: {sent_text[:40]}")
                 elif _with_outbound_origin("model", smart_send_group, group_id,
@@ -18353,6 +18381,25 @@ def _pipeline_step(group_id):
                     sent_text or reply or "……", is_group=True)[0]
                 _commit_group_turn(group_id, merged_text, _commit_text)
                 save_instruction(merged_text, _commit_text)
+                # ★ 2026-11-16（路线图 3.3）：SuperMemory 也在**发送成功后**提交。
+                #   after_reply 已不再写库 —— 被丢弃/被抑制/发送失败的回复不该
+                #   在记忆里留下一条「Bot 说过这句话」。
+                try:
+                    from plugins.ego import super_memory as _sm
+                    _sm.commit_sent_turn(scope="group", scope_id=str(group_id),
+                                         user_id=str(buffer.get("sender") or ""),
+                                         message=merged_text, reply=_commit_text)
+                except Exception as _sm_e:
+                    log(f"[记忆] 群本轮提交失败（不影响发送）: {_sm_e}")
+                # ★ 2026-11-16（路线图 3.1）：发送与提交两个终点。
+                try:
+                    from harness import turn_trace as _tt_sent
+                    _tt_sent.note(_cur_trace(), "SENT", scene="group",
+                                  target=str(group_id), text_len=len(_commit_text or ""))
+                    _tt_sent.note(_cur_trace(), "COMMITTED", scene="group",
+                                  target=str(group_id))
+                except Exception:
+                    pass
 
             # 触发自主学习
             if SELF_LEARN_OK:
@@ -18360,6 +18407,12 @@ def _pipeline_step(group_id):
                     self_learn.maybe_learn(str(group_id))
     except Exception as e:
         log(f"群[{group_id}] AI 调用异常: {e}")
+        try:
+            from harness import turn_trace as _tt_fail
+            _tt_fail.note(_cur_trace(), "FAILED", scene="group",
+                          target=str(group_id), why=f"{type(e).__name__}: {e}"[:120])
+        except Exception:
+            pass
 
 
 # ═══════════════════════════════════════════
@@ -20172,6 +20225,14 @@ def main():
                     pass
 
                 log(f"收到: {text[:80]}" + (f" +{len(images)}图" if images else ""))
+                # ★ 2026-11-16（路线图 3.1）：私聊轮次 trace 起点。
+                _ptid = _set_trace(_new_trace_id())
+                try:
+                    from harness import turn_trace as _tt_p
+                    _tt_p.begin(_ptid, scene="private", target=str(sender),
+                                user=str(sender), text_len=len(str(text or "")))
+                except Exception:
+                    pass
 
                 # ChatStyle 说话方式自动学习（私聊以 sender 为作用域）
                 # ★ 2026-11-10：同上，只学本次发言，不学引用壳里的注记和被引原文
@@ -20635,6 +20696,24 @@ def main():
                             pass
                         # C2 存储对齐：私聊截断 60→24 轮（组装只取最近10轮，储存更多纯占内存+IO）
                         chat_history[sender] = ch[-_PRIVATE_HISTORY_CAP:]
+                        # ★ 2026-11-16（路线图 3.3）：SuperMemory 同样在发送成功后提交，
+                        #   与上面 chat_history 用同一份最终文本（_pm_text）。
+                        try:
+                            from plugins.ego import super_memory as _sm
+                            _sm.commit_sent_turn(scope="private", scope_id=str(sender),
+                                                 user_id=str(sender),
+                                                 message=text, reply=_pm_text)
+                        except Exception as _sm_e:
+                            log(f"[记忆] 私聊提交失败（不影响发送）: {_sm_e}")
+                        # ★ 2026-11-16（路线图 3.1）：私聊的发送与提交终点。
+                        try:
+                            from harness import turn_trace as _tt_ps
+                            _tt_ps.note(_cur_trace(), "SENT", scene="private",
+                                        target=str(sender), text_len=len(_pm_text or ""))
+                            _tt_ps.note(_cur_trace(), "COMMITTED", scene="private",
+                                        target=str(sender))
+                        except Exception:
+                            pass
                         # P1-3：把刚发的表情包也记进 history —— 模型下一轮才知道
                         # 自己发了哪张（否则它只会说"图是系统配的"）。
                         if _pm_meme_path:

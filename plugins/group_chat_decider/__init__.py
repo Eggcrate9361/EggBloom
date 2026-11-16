@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """
 group_chat_decider 群聊决策插件 v3.0 - 话题流 + 群画像 + 记忆匹配 + 情绪感知
 
@@ -1863,6 +1863,16 @@ def before_reply(message: str = "", group_id: str = "", context: dict = None, **
         return None
 
     ctx = context or {}
+
+    # ★ 2026-11-16（路线图 4.1）：在宿主给的本轮 trace 下调用决策模型。
+    #   否则 Model Gateway 账本里这条调用的 turn 是空的，串不回「哪条消息」。
+    try:
+        _tid = str((ctx or {}).get("trace") or "")
+        if _tid:
+            import bot_core as _bc_trace
+            _bc_trace._set_trace(_tid)
+    except Exception:
+        pass
 
     # ── 决策缓存（2026-10-10）──
     # 主链对同一条消息会两次派发 before_reply（无触发预决策 → 触发后正式注入）。

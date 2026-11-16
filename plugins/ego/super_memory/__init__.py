@@ -1596,42 +1596,91 @@ def before_reply(scope: str = "", scope_id: str = "", message: str = "", user_id
     return None
 
 
-def after_reply(scope: str = "", scope_id: str = "", message: str = "", reply: str = "", user_id: str = "", context: Optional[Dict[str, Any]] = None, **kwargs) -> Optional[Dict[str, Any]]:
+# ★ 2026-11-16（路线图 3.3）：发送成功后提交，还是沿用旧行为（发送前提交）。
+# 默认新行为；置 0 可退回旧路径做对照排查。
+_COMMIT_AFTER_SEND = str(os.environ.get("EGG_SM_COMMIT_AFTER_SEND", "1")).strip().lower() \
+    not in ("0", "false", "no", "off")
+
+
+def _commit_impl(scope: str = "", scope_id: str = "", message: str = "", reply: str = "",
+                 user_id: str = "", context: Optional[Dict[str, Any]] = None,
+                 ts: Optional[float] = None) -> bool:
+    """真正写库的那一段：messages + 事实抽取 + 亲和 + 整合。
+
+    after_reply 的旧路径与 commit_sent_turn 共用，避免两套写库逻辑漂移。
+    """
     if not _memory.config.get("enabled", True):
-        return None
-    scope = scope or context.get("scope", "group") if context else "group"
-    scope_id = scope_id or context.get("group_id", "") if context else ""
-    user_id = user_id or context.get("sender", "") if context else ""
+        return False
+    if context:
+        scope = scope or context.get("scope", "group")
+        scope_id = scope_id or context.get("group_id", "")
+        user_id = user_id or context.get("sender", "")
+    scope = scope or "group"
+    scope_id = scope_id or ""
+    user_id = user_id or ""
     # 私聊（group_id 为空）时以 sender 作为会话作用域，保证记忆写入/召回同 key
     if not scope_id and scope == "private":
         scope_id = user_id or "private"
-    if scope in ("private", "group") and scope_id:
-        importance = 0.5
-        if any(kw in message for kw in ["?", "？", "什么", "为什么", "怎么", "如何"]):
-            importance = 0.6
-        if any(kw in message for kw in ["谢谢", "厉害", "不错", "哈哈", "笑死"]):
-            importance = 0.7
-        conn = sqlite3.connect(DB_PATH)
-        conn.execute(
-            "INSERT INTO messages (scope, scope_id, user_msg, bot_reply, timestamp, importance, tier) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (scope, str(scope_id), message[:500], reply[:500], time.time(), importance, _memory._classify_tier(importance, 1)),
-        )
-        conn.commit()
-        conn.close()
+    if scope not in ("private", "group") or not scope_id:
+        return False
+    message = str(message or "")
+    reply = str(reply or "")
+    importance = 0.5
+    if any(kw in message for kw in ["?", "？", "什么", "为什么", "怎么", "如何"]):
+        importance = 0.6
+    if any(kw in message for kw in ["谢谢", "厉害", "不错", "哈哈", "笑死"]):
+        importance = 0.7
+    _ts = float(ts if ts is not None else time.time())
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute(
+        "INSERT INTO messages (scope, scope_id, user_msg, bot_reply, timestamp, importance, tier) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (scope, str(scope_id), message[:500], reply[:500], _ts, importance, _memory._classify_tier(importance, 1)),
+    )
+    conn.commit()
+    conn.close()
 
-        facts = []
-        events = []
-        if _memory.config.get("extract_facts", True):
-            facts = _memory.extract_facts(scope_id, user_id or "", message)
-            _memory._store_facts(scope_id, user_id or "", facts, message)
-            _memory._update_persona_kernel(scope_id, facts, user_id or "")
-            events = _memory.extract_events(scope_id, message, user_id or "")
-            _memory._store_events(scope_id, events, user_id or "")
+    if _memory.config.get("extract_facts", True):
+        facts = _memory.extract_facts(scope_id, user_id or "", message)
+        _memory._store_facts(scope_id, user_id or "", facts, message)
+        _memory._update_persona_kernel(scope_id, facts, user_id or "")
+        events = _memory.extract_events(scope_id, message, user_id or "")
+        _memory._store_events(scope_id, events, user_id or "")
 
-        if user_id and _memory.config.get("affection_enabled", True):
-            _memory.update_affection(scope_id, user_id, message)
-        _memory.consolidate(scope, scope_id)
+    if user_id and _memory.config.get("affection_enabled", True):
+        _memory.update_affection(scope_id, user_id, message)
+    _memory.consolidate(scope, scope_id)
+    return True
+
+
+def after_reply(scope: str = "", scope_id: str = "", message: str = "", reply: str = "", user_id: str = "", context: Optional[Dict[str, Any]] = None, **kwargs) -> Optional[Dict[str, Any]]:
+    """（2026-11-16，路线图 3.3）发送**前**不再写库。
+
+    原来这里同步写 messages / 抽事实 / 更新亲和 / 整合，而 after_reply 是
+    发送前派发的：回复被丢弃、被插件抑制、发送失败，记忆库照样多一条
+    「Bot 说过这句话」。现在写库挪到 commit_sent_turn()，由主链在发送成功后调用。
+
+    保留本函数是为了旧调用方不报错；`EGG_SM_COMMIT_AFTER_SEND=0` 退回旧行为。
+    """
+    if _COMMIT_AFTER_SEND:
+        return None
+    _commit_impl(scope=scope, scope_id=scope_id, message=message, reply=reply,
+                 user_id=user_id, context=context)
     return None
+
+
+def commit_sent_turn(scope: str = "group", scope_id: str = "", user_id: str = "",
+                     message: str = "", reply: str = "", ts: Optional[float] = None) -> bool:
+    """发送成功后提交本轮（路线图 3.3）。
+
+    只有真的发出去了才写 messages / 抽事实 / 更新亲和 / 整合。
+    返回 True = 已提交；False = 没提交（库坏了也不影响发送）。
+    """
+    try:
+        return bool(_commit_impl(scope=scope, scope_id=scope_id, message=message,
+                                 reply=reply, user_id=user_id, ts=ts))
+    except Exception as e:
+        print(f"[SuperMemory] commit_sent_turn 失败: {e}")
+        return False
 
 # ── 通用插件通道动作（WebUI plugin_id='ego.super_memory'） ──
 def add_action_event(summary: str, *, scope: str = "group", scope_id: str = "",
