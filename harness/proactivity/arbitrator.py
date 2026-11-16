@@ -289,7 +289,13 @@ def _human_evidence(kind: str, ev: dict) -> str:
                "title": "什么事", "start": "几点", "in_minutes": "还剩几分钟",
                "images": "几张图", "last_was": "最后是谁说的",
                "activity_1h": "一小时里说了几句", "event": "发生了什么",
-               "name": "新名字", "kick": "是被踢的"}.get(k, k)
+               "name": "新名字", "kick": "是被踢的"}.get(k)
+        if key is None:
+            # ★ 2026-11-16：没进映射表的字段一律不进 prompt。
+            #   此前兜底是 `.get(k, k)`，把 `last_user_s：59.2` 这种内部秒数
+            #   原样喂给模型 —— 真机回了一句「行吧 59.2 就59.2 不催了」。
+            #   工程数值在提示里只会变成话题，不会变成情境。
+            continue
         out.append("%s：%s" % (key, v))
     return "；".join(out)
 
