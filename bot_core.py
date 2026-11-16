@@ -14956,6 +14956,14 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
     error_retries = 0
     _img_fallback_used = False     # 图片降级只做一次（native 拒图 → 视觉描述重试）
     _length_retry_used = False     # 思维链吃光输出预算的加倍重试，只做一次
+    # ★ 2026-11-16：工具链总时长预算。轮次上限只限"几拍"，不限时间 —— 真机
+    #   一次「查 EggBloom 1.6.0」跑了 5 轮（open_url 超时 30s + search_web +
+    #   py_run ×2），首句回复 149 秒。超过预算就带着已有结果收尾，不让用户干等。
+    _tool_started = 0.0
+    try:
+        _TOOL_BUDGET_S = float(_config.get("tool_time_budget_s") or 45)
+    except Exception:
+        _TOOL_BUDGET_S = 45.0
     while True:
         try:
             # 每轮模型调用都是一次"有进展"（2026-10-27）：模型自己决定联网搜索时，
@@ -14997,6 +15005,8 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
                         pass
                     messages.append({"role": "assistant", "content": msg.get("content") or "", "tool_calls": tool_calls})
                     web_rounds += 1
+                    if not _tool_started:
+                        _tool_started = time.time()
                     _round_ok_flags = []        # 这一轮每个工具的成功情况
                     #: 本轮是否出现「搜索结果年份与问句不符」（见下方注释）
                     _stale_hit = False
@@ -15074,6 +15084,16 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
                     if _over:
                         log(f"[上下文闸] 工具轮累计 {_used} 字符 ≥ 预算 {_lim}，"
                             f"停止工具轮，强制收尾")
+                        return _finalize_reply(messages, effective_max_tokens,
+                                               ("group" if is_group else "private"),
+                                               had_tools_rounds=web_rounds,
+                                               progress=progress)
+                    # ── 工具链总时长闸（2026-11-16）──
+                    #   轮次闸只管"几拍"，不管"多久"。真机实测 5 轮工具能拖到 149 秒。
+                    if _tool_started and _TOOL_BUDGET_S > 0 and \
+                            (time.time() - _tool_started) >= _TOOL_BUDGET_S:
+                        log(f"[工具超时] 工具链已跑 {time.time() - _tool_started:.0f}s ≥ "
+                            f"预算 {int(_TOOL_BUDGET_S)}s，停止工具轮，强制收尾")
                         return _finalize_reply(messages, effective_max_tokens,
                                                ("group" if is_group else "private"),
                                                had_tools_rounds=web_rounds,
