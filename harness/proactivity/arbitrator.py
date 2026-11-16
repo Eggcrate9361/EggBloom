@@ -223,6 +223,20 @@ def _bot_name() -> str:
     return "小a"
 
 
+def _main_persona(max_chars: int = 1600) -> str:
+    """主链人格原文（`plugins/personality.txt` 或已发布的蒸馏卡）。
+
+    ★ 2026-11-16：主动发言与群聊回复改用同一份人格，不再各维护一套。
+    运行时才 import（plugins 在 bot_core 之后加载，避免循环依赖）。
+    """
+    try:
+        from plugins.ego.personality_engine import get_personality
+        raw = str((get_personality() or {}).get("raw") or "").strip()
+    except Exception:
+        return ""
+    return raw[:max_chars]
+
+
 def _system_prompt() -> str:
     try:
         from config import load_config
@@ -230,7 +244,13 @@ def _system_prompt() -> str:
     except Exception:
         cfg = {}
     p = _persona_of(cfg)
-    personality = str(cfg.get("proactivity_personality") or p["personality"])
+    # ★ 2026-11-16：人格优先用主链那份（含「没有身体，没有现实生活」与全部底线），
+    #   _PERSONAS 只剩「什么时候说 / 怎么说」的补充，不再自带一套人设。
+    main_raw = _main_persona()
+    if main_raw:
+        personality = main_raw
+    else:
+        personality = str(cfg.get("proactivity_personality") or p["personality"])
     behavior = str(cfg.get("proactivity_behavior_style") or p["behavior"])
     reply = str(cfg.get("proactivity_reply_style") or p["reply"])
     txt = _DECIDE_TEMPLATE
