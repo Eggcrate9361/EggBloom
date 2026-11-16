@@ -12040,12 +12040,15 @@ def _handle_poke_event(ev):
     #   发在下面"目标是不是 Bot"的过滤**之前** —— 群友互戳同样是事实，
     #   插件要靠它判断"没人在戳我"（主动戳一戳的冷却就依赖这条）。
     #   载荷字段固定：group_id / operator / target / ts。
-    _emit_plugin_event("notice.poke", {
-        "group_id": str(poke_gid or ""),
-        "operator": str(ev.get("user_id", "") or ""),
-        "target": str(ev.get("target_id", "") or ""),
-        "ts": time.time(),
-    })
+    # ★ 2026-11-16：Bot 自己戳人不算「有人戳我」。群友互戳仍照发（那是事实，
+    #   主动戳一戳的冷却要靠它）；这里只挡 operator 是 Bot 自己的情况。
+    if str(ev.get("user_id", "") or "") != str(BOT_QQ):
+        _emit_plugin_event("notice.poke", {
+            "group_id": str(poke_gid or ""),
+            "operator": str(ev.get("user_id", "") or ""),
+            "target": str(ev.get("target_id", "") or ""),
+            "ts": time.time(),
+        })
     # 防御：若事件带 target_id 且目标不是 Bot，忽略（群友互戳不触发）
     _poke_target = ev.get("target_id")
     if _poke_target is not None and str(_poke_target) != "" and str(_poke_target) != str(BOT_QQ):
@@ -12276,6 +12279,18 @@ def _handle_recall_event(ev):
     recall_msg_id = ev.get("message_id", 0)
     is_grp_recall = ev.get("notice_type") == "group_recall"
     log(f"[事件] 撤回: type={ev.get('notice_type')} user_id={recall_uid} group_id={recall_gid or '私聊'} msg_id={recall_msg_id}")
+    # ★ 2026-11-16：自己撤回自己发的消息 ≠「用户撤回了」。
+    #   放行的话会走完整条撤回反馈（回一句「撤回了？我还没看到」），
+    #   甚至取消刚建的批次 —— 把系统自己的动作当成了外部事件。
+    try:
+        _self_recall = bool(recall_uid) and (
+            str(recall_uid) == str(BOT_QQ)
+            or str(recall_uid).endswith(f"({BOT_QQ})"))
+    except Exception:
+        _self_recall = False
+    if _self_recall:
+        log("[撤回] 自己撤回，跳过反馈")
+        return
     # 2026-11-08 分离态：预设/硬编码反馈一律不用，措辞交给模型自己。
     # 判定必须在**函数入口**做：私聊分支会提前 return，若只在群聊分支里赋值，
     # 私聊路径读到的是未绑定的局部变量（UnboundLocalError）。
@@ -19221,12 +19236,16 @@ def main():
                         except Exception as e:
                             log(f"[事件] group_increase 处理异常: {e}")
                         try:
-                            _emit_plugin_event("notice.member_in", {
-                                "group_id": str(ev.get("group_id") or ""),
-                                "user_id": str(ev.get("user_id") or ""),
-                                "operator": str(ev.get("operator_id") or ""),
-                                "ts": time.time(),
-                            })
+                            # 自己被拉进新群也是 group_increase（user_id=bot）。
+                            # 那不是「群里来了新人」，放进去会让主动层说「啊 新来了个」——
+                            # 2026-11-16 真机：刚进群就先欢迎了自己一句。
+                            if str(ev.get("user_id") or "") != str(BOT_QQ):
+                                _emit_plugin_event("notice.member_in", {
+                                    "group_id": str(ev.get("group_id") or ""),
+                                    "user_id": str(ev.get("user_id") or ""),
+                                    "operator": str(ev.get("operator_id") or ""),
+                                    "ts": time.time(),
+                                })
                         except Exception:
                             pass
                     elif post_type == "notice" and ev.get("notice_type") == "group_decrease":
@@ -19235,13 +19254,15 @@ def main():
                         except Exception as e:
                             log(f"[事件] group_decrease 处理异常: {e}")
                         try:
-                            _emit_plugin_event("notice.member_out", {
-                                "group_id": str(ev.get("group_id") or ""),
-                                "user_id": str(ev.get("user_id") or ""),
-                                "operator": str(ev.get("operator_id") or ""),
-                                "kick": bool(ev.get("sub_type") == "kick"),
-                                "ts": time.time(),
-                            })
+                            # 退群同理：自己被踢/自己退，不该被当成「群里有人走了」去点评。
+                            if str(ev.get("user_id") or "") != str(BOT_QQ):
+                                _emit_plugin_event("notice.member_out", {
+                                    "group_id": str(ev.get("group_id") or ""),
+                                    "user_id": str(ev.get("user_id") or ""),
+                                    "operator": str(ev.get("operator_id") or ""),
+                                    "kick": bool(ev.get("sub_type") == "kick"),
+                                    "ts": time.time(),
+                                })
                         except Exception:
                             pass
                     elif post_type == "notice" and ev.get("notice_type") == "group_ban":
@@ -19254,13 +19275,17 @@ def main():
                         # ★ 2026-11-07 主动性 P2：改群名此前完全没有痕迹，
                         #   主动性那边想做「视关系评论一句」连入口都没有。
                         try:
-                            _emit_plugin_event("notice.group_name", {
-                                "group_id": str(ev.get("group_id") or ""),
-                                "name": str(ev.get("new_group_name") or ""),
-                                "operator": str(ev.get("operator_id")
-                                                or ev.get("user_id") or ""),
-                                "ts": time.time(),
-                            })
+                            # 2026-11-16：Bot 自己改群名（有工具能改）不算「群里有人
+                            # 改了名」，别让主动层转头评论自己的操作。
+                            _gn_op = str(ev.get("operator_id")
+                                         or ev.get("user_id") or "")
+                            if _gn_op != str(BOT_QQ):
+                                _emit_plugin_event("notice.group_name", {
+                                    "group_id": str(ev.get("group_id") or ""),
+                                    "name": str(ev.get("new_group_name") or ""),
+                                    "operator": _gn_op,
+                                    "ts": time.time(),
+                                })
                             # 2026-11-15 全补：群名变了是"我的世界变了"，
                             # 此前只发给插件、主链一无所知（还会用旧名字称呼群）。
                             _note_self_action(
@@ -19279,10 +19304,14 @@ def main():
                         except Exception as e:
                             log(f"[事件] friend_add 处理异常: {e}")
                         try:
-                            _emit_plugin_event("notice.friend_add", {
-                                "user_id": str(ev.get("user_id") or ""),
-                                "ts": time.time(),
-                            })
+                            # 2026-11-16：加好友的人若是 Bot 自己（有对应工具），
+                            # 同样不该走「有人加我了」。
+                            _fa_uid = str(ev.get("user_id") or "")
+                            if _fa_uid and _fa_uid != str(BOT_QQ):
+                                _emit_plugin_event("notice.friend_add", {
+                                    "user_id": _fa_uid,
+                                    "ts": time.time(),
+                                })
                         except Exception:
                             pass
                 except Exception as e:
