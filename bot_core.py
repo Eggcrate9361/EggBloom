@@ -2900,6 +2900,16 @@ def chat_log(direction, chat_type, target_id, text, sender_name=""):
         pass  # GUI 模式下 stdout 无效
 
 
+# ── OneBot 熔断 / 日志节流（2026-11-16）──
+# 真机：协议端挂 13 个半小时，3 秒一轮轮询 5 个接口 → 4.8 万行 Connection refused，
+# 把当天 journal 灌满了（50038 行里 48252 行是同一条）。协议端不可用属于「整段
+# 故障」，不是「每条消息的失败」，所以：
+#   · 同一 endpoint 前 3 次逐条记，之后 60 秒才记一行；
+#   · 读接口（get_*）连续失败 5 次 → 熔断 30 秒，期间直接返回失败、连请求都不发；
+#   · 写接口（send_*）不熔断 —— 协议端恢复那一瞬间要能立刻把积压发出去。
+_API_BREAKER: Dict[str, Any] = {"fails": {}, "last_log": {}, "open_until": 0.0}
+
+
 def api_call(endpoint: str, data: Optional[Dict] = None, timeout: float = 15) -> Dict:
     """调用 OneBot HTTP API。requests.Session 优先（连接池复用）；
     requests 不可用时降级 urllib + LOCAL_CTX（允许自签名证书）。
@@ -2908,6 +2918,9 @@ def api_call(endpoint: str, data: Optional[Dict] = None, timeout: float = 15) ->
     必须按体积给时间，否则 709MB 的包 15 秒必超时（线上实证：Full.zip 上传被
     判失败，而工具侧又把它报成"已发送"——两处 bug 叠在一起）。
     """
+    _now = time.time()
+    if _now < float(_API_BREAKER.get("open_until") or 0.0) and endpoint.startswith("get_"):
+        return {"retcode": -1}
     url = f"{ONE_BOT_URL}/{endpoint}"
     body = json.dumps(data or {}).encode("utf-8")
     headers = {"Content-Type": "application/json"}
@@ -2922,7 +2935,15 @@ def api_call(endpoint: str, data: Optional[Dict] = None, timeout: float = 15) ->
             with urllib.request.urlopen(req, timeout=timeout, context=LOCAL_CTX) as r:
                 resp = json.loads(r.read().decode("utf-8"))
     except Exception as e:
-        log(f"OneBot API 失败 [{endpoint}]: {e}")
+        _n = int(_API_BREAKER["fails"].get(endpoint, 0)) + 1
+        _API_BREAKER["fails"][endpoint] = _n
+        _last_log = float(_API_BREAKER["last_log"].get(endpoint, 0.0))
+        if _n <= 3 or (_now - _last_log) >= 60:
+            _suffix = f"（连续第 {_n} 次，已降频到每分钟一条）" if _n > 3 else ""
+            log(f"OneBot API 失败 [{endpoint}]: {e}{_suffix}")
+            _API_BREAKER["last_log"][endpoint] = _now
+        if _n >= 5 and endpoint.startswith("get_"):
+            _API_BREAKER["open_until"] = _now + 30
         return {"retcode": -1}
     # ★ 1.5.10 F2：`bot.replied` 只在**真的发出去**时发一次。
     #   挂在这里而不是逐条发送函数里：多气泡、长文拆条、插件出口全都覆盖，
@@ -2946,6 +2967,10 @@ def api_call(endpoint: str, data: Optional[Dict] = None, timeout: float = 15) ->
                 "reply_to": int((data or {}).get("message_id") or 0),
                 "trace_id": _cur_trace(),
             })
+    except Exception:
+        pass
+    try:
+        _API_BREAKER["fails"].pop(endpoint, None)
     except Exception:
         pass
     return resp
