@@ -317,10 +317,39 @@ def main():
     ap.add_argument("--walk", action="store_true",
                     help="不靠 git，直接按目录遍历（无 .git 的环境用这个）")
     ap.add_argument("--selftest", action="store_true", help="只跑基础设施判据自检")
+    ap.add_argument("--message-file", default="",
+                    help="把提交信息当文本扫（commit-msg 钩子用）")
+    ap.add_argument("--stdin", action="store_true",
+                    help="从标准输入读一段文本扫（pre-push 扫提交信息用）")
     args = ap.parse_args()
 
     if args.selftest:
         return _selftest()
+
+    # 提交信息也是公开面（git log 直接看得到），但 `--staged`/默认模式只扫文件。
+    # 2026-11-16 实测：把一条完整 ssh 地址写进 commit message，三道钩子全放行 ——
+    # pre-commit 不看 message，commit-msg 只跑 commit_lint（格式/号码/转述）。
+    # 这两个入口让同一份判据也能扫 message，接在 commit-msg 与 pre-push 上。
+    if args.message_file or args.stdin:
+        if args.stdin:
+            text = sys.stdin.read()
+            label = "(stdin)"
+        else:
+            try:
+                with open(args.message_file, encoding="utf-8", errors="replace") as f:
+                    text = f.read()
+            except OSError as e:
+                print("[check_secrets] 读不了提交信息：%r" % e)
+                return 2
+            label = "(commit message)"
+        hits = scan_text(label, text)
+        if not hits:
+            return 0
+        print("[check_secrets] 提交信息命中 %d 处，拒绝提交：" % len(hits))
+        for path, line, name, val in hits[:20]:
+            print("  %s:%s  [%s]  %s" % (label, line, name, val))
+        print("\n节点地址不进库，也不进提交信息 —— 写「另一台机器上的裸仓库」这类描述即可。")
+        return 1
 
     if args.staged:
         paths = _files(True)

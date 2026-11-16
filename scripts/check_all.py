@@ -17,6 +17,7 @@
      history_rules     历史闸自检（临时仓库，钉住 --batch 对 tree 的解析）
      package_rules     发行包闸自检（内容/结构/溯源，造坏包断言能抓）
      surface           对外可见面验收（包闸会拦、历史闸会拦、判据只有一份）
+     hooks             三个提交钩子已安装、与 .githooks/ 副本一致
   4. page_parity       v3 -> v4 页面功能对等（13 页）
   5. config_parity     配置中心逐项验收：静态两项 + 浏览器项（要 playwright）
   6. drive_tokens      drive.tick 的 token 记账（假 agent_service，不跑模型）
@@ -60,6 +61,7 @@ CHECKS = [
     ("history_rules", "check_history.py", ["--selftest"], "历史闸自检（blob 解析对齐）", False),
     ("package_rules", "check_package.py", ["--selftest"], "发行包闸自检（内容/结构/溯源）", False),
     ("surface", "tests/test_release_surface.py", [], "对外可见面：包/历史/判据单一来源", False),
+    ("hooks", "install_git_hooks.py", ["--check"], "提交钩子已装且与版本化副本一致", False),
     ("identity", "tests/test_identity_numbers.py", [], "身份号判据 + 工作树 0 命中", False),
     ("page_parity", "audit_page_parity.py", [], "页面功能对等 v3->v4", False),
     ("config_parity", "audit_config_parity.py", [], "配置中心逐项验收", True),

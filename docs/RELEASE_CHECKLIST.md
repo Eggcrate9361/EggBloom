@@ -70,7 +70,9 @@
       （`ssh://` 形式、`user@IP`、公网 IPv4、POSIX 家目录、`root` 家目录）：
       私网、回环与文档示例段不算泄漏，带 UA 标记的行跳过 IPv4 判定
       （`Chrome/131.0.0.0` 是版本号）。判据自检：
-      `python scripts/check_secrets.py --selftest`（11 条夹具）。
+      `python scripts/check_secrets.py --selftest
+python scripts/install_git_hooks.py --check          # 三个提交钩子装了没、与副本一致不
+python scripts/check_secrets.py --message-file .git/COMMIT_EDITMSG   # 单验一条提交信息`（11 条夹具）。
 - [x] **历史复查**：当前树干净 ≠ 历史干净。每条要清的地址都得单独查一遍：
       `git log --all -S "<地址片段>" --oneline | wc -l`
       —— 命中数等于还带着它的提交数，只清 HEAD 没有意义。
@@ -355,6 +357,8 @@ git grep -n "YOUR_NAME\|your-repo\|TODO" -- README.md CONTRIBUTING.md .github/
 # 基础设施标识：当前树扫一遍 + 判据自检
 python scripts/check_secrets.py
 python scripts/check_secrets.py --selftest
+python scripts/install_git_hooks.py --check          # 三个提交钩子装了没、与副本一致不
+python scripts/check_secrets.py --message-file .git/COMMIT_EDITMSG   # 单验一条提交信息
 
 # 历史里的地址（片段换成真值；当前树干净不代表历史干净）
 git log --all -S "<地址片段>" --oneline | wc -l

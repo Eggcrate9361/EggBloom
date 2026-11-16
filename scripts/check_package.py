@@ -91,7 +91,7 @@ MAX_TEXT = 4 * 1024 * 1024
 SOURCE_PREFIX = ("harness/", "webui/", "plugins/", "components/", "separation/",
                  "autonomy/", "skills/", "protocols/", "licenses/")
 #: 不进包的工具链 —— 改了不影响包内容，不参与「落后」判定
-TOOLING_PREFIX = ("scripts/", "tests/", "tools/", ".github/", ".gitignore")
+TOOLING_PREFIX = ("scripts/", "tests/", "tools/", ".github/", ".githooks/", ".gitignore")
 
 
 def _drift(commit):

@@ -18,6 +18,7 @@
 # 删除远端 ref 不受限：删除不暴露任何东西。
 
 REMOTE="$1"
+REPO=$(git rev-parse --show-toplevel)
 
 # 非 origin 的远端（私有的 server）随便推
 if [ "$REMOTE" != "origin" ]; then
@@ -29,13 +30,28 @@ if [ "$EGGBLOOM_ARCHIVE_PUSH" = "1" ]; then
     exit 0
 fi
 
+# 兜底 `git commit --no-verify`：commit-msg 被跳过时，推 main 之前把这次新增的
+# 提交信息再过一遍判据。2026-11-16 补 —— 强推重写历史那几次就用的是 --no-verify，
+# 那条链上提交信息是唯一没人复查过的内容。
+# 只扫新增区间，不重扫整条历史（发布前由 check_history.py 全量负责）。
+# ★ 必须放进下面这个主循环里：pre-push 的 stdin 是一次性的，另开一个 while read
+#   会把主循环的输入吃光，后面的 ref 一个都拦不到。
+
 bad=""
 while read -r local_ref local_sha remote_ref remote_sha; do
     [ -z "$remote_ref" ] && continue
 
-    # main 自己：发布流程里允许强推
+    # main 自己：发布流程里允许强推，但要先把新增提交的信息过一遍判据
     case "$remote_ref" in
-        refs/heads/main) continue ;;
+        refs/heads/main)
+            case "$remote_sha" in
+                0000000000000000000000000000000000000000) RANGE="$local_sha" ;;
+                *) RANGE="$remote_sha..$local_sha" ;;
+            esac
+            git log --format=%B "$RANGE" 2>/dev/null |
+                python "$REPO/scripts/check_secrets.py" --stdin || exit 1
+            continue
+            ;;
     esac
 
     # local_sha 全 0 = 删除远端 ref，不暴露内容

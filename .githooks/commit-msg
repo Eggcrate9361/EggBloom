@@ -13,4 +13,9 @@ if ! command -v python >/dev/null 2>&1; then
     exit 0
 fi
 
-exec python "$REPO/tools/commit_lint.py" --message-file "$1"
+# 两道都得跑：
+#   commit_lint       —— 格式 / 身份号 / 转述 / 昵称
+#   check_secrets     —— 地址 / 密钥 / 基础设施标识
+# 2026-11-16 实测：只跑前者时，把完整 ssh 地址写进 commit message 会直接放行。
+python "$REPO/tools/commit_lint.py" --message-file "$1" || exit $?
+exec python "$REPO/scripts/check_secrets.py" --message-file "$1"

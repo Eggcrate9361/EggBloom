@@ -156,6 +156,35 @@ def main():
             check(f"{mod.__name__}.{fn} 里没有自己写正则判据",
                   "re.compile" not in src)
 
+        # ── [5] 正常提交链 ─────────────────────────────────────────
+        # 2026-11-16 实测：把完整 ssh 地址写进 commit message，三道钩子全放行，
+        # 因为 commit-msg 只跑 commit_lint（格式/号码/转述），不看地址。
+        # 这一节钉住「补完之后不许再退化」。
+        print("\n[5] 正常提交链：提交信息也是公开面")
+        bad_msg = "fix(release): 11-16 挪到 ssh://ubuntu@192.0.2.10/home/ubuntu/x.git"
+        good_msg = "fix(release): 11-16 正常提交格式\n"
+        check("判据能扫提交信息里的地址",
+              len(cs.scan_text("(commit message)", bad_msg)) >= 2)
+        check("正常提交信息不误报",
+              not cs.scan_text("(commit message)", good_msg))
+
+        hd = os.path.join(ROOT, ".githooks")
+        read = lambda n: open(os.path.join(hd, n), encoding="utf-8").read()
+        pre, cm, pp = read("pre-commit"), read("commit-msg"), read("pre-push")
+        check("pre-commit 扫暂存区", "--staged" in pre)
+        check("commit-msg 同时跑 commit_lint 与 check_secrets",
+              "tools/commit_lint.py" in cm and "scripts/check_secrets.py" in cm
+              and cm.count("--message-file") == 2)
+        check("pre-push 兜底 --no-verify（扫新增提交信息）", "--stdin" in pp)
+        check("pre-push 只有一个 read 循环（stdin 是一次性的）",
+              pp.count("while read -r") == 1, pp.count("while read -r"))
+
+        r = subprocess.run([sys.executable,
+                            os.path.join(ROOT, "scripts", "install_git_hooks.py"), "--check"],
+                           cwd=ROOT, capture_output=True)
+        check("三个钩子已装且与版本化副本一致", r.returncode == 0,
+              r.stdout.decode("utf-8", "replace")[-200:])
+
         print("\n" + "=" * 56)
         if _fail:
             print(f"失败 {len(_fail)}：{_fail}")
