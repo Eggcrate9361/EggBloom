@@ -114,6 +114,25 @@ def _model_chain(model: str) -> list:
 
 
 def _post_once(use_http, url, headers, payload, timeout):
+    # ★ 2026-11-16（路线图 4.1）：视觉请求也过网关（熔断/预算/账本）。
+    #   网关不可用时走下面的原实现，错误分级保持不变。
+    try:
+        from harness import model_gateway as _mg
+        if _mg.available():
+            _key = ""
+            try:
+                _auth = (headers or {}).get("Authorization") or (headers or {}).get("authorization") or ""
+                if str(_auth).lower().startswith("bearer "):
+                    _key = str(_auth)[7:].strip()
+            except Exception:
+                _key = ""
+            data = _mg.call(url, payload, api_key=_key, timeout=timeout,
+                            meta={"task": "vision", "plugin": "web_operator"})
+            return 200, data
+    except Exception as _gw_e:
+        if type(_gw_e).__name__ == "ModelBudgetError":
+            raise
+        # 其它异常继续走直连：这里不能把网络错误吞成"网关问题"
     if use_http is not None:
         resp = use_http.post(url, headers=headers, json=payload, timeout=timeout)
         try:

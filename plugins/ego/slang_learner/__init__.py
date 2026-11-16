@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """
 slang_learner 插件：让 EggBloom 能手动学习最新网络黑话，候选池确认后再注入。
 优化版：保持“手动触发 + 用户确认注入”模式，提升学习触发效率和注入流程。
@@ -377,7 +377,7 @@ class SlangLearner:
             "不要输出多余内容。"
         ).format(topic=topic, n=batch_size)
 
-        body = json.dumps({
+        body_obj = {
             "model": model,
             "messages": [
                 {"role": "system", "content": "只输出 JSON，不要解释。"},
@@ -385,7 +385,8 @@ class SlangLearner:
             ],
             "temperature": 0.4,
             "max_tokens": 1200,
-        }).encode("utf-8")
+        }
+        body = json.dumps(body_obj).encode("utf-8")
 
         req = urllib.request.Request(
             api_url,
@@ -397,8 +398,21 @@ class SlangLearner:
             method="POST",
         )
         try:
-            with urllib.request.urlopen(req, timeout=20) as resp:
-                raw = resp.read().decode("utf-8")
+            # ★ 2026-11-16（路线图 4.1）：插件 AI 调用也过网关；未注入时保持直连。
+            _gw = None
+            try:
+                from harness import model_gateway as _mg
+                if _mg.available():
+                    _gw = _mg
+            except Exception:
+                _gw = None
+            if _gw is not None:
+                _resp = _gw.call(api_url, body_obj, api_key=api_key, timeout=20,
+                                 meta={"task": "slang", "plugin": "ego.slang_learner"})
+                raw = json.dumps(_resp, ensure_ascii=False)
+            else:
+                with urllib.request.urlopen(req, timeout=20) as resp:
+                    raw = resp.read().decode("utf-8")
         except Exception as e:
             print(f"[SlangLearner] llm_enrich 请求失败: {e}")
             return candidates

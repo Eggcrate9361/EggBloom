@@ -153,8 +153,23 @@ class OpenAIProvider(Provider):
 
         def _attempt():
             req = urllib.request.Request(self.api_url, data=body, headers=headers)
-            with urllib.request.urlopen(req, timeout=60, context=_SSL_CTX) as r:
-                resp = json.loads(r.read().decode("utf-8"))
+            # ★ 2026-11-16（路线图 4.1）：插件经 AIClient 发出的请求也过网关。
+            #   带自定义头的 provider 保持直连（网关只带 Bearer，会把头丢掉）。
+            _gw = None
+            try:
+                from harness import model_gateway as _mg
+                _eh = self.extra_headers() or {}
+                if not _eh and _mg.available():
+                    _gw = _mg
+            except Exception:
+                _gw = None
+            if _gw is not None:
+                resp = _gw.call(self.api_url, data, api_key=self.api_key, timeout=60,
+                                meta={"task": "provider", "plugin": "host",
+                                      "lane": "provider"})
+            else:
+                with urllib.request.urlopen(req, timeout=60, context=_SSL_CTX) as r:
+                    resp = json.loads(r.read().decode("utf-8"))
             msg = resp["choices"][0]["message"]
             usage = resp.get("usage", {})
             total = usage.get("total_tokens", 0)

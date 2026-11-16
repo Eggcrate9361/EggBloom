@@ -14143,6 +14143,20 @@ def _post_chat_stream(url, payload, api_key="", timeout=60):
     return urllib.request.urlopen(req, timeout=timeout, context=CTX)
 
 
+# ★ 2026-11-16（路线图 4.1）：两个出口都交给 Model Gateway。
+#   网关在 harness 里，不反向 import 主链 —— 这里注入，它才能做熔断/预算/账本。
+try:
+    from harness import model_gateway as _model_gateway
+    _model_gateway.set_transport(_post_chat)
+    _model_gateway.set_stream_transport(_post_chat_stream)
+except Exception as _mg_e:                      # 网关坏了不能影响发消息
+    _model_gateway = None
+    try:
+        log(f"[ModelGateway] 初始化失败（按未启用处理）: {_mg_e}")
+    except Exception:
+        pass
+
+
 def _effective_temperature(personality_temperature=None) -> float:
     """决定本次请求真正使用的 temperature。
 
@@ -14312,7 +14326,22 @@ def _call_chat_sync(messages, runtime_cfg=None, max_tokens=AI_MAX_TOKENS, stream
         payload["tools"] = with_tools if isinstance(with_tools, list) else TOOLS
     if stream:
         return api_url, api_key, payload
-    resp = _post_chat(api_url, payload, api_key=api_key, timeout=60)
+    # ★ 2026-11-16（路线图 4.1）：所有非流式模型请求统一走网关。
+    #   网关不可用（旧部署/单测）时退回直连，行为与以前一致。
+    if _model_gateway is not None:
+        try:
+            resp = _model_gateway.call(
+                api_url, payload, api_key=api_key, timeout=60,
+                meta={"turn": _cur_trace(), "task": "chat", "plugin": "host",
+                      "lane": "main"})
+        except Exception as _gw_e:
+            # 预算/熔断：转成调用方认识的 ValueError（上层按"模型不可用"降级），
+            # 其它异常（HTTP/网络）原样抛出，与直连时代一致。
+            if type(_gw_e).__name__ == "ModelBudgetError":
+                raise ValueError(f"model budget: {_gw_e}")
+            raise
+    else:
+        resp = _post_chat(api_url, payload, api_key=api_key, timeout=60)
     choices = resp.get("choices", [])
     if not choices:
         raise ValueError("empty choices")
@@ -14352,7 +14381,20 @@ def _stream_chat_lines(messages, runtime_cfg=None, max_tokens=AI_MAX_TOKENS, wit
                              provider=ptype, max_retries=3)
         return prov.chat_stream(messages, max_tokens=max_tokens) or ""
     api_url, api_key, payload = _call_chat_sync(messages, runtime_cfg=runtime_cfg, max_tokens=max_tokens, stream=True, with_tools=with_tools)
-    r = _post_chat_stream(api_url, payload, api_key=api_key, timeout=60)
+    # ★ 2026-11-16（路线图 4.1）：流式也走网关（熔断/预算/请求账本）。
+    #   token 仍由本函数末尾记 —— 两本账不重复计数。
+    try:
+        if _model_gateway is not None:
+            r = _model_gateway.stream(api_url, payload, api_key=api_key, timeout=60,
+                                      meta={"turn": _cur_trace(), "task": "stream",
+                                            "plugin": "host", "lane": "main"})
+        else:
+            r = _post_chat_stream(api_url, payload, api_key=api_key, timeout=60)
+    except Exception as _gw_s_e:
+        if type(_gw_s_e).__name__ == "ModelBudgetError":
+            log(f"[流式] 网关拒绝（预算/熔断），本轮按空回复处理: {_gw_s_e}")
+            return ""
+        raise
     full_reply = ""
     last_usage = {}
     _fr = ""

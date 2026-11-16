@@ -191,6 +191,18 @@ def _sse_text(raw: str) -> str:
 
 
 def _http(url, body, headers, timeout):
+    # ★ 2026-11-16（路线图 4.1）：免费车道也过网关（熔断/预算/账本）。
+    #   请求头与返回文本原样透传 —— 指纹头（x-opencode-*）和 SSE 不能被重新包装。
+    try:
+        from harness import model_gateway as _mg
+        if _mg.enabled():
+            return _mg.call_raw(url, body, headers=headers, timeout=timeout,
+                                meta={"task": "free_llm", "plugin": "free_llm",
+                                      "lane": "free"})
+    except Exception as _gw_e:
+        if type(_gw_e).__name__ in ("ModelBudgetError", "ModelGatewayError"):
+            return 0, f"gateway: {_gw_e}"
+        # 其它异常落回直连，保持原有错误分级
     data = json.dumps(body, ensure_ascii=False).encode("utf-8")
     req = urllib.request.Request(url, data=data, headers=headers, method="POST")
     try:
