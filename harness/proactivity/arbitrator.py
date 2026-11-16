@@ -38,6 +38,30 @@ BUDGET_LEVELS = {
     2: {"label": "常态", "per_hour": 3, "cooldown_s": 900, "min_gap_s": 240},
     3: {"label": "活跃", "per_hour": 6, "cooldown_s": 420, "min_gap_s": 120},
 }
+
+#: 同类跳过原因的最近记录时间（2026-11-16）。TICK=30s，同一句一天几百行。
+_SKIP_LOG_AT: Dict[str, float] = {}
+_SKIP_LOG_EVERY_S = 600.0
+
+
+def _throttled_log(log_fn, key: str, msg: str, now: float,
+                   every: float = _SKIP_LOG_EVERY_S) -> None:
+    """同一类跳过原因每 every 秒才记一行。
+
+    静默跳过会让「为什么不回」不可观测，所以不能直接删日志；
+    但每 30 秒重复同一句只是把日志灌满，也淹掉真正的异常。
+    """
+    try:
+        last = float(_SKIP_LOG_AT.get(key, 0.0))
+    except Exception:
+        last = 0.0
+    if now - last < every:
+        return
+    _SKIP_LOG_AT[key] = now
+    try:
+        log_fn(msg)
+    except Exception:
+        pass
 DEFAULT_LEVEL = 1
 
 #: 每条行为的默认开关与优先级（优先级高者先被仲裁）
@@ -477,9 +501,15 @@ def arbitrate(observations: List[Dict[str, Any]], *, cfg: Dict[str, Any], now: f
         # ★ 2026-11-15：原来每个被 gate 挡下的 observation 各打一行，
         #   TICK_SEC=30s、十余个行为开关同开时一轮十几行，日志被刷屏。
         #   改成一轮一行汇总（前 3 条给原因，其余只给计数）—— 可观测性不丢。
+        # ★ 2026-11-16：一轮一行也不够。TICK_SEC=30s 且几乎每轮都挡下同一批
+        #   （「该观察已触发过（去重）」「会话冷却中」），一天仍是几百行同一句。
+        #   同一组原因 10 分钟内只记一次；原因变了立刻记。
         _head = "；".join(_blocked[:3])
         _more = ("；…另 %d 条" % (len(_blocked) - 3)) if len(_blocked) > 3 else ""
-        log("[主动/跳过] 本轮挡下 %d 条：%s%s" % (len(_blocked), _head, _more))
+        _key = "|".join(sorted({str(b).rsplit("—", 1)[-1] for b in _blocked}))[:120]
+        _throttled_log(log, _key,
+                       "[主动/跳过] 本轮挡下 %d 条：%s%s" % (len(_blocked), _head, _more),
+                       float(now))
     if not cands:
         return None
     chosen = cands[0]        # ★ 同一轮只发一个，多个触发器不许叠加
