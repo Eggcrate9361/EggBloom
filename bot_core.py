@@ -12252,12 +12252,16 @@ def _recall_should_fire(*, buffer_cancelled: bool, last_bot_msg: float,
 def _model_oneliner(action: str, context: str = "", max_chars: int = 40) -> str:
     """让主模型按人格说一句（用于"预设关掉"的动作反馈）。失败返回空串。"""
     try:
-        r = _call_chat_sync([
+        res = _call_chat_sync([
             {"role": "system",
              "content": "你在 QQ 里聊天。只输出一句话，不要解释，不要提系统/预设/动作。"},
             {"role": "user",
              "content": f"{context}\n（系统动作：{action}。用你自己的口气说一句。）"},
         ], max_tokens=80, stream=False, with_tools=False)
+        # _call_chat_sync 返回的是 (msg, usage)，不是 dict —— 直接 .get 会抛
+        # "'tuple' object has no attribute 'get'"，撤回反馈在分离态走这条路，
+        # 2026-11-16 真机日志里就是这么挂的。
+        r = res[0] if isinstance(res, tuple) else res
         txt = str((r or {}).get("content") or "").strip()
         return txt.splitlines()[0][:max_chars] if txt else ""
     except Exception as e:
