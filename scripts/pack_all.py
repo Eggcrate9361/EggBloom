@@ -349,6 +349,22 @@ def main():
         size = round(out_new.stat().st_size / 1048576, 1)
         if rc != 0 or size < 1:
             ok, why = False, f"7z 退出码 {rc} / 体积异常 {size}MB"
+        # 出厂闸：结构与完整性过了还不够，得确认包里没有不该有的东西
+        # （2026-11-15：三档包各带一份写了 ssh 地址的文档，当时这里一句都没问）。
+        if ok:
+            try:
+                import check_package as _cp
+                gate = _cp.scan_zip(out_new, commit=commit, check_commit=False)
+                if not gate["ok"]:
+                    ok = False
+                    why = f"包闸拦下：{len(gate['findings'])} 处硬失败"
+                    for p_, ln_, nm_, val_ in gate["findings"][:5]:
+                        log(f"    ✗ {p_}:{ln_} [{nm_}] {val_}")
+                elif gate["warns"]:
+                    log(f"    ! 包闸警告 {len(gate['warns'])} 处（发布前跑 prepublish --strict）")
+            except Exception as e:      # 闸坏了不能静默放行
+                ok = False
+                why = f"包闸起不来：{e!r}"
         log(f"  {folder}: 源 {before}MB → zip {size}MB · {len(names)} 条目 · 顶层 {tops} · "
             f"{'OK' if ok else 'BAD:' + why} · {time.time()-t0:.0f}s")
         results[folder] = {"zip_mb": size, "src_mb": before, "entries": len(names), "ok": ok}

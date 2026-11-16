@@ -103,12 +103,29 @@ HOME_PLACEHOLDERS = {"user", "username", "yourname", "someone", "example", "xxx"
 INFRA_ALLOW = {
     ("tests/test_outgoing_audit.py", "/home/administrator/"):
         "脱敏用例的夹具：测的就是路径识别本身，不指向任何真实机器",
+    ("tests/test_release_surface.py", "ssh://ubuntu@192.0.2.10/home/ubuntu/x.git"):
+        "包闸/历史闸的夹具：断言「带地址的包会被拦」，IP 用文档段 192.0.2.0/24",
+    ("tests/test_release_surface.py", "ubuntu@192.0.2.10"):
+        "同上：user@IP 那一条判据的夹具",
 }
 
 
 #: 判据文件自己的夹具就是违规样例（同 `identity_numbers.is_judge_file` 的做法）。
 #: 扫自己时只关掉基础设施这一层，号码层照查。
-JUDGE_FILE = "scripts/check_secrets.py"
+#:
+#: 2026-11-15 从单个常量改成集合：`check_history.py` / `check_package.py` 的自检夹具
+#: 也要造「带地址的历史」「带地址的包」，形态与真泄漏一字不差。不放行的话每次发布前
+#: 检查都会红在自己身上 —— 那种红会让人习惯性忽略闸门，比不放行危险得多。
+JUDGE_FILES = (
+    "scripts/check_secrets.py",
+    "scripts/check_history.py",
+    "scripts/check_package.py",
+)
+
+
+def is_judge_file(path: str) -> bool:
+    p = os.path.normpath(path)
+    return any(p == os.path.normpath(j) for j in JUDGE_FILES)
 
 
 def _ip_is_public(s: str) -> bool:
@@ -216,6 +233,40 @@ _IDENT_LABEL = {
 }
 
 
+def scan_text(path: str, text: str, blocked=None):
+    """一段文本里的全部命中。返回 [(path, 行号, 判据名, 值)]。
+
+    抽成独立函数是为了让**同一个判据**能扫三处不同来源：工作树文件、git 历史 blob、
+    发行包里的条目。以前只有 `scan()` 一条路，包和历史各自长了一套近似规则 ——
+    那正是「树干净、历史脏」的成因：换个入口就等于换了一套判据。
+    """
+    hits = []
+    if blocked is None:
+        blocked = idn.blocked_digests()
+    # 判据文件自己的夹具就是违规样例，第二层对它关掉（第一层照查）
+    check_identity = not idn.is_judge_file(path)
+    check_infra = not is_judge_file(path)
+    for lineno, line in enumerate(text.splitlines(), 1):
+        # 号码判据先跑，且**不吃**下面那条「整行含白名单片段就跳过」的捷径：
+        # 一行里同时有 example.com 和一个真号时，整行跳过等于把真号放过去。
+        for h in idn.scan_line(line, blocked, check_identity):
+            hits.append((path, lineno, _IDENT_LABEL[h.kind],
+                         f"{idn.mask(h.value)}  {h.why}"))
+        # 基础设施标识：也不吃 WHITELIST 捷径（一行里同时有 example.com 和一台真机时，
+        # 整行跳过等于把地址放过去），只吃带理由的 INFRA_ALLOW。
+        for name, val in _infra_hits(line):
+            if not check_infra or (path, val) in INFRA_ALLOW:
+                continue
+            hits.append((path, lineno, name, val[:60]))
+        if any(w in line for w in WHITELIST):
+            continue
+        for name, pat in PATTERNS:
+            m = pat.search(line)
+            if m:
+                hits.append((path, lineno, name, m.group(0)[:40]))
+    return hits
+
+
 def scan(paths, staged: bool):
     hits = []
     blocked = idn.blocked_digests()
@@ -225,27 +276,7 @@ def scan(paths, staged: bool):
         text = _text_of(path, staged)
         if not text:
             continue
-        # 判据文件自己的夹具就是违规样例，第二层对它关掉（第一层照查）
-        check_identity = not idn.is_judge_file(path)
-        check_infra = os.path.normpath(path) != os.path.normpath(JUDGE_FILE)
-        for lineno, line in enumerate(text.splitlines(), 1):
-            # 号码判据先跑，且**不吃**下面那条「整行含白名单片段就跳过」的捷径：
-            # 一行里同时有 example.com 和一个真号时，整行跳过等于把真号放过去。
-            for h in idn.scan_line(line, blocked, check_identity):
-                hits.append((path, lineno, _IDENT_LABEL[h.kind],
-                             f"{idn.mask(h.value)}  {h.why}"))
-            # 基础设施标识：也不吃 WHITELIST 捷径（一行里同时有 example.com 和一台真机时，
-            # 整行跳过等于把地址放过去），只吃带理由的 INFRA_ALLOW。
-            for name, val in _infra_hits(line):
-                if not check_infra or (path, val) in INFRA_ALLOW:
-                    continue
-                hits.append((path, lineno, name, val[:60]))
-            if any(w in line for w in WHITELIST):
-                continue
-            for name, pat in PATTERNS:
-                m = pat.search(line)
-                if m:
-                    hits.append((path, lineno, name, m.group(0)[:40]))
+        hits.extend(scan_text(path, text, blocked))
     return hits
 
 

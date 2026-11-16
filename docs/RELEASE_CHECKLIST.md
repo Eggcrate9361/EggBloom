@@ -71,9 +71,23 @@
       私网、回环与文档示例段不算泄漏，带 UA 标记的行跳过 IPv4 判定
       （`Chrome/131.0.0.0` 是版本号）。判据自检：
       `python scripts/check_secrets.py --selftest`（11 条夹具）。
-- [ ] **历史复查**：当前树干净 ≠ 历史干净。每条要清的地址都得单独查一遍：
+- [x] **历史复查**：当前树干净 ≠ 历史干净。每条要清的地址都得单独查一遍：
       `git log --all -S "<地址片段>" --oneline | wc -l`
       —— 命中数等于还带着它的提交数，只清 HEAD 没有意义。
+      **2026-11-15 起有闸了**：`python scripts/check_history.py` 扫本地所有非归档 ref
+      的 blob + 提交信息 + tag 附注，与工作树闸共用同一个 `scan_text()`。
+      归档 ref（`legacy/` `backup/` `public/`）默认跳过，`--include-archive` 才扫 ——
+      它们本来就不推出去。实测：`main` + `v1.6.0` 干净，加 `--include-archive`
+      时四条归档 ref 里的旧地址一条不差全抓出来（24 处）。
+- [x] **发行包闸（2026-11-15）**：`pack_all.py` 替换 `.zip.new` 之前调
+      `check_package.scan_zip()`，不过闸就不替换。五条判据（内容 / 结构 / 溯源 /
+      来源 / 文件名）见 `docs/发布打包.md` §5.1。三档包复验：
+      `python scripts/check_package.py --dist "E:\EggBloom水星\dist"` → 0 不合格。
+- [x] **四个面一条命令（2026-11-15）**：
+      `python scripts/prepublish.py --all --dist "E:\EggBloom水星\dist" --strict`
+      跑工作树 / 历史 / 发行包 / Release 元数据（正文、标题、附件名、仓库描述）。
+      **退出码 2 = 有面没验成，不算通过** —— 「没扫」和「干净」必须能分开，
+      这是 11-13 那次假绿的根因。
 - [ ] 确认 `.gitignore` 覆盖：`chat_logs/`、`personality/`、`personality_versions/`、
       `logs/`、`image_cache/`、`self_learning_db/`、`plugins/state/`、`memes` 图库、
       `super_memory/models/`、`slang_*.json`。
@@ -345,12 +359,19 @@ python scripts/check_secrets.py --selftest
 # 历史里的地址（片段换成真值；当前树干净不代表历史干净）
 git log --all -S "<地址片段>" --oneline | wc -l
 
+# 2026-11-15 起：上面两步有闸了，一条命令跑完四个面（推荐）
+python scripts/check_history.py                 # 历史（默认跳过归档 ref）
+python scripts/check_package.py --dist "E:\EggBloom水星\dist"   # 发行包
+python scripts/prepublish.py --all --dist "E:\EggBloom水星\dist" --strict
+#   退出码 0 全绿 / 1 有不干净的面 / 2 有面没验成（不算通过）
+
 # 版本
 grep '"version"' package.json; grep '^version' pyproject.toml
 
 # 测试（见 §2 的已知失败项）
 python tests/test_persona_tag.py
 python tests/test_dev_watch.py
+python tests/test_release_surface.py            # 包闸/历史闸会不会拦、判据是不是只有一份
 ```
 
 ---

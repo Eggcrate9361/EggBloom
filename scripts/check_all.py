@@ -12,6 +12,11 @@
   1. js_syntax         webui_artistic_v4.html 内联 <script> 语法（要 node）
   2. fieldmeta_chain   字段链三边：v4 / _fieldmeta.json / DEFAULT_CONFIG（只读）
   3. secrets           敏感信息扫描（默认口径：已跟踪 + 未跟踪，跳过 ignored）
+     secrets_rules     基础设施判据自检（ssh/IP/家目录，11 条夹具）
+     history           历史闸：所有非归档 ref 的 blob + 提交信息 + tag 附注
+     history_rules     历史闸自检（临时仓库，钉住 --batch 对 tree 的解析）
+     package_rules     发行包闸自检（内容/结构/溯源，造坏包断言能抓）
+     surface           对外可见面验收（包闸会拦、历史闸会拦、判据只有一份）
   4. page_parity       v3 -> v4 页面功能对等（13 页）
   5. config_parity     配置中心逐项验收：静态两项 + 浏览器项（要 playwright）
   6. drive_tokens      drive.tick 的 token 记账（假 agent_service，不跑模型）
@@ -51,6 +56,10 @@ CHECKS = [
     ("fieldmeta_chain", "check_fieldmeta_chain.py", [], "字段链三边一致（只读）", False),
     ("secrets", "check_secrets.py", [], "敏感信息扫描", False),
     ("secrets_rules", "check_secrets.py", ["--selftest"], "基础设施判据自检（ssh/IP/家目录）", False),
+    ("history", "check_history.py", [], "历史闸：所有非归档 ref 的 blob + 提交信息", False),
+    ("history_rules", "check_history.py", ["--selftest"], "历史闸自检（blob 解析对齐）", False),
+    ("package_rules", "check_package.py", ["--selftest"], "发行包闸自检（内容/结构/溯源）", False),
+    ("surface", "tests/test_release_surface.py", [], "对外可见面：包/历史/判据单一来源", False),
     ("identity", "tests/test_identity_numbers.py", [], "身份号判据 + 工作树 0 命中", False),
     ("page_parity", "audit_page_parity.py", [], "页面功能对等 v3->v4", False),
     ("config_parity", "audit_config_parity.py", [], "配置中心逐项验收", True),
