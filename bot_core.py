@@ -16809,6 +16809,13 @@ def _pipeline_upsert(group_id, *, sender, text, images=None, flags=None,
     #   每条真实消息都该被订阅方看到，不管它最后并进哪个批次。
     # ★ H5：一开始就给这条消息一个 trace_id，后续并批/生成/发送都沿用它。
     _tid = _new_trace_id()
+    # ★ 2026-11-16（路线图 3.1）：trace 从**入站这一刻**就进线程上下文。
+    #   只放在 _pipeline_step 里不够 —— 决策器、图片理解、模型调用都可能在
+    #   那之前发生，账本里就是一堆 turn 为空的调用。
+    try:
+        _set_trace(_tid)
+    except Exception:
+        pass
     # ★ 2026-11-16（路线图 3.1）：turn trace 起点。只记不判，写盘失败也不影响主链。
     try:
         from harness import turn_trace as _tt_in
@@ -17162,6 +17169,20 @@ def _cooldown_log_tick(elapsed: int, total: int) -> bool:
     return e == 1 or e % 5 == 0
 
 
+def _trace_skip(group_id, why: str, *, scene: str = "group") -> None:
+    """记一条「这轮为什么不回」（路线图 3.1）。只写 trace，不动任何逻辑。
+
+    此前 SKIPPED 只覆盖 `_decision["act"] == "skip"` 一条分支，观察 / 冷却 /
+    闸门 / 定向他人这些提前 return 全没有痕迹 —— 「为什么没回」还得翻普通日志。
+    """
+    try:
+        from harness import turn_trace as _tt
+        _tt.note(_cur_trace(), "SKIPPED", scene=scene, target=str(group_id or ""),
+                 why=str(why)[:80])
+    except Exception:
+        pass
+
+
 def _pipeline_step(group_id):
     """原 process_buffered_message 的主体：pop、决策、生成、分条发送。"""
     global GROUP_MSG_BUFFER, GROUP_SESSION, group_chat_history, startup_time
@@ -17259,10 +17280,12 @@ def _pipeline_step(group_id):
         _mode_q = str(_config.get("quiet_when_mentioned", "wake") or "wake").lower()
         if not _mention:
             log(f"群[{group_id}] 静默时段 {_config.get('quiet_hours')} 且没被点名，不回")
+            _trace_skip(group_id, "静默时段")
             return
         if _mode_q == "ignore":
             log(f"群[{group_id}] 静默时段 {_config.get('quiet_hours')}，"
                 f"被点名但 quiet_when_mentioned=ignore，不回")
+            _trace_skip(group_id, "静默时段点名忽略")
             return
         log(f"群[{group_id}] 静默时段 {_config.get('quiet_hours')} 被点名，"
             f"叫醒回复（话会短）")
@@ -17351,6 +17374,7 @@ def _pipeline_step(group_id):
                               keep={"forced": buffer.get("forced"),
                                     "source": buffer.get("source"),
                                     "poke_uid": buffer.get("poke_uid")})
+        _trace_skip(group_id, "观察(observe)")
         return
     if _decision["act"] == "skip":
         _why = str(_decision.get("reason") or "")
@@ -17386,6 +17410,7 @@ def _pipeline_step(group_id):
         gs = GROUP_SESSION.get(group_id)
         if not gs or gs.get("remaining", 0) <= 0:
             log(f"群[{group_id}] 会话已过期或无配额（拦截，可在配置中心关）")
+            _trace_skip(group_id, "会话无配额")
             return
         # 会话模式：实际处理时才递减配额
         with _session_lock:
@@ -17411,6 +17436,7 @@ def _pipeline_step(group_id):
         #   和「用户引用别人再问我」都当成"在跟别人说话" → 整批被丢。
         if _line_is_directed_to_others(line, addressed=_batch_addressed):
             log(f"群[{group_id}] 跳过定向他人的消息: {line[:60]}")
+            _trace_skip(group_id, "定向他人")
             return
         
         # 小a/人格保护
@@ -17472,6 +17498,7 @@ def _pipeline_step(group_id):
                 log(f"群[{group_id}] @空 AI 调用异常: {e}")
         else:
             log(f"群[{group_id}] 跳过无意义消息: {merged_text[:60]}")
+        _trace_skip(group_id, "无意义消息")
         return
     
     log(f"群[{group_id}] 合并消息: {merged_text[:200]}{'...共' + str(len(merged_text)) + '字' if len(merged_text) > 200 else ''}")
@@ -17962,6 +17989,7 @@ def _pipeline_step(group_id):
                     f"（不是模型决定沉默；该次生成的 token 已经计费）")
             else:
                 log(f"群[{group_id}] AI决定不回复: {reply[:30] if reply else '(空)'}")
+            _trace_skip(group_id, "AI决定不回复")
             return
 
         if reply:
@@ -18068,6 +18096,7 @@ def _pipeline_step(group_id):
                     break
                 else:
                     log(f"群[{group_id}] 跳过重复回复（{retry_i+1}次重试仍重复）")
+                    _trace_skip(group_id, "重复回复")
                     return
 
             # 历史 / session log / 记忆统一在发送成功后提交（_commit_group_turn）。
