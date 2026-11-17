@@ -450,8 +450,12 @@ def build_prompt(obs: Dict[str, Any], allowed=None) -> List[Dict[str, str]]:
         elapsed = float(o.get("elapsed_s") or 0)
     except (TypeError, ValueError):
         elapsed = 0.0
-    if elapsed >= 60:
-        lines.append("这事已经过去 %d 分钟了。" % int(elapsed // 60))
+    # ★ 2026-11-17：不报精确分钟数。模型会把它当成话题复述出来 ——
+    #   真机出现「376分钟了，失联宣布延迟到什么时候」「三分钟没回你就宣布失联了？」。
+    if elapsed >= 1800:
+        lines.append("这事已经过去好一阵了。")
+    elif elapsed >= 600:
+        lines.append("这事过去了一会儿。")
     acts = list(allowed or ALLOWED_ACTS)
     lines.append("这一轮能选的动作：" + " / ".join(acts) + "（不在里面的不能选）。")
     return [
