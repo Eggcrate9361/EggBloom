@@ -12545,14 +12545,14 @@ def _handle_recall_event(ev):
                         "看到了哦 不说",
                         "太慢了 我已经看到了",
                         "来不及了 嘿嘿",
-                        "撤回慢了 已截获",
+                        "刚看到就撤回了",
                         "晚了 我看到了",
                         "回复已经发出去了 哈哈",
                         "不好意思 你撤的时候我已经看到了",
                         "看到了 不过我不说",
                         "来不及啦 我已经读过了",
                         "晚啦 眼睛比你手快",
-                        "撤回无效 本人已阅",
+                        "没事，看到了",
                         "看到了看到了 别费劲了",
                         "我看到了 你撤了个寂寞",
                         "撤晚了 我已经知道了",
@@ -12628,7 +12628,7 @@ def _handle_recall_event(ev):
 
         recall_msgs = _config.get("recall_private_post_messages") or [
             "撤回了？我还没看到", "什么情况 手滑了？", "你撤回的速度比打字快多了",
-            "心虚了吧", "好家伙 说撤就撤", "别撤回啊 发都发了",
+            "怎么了，手滑了？", "好家伙 说撤就撤", "没事，看到了",
         ]
         if _sep_on:
             # 分离态：私聊也不吃预设，措辞交给模型；模型给空就干脆不回
@@ -17184,6 +17184,8 @@ def _decide(group_id, batch):
                     "bot_replies": _safe_extract_col(_breps_all, 1),
                     "sender": batch.get("sender", ""),
                     "user_id": batch.get("sender", ""),
+                    "message_id": str(batch.get("message_id") or ""),
+                    "trace": _cur_trace(),
                     "is_at_bot": False, "has_xiao_a": False, "has_bot_nick": False,
                     "has_quote": quote_forces, "has_text_at": False, "in_session": False,
                     "observe_retry": bool(batch.get("observe_retry")),
@@ -17777,6 +17779,8 @@ def _pipeline_step(group_id):
                     "bot_replies": _safe_extract_col(_snap_breps, 1),
                     "sender": buffer.get("sender", ""),
                     "user_id": buffer.get("sender", ""),
+                    "message_id": str(buffer.get("message_id") or ""),
+                    "trace": _cur_trace(),
                     "is_at_bot": buffer.get("is_at_bot", False),
                     "has_xiao_a": buffer.get("has_xiao_a", False),
                     "has_bot_nick": buffer.get("has_bot_nick", False),

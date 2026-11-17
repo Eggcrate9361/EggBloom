@@ -48,7 +48,8 @@ class FakeCtx:
     """最小宿主：配置、私有 KV、发送出口。"""
 
     def __init__(self, cfg=None):
-        self.cfg = dict(cfg or {})
+        self.cfg = {"recall_feedback_by": "plugin"}
+        self.cfg.update(cfg or {})
         self.store = {}
         self.sent = []
         self.logs = []
@@ -192,6 +193,22 @@ def main():
     check("尝试发了", len(ctx.sent) == 1, ctx.sent)
     check("★ 失败不写状态（否则一次抖动沉默一分钟）",
           ctx.get_state(rm.STATE_KEY, {}) == {}, ctx.store)
+    check("★ 失败后释放内存预占，后续可重试", rm._INST_RECENT == {}, rm._INST_RECENT)
+
+    print("\n[F2] 主链仍负责时插件主动让位")
+    ctx = FakeCtx(cfg={"recall_feedback_by": "core"})
+    fire(ctx, event_name="notice.recall", payload=recall_ev(message_id="route-core"))
+    check("★ core 路由下插件不发", ctx.sent == [], ctx.sent)
+
+    print("\n[F3] 缺 message_id 时不同事件不会共用空键")
+    ctx = FakeCtx(cfg={"recall_feedback_cooldown": 0})
+    rm._INST_RECENT.clear()
+    rm.on_event(ctx, event_name="notice.recall",
+                payload=recall_ev(message_id="", ts=NOW_BASE))
+    rm.on_event(ctx, event_name="notice.recall",
+                payload=recall_ev(message_id="", ts=NOW_BASE + 1))
+    time.sleep(0.35)
+    check("★ 不同指纹都能投递", len(ctx.sent) == 2, ctx.sent)
 
     print("\n[G] 私聊撤回走 target")
     ctx = FakeCtx()

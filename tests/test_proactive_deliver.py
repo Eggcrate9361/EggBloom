@@ -96,6 +96,17 @@ def main():
     finally:
         pt._log, pt._send_bubbles = orig_log, orig_send
 
+    print("\n=== E) 部分发送只提交成功气泡 ===")
+    orig_private, orig_log = pt._send_private, pt._log
+    try:
+        pt._log = lambda msg, level="info": None
+        pt._send_private = lambda qq, text: text != "二"
+        sent, delivered = pt._deliver_items("1000000006", ["一", "二", "三"])
+        check("成功数=2", sent == 2, sent)
+        check("★ 只返回真实成功的气泡", delivered == ["一", "三"], delivered)
+    finally:
+        pt._send_private, pt._log = orig_private, orig_log
+
     print("\n" + "=" * 56)
     print(f"通过 {PASS} / 失败 {FAIL}")
     for x in FAILURES:

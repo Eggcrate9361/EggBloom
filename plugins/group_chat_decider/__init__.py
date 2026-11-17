@@ -151,18 +151,24 @@ class GroupChatDB:
                 print(f"[GroupDecider] 更新群画像失败: {e}")
 
     def get_group_profile(self, group_id: str) -> dict:
+        conn = None
         try:
             conn = sqlite3.connect(self.db_path)
             row = conn.execute(
                 "SELECT * FROM group_profiles WHERE group_id=?", (str(group_id),)
             ).fetchone()
-            conn.close()
             if not row:
                 return {}
-            cols = [d[0] for d in conn.execute("PRAGMA table_info(group_profiles)").fetchall()]
+            cols = [d[1] for d in conn.execute("PRAGMA table_info(group_profiles)").fetchall()]
             return dict(zip(cols, row))
         except Exception:
             return {}
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
 
     def add_topic_message(self, group_id: str, topic: str, message: str, sender: str):
         with self._lock:
@@ -659,6 +665,8 @@ _last_reply_time = {}
 _last_reply_target = {}   # {group_id: (被回复者QQ, 时间)} —— 接话豁免用
 _bot_spoke_times = {}     # {group_id: [真实发出时刻…]} —— 防刷屏闸用
 _pending_reply = {}       # {group_id: 决策放行时刻} —— 回复生成期间的预占冷却
+_STATE_LOCK = threading.RLock()
+_DECISION_LOCKS = {}
 _followup_until = {}      # {group_id: 接话窗口截止} —— 回完等追问（学 qq-bridge 的 purpose=reply/messages）
 #: 最近决策（1.5.10 精致化）：插件页展示"为什么回 / 为什么没回"。
 #: 只存内存、最多 60 条；重启即清空 —— 它是观测数据，不参与任何判断。
@@ -1281,8 +1289,9 @@ def decide(message: str, group_id: str, context: dict = None) -> Optional[Decisi
     #   旧版一刀切冷却会拦掉"同一个人追第二个问题"，Bot 显得答非所问接不上话。
     if cooldown > 0 and not ctx.get("is_at_bot"):   # cooldown_seconds=0 → 本段整体不生效
         nowts = time.time()
-        last_reply = _last_reply_time.get(group_id, 0)
-        _pend = _pending_reply.get(group_id, 0)
+        with _STATE_LOCK:
+            last_reply = _last_reply_time.get(group_id, 0)
+            _pend = _pending_reply.get(group_id, 0)
         # 预占超 120s 视为回复生成失败 → 丢弃，避免把该群永久焊死
         if _pend and nowts - _pend >= 120:
             _pend = 0
@@ -1855,7 +1864,7 @@ def _parse_json_output(text: str) -> Optional[dict]:
 # 钩子函数
 # ═══════════════════════════════════════════
 
-def before_reply(message: str = "", group_id: str = "", context: dict = None, **kwargs) -> dict | None:
+def _before_reply_impl(message: str = "", group_id: str = "", context: dict = None, **kwargs) -> dict | None:
     """before_reply 挂载点"""
     if not PLUGIN_META["enabled"]:
         return None
@@ -1883,8 +1892,12 @@ def before_reply(message: str = "", group_id: str = "", context: dict = None, **
     _ck_tail_ts = recent_msgs[-1][0] if (recent_msgs and isinstance(recent_msgs[-1], (list, tuple)) and recent_msgs[-1]) else 0
     # ★ 缓存键必须区分 observe_retry：潜水前观察是**同一段文本**的二次决策，
     #   不带这个标志就会命中第一次的缓存 → 又返回 observe → 无限循环观察。
-    _ck = (group_id, message[:80], _ck_tail_ts, bool(ctx.get("observe_retry")))
-    _hit = _decision_cache.get(_ck)
+    _ck = (group_id, message[:80], _ck_tail_ts,
+           bool(ctx.get("observe_retry")),
+           str(ctx.get("sender") or ctx.get("user_id") or ""),
+           str(ctx.get("message_id") or ""))
+    with _STATE_LOCK:
+        _hit = _decision_cache.get(_ck)
     if _hit and time.time() - _hit[0] < 30:
         _cached = _hit[1]
         if _cached is None:
@@ -1939,20 +1952,32 @@ def before_reply(message: str = "", group_id: str = "", context: dict = None, **
             # ② 这里写 _pending_reply 作**预占冷却** —— 回复生成要几秒~几十秒，
             #    期间同群再进消息若只看 _last_reply_time（还是旧的）会二次放行，
             #    这正是"连答两次"的第三条路径。pending 让冷却期提前咬合。
-            _pending_reply[group_id] = time.time()
+            with _STATE_LOCK:
+                _pending_reply[group_id] = time.time()
             _result = {
                 "action": "inject",
                 "content": decision.to_prompt_injection(),
                 "meta": decision.to_dict(),
             }
     # 写缓存（None 也要缓存，防第二次派发重烧决策）
-    if len(_decision_cache) > 120:
-        _cut = time.time() - 30
-        for _k in [k for k, (ts, _) in _decision_cache.items() if ts < _cut]:
-            _decision_cache.pop(_k, None)
+    with _STATE_LOCK:
+        if len(_decision_cache) > 120:
+            _cut = time.time() - 30
+            for _k in [k for k, (ts, _) in _decision_cache.items() if ts < _cut]:
+                _decision_cache.pop(_k, None)
+        _decision_cache[_ck] = (time.time(), _result)
     _record_decision(group_id, message, decision, _result)
-    _decision_cache[_ck] = (time.time(), _result)
     return _result
+
+
+def before_reply(message: str = "", group_id: str = "", context: dict = None, **kwargs) -> dict | None:
+    """Serialize decision calculation per group; different groups stay parallel."""
+    key = str(group_id or "__no_group__")
+    with _STATE_LOCK:
+        lock = _DECISION_LOCKS.setdefault(key, threading.RLock())
+    with lock:
+        return _before_reply_impl(message=message, group_id=group_id,
+                                  context=context, **kwargs)
 
 
 def after_reply(message: str = "", group_id: str = "", reply: str = "", context: dict = None, **kwargs) -> dict | None:
@@ -1967,12 +1992,13 @@ def after_reply(message: str = "", group_id: str = "", reply: str = "", context:
     # 记录发出时刻、发言序列（防刷屏闸）、以及本轮对话对象（接话豁免）。
     if reply:
         _now = time.time()
-        _last_reply_time[group_id] = _now
-        _pending_reply.pop(group_id, None)  # 已真实发出，预占失效
-        _lst = _bot_spoke_times.setdefault(group_id, [])
-        _lst.append(_now)
-        if len(_lst) > 20:
-            del _lst[:-20]
+        with _STATE_LOCK:
+            _last_reply_time[group_id] = _now
+            _pending_reply.pop(group_id, None)  # 已真实发出，预占失效
+            _lst = _bot_spoke_times.setdefault(group_id, [])
+            _lst.append(_now)
+            if len(_lst) > 20:
+                del _lst[:-20]
 
     ctx = context or {}
     recent_msgs = ctx.get("recent_msgs", [])

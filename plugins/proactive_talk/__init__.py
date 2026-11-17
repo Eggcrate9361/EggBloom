@@ -92,6 +92,7 @@ DEFAULT_CONFIG = {
 _ctx: "PluginContext | None" = None
 _thread: "threading.Thread | None" = None
 _stop = threading.Event()
+_DELIVERY = threading.local()
 _send_lock = threading.Lock()
 
 # ── 配置读写（插件自己的 data/config.json）────────────────
@@ -403,14 +404,31 @@ def _send_private(qq: str, text: str) -> bool:
 
 def _send_bubbles(qq: str, bubbles: list) -> int:
     sent = 0
+    delivered = []
     for i, b in enumerate(bubbles):
         if _stop.is_set():
             break
         if _send_private(qq, b):
             sent += 1
+            delivered.append(str(b))
         if i < len(bubbles) - 1:
             _stop.wait(min(0.8 + 0.15 * len(b), 4.0))   # 打字延时，可被停止打断
+    _DELIVERY.bubbles = delivered
     return sent
+
+
+def _send_bubble_results(qq: str, bubbles: list) -> list:
+    """Return one delivery result per bubble, preserving input order."""
+    results = []
+    total = len(bubbles or [])
+    for i, bubble in enumerate(bubbles or []):
+        ok = False
+        if not _stop.is_set():
+            ok = bool(_send_private(qq, bubble))
+        results.append({"index": i, "text": str(bubble), "ok": ok})
+        if i < total - 1:
+            _stop.wait(min(0.8 + 0.15 * len(bubble), 4.0))
+    return results
 
 
 def _deliver(qq: str, bubbles: list) -> int:
@@ -428,6 +446,19 @@ def _deliver(qq: str, bubbles: list) -> int:
     if sent < len(bubbles or []):
         _log(f"主动开口结果 → {qq}: {sent}/{len(bubbles or [])} 条成功")
     return sent
+
+
+def _deliver_items(qq: str, bubbles: list):
+    """Production delivery path: return (sent_count, delivered_bubbles)."""
+    joined = " / ".join(str(b) for b in (bubbles or []))
+    _log(f"主动开口 → {qq}: {joined[:60]}")
+    sent = int(_send_bubbles(qq, bubbles) or 0)
+    delivered = list(getattr(_DELIVERY, "bubbles", []) or [])
+    if not delivered and sent:
+        delivered = list(bubbles[:sent])
+    if sent < len(bubbles or []):
+        _log(f"主动开口结果 → {qq}: {sent}/{len(bubbles or [])} 条成功")
+    return sent, delivered
 
 
 # ── 生成 ──────────────────────────────────────────────────
@@ -806,11 +837,11 @@ def _proactive_once(force: bool = False, target: str = "") -> dict:
         except Exception as _ge:
             _log(f"事实围栏跳过（不影响发送）: {_ge}")
 
-        sent = _deliver(chosen, bubbles)
+        sent, delivered = _deliver_items(chosen, bubbles)
         if sent == 0:
             return {"ok": False, "error": "发送失败（OneBot 未连接？）"}
 
-        joined = " / ".join(bubbles)
+        joined = " / ".join(delivered)
         hmap = dict(state.get("history_map") or {})
         hist = list(hmap.get(chosen) or [])
         hist.append({"ts": time.time(), "text": joined[:120]})
@@ -827,8 +858,9 @@ def _proactive_once(force: bool = False, target: str = "") -> dict:
         if cfg.get("extract_pending", True) and _daily["ai_calls"] < _cap_ai:
             _daily["ai_calls"] += 1
             _ctx.set_state("daily", _daily)
-            _update_pending_topic(bubbles, chosen)
-        return {"ok": True, "target": chosen, "bubbles": bubbles}
+            _update_pending_topic(delivered, chosen)
+        return {"ok": True, "target": chosen, "bubbles": delivered,
+                "attempted": len(bubbles), "sent": sent}
 
 
 # ── 心跳线程 ──────────────────────────────────────────────
