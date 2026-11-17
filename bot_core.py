@@ -169,6 +169,32 @@ def _cur_trace() -> str:
         return ""
 
 
+def _clear_trace() -> None:
+    try:
+        del _TRACE_LOCAL.id
+    except Exception:
+        pass
+
+
+def _trace_diag(stage: str, trace_id: str = "", **fields) -> None:
+    """Opt-in thread-boundary diagnostics; never include message contents."""
+    if str(os.environ.get("EGG_TRACE_DIAG", "")).strip().lower() not in ("1", "true", "yes", "on"):
+        return
+    current = _cur_trace()
+    meta = " ".join(f"{k}={str(v)[:80]}" for k, v in fields.items() if v not in (None, ""))
+    log(f"[TraceDiag] {stage} expected={trace_id or '-'} current={current or '-'} "
+        f"thread={threading.current_thread().name}/{threading.get_ident()}"
+        + (f" {meta}" if meta else ""))
+
+
+def _trace_note(trace_id: str, phase: str, **fields) -> bool:
+    try:
+        from harness import turn_trace as _tt
+        return _tt.note(str(trace_id or ""), phase, **fields)
+    except Exception:
+        return False
+
+
 def _trace_suffix() -> str:
     t = _cur_trace()
     return f" trace={t}" if t else ""
@@ -4621,6 +4647,15 @@ def try_send_meme(group_id, reply_text, prob_bonus=0.0):
         log("[表情] 引擎已禁用")
         return None
 
+    # Full/Standard 图片库是运行时资源，不随源码安装；无文件时无需做情绪召回。
+    _meme_engine_globals = getattr(match_meme, "__globals__", {})
+    if isinstance(_meme_engine_globals, dict) and isinstance(
+            _meme_engine_globals.get("_tag_db"), dict):
+        _inventory = _meme_inventory()
+        if not _inventory["files"]:
+            log(f"[表情] 服务器未安装表情图片，跳过（root={_inventory['root']}）")
+            return None
+
     # 冷却检查
     key = f"group_{group_id}"
     now = time.time()
@@ -4675,21 +4710,35 @@ def try_send_meme(group_id, reply_text, prob_bonus=0.0):
             return None
     
     meme_path = match_meme(emotion)
+    if not meme_path:
+        _inventory = _meme_inventory()
+        if not _inventory["files"]:
+            _status = "服务器未安装表情图片"
+        elif not _inventory["indexed"]:
+            _status = "表情图片存在，但标签索引未安装"
+        elif not _inventory["available"]:
+            _status = "表情索引没有可发送文件（可能已缺失、待审核或拉黑）"
+        else:
+            _status = "已安装素材中没有匹配项"
+        log(f"[表情] {_status}，跳过 emotion={emotion or '-'} "
+            f"indexed={_inventory['indexed']} files={_inventory['files']} "
+            f"available={_inventory['available']} "
+            f"root={_inventory['root']}")
+        return None
     log(f"[表情] 匹配路径: {meme_path}")
-    _sent_meme = False
-    if meme_path:
-        # 用 lambda 包一层，保留 `send_group_image(group_id, meme_path, sub_type=1)`
-        # 这个调用字面串 —— tests/test_image_subtype.py 的源码断言钉着它。
-        _sent_meme = _with_outbound_origin(
-            ("model" if _meme_by_model else "rule") + " action=表情",
-            lambda: send_group_image(group_id, meme_path, sub_type=1))
+
+    # 用 lambda 包一层，保留 `send_group_image(group_id, meme_path, sub_type=1)`
+    # 这个调用字面串 —— tests/test_image_subtype.py 的源码断言钉着它。
+    _sent_meme = _with_outbound_origin(
+        ("model" if _meme_by_model else "rule") + " action=表情",
+        lambda: send_group_image(group_id, meme_path, sub_type=1))
     if _sent_meme:
         MEME_LAST_SENT[key] = now
         # P1-3：记进群 history，模型下一轮才知道自己发了哪张图
         _note_sent_meme(meme_path, group_id=group_id)
         log(f"[表情] 发送成功: {os.path.basename(meme_path)}")
         return os.path.basename(meme_path)
-    log("[表情] 发送失败或无路径")
+    log(f"[表情] OneBot 图片发送失败: {os.path.basename(meme_path)}")
     return None
 
 # ── 纯表情包消息 → 回敬一张表情包（2026-10-13 用户拍板）──
@@ -13173,6 +13222,13 @@ def _ai_worker() -> None:
         if task is None:  # 停止信号
             break
         task_id, params, event = task
+        task_trace = str(params.get("_trace_id") or "")
+        _trace_diag("worker-before-restore", task_trace, task_id=task_id)
+        if task_trace:
+            _set_trace(task_trace)
+        else:
+            _clear_trace()
+        _trace_diag("worker-start", task_trace, task_id=task_id)
 
         def _tick_progress(tid=task_id):
             # 告诉等待方"这一轮还在推进"。只更新一个时间戳，不加锁竞争（走同一把锁，
@@ -13199,12 +13255,14 @@ def _ai_worker() -> None:
                 scene_context=params.get("scene_context", ""),
                 sender=params.get("sender", ""),
                 progress=_tick_progress)
+            _trace_diag("worker-done", task_trace, task_id=task_id, outcome="ok")
             with _ai_results_lock:
                 entry = _ai_results.get(task_id)
                 if entry:
                     entry["result"] = result
             event.set()
         except Exception as e:
+            _trace_diag("worker-done", task_trace, task_id=task_id, outcome=type(e).__name__)
             log(f"AI Worker 异常: {e}")
             with _ai_results_lock:
                 entry = _ai_results.get(task_id)
@@ -13216,6 +13274,7 @@ def _ai_worker() -> None:
             event.set()
         finally:
             _ai_task_queue.task_done()
+            _clear_trace()
             # 防泄漏：任务完成后 entry 最多保留 5 分钟（超时等待者可能已放弃），随后强制清理
             def _late_cleanup(tid=task_id):
                 try:
@@ -13229,6 +13288,9 @@ def _ai_worker() -> None:
 def _submit_ai_task(params: Dict) -> int:
     """提交 AI 任务到后台队列，返回 task_id。结果通过事件通知。"""
     global _ai_task_counter
+    params = dict(params or {})
+    task_trace = _cur_trace()
+    params["_trace_id"] = task_trace
     with _ai_task_counter_lock:
         _ai_task_counter += 1
         task_id = _ai_task_counter
@@ -13236,6 +13298,7 @@ def _submit_ai_task(params: Dict) -> int:
     with _ai_results_lock:
         _ai_results[task_id] = {"event": event, "result": None,
                                 "progress": time.time()}
+    _trace_diag("enqueue", task_trace, task_id=task_id)
     _ai_task_queue.put((task_id, params, event))
     return task_id
 
@@ -14330,6 +14393,7 @@ def _call_chat_sync(messages, runtime_cfg=None, max_tokens=AI_MAX_TOKENS, stream
     #   网关不可用（旧部署/单测）时退回直连，行为与以前一致。
     if _model_gateway is not None:
         try:
+            _trace_diag("gateway-call", _cur_trace(), lane="main", task="chat")
             resp = _model_gateway.call(
                 api_url, payload, api_key=api_key, timeout=60,
                 meta={"turn": _cur_trace(), "task": "chat", "plugin": "host",
@@ -14385,6 +14449,7 @@ def _stream_chat_lines(messages, runtime_cfg=None, max_tokens=AI_MAX_TOKENS, wit
     #   token 仍由本函数末尾记 —— 两本账不重复计数。
     try:
         if _model_gateway is not None:
+            _trace_diag("gateway-stream", _cur_trace(), lane="main", task="stream")
             r = _model_gateway.stream(api_url, payload, api_key=api_key, timeout=60,
                                       meta={"turn": _cur_trace(), "task": "stream",
                                             "plugin": "host", "lane": "main"})
@@ -16098,11 +16163,14 @@ def _observe_second_look(group_id: str):
     rec = GROUP_OBSERVE.pop(group_id, None)
     if not rec:
         return
+    _trace_id = str((rec.get("keep") or {}).get("trace_id") or "")
     with _buffer_lock:
         fresh = GROUP_MSG_BUFFER.get(group_id)
     if fresh:
         # 期间有**新消息**进来 → 正常路径会以更新的上下文处理，这里不重复动作
         log(f"群[{group_id}] [观察] 窗口内有新消息，改走新上下文（本次观察作废）")
+        _trace_note(_trace_id, "SKIPPED", scene="group", target=str(group_id),
+                    why="observe_superseded")
         return
     # ★ 2026-10-25：相位不空闲时不写合成批次 —— 那会覆盖别人正在用的待批数据。
     #   回看本来就只发生一次，作废即可，不排队（排队等于多一次模型调用）。
@@ -16110,9 +16178,13 @@ def _observe_second_look(group_id: str):
         _phase = (GROUP_PIPELINE.get(group_id) or {}).get("phase", "idle")
     if _phase != "idle":
         log(f"群[{group_id}] [观察] 正在{_phase}，本次回看作废")
+        _trace_note(_trace_id, "SKIPPED", scene="group", target=str(group_id),
+                    why="observe_pipeline_busy")
         return
     text = str(rec.get("text") or "").strip()
     if not text:
+        _trace_note(_trace_id, "SKIPPED", scene="group", target=str(group_id),
+                    why="observe_empty")
         return
     log(f"群[{group_id}] [观察] 第二次决策（原理由：{str(rec.get('reason') or '')[:60]}）")
     with _buffer_lock:
@@ -16130,11 +16202,14 @@ def _observe_second_look(group_id: str):
             "forced": bool((rec.get("keep") or {}).get("forced")),
             "source": (rec.get("keep") or {}).get("source") or "message",
             "poke_uid": (rec.get("keep") or {}).get("poke_uid"),
+            "trace_id": _trace_id or _new_trace_id(),
         }
     try:
         process_buffered_message(group_id)
     except Exception as e:
         log(f"群[{group_id}] [观察] 第二次决策异常: {e}")
+        _trace_note(_trace_id, "FAILED", scene="group", target=str(group_id),
+                    why=f"observe {type(e).__name__}: {e}"[:120])
 
 
 def _extract_qq(s) -> str:
@@ -16696,15 +16771,38 @@ def _pipeline_release(group_id, again: bool = False) -> bool:
 
 
 def _pipeline_run(group_id) -> bool:
+    previous_trace = _cur_trace()
     if not _pipeline_acquire(group_id):
         return False
     while True:
+        with _buffer_lock:
+            _buffer = GROUP_MSG_BUFFER.get(group_id) or {}
+            _turn_id = str(_buffer.get("trace_id") or "")
         try:
             _pipeline_step(group_id)
-        except Exception:
+        except Exception as _pipeline_error:
+            if _turn_id:
+                _trace_note(_turn_id, "FAILED", scene="group", target=str(group_id),
+                            why=f"{type(_pipeline_error).__name__}: {_pipeline_error}"[:120])
             _pipeline_release(group_id)
+            if previous_trace:
+                _set_trace(previous_trace)
+            else:
+                _clear_trace()
             raise
+        if _turn_id:
+            try:
+                from harness import turn_trace as _tt_state
+                if not _tt_state.is_terminal(_turn_id) and not _tt_state.is_observing(_turn_id):
+                    _trace_note(_turn_id, "SKIPPED", scene="group", target=str(group_id),
+                                why="pipeline_return_without_terminal")
+            except Exception:
+                pass
         if not _pipeline_release(group_id, again=True):
+            if previous_trace:
+                _set_trace(previous_trace)
+            else:
+                _clear_trace()
             return True
 
 
@@ -16809,20 +16907,11 @@ def _pipeline_upsert(group_id, *, sender, text, images=None, flags=None,
     #   每条真实消息都该被订阅方看到，不管它最后并进哪个批次。
     # ★ H5：一开始就给这条消息一个 trace_id，后续并批/生成/发送都沿用它。
     _tid = _new_trace_id()
-    # ★ 2026-11-16（路线图 3.1）：trace 从**入站这一刻**就进线程上下文。
-    #   只放在 _pipeline_step 里不够 —— 决策器、图片理解、模型调用都可能在
-    #   那之前发生，账本里就是一堆 turn 为空的调用。
-    try:
-        _set_trace(_tid)
-    except Exception:
-        pass
+    # Timer 与模型 worker 通过批次参数显式传递 trace；不要把它留在线程局部，
+    # 否则主循环后续处理的私聊/插件事件会继承这条群消息的 turn。
     # ★ 2026-11-16（路线图 3.1）：turn trace 起点。只记不判，写盘失败也不影响主链。
-    try:
-        from harness import turn_trace as _tt_in
-        _tt_in.begin(_tid, scene="group", target=str(group_id),
-                     user=str(sender), text_len=len(str(text or "")))
-    except Exception:
-        pass
+    _trace_note(_tid, "RECEIVED", scene="group", target=str(group_id),
+                user=str(sender), text_len=len(str(text or "")))
     if source == "message":
         _emit_plugin_event("message.in", {
             "group_id": str(group_id),
@@ -16857,6 +16946,9 @@ def _pipeline_upsert(group_id, *, sender, text, images=None, flags=None,
         timer = _merge(buffer) if buffer else None
     if timer is not None:
         timer.start()          # 锁外启动：回调内部要拿同一把锁
+        _trace_note(_tid, "MERGED", scene="group", target=str(group_id),
+                    into=str(buffer.get("trace_id") or ""))
+        _trace_diag("batch-merged", _tid, into=buffer.get("trace_id") or "")
         return "merged"
 
     # ② 有批次但已过期 → 先结算旧批，再看它还在不在
@@ -16870,6 +16962,9 @@ def _pipeline_upsert(group_id, *, sender, text, images=None, flags=None,
             timer = _merge(still, force=True) if still else None
         if timer is not None:
             timer.start()
+            _trace_note(_tid, "MERGED", scene="group", target=str(group_id),
+                        into=str(still.get("trace_id") or ""))
+            _trace_diag("batch-merged", _tid, into=still.get("trace_id") or "")
             return "expired"
 
     # ③ 新建批次：被 @ 或叫「小a」时回抓最近消息作为上下文
@@ -17175,12 +17270,53 @@ def _trace_skip(group_id, why: str, *, scene: str = "group") -> None:
     此前 SKIPPED 只覆盖 `_decision["act"] == "skip"` 一条分支，观察 / 冷却 /
     闸门 / 定向他人这些提前 return 全没有痕迹 —— 「为什么没回」还得翻普通日志。
     """
-    try:
-        from harness import turn_trace as _tt
-        _tt.note(_cur_trace(), "SKIPPED", scene=scene, target=str(group_id or ""),
-                 why=str(why)[:80])
-    except Exception:
-        pass
+    _trace_note(_cur_trace(), "SKIPPED", scene=scene, target=str(group_id or ""),
+                why=str(why)[:80])
+
+
+_MEME_INVENTORY_CACHE = {"at": 0.0, "key": None, "value": None}
+
+
+def _meme_inventory(*, refresh: bool = False) -> dict:
+    """Report meme index coverage and actual files without reading image contents."""
+    engine = getattr(match_meme, "__globals__", {})
+    root = os.path.join(MEME_DIR, "memes")
+    if isinstance(engine, dict):
+        root = str(engine.get("MEME_DIR") or root)
+    db = engine.get("_tag_db") if isinstance(engine, dict) else None
+    indexed = len(db) if isinstance(db, dict) else 0
+    key = (root, id(db), indexed)
+    cached = _MEME_INVENTORY_CACHE
+    if (not refresh and cached.get("key") == key
+            and time.monotonic() - float(cached.get("at") or 0) < 60.0):
+        return dict(cached["value"])
+    actual_files = 0
+    for _dir, _subdirs, _files in os.walk(root):
+        actual_files += sum(1 for _name in _files
+                            if _name.lower().endswith((".gif", ".png", ".jpg", ".jpeg", ".webp")))
+    approved, blocked = None, set()
+    if isinstance(engine, dict):
+        try:
+            approved = engine["_approved_rels"]()
+            blocked = engine["_blocked_rels"]() or set()
+        except Exception:
+            pass
+    available = 0
+    for rel in db or {}:
+        try:
+            _rel = str(rel).replace("\\", "/")
+            if _rel in blocked:
+                continue
+            if approved is not None and _rel.startswith("collected/") and _rel not in approved:
+                continue
+            if os.path.isfile(os.path.join(root, _rel.replace("/", os.sep))):
+                available += 1
+        except Exception:
+            pass
+    result = {"root": root, "indexed": indexed,
+              "files": actual_files, "available": available}
+    _MEME_INVENTORY_CACHE.update(at=time.monotonic(), key=key, value=result)
+    return dict(result)
 
 
 def _pipeline_step(group_id):
@@ -17192,6 +17328,13 @@ def _pipeline_step(group_id):
         buffer = GROUP_MSG_BUFFER.pop(group_id, None)
     if not buffer or not buffer["text"]:
         return
+    _batch_tid = _set_trace(str(buffer.get("trace_id") or ""))
+    if not _batch_tid:
+        _batch_tid = _new_trace_id()
+        buffer["trace_id"] = _batch_tid
+        _trace_note(_batch_tid, "RECEIVED", scene="group", target=str(group_id),
+                    text_len=len(str(buffer.get("text") or "")))
+    _trace_diag("batch-start", _batch_tid, group_id=group_id)
     
     merged_text = buffer["text"].strip()
     # 1.5.9 §B2：时序锚点。batch = 从批次第一条到开始处理（等批时长），
@@ -17307,7 +17450,7 @@ def _pipeline_step(group_id):
     _batch_addressed = bool(is_at_bot or has_xiao_a or has_bot_nick
                              or quote_forces or has_text_at)
     
-    # ★ 1.5.10 H5：本批的 trace 进入线程上下文，后续决策/发送日志都带上它。
+    # Reassert the same ID before decision and event logging.
     _batch_tid = _set_trace(str(buffer.get("trace_id") or ""))
     # ★ 1.6.0 前置 C（2026-11-01）：同一个 trace 也写进事件日志的 `trace_id`，
     #   P0 的验收判据（"agent 与闲聊同一个 trace"）就是从这里比对的。
@@ -17373,8 +17516,12 @@ def _pipeline_step(group_id):
                               _decision.get("reason") or "",
                               keep={"forced": buffer.get("forced"),
                                     "source": buffer.get("source"),
-                                    "poke_uid": buffer.get("poke_uid")})
-        _trace_skip(group_id, "观察(observe)")
+                                    "poke_uid": buffer.get("poke_uid"),
+                                    "trace_id": _batch_tid})
+            _trace_note(_batch_tid, "OBSERVING", scene="group",
+                        target=str(group_id), why="observe_scheduled")
+        else:
+            _trace_skip(group_id, "观察未排期")
         return
     if _decision["act"] == "skip":
         _why = str(_decision.get("reason") or "")
@@ -17722,7 +17869,10 @@ def _pipeline_step(group_id):
                                 group_id, merged_text, _obs_after, _obs_reason,
                                 keep={"forced": buffer.get("forced"),
                                       "source": buffer.get("source"),
-                                      "poke_uid": buffer.get("poke_uid")})
+                                      "poke_uid": buffer.get("poke_uid"),
+                                      "trace_id": _batch_tid})
+                            _trace_note(_batch_tid, "OBSERVING", scene="group",
+                                        target=str(group_id), why="plugin_observe_scheduled")
                         return
                     if inject_parts:
                         # F4 排序 + F3 预算：原来只有 `sort(priority)` 和裸 join，
@@ -18635,6 +18785,21 @@ def main():
     log("EggBloom v8 - 多账号 + 文件转发 + 消息转存")
     log(f"Bot: {BOT_QQ} | 监听: {', '.join(TARGET_QQS)} | 群聊: {len(GROUP_IDS)}个")
     log("=" * 50)
+    if MEME_OK:
+        _inventory = _meme_inventory()
+        if not _inventory["files"]:
+            _status = "服务器未安装表情图片"
+        elif not _inventory["indexed"]:
+            _status = "图片存在但标签索引缺失"
+        elif not _inventory["available"]:
+            _status = "索引没有可用图片（文件缺失、待审核或被拉黑）"
+        else:
+            _status = "就绪"
+        log(f"[表情库] {_status}: indexed={_inventory['indexed']} "
+            f"files={_inventory['files']} available={_inventory['available']} "
+            f"root={_inventory['root']}")
+    else:
+        log("[表情库] engine unavailable")
 
     # ── 沙漏记忆引擎（同步初始化，实测 20ms）──
     # ★ 2026-10-25：原来起后台线程后只打一句「后台初始化中」，
@@ -19276,6 +19441,7 @@ def main():
     global GROUP_MSG_BUFFER, LAST_MSG_TIME
 
     while True:
+        _clear_trace()
         try:
 
             # 处理实时消息队列（来自协议层 3005 端口推送）
@@ -19561,6 +19727,7 @@ def main():
                     log(f"[自愈R3] 观察失败（已忽略）: {_r3e}")
 
             for msg in new_msgs:
+                _clear_trace()
                 # ── 真插件 ABI：on_message（只调 spec 插件；返回文本即作为插件回复，跳过 AI）──
                 if PLUGIN_OK:
                     try:

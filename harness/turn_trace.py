@@ -53,6 +53,8 @@ _DIR: Optional[str] = os.path.join(_ROOT, "data", "trace")
 
 #: 单行上限，防止异常长文本把日志撑爆
 _MAX_FIELD = 200
+_TERMINAL_PHASES = {"MERGED", "SENT", "COMMITTED", "SKIPPED", "DROPPED", "FAILED"}
+_LAST_PHASE: Dict[str, str] = {}
 
 
 def enabled() -> bool:
@@ -88,9 +90,24 @@ def note(turn_id: str, phase: str, **fields: Any) -> bool:
             os.makedirs(_DIR, exist_ok=True)
             with open(_path(), "a", encoding="utf-8") as f:
                 f.write(line + "\n")
+            _LAST_PHASE[str(turn_id)] = str(phase)
+            if len(_LAST_PHASE) > 5000:
+                _LAST_PHASE.pop(next(iter(_LAST_PHASE)))
         return True
     except Exception:
         return False
+
+
+def is_terminal(turn_id: str) -> bool:
+    """Return whether this process has recorded a terminal phase for a turn."""
+    with _LOCK:
+        return _LAST_PHASE.get(str(turn_id or "")) in _TERMINAL_PHASES
+
+
+def is_observing(turn_id: str) -> bool:
+    """Return whether a turn is waiting for its scheduled second look."""
+    with _LOCK:
+        return _LAST_PHASE.get(str(turn_id or "")) == "OBSERVING"
 
 
 def begin(turn_id: str, **fields: Any) -> Dict[str, Any]:
