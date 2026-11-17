@@ -23,6 +23,7 @@ ROOT = os.path.dirname(HERE)
 sys.path.insert(0, ROOT)
 
 TMP = tempfile.mkdtemp(prefix="subagent_test_")
+os.environ["EGGBLOOM_TASKCENTER_DB"] = os.path.join(TMP, "taskcenter.sqlite3")
 from harness import subagent as sa  # noqa: E402
 
 sa.DATA_DIR = TMP
@@ -74,6 +75,17 @@ try:
     st3 = wait_done(tid3)
     # 内层任务应被判 failed；外层正常结束，结果是 "failed" 这个状态字符串
     check("子 agent 里不能派活", st3.get("result") == "failed", st3)
+
+    def slow(_g, cancel_event=None):
+        time.sleep(0.35)
+        return "LATE"
+
+    tid4 = sa.submit("执行超时", run_fn=slow, timeout=0.1)
+    st4 = wait_done(tid4)
+    check("★ 执行阶段也受 timeout 限制", st4.get("state") == "timeout", st4)
+    time.sleep(0.35)
+    check("★ 超时后晚到结果不覆盖终态",
+          sa.status(tid4).get("state") == "timeout", sa.status(tid4))
 
     check("文件落盘", os.path.isfile(sa.LOG_FILE), sa.LOG_FILE)
 finally:

@@ -33,8 +33,11 @@
 """
 from __future__ import annotations
 
+import copy
 import json
 import os
+import re
+import tempfile
 import threading
 import time
 import uuid
@@ -78,10 +81,17 @@ def _runs_dir(store_dir: str) -> str:
 
 def _atomic_json(path: str, data: Any) -> None:
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=1, default=str)
-    os.replace(tmp, path)
+    fd, tmp = tempfile.mkstemp(prefix=".tmp-", suffix=".json",
+                               dir=os.path.dirname(path))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=1, default=str)
+        os.replace(tmp, path)
+    finally:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
 
 
 def _read_json(path: str) -> Optional[dict]:
@@ -97,6 +107,21 @@ _HANDLERS: Dict[str, dict] = {}
 _HAND_LOCK = threading.Lock()
 _DEFS: Dict[str, dict] = {}
 _RUN_INDEX: Dict[str, str] = {}        # run_id -> store_dir（跨会话时靠 store_dir 参数）
+_RUN_LOCKS: Dict[str, threading.RLock] = {}
+_RUN_LOCKS_LOCK = threading.Lock()
+_SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
+
+
+def _safe_id(value: str, kind: str) -> str:
+    ident = str(value or "").strip()
+    if not ident or ".." in ident or not _SAFE_ID.fullmatch(ident):
+        raise ValueError(f"非法 {kind}: {value!r}")
+    return ident
+
+
+def _run_lock(run_id: str) -> threading.RLock:
+    with _RUN_LOCKS_LOCK:
+        return _RUN_LOCKS.setdefault(run_id, threading.RLock())
 
 
 def _hkey(name: str, node_id: str) -> str:
@@ -139,7 +164,8 @@ def define(name: str, nodes: List[dict], *, store_dir: str = "") -> dict:
     节点字段：id / depends / when / run / retries / fallback。
     `when`、`run` 是 callable，登记进注册表但不写进盘上的定义。
     """
-    name = str(name or "").strip() or ("flow-" + uuid.uuid4().hex[:8])
+    name = _safe_id(str(name or "").strip() or ("flow-" + uuid.uuid4().hex[:8]),
+                    "流程名")
     clean = []
     for i, n in enumerate(nodes):
         if not isinstance(n, dict):
@@ -169,6 +195,7 @@ def _resolve_defn(spec, store_dir: str) -> dict:
     """spec 可以是：名字(str) / define 返回的 dict / 原始节点 list。"""
     sd = store_dir or default_dir()
     if isinstance(spec, str):
+        spec = _safe_id(spec, "流程名")
         if spec in _DEFS:
             return _DEFS[spec]
         d = _read_json(os.path.join(_defs_dir(sd), f"{spec}.json"))
@@ -218,19 +245,50 @@ def _run_node(nid: str, ctx: dict, hmap: Dict[str, dict], retries: int):
     """跑一个节点（含重试）。返回 (status, result, error, attempts)。"""
     h = hmap.get(nid, {})
     fn = h.get("run")
+    if not callable(fn):
+        return ST_FAILED, None, "MissingHandler: 节点执行器未注册", 1
     err = ""
     attempts = 0
     for _ in range(retries + 1):
         attempts += 1
         try:
-            out = fn(ctx) if callable(fn) else None
+            out = fn(ctx)
             return ST_DONE, out, "", attempts
         except Exception as e:
             err = f"{type(e).__name__}: {e}"
     return ST_FAILED, None, err, attempts
 
 
-def _execute(state: dict, defn: dict, hmap: Dict[str, dict]) -> dict:
+def _clone_ctx(ctx: dict) -> dict:
+    out = {}
+    for key, value in (ctx or {}).items():
+        if isinstance(value, (dict, list, set, tuple)):
+            try:
+                out[key] = copy.deepcopy(value)
+            except Exception:
+                out[key] = value
+        else:
+            out[key] = value
+    return out
+
+
+def _ctx_changes(base: dict, local: dict) -> dict:
+    changed = {}
+    for key, value in (local or {}).items():
+        if key not in base:
+            changed[key] = value
+            continue
+        try:
+            same = value == base[key]
+        except Exception:
+            same = value is base[key]
+        if not same:
+            changed[key] = value
+    return changed
+
+
+def _execute(state: dict, defn: dict, hmap: Dict[str, dict],
+             stop_check=None) -> dict:
     """按拓扑层级执行：同层无依赖节点并行；支持条件分支、重试、回退、提前终止。"""
     order, level = _topo(defn["nodes"])
     by_level: Dict[int, List[str]] = {}
@@ -239,6 +297,7 @@ def _execute(state: dict, defn: dict, hmap: Dict[str, dict]) -> dict:
     deps = {n["id"]: list(n.get("depends") or []) for n in defn["nodes"]}
     retries = {n["id"]: int(n.get("retries") or 0) for n in defn["nodes"]}
     fallback = {n["id"]: str(n.get("fallback") or "").strip() for n in defn["nodes"]}
+    fallback_targets = {v for v in fallback.values() if v}
     ctx = state["context"]
     steps = state["steps"]
     fallback_done = set()
@@ -247,6 +306,10 @@ def _execute(state: dict, defn: dict, hmap: Dict[str, dict]) -> dict:
     for L in sorted(by_level):
         if aborted:
             break
+        if stop_check and stop_check():
+            state["status"] = RUN_CANCELLED
+            state["updated"] = _now()
+            return state
         batch = [nid for nid in by_level[L] if steps[nid]["status"] == ST_PENDING]
         # 先判依赖与条件（条件分支未命中 → skipped）
         ready = []
@@ -258,6 +321,8 @@ def _execute(state: dict, defn: dict, hmap: Dict[str, dict]) -> dict:
                               "skip_reason": "依赖未满足"}
                 continue
             when = hmap.get(nid, {}).get("when")
+            if nid in fallback_targets:
+                continue
             if callable(when) and not _safe_when(when, ctx):
                 steps[nid] = {"status": ST_SKIPPED, "attempts": 0,
                               "result": None, "error": "",
@@ -270,16 +335,21 @@ def _execute(state: dict, defn: dict, hmap: Dict[str, dict]) -> dict:
 
         # 同层并行执行
         def _one(nid):
-            return nid, _run_node(nid, ctx, hmap, retries[nid])
+            local = _clone_ctx(ctx)
+            result = _run_node(nid, local, hmap, retries[nid])
+            return nid, result, local
 
         results = {}
+        changes = {}
         if len(ready) == 1:
-            nid, r = _one(ready[0])
+            nid, r, local = _one(ready[0])
             results[nid] = r
+            changes[nid] = _ctx_changes(ctx, local)
         else:
             with ThreadPoolExecutor(max_workers=len(ready)) as ex:
-                for nid, r in ex.map(_one, ready):
+                for nid, r, local in ex.map(_one, ready):
                     results[nid] = r
+                    changes[nid] = _ctx_changes(ctx, local)
 
         # 先把**整批**结果合并完（不能因为某个节点触发回退就丢掉并行兄弟的结果）
         failed_nodes = []
@@ -289,16 +359,31 @@ def _execute(state: dict, defn: dict, hmap: Dict[str, dict]) -> dict:
             if st == ST_FAILED:
                 failed_nodes.append(nid)
 
+        owners = {}
+        for nid in sorted(ready):
+            if steps[nid]["status"] != ST_DONE:
+                continue
+            for key, value in changes.get(nid, {}).items():
+                if key in owners and owners[key][1] != value:
+                    step = steps[nid]
+                    step["status"] = ST_FAILED
+                    step["error"] = f"并发上下文冲突: {key} 已被 {owners[key][0]} 修改"
+                    failed_nodes.append(nid)
+                    break
+                owners[key] = (nid, value)
+        for key, (_owner, value) in owners.items():
+            ctx[key] = value
+
         # 步骤级回退：失败节点配了 fallback 就执行回退节点（只跑一次，防环）
         for nid in failed_nodes:
             fb = fallback.get(nid)
             if not fb or fb not in steps or fb in fallback_done:
                 continue
             fallback_done.add(fb)
+            ctx["__fallback_from__"] = nid
             fb_st, fb_res, fb_err, fb_att = _run_node(fb, ctx, hmap, retries.get(fb, 0))
             steps[fb] = {"status": fb_st, "attempts": fb_att,
                          "result": fb_res, "error": fb_err, "skip_reason": ""}
-            ctx["__fallback_from__"] = nid
 
         if _FINAL_KEY in ctx:
             aborted = True
@@ -360,8 +445,10 @@ def _find_run(run_id: str, store_dir: str) -> Optional[dict]:
 
 def _save_run(state: dict, store_dir: str) -> None:
     sd = store_dir or default_dir()
-    _atomic_json(os.path.join(_runs_dir(sd), f"{state['run_id']}.json"), state)
-    _RUN_INDEX[state["run_id"]] = sd
+    rid = _safe_id(str(state.get("run_id") or ""), "run_id")
+    with _run_lock(rid):
+        _atomic_json(os.path.join(_runs_dir(sd), f"{rid}.json"), state)
+        _RUN_INDEX[rid] = sd
 
 
 def start(spec, *, context: Optional[dict] = None, run_id: str = "",
@@ -374,32 +461,47 @@ def start(spec, *, context: Optional[dict] = None, run_id: str = "",
     defn = _resolve_defn(spec, sd)
     name = defn["name"]
     hmap = _resolve_handlers(name, defn, handlers)
-    rid = str(run_id or "").strip() or ("run-" + uuid.uuid4().hex[:12])
-    state = _new_state(rid, name, context or {}, defn)
-    _save_run(state, sd)
+    rid = _safe_id(str(run_id or "").strip() or ("run-" + uuid.uuid4().hex[:12]),
+                   "run_id")
+    with _run_lock(rid):
+        path = os.path.join(_runs_dir(sd), f"{rid}.json")
+        if os.path.exists(path):
+            raise ValueError(f"run_id 已存在，请用 resume: {rid}")
+        state = _new_state(rid, name, context or {}, defn)
+        _save_run(state, sd)
     return _execute_and_save(state, defn, hmap, sd)
 
 
 def _execute_and_save(state: dict, defn: dict, hmap: dict, sd: str) -> dict:
+    rid = str(state.get("run_id") or "")
     try:
-        _execute(state, defn, hmap)
+        _execute(state, defn, hmap, stop_check=lambda: (
+            (_find_run(rid, sd) or {}).get("status") == RUN_CANCELLED))
     except Exception as e:
         state["status"] = RUN_FAILED
         state["result"] = {"ok": False, "error": f"工作流异常: {type(e).__name__}: {e}"}
         state["updated"] = _now()
-    _save_run(state, sd)
+    with _run_lock(rid):
+        disk = _find_run(rid, sd) or {}
+        if disk.get("status") == RUN_CANCELLED and state.get("status") != RUN_CANCELLED:
+            state["status"] = RUN_CANCELLED
+            state["context"] = disk.get("context", state.get("context") or {})
+            state["result"] = disk.get("result")
+        _save_run(state, sd)
     return state
 
 
 def status(run_id: str, *, store_dir: str = "") -> Optional[dict]:
     """凭 run_id 查运行态（只读盘，不认内存）。"""
-    return _find_run(run_id, store_dir)
+    return _find_run(_safe_id(run_id, "run_id"), store_dir)
 
 
 def resume(run_id: str, *, store_dir: str = "", handlers=None,
            context: Optional[dict] = None) -> Optional[dict]:
     """凭 run_id 恢复：已 done 的节点不重跑，其余重新执行。"""
-    state = _find_run(run_id, store_dir)
+    run_id = _safe_id(run_id, "run_id")
+    with _run_lock(run_id):
+        state = _find_run(run_id, store_dir)
     if state is None:
         return None
     if state["status"] in (RUN_DONE, RUN_CANCELLED):
@@ -421,14 +523,16 @@ def resume(run_id: str, *, store_dir: str = "", handlers=None,
 
 
 def cancel(run_id: str, reason: str = "", *, store_dir: str = "") -> bool:
-    state = _find_run(run_id, store_dir)
-    if state is None:
-        return False
-    state["status"] = RUN_CANCELLED
-    state["context"]["__cancel_reason__"] = str(reason or "")
-    state["updated"] = _now()
-    _save_run(state, _store_dir_for(run_id, store_dir))
-    return True
+    run_id = _safe_id(run_id, "run_id")
+    with _run_lock(run_id):
+        state = _find_run(run_id, store_dir)
+        if state is None:
+            return False
+        state["status"] = RUN_CANCELLED
+        state["context"]["__cancel_reason__"] = str(reason or "")
+        state["updated"] = _now()
+        _save_run(state, _store_dir_for(run_id, store_dir))
+        return True
 
 
 def list_runs(*, store_dir: str = "") -> List[dict]:

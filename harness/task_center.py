@@ -36,6 +36,7 @@ Popen 句柄缓存，前者是**跨进程**的续等注册表。
 from __future__ import annotations
 
 import json
+import inspect
 import os
 import re
 import threading
@@ -118,6 +119,21 @@ def _text(x) -> str:
         return str(x)
 
 
+def _mirror_changed(cur: Optional[dict], fields: dict) -> bool:
+    if cur is None:
+        return True
+    for key, value in fields.items():
+        old = cur.get(key)
+        if key in ("payload", "meta"):
+            try:
+                old = json.loads(old) if isinstance(old, str) else old
+            except Exception:
+                pass
+        if old != value:
+            return True
+    return False
+
+
 def _default_path() -> str:
     env = os.environ.get("EGGBLOOM_TASKCENTER_DB")
     if env:
@@ -132,6 +148,7 @@ class TaskCenter:
     def __init__(self, path: str = ""):
         self.path = str(path or _default_path())
         self._lock = threading.RLock()
+        self._cancel_events: Dict[str, threading.Event] = {}
         self._init()
 
     # ── 基础设施 ──────────────────────────────────────────────
@@ -245,7 +262,7 @@ class TaskCenter:
         for k in ("payload", "meta"):
             if k in known and not isinstance(known[k], str):
                 known[k] = _dump(known[k])
-        known["updated"] = _now()
+        known.setdefault("updated", _now())
         cols = ", ".join(f"{k} = ?" for k in known)
         with self._lock:
             c = self._conn()
@@ -308,11 +325,13 @@ class TaskCenter:
         with self._lock:
             c = self._conn()
             try:
-                c.execute(
-                    f"INSERT OR REPLACE INTO jobs ({', '.join(_COLS)}) "
+                cur = c.execute(
+                    f"INSERT OR IGNORE INTO jobs ({', '.join(_COLS)}) "
                     f"VALUES ({', '.join('?' * len(_COLS))})",
                     tuple(rec[k] for k in _COLS))
                 c.commit()
+                if int(cur.rowcount or 0) != 1:
+                    raise ValueError(f"job_id 已存在：{j}")
             finally:
                 c.close()
         if run_fn is not None:
@@ -320,31 +339,119 @@ class TaskCenter:
         return j
 
     def _run_async(self, job_id: str, run_fn, payload, on_done, timeout: float) -> None:
+        cancel_event = threading.Event()
+        with self._lock:
+            self._cancel_events[job_id] = cancel_event
+
         def runner():
-            self.update(job_id, status=ST_RUNNING, started=_now(),
-                        attempts=self._bump(job_id))
+            if not self._transition(job_id, {ST_QUEUED, ST_PAUSED},
+                                    status=ST_RUNNING, started=_now(),
+                                    attempts=self._bump(job_id)):
+                if on_done:
+                    try:
+                        on_done(self.get(job_id))
+                    except Exception:
+                        pass
+                with self._lock:
+                    self._cancel_events.pop(job_id, None)
+                return
+            done = threading.Event()
+            holder: Dict[str, Any] = {}
+
+            def work():
+                try:
+                    out = self._call_executor(run_fn, payload, cancel_event)
+                    holder["result"] = out
+                except Exception as e:
+                    holder["error"] = f"{type(e).__name__}: {e}"
+                finally:
+                    done.set()
+
+            worker = threading.Thread(target=work, daemon=True,
+                                      name=f"taskcenter-work-{job_id}")
             try:
-                out = run_fn(payload)
-                self.update(job_id, status=ST_DONE, result=_text(out), ended=_now())
+                worker.start()
+                wait_s = max(0.0, float(timeout or 0))
+                if wait_s > 0:
+                    completed = done.wait(wait_s)
+                else:
+                    while not done.is_set() and not cancel_event.is_set():
+                        done.wait(0.05)
+                    completed = done.is_set()
+                if cancel_event.is_set():
+                    pass
+                elif not completed:
+                    cancel_event.set()
+                    self._transition(job_id, {ST_RUNNING}, status=ST_TIMEOUT,
+                                     error=f"执行超时（>{wait_s:g}s，后台执行未终止）",
+                                     ended=_now())
+                elif holder.get("error"):
+                    self._transition(job_id, {ST_RUNNING}, status=ST_FAILED,
+                                     error=holder["error"], ended=_now())
+                else:
+                    self._transition(job_id, {ST_RUNNING}, status=ST_DONE,
+                                     result=_text(holder.get("result")),
+                                     ended=_now())
             except Exception as e:
-                self.update(job_id, status=ST_FAILED,
-                            error=f"{type(e).__name__}: {e}", ended=_now())
+                self._transition(job_id, {ST_RUNNING}, status=ST_FAILED,
+                                 error=f"{type(e).__name__}: {e}", ended=_now())
             rec = self.get(job_id)
             if on_done:
                 try:
                     on_done(rec)
                 except Exception:
                     pass
+            with self._lock:
+                self._cancel_events.pop(job_id, None)
         try:
             threading.Thread(target=runner, daemon=True,
                              name=f"taskcenter-{job_id}").start()
         except Exception as e:
             self.update(job_id, status=ST_FAILED,
                         error=f"线程启动失败: {e}", ended=_now())
+            with self._lock:
+                self._cancel_events.pop(job_id, None)
 
     def _bump(self, job_id: str) -> int:
         cur = self.get(job_id)
         return int((cur or {}).get("attempts") or 0) + 1
+
+    def _transition(self, job_id: str, expected, **fields) -> bool:
+        """Apply a state update only when the current status is expected."""
+        known = {k: v for k, v in fields.items() if k in _COLS and k != "job_id"}
+        for k in ("payload", "meta"):
+            if k in known and not isinstance(known[k], str):
+                known[k] = _dump(known[k])
+        known["updated"] = _now()
+        expected = tuple(str(x) for x in (expected or ()))
+        if not expected:
+            return False
+        marks = ", ".join("?" for _ in expected)
+        cols = ", ".join(f"{k} = ?" for k in known)
+        with self._lock:
+            c = self._conn()
+            try:
+                cur = c.execute(
+                    f"UPDATE jobs SET {cols} WHERE job_id = ? AND status IN ({marks})",
+                    [*known.values(), str(job_id or ""), *expected])
+                c.commit()
+                return int(cur.rowcount or 0) == 1
+            finally:
+                c.close()
+
+    @staticmethod
+    def _call_executor(run_fn, payload, cancel_event):
+        """Pass a cancellation token when the executor explicitly accepts it."""
+        try:
+            params = inspect.signature(run_fn).parameters
+        except (TypeError, ValueError):
+            params = {}
+        kwargs = {}
+        if "cancel_event" in params:
+            kwargs["cancel_event"] = cancel_event
+        elif "should_cancel" in params:
+            kwargs["should_cancel"] = cancel_event.is_set
+        return run_fn(payload, **kwargs)
 
     # ── wait / resume / cancel ────────────────────────────────
     def wait(self, job_id: str, *, timeout: float = 30.0, poll: float = 0.1,
@@ -393,6 +500,10 @@ class TaskCenter:
             return None
         if run_fn is None and rec["status"] in (ST_DONE, ST_CANCELLED, ST_KILLED):
             return rec
+        with self._lock:
+            event = self._cancel_events.get(j)
+            if event is not None:
+                event.clear()
         self.update(j, status=ST_QUEUED, result="", error="", ended=0.0)
         if run_fn is not None:
             self._run_async(j, run_fn,
@@ -409,9 +520,16 @@ class TaskCenter:
             return True                      # 幂等：已经取消过
         if rec["status"] in TERMINAL:
             return False                     # 已结束的任务不覆盖成 cancelled
-        self.update(j, status=ST_CANCELLED, ended=_now(),
-                    error=str(reason or "")[:200])
-        return True
+        with self._lock:
+            event = self._cancel_events.get(j)
+            if event is None:
+                event = threading.Event()
+                self._cancel_events[j] = event
+            event.set()
+        return self._transition(
+            j, {ST_QUEUED, ST_RUNNING, ST_PAUSED},
+            status=ST_CANCELLED, ended=_now(),
+            error=str(reason or "")[:200])
 
     # ── 统一恢复 ─────────────────────────────────────────────
     def recover(self, *, reason: str = "") -> Dict[str, int]:
@@ -471,19 +589,24 @@ class TaskCenter:
             from . import ticket
             for t in ticket.default().list(limit=10000):
                 tid = str(t.get("id") or "")
-                if not tid or self.get(tid) is not None:
+                if not tid:
                     continue
+                fields = {
+                    "label": str(t.get("goal") or ""),
+                    "status": _TICKET_ST.get(str(t.get("state") or ""), ST_QUEUED),
+                    "meta": {"assignee": t.get("assignee") or "",
+                             "role": t.get("role") or "",
+                             "handback": bool(t.get("handback"))},
+                    "created": float(t.get("created") or 0),
+                    "updated": float(t.get("updated") or 0),
+                    "attempts": int(t.get("attempts") or 0),
+                }
+                changed = _mirror_changed(self.get(tid), fields)
                 self.register(
                     tid, kind="ticket", source="ticket", external_id=tid,
-                    label=str(t.get("goal") or ""),
-                    status=_TICKET_ST.get(str(t.get("state") or ""), ST_QUEUED),
-                    meta={"assignee": t.get("assignee") or "",
-                          "role": t.get("role") or "",
-                          "handback": bool(t.get("handback"))},
-                    created=float(t.get("created") or 0),
-                    updated=float(t.get("updated") or 0),
-                    attempts=int(t.get("attempts") or 0))
-                out["ticket"] += 1
+                    **fields)
+                if changed:
+                    out["ticket"] += 1
         except Exception:
             pass
         _OUTBOX_ST = {"pending": ST_QUEUED, "sending": ST_RUNNING,
@@ -492,19 +615,23 @@ class TaskCenter:
             from . import outbox
             for j in outbox.default().list_all(limit=10000):
                 jid = str(j.get("id") or "")
-                if not jid or self.get(jid) is not None:
+                if not jid:
                     continue
+                fields = {
+                    "kind": str(j.get("kind") or "outbox"),
+                    "label": f"{j.get('kind')}→{j.get('target')}",
+                    "status": _OUTBOX_ST.get(str(j.get("status") or ""), ST_QUEUED),
+                    "payload": j.get("payload") or {},
+                    "error": str(j.get("last_err") or ""),
+                    "created": float(j.get("created") or 0),
+                    "updated": float(j.get("next_at") or 0),
+                    "attempts": int(j.get("attempts") or 0),
+                }
+                changed = _mirror_changed(self.get(jid), fields)
                 self.register(
-                    jid, kind=str(j.get("kind") or "outbox"), source="outbox",
-                    external_id=jid,
-                    label=f"{j.get('kind')}→{j.get('target')}",
-                    status=_OUTBOX_ST.get(str(j.get("status") or ""), ST_QUEUED),
-                    payload=j.get("payload") or {},
-                    error=str(j.get("last_err") or ""),
-                    created=float(j.get("created") or 0),
-                    updated=float(j.get("next_at") or 0),
-                    attempts=int(j.get("attempts") or 0))
-                out["outbox"] += 1
+                    jid, source="outbox", external_id=jid, **fields)
+                if changed:
+                    out["outbox"] += 1
         except Exception:
             pass
         try:
@@ -549,23 +676,28 @@ class TaskCenter:
                     except Exception:
                         continue
                     tid = str(t.get("id") or name[:-5])
-                    if self.get(tid) is not None:
-                        continue
                     st = str(t.get("status") or "")
                     status = (ST_DONE if st == "done" else
                               ST_FAILED if st in ("failed", "rejected") else
                               ST_RUNNING if st == "running" else ST_QUEUED)
+                    fields = {
+                        "kind": kind,
+                        "label": str(t.get("id") or tid),
+                        "status": status,
+                        "payload": {"params": t.get("params") or {}},
+                        "result": str(t.get("artifact") or ""),
+                        "error": str(t.get("error") or ""),
+                        "meta": {"aigc_status": st,
+                                 "meta_path": os.path.join(ddir, name)},
+                        "created": float(t.get("created_at") or _now()),
+                        "started": float(t.get("started_at") or 0),
+                        "ended": float(t.get("finished_at") or 0),
+                    }
+                    changed = _mirror_changed(self.get(tid), fields)
                     self.register(
-                        tid, kind=kind, source="aigc", external_id=tid,
-                        label=str(t.get("id") or tid), status=status,
-                        payload={"params": t.get("params") or {}},
-                        result=str(t.get("artifact") or ""),
-                        error=str(t.get("error") or ""),
-                        meta={"aigc_status": st, "meta_path": os.path.join(ddir, name)},
-                        created=float(t.get("created_at") or _now()),
-                        started=float(t.get("started_at") or 0),
-                        ended=float(t.get("finished_at") or 0))
-                    n += 1
+                        tid, source="aigc", external_id=tid, **fields)
+                    if changed:
+                        n += 1
         return n
 
 

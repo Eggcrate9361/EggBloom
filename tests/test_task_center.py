@@ -104,6 +104,44 @@ try:
     check("cancel 已完成任务被拒", tc.cancel(jid) is False)
     check("cancel 不存在的 id 被拒", tc.cancel("job-nope") is False)
 
+    # 重复 job_id 不允许覆盖；执行超时和取消必须保留终态
+    jid_keep = tc.submit(kind="demo", label="保留旧结果", payload={})
+    tc.update(jid_keep, status="done", result="OLD")
+    try:
+        tc.submit(kind="demo", job_id=jid_keep, label="覆盖", run_fn=lambda p: "NEW")
+        dup_rejected = False
+    except ValueError:
+        dup_rejected = True
+    check("★ 重复 job_id 被拒绝", dup_rejected)
+    check("★ 重复提交不覆盖旧结果",
+          tc.get(jid_keep)["status"] == "done" and tc.get(jid_keep)["result"] == "OLD",
+          tc.get(jid_keep))
+
+    jid_timeout = tc.submit(kind="demo", label="执行超时",
+                            run_fn=lambda p: (time.sleep(0.5) or "LATE"),
+                            timeout=0.1)
+    rto = tc.wait(jid_timeout, timeout=1, poll=0.02)
+    check("★ 执行阶段超时进入 timeout", rto and rto["status"] == "timeout", rto)
+    time.sleep(0.55)
+    check("★ 超时后晚到结果不覆盖终态",
+          tc.get(jid_timeout)["status"] == "timeout", tc.get(jid_timeout))
+
+    def _cancel_work(_payload, cancel_event=None):
+        deadline = time.time() + 3
+        while time.time() < deadline and not cancel_event.is_set():
+            time.sleep(0.02)
+        return "stopped"
+
+    jid_cancel = tc.submit(kind="demo", label="协作取消",
+                           run_fn=_cancel_work, timeout=5)
+    deadline = time.time() + 2
+    while time.time() < deadline and (tc.get(jid_cancel) or {}).get("status") != "running":
+        time.sleep(0.01)
+    tc.cancel(jid_cancel, "测试取消")
+    time.sleep(0.15)
+    check("★ worker 完成后不覆盖 cancelled",
+          tc.get(jid_cancel)["status"] == "cancelled", tc.get(jid_cancel))
+
     # ══ 6. list / stats ════════════════════════════════════════════
     lst = tc.list_jobs(status="done")
     check("list 按状态过滤", all(x["status"] == "done" for x in lst) and len(lst) >= 2, len(lst))
@@ -137,6 +175,12 @@ try:
     check("★ recover 把 outbox 收口进总表（同一 job_id）",
           out_rec.get("mirrored_outbox") == 1
           and (tc.get(oid) or {}).get("source") == "outbox", out_rec)
+    s.cancel(tkid, "单测取消")
+    mir2 = tc.default().mirror_sources()
+    check("★ 来源状态变化后镜像会更新",
+          mir2.get("ticket") >= 1
+          and (tc.get(tkid) or {}).get("status") == "cancelled",
+          (mir2, tc.get(tkid)))
 
     # ══ 8. aigc 只读镜像（aigc_task.py 不可改，扫它落盘的元数据）════
     media = os.path.join(TMP, "media")

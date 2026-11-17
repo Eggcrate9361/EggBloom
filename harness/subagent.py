@@ -45,6 +45,7 @@ QQ 里 agent 一接管回复，就和聊天模型打架：占位句冲掉人格�
 """
 from __future__ import annotations
 
+import inspect
 import json
 import os
 import threading
@@ -63,6 +64,7 @@ _LOCK = threading.Lock()
 _TASKS: "OrderedDict[str, dict]" = OrderedDict()
 _SEM = threading.BoundedSemaphore(MAX_CONCURRENT)
 _ACTIVE = threading.local()
+_CANCEL_EVENTS: Dict[str, threading.Event] = {}
 
 
 def set_logger(fn) -> None:
@@ -196,29 +198,75 @@ def _spawn(tid: str, goal: str, run_fn: Callable[[str], str],
             _finish(tid, state="timeout", error="排队超时")
             _settle(tid)
             return
-        _ACTIVE.in_worker = True
+        cancel_event = threading.Event()
+        with _LOCK:
+            _CANCEL_EVENTS[tid] = cancel_event
+            rec = _TASKS.get(tid)
+            if rec is None:
+                rec = {"task_id": tid, "goal": goal, "state": "running",
+                       "result": "", "error": "", "ts": _now(),
+                       "started": 0.0, "ended": 0.0, "meta": dict(meta or {})}
+                _TASKS[tid] = rec
+            if rec.get("state") == "cancelled":
+                cancel_event.set()
+            rec["state"] = "running"
+            rec["started"] = _now()
+        _persist(dict(rec, state="running"))
+        _tc_mirror(tid, status="running", started=_now())
+
+        done = threading.Event()
+        holder = {}
+
+        def _work():
+            _ACTIVE.in_worker = True
+            try:
+                kwargs = {}
+                try:
+                    params = inspect.signature(run_fn).parameters
+                except (TypeError, ValueError):
+                    params = {}
+                if "cancel_event" in params:
+                    kwargs["cancel_event"] = cancel_event
+                elif "should_cancel" in params:
+                    kwargs["should_cancel"] = cancel_event.is_set
+                holder["out"] = run_fn(str(goal or ""), **kwargs)
+            except Exception as e:
+                holder["error"] = f"{type(e).__name__}: {e}"
+            finally:
+                _ACTIVE.in_worker = False
+                try:
+                    _SEM.release()
+                except Exception:
+                    pass
+                done.set()
+
         try:
-            with _LOCK:
-                rec = _TASKS.get(tid)
-                if rec is None:
-                    rec = {"task_id": tid, "goal": goal, "state": "running",
-                           "result": "", "error": "", "ts": _now(),
-                           "started": 0.0, "ended": 0.0, "meta": dict(meta or {})}
-                    _TASKS[tid] = rec
-                rec["state"] = "running"
-                rec["started"] = _now()
-            _persist(dict(rec, state="running"))
-            _tc_mirror(tid, status="running", started=_now())
-            out = run_fn(str(goal or ""))
-            _finish(tid, state="done", result=str(out or ""))
+            worker = threading.Thread(target=_work, daemon=True,
+                                      name=f"subagent-work-{tid}")
+            worker.start()
         except Exception as e:
-            _finish(tid, state="failed", error=f"{type(e).__name__}: {e}")
-        finally:
-            _ACTIVE.in_worker = False
             try:
                 _SEM.release()
             except Exception:
                 pass
+            _finish(tid, state="failed", error=f"线程启动失败: {e}")
+            _settle(tid)
+            return
+
+        wait_s = max(0.0, float(timeout or 0))
+        completed = done.wait(wait_s if wait_s > 0 else None)
+        if not completed:
+            cancel_event.set()
+            _finish(tid, state="timeout",
+                    error=f"执行超时（>{wait_s:g}s，后台执行未终止）")
+        elif holder.get("error"):
+            _finish(tid, state="failed", error=str(holder["error"]))
+        else:
+            with _LOCK:
+                current = _TASKS.get(tid) or {}
+                cancelled = current.get("state") == "cancelled"
+            if not cancelled:
+                _finish(tid, state="done", result=str(holder.get("out") or ""))
         if on_done:
             try:
                 on_done(status(tid) or {})
@@ -228,6 +276,8 @@ def _spawn(tid: str, goal: str, run_fn: Callable[[str], str],
                 except Exception:
                     pass
         _settle(tid)
+        with _LOCK:
+            _CANCEL_EVENTS.pop(tid, None)
 
     try:
         threading.Thread(target=_runner, daemon=True, name=f"subagent-{tid}").start()
@@ -335,17 +385,30 @@ def resume(task_id: str, *, run_fn: Optional[Callable[[str], str]] = None,
     goal = str(rec.get("label") or "")
     meta = rec.get("meta") or {}
 
+    if run_fn is None:
+        with _LOCK:
+            _TASKS[tid] = {"task_id": tid, "goal": goal, "state": "paused",
+                           "result": "", "error": "等待宿主重新绑定 run_fn",
+                           "ts": _now(), "started": 0.0, "ended": 0.0,
+                           "meta": dict(meta)}
+        _persist(dict(_TASKS[tid]))
+        _tc_mirror(tid, label=goal, status="paused", result="",
+                   error="等待宿主重新绑定 run_fn", ended=0.0)
+        return tid
+
     with _LOCK:
         _TASKS[tid] = {"task_id": tid, "goal": goal, "state": "queued",
                        "result": "", "error": "", "ts": _now(),
                        "started": 0.0, "ended": 0.0, "meta": dict(meta)}
+        event = _CANCEL_EVENTS.get(tid)
+        if event is not None:
+            event.clear()
     _tc_mirror(tid, label=goal, status="queued", result="", error="", ended=0.0)
 
     if getattr(_ACTIVE, "in_worker", False):
         _finish(tid, state="failed", error="子 agent 里不允许再派活")
         return tid
-    fn = run_fn if callable(run_fn) else (lambda g: "（恢复后未提供 run_fn）")
-    _spawn(tid, goal, fn, on_done, timeout, meta)
+    _spawn(tid, goal, run_fn, on_done, timeout, meta)
     return tid
 
 

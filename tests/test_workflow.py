@@ -96,6 +96,17 @@ try:
           {k: v["status"] for k, v in pst["steps"].items()})
     check("并行节点都写了 ctx", pst["context"].get("left") and pst["context"].get("right"))
 
+    wf.define("parallel-conflict", [
+        {"id": "left", "run": lambda c: c.update({"shared": "L", "left_only": 1})},
+        {"id": "right", "run": lambda c: c.update({"shared": "R", "right_only": 2})},
+    ], store_dir=SD)
+    cst = wf.start("parallel-conflict", store_dir=SD)
+    check("★ 同层写同一字段显式冲突失败",
+          cst["status"] == wf.RUN_FAILED
+          and any(s["status"] == wf.ST_FAILED for s in cst["steps"].values()),
+          {k: v["status"] for k, v in cst["steps"].items()})
+    check("★ 冲突合并仍是确定值", cst["context"].get("shared") == "L", cst["context"].get("shared"))
+
     # ══ C. 条件分支：when 为假 → skipped ═══════════════════════════
     def yes(ctx):
         ctx["yes"] = True
@@ -134,7 +145,10 @@ try:
     def always_fail(ctx):
         raise RuntimeError("boom")
 
+    fallback_seen = []
+
     def cleanup(ctx):
+        fallback_seen.append(ctx.get("__fallback_from__"))
         ctx["cleaned"] = True
         return "CLEAN"
 
@@ -145,6 +159,7 @@ try:
     fst = wf.start("fallback", store_dir=SD)
     check("★ 失败节点触发回退节点", fst["steps"]["cleanup"]["status"] == wf.ST_DONE)
     check("回退来源被记录", fst["context"].get("__fallback_from__") == "bad")
+    check("★ fallback 执行期间就能读到来源", fallback_seen == ["bad"], fallback_seen)
     check("回退节点写了 ctx", fst["context"].get("cleaned") is True)
     check("失败节点仍是 failed（整个流程判 failed）",
           fst["steps"]["bad"]["status"] == wf.ST_FAILED and fst["status"] == wf.RUN_FAILED)
@@ -219,6 +234,47 @@ try:
     check("已 done 的 run resume 是 noop",
           wf.resume("run-cross", store_dir=SD)["status"] == wf.RUN_DONE)
 
+    try:
+        wf.start("linear", store_dir=SD, run_id="run-linear")
+        reused = False
+    except ValueError:
+        reused = True
+    check("★ 重复 run_id 拒绝覆盖", reused)
+    try:
+        wf.status("../escape", store_dir=SD)
+        unsafe = False
+    except ValueError:
+        unsafe = True
+    check("★ run_id 路径分隔符被拒", unsafe)
+
+    started = threading.Event()
+    after_called = []
+
+    def cancel_slow(ctx):
+        started.set()
+        threading.Event().wait(0.35)
+        return "SLOW"
+
+    def cancel_after(ctx):
+        after_called.append(True)
+        return "AFTER"
+
+    wf.define("cancel-running", [
+        {"id": "slow", "run": cancel_slow},
+        {"id": "after", "depends": ["slow"], "run": cancel_after},
+    ], store_dir=SD)
+    holder = {}
+    th = threading.Thread(target=lambda: holder.setdefault(
+        "state", wf.start("cancel-running", store_dir=SD, run_id="run-cancel-live")))
+    th.start()
+    check("运行中的 cancel 测试已启动", started.wait(2))
+    check("★ 运行中的 cancel 返回成功", wf.cancel("run-cancel-live", "测试", store_dir=SD))
+    th.join(timeout=3)
+    check("★ 取消阻止下一节点", after_called == [], after_called)
+    check("★ 执行结束不覆盖 cancelled",
+          wf.status("run-cancel-live", store_dir=SD)["status"] == wf.RUN_CANCELLED,
+          wf.status("run-cancel-live", store_dir=SD))
+
     # ══ J. 非法定义（依赖不存在 / 有环）应当被拒 ═════════════════════
     try:
         wf.define("bad_dep", [{"id": "x", "depends": ["y"]}], store_dir=SD)
@@ -235,6 +291,16 @@ try:
     except ValueError:
         cyc = True
     check("有环的 DAG 被 define 拒绝", cyc)
+
+    # ══ K. 重启后 handler 缺失必须失败，不能空跑成功 ═════════════════
+    wf.define("missing-handler", [{"id": "must", "run": lambda c: "OK"}], store_dir=SD)
+    wf._HANDLERS.clear()
+    mh = wf.start("missing-handler", store_dir=SD, run_id="run-missing-handler")
+    check("★ handler 缺失 → failed",
+          mh["status"] == wf.RUN_FAILED
+          and mh["steps"]["must"]["status"] == wf.ST_FAILED
+          and "MissingHandler" in mh["steps"]["must"]["error"],
+          mh["steps"]["must"])
 finally:
     shutil.rmtree(TMP, ignore_errors=True)
 

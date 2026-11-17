@@ -146,6 +146,11 @@ try:
 
     # ══ G. resume 边界 ════════════════════════════════════════════
     check("resume 未知 id → 空串", sa.resume("t-nope", run_fn=lambda g: "x") == "")
+    tc.register("tNOEXEC", source="subagent", label="等待重新绑定", status="paused")
+    check("★ 无 run_fn 的 resume 不伪装成功",
+          sa.resume("tNOEXEC", run_fn=None) == "tNOEXEC"
+          and (tc.get("tNOEXEC") or {}).get("status") == "paused",
+          tc.get("tNOEXEC"))
     check("resume 已 done 且无 run_fn → 空串（不无脑复活）",
           sa.resume("tCRASH", run_fn=None) == "")
     check("已 done 的任务状态没被改", (tc.get("tCRASH") or {}).get("status") == "done")
