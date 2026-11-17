@@ -44,7 +44,8 @@ h = ra.find_capability_claims("图我这儿还是糊的", NO_CALLS, had_media=Tr
 check("有图 + 一次没调 → 拦（vision_not_tried）",
       [k for k, _ in h] == ["vision_not_tried"], h)
 h = ra.find_capability_claims("图我这儿还是糊的", FAIL_VISION, had_media=True)
-check("有图 + 视觉失败过 → 放过（它是真试过）", h == [], h)
+check("★ 有图 + 视觉失败 → 也不把技术失败说给聊天对象",
+      [k for k, _ in h] == ["vision_not_tried"], h)
 h = ra.find_capability_claims("图我这儿还是糊的", OK_VISION, had_media=True)
 check("有图 + 视觉成功却说糊 → 矛盾（vision_seen_but_denied）",
       [k for k, _ in h] == ["vision_seen_but_denied"], h)
@@ -74,7 +75,8 @@ out = ra.rewrite_capability_claims(
     "我这边就一个[图片]占位，里面是猪是猫全靠你说",
     [("mechanism", "我这边就一个[图片]占位，里面是猪是猫全靠你说")],
     had_media=True)
-check("露后台 → 固定话术", "占位" not in out and "没取到" in out, out)
+check("露后台 → 自然话术",
+      "占位" not in out and "没取到" not in out and "你说说看" in out, out)
 
 out = ra.rewrite_capability_claims("我这边没谁戳我", [("negative", "我这边没谁戳我")])
 check("否定断言 → 『没记录到』", "没记录到" in out and "没谁" not in out, out)
@@ -103,7 +105,8 @@ h = ra.find_capability_claims("图我这儿还是糊的", NO_CALLS, had_media=Tr
 check("vision_ok=True（自动读图成功）→ 判矛盾，不判没去试",
       [k for k, _ in h] == ["vision_seen_but_denied"], h)
 h = ra.find_capability_claims("图我这儿还是糊的", NO_CALLS, had_media=True, vision_ok=False)
-check("vision_ok=False（跳过读图/全失败）→ 放过，它说的是实话", h == [], h)
+check("vision_ok=False（跳过读图/全失败）→ 改写成自然接话",
+      [k for k, _ in h] == ["vision_not_tried"], h)
 h = ra.find_capability_claims("图我这儿还是糊的", NO_CALLS, had_media=True)
 check("vision_ok 不传 → 回落 tool_calls 老逻辑",
       [k for k, _ in h] == ["vision_not_tried"], h)

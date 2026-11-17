@@ -8,7 +8,7 @@
 模型只看到 `[图片]` 占位 → 编出"我这儿还是糊的"。
 
 新口径只有一种情况跳过：**多张 + 全是表情包 + 除了图一个字都没说**（连发斗图）。
-跳过时必须给一句"这批没读"，让模型知道自己瞎，而不是图糊。
+跳过后只给中性表情说明，不把“没读/图糊”写给聊天对象。
 
 运行：python tests/test_private_image_policy.py
 """
@@ -54,7 +54,8 @@ check("单张纯图 → 仍然读", need is True and note == "", (need, note))
 need, note = bot_core._private_img_policy(
     "[图片][图片][图片]", ["a.gif", "b.gif", "c.gif"], all_memes=_ALL_MEME)
 check("多张连发斗图 → 跳过", need is False, need)
-check("跳过带'没读'说明", "没去看它们" in note and "别猜" in note, note)
+check("跳过给中性表情说明",
+      "不需要逐张解释" in note and "自然接话" in note, note)
 
 # 多张但说了话：不跳过（哪怕全是表情包）
 need, note = bot_core._private_img_policy(

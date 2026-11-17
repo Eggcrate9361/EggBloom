@@ -218,7 +218,8 @@ def rewrite_unsupported(reply, hits):
 #: 「我看不到」类措辞。只在本轮**确实有图**时才判，否则这只是句普通的感慨。
 _CAP_VISION_PHRASES = (
     "看不到", "看不见", "看不着", "读不到", "读不出来", "认不出",
-    "没读到", "没看到", "没看出来", "看不出", "糊的", "糊了", "是一团",
+    "没读到", "没看到", "没看出来", "看不出", "没看懂", "糊的", "糊了",
+    "是一团", "打不开", "没取到", "识别失败",
 )
 
 #: 露后台：把实现细节端到用户面前。**窄列表**，宁可漏判也别误伤正常聊天
@@ -231,7 +232,7 @@ _CAP_VISION_PHRASES = (
 #: 纯文字私聊里突然冒出"图"。两族从此分开。
 _CAP_MECH_VISION = (
     "占位", "一个框", "一个空框", "渲染", "解析失败", "系统配的",
-    "系统自己配", "系统挑的", "视觉链", "视觉模型",
+    "系统自己配", "系统挑的", "视觉链", "视觉模型", "打不开",
 )
 _CAP_MECH_LLM = (
     "语言模型", "大模型那边", "接口没返回", "接口返回", "prompt", "token",
@@ -257,10 +258,10 @@ _CAP_NEGATIVE_RE = re.compile(
 #: 统一话术的目的不是好看，是**让模型没有自由发挥的空间** ——
 #: "糊的""一个框""解析失败"全是自由发挥出来的。
 _REWRITE_CAP = {
-    "mechanism": "图我这儿没取到，你说是啥",
+    "mechanism": "你说说看，我没接上",
     "mechanism_llm": "这个不聊",
-    "vision_seen_but_denied": "刚才那张我看到了",
-    "vision_not_tried": "我这轮没去取，你说说是什么",
+    "vision_seen_but_denied": "嗯，我看到了",
+    "vision_not_tried": "你直接说就行",
     "negative": "我这边没记录到",
 }
 
@@ -308,10 +309,10 @@ def find_capability_claims(reply, tool_calls, had_media=False, user_msg="",
     返回 [(kind, sentence), ...]，kind ∈ {mechanism, mechanism_llm,
     vision_seen_but_denied, vision_not_tried, negative}。
 
-    三态处置（方案 v2 §5）：
+    三态处置（2026-11-18 更新）：
       · 有成功的视觉调用却还说看不到 → vision_seen_but_denied（自相矛盾）
-      · 有失败的视觉调用             → **放过**（它是真试过，允许说看不到）
-      · 一次都没调                   → vision_not_tried（拦，给了动作就该去做）
+      · 视觉失败或一次都没调         → vision_not_tried（改成自然接话）
+    技术失败不直接展示给聊天对象，避免“读不到图”“图糊了”这类出戏回复。
     """
     if not reply:
         return []
@@ -337,7 +338,7 @@ def find_capability_claims(reply, tool_calls, had_media=False, user_msg="",
                 continue
             if seen_ok:
                 hits.append(("vision_seen_but_denied", sent))
-            elif not seen_fail:
+            else:
                 hits.append(("vision_not_tried", sent))
             continue
         if _CAP_NEGATIVE_RE.search(sent):

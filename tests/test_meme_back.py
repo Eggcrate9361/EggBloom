@@ -5,7 +5,8 @@
      回敬失败（库空/发送失败）才落回读图路径；冷却中直接静默。
   2. **不让 AI 次次都读表情包**：群里顺带甩个表情、话里没在说这张图
      → 不交视觉、不交主模型（describe/native 两条模式都封住）。
-  3. **照片/截图维持原行为**：非 GIF 的图照旧会被读 —— 那是发给它看的。
+  3. **群聊图片按需解读**：只有点名、引用、问图或讨论图片时才调用视觉；
+     无关聊天里的生活照不自动解读。
 
 外加 GIF 透明底：压缩链路必须保留透明索引（"bot 发的表情包有黑底"回归钉）。
 不调真实模型/网络：视觉、主模型、发送全部打桩。
@@ -149,7 +150,8 @@ def test_helpers():
     # 真的在问图 → 必须读（表情包也要读）
     for _t in ("这个图里写的啥", "图里是什么", "这张图什么意思", "表情包里那个是谁",
                "截图里报错是啥", "画里那个人是谁", "上面写的什么字", "照片里是你吗",
-               "里面写的啥"):
+               "里面写的啥", "看这个", "看看这张图",
+               "这一张是什么", "这两张是什么"):
         check(f"问图「{_t}」→ 读（表情包）",
               bot_core._image_understanding_needed(_t, memes_only=True))
     # 纯图无文字：表情包不读（斗图不需要识别），照片/截图要读（发给我看的）
@@ -161,10 +163,11 @@ def test_helpers():
 
 def _stub_env():
     """公共打桩：主模型/发送/表情库。返回 (记录本, 还原函数)。"""
-    seen = {"ai": [], "sent_text": [], "meme_img": []}
+    seen = {"ai": [], "sent_text": [], "meme_img": [], "vision": []}
     orig = (bot_core.call_deepseek, bot_core.smart_send_group,
             bot_core.send_group_image, bot_core.match_meme,
-            bot_core.describe_image, bot_core.startup_time)
+            bot_core.describe_image, bot_core._known_meme_emotion,
+            bot_core.startup_time)
     orig_cfg = dict(bot_core._config)
     orig_sess = dict(bot_core.GROUP_SESSION)
     bot_core.call_deepseek = lambda user_msg, images=None, *a, **kw: (
@@ -188,7 +191,8 @@ def _stub_env():
     def restore():
         (bot_core.call_deepseek, bot_core.smart_send_group,
          bot_core.send_group_image, bot_core.match_meme,
-         bot_core.describe_image, bot_core.startup_time) = orig
+         bot_core.describe_image, bot_core._known_meme_emotion,
+         bot_core.startup_time) = orig
         bot_core._config.clear(); bot_core._config.update(orig_cfg)
         bot_core.GROUP_SESSION.clear(); bot_core.GROUP_SESSION.update(orig_sess)
         bot_core.MEME_LAST_SENT.clear()
@@ -231,12 +235,14 @@ def test_group_pure_meme():
     finally:
         restore()
 
-    print("\n=== ②b 回敬要看情绪：来图判「嫌弃」→ 接梗池里挑（不随机乱甩）===")
+    print("\n=== ②b 回敬读取已知标签；未知图随机，不临时调用视觉 ===")
     seen, restore = _stub_env()
     _orig_auto = bot_core.auto_detect_emotion
     try:
         bot_core._remember_image_kind(g, "meme")
-        bot_core.describe_image = lambda ref, prompt="": "嫌弃|猫猫翻白眼甩尾巴"
+        bot_core._known_meme_emotion = lambda paths: "嫌弃"
+        bot_core.describe_image = lambda ref, prompt="": (
+            seen["vision"].append(ref) or "不应调用视觉")
         picked = []
         bot_core.match_meme = lambda emo: (picked.append(emo) or
                                            os.path.join(TMP, "a.gif"))
@@ -245,34 +251,33 @@ def test_group_pure_meme():
               bool(picked) and picked[0] in ("嫌弃", "呆滞", "得意"), str(picked))
         check("回敬仍不发文字、不动主模型",
               not seen["sent_text"] and not seen["ai"], str(seen)[:80])
-        # 判不出情绪 → 退回随机池（match_meme 仍被调用，说明没卡死）
+        check("★ 已知标签回敬没有调用视觉", not seen["vision"], seen["vision"])
+        # 图库没有标签 → 退回随机池，仍然不调视觉
         picked.clear()
         bot_core.MEME_LAST_SENT.clear()
-        bot_core.describe_image = lambda ref, prompt="": ""
-        bot_core.auto_detect_emotion = lambda t: None
+        bot_core._known_meme_emotion = lambda paths: None
         _run_group("_t_meme_emo2", "[小明] [图片]", [g], is_at_bot=True)
         check("判不出情绪 → 仍随机回敬一张", bool(picked), str(picked))
+        check("★ 未知图自动回敬也不调用视觉", not seen["vision"], seen["vision"])
     finally:
         bot_core.auto_detect_emotion = _orig_auto
         restore()
 
-    print("\n=== ③ 群聊：回敬失败 → 落回读图路径（看懂再说）===")
+    print("\n=== ③ 群聊：表情库不可用 → 不把表情包转去视觉解读 ===")
     seen, restore = _stub_env()
     try:
         bot_core._remember_image_kind(g, "meme")
         bot_core.match_meme = lambda emo: None      # 表情库空
         _run_group("_t_meme_fallback", "[小明] [图片]", [g],
                    mode="describe", is_at_bot=True)
-        check("★ 落回了主模型", bool(seen["ai"]), str(seen["ai"])[:80])
-        if seen["ai"]:
-            check("落回时 prompt 带视觉描述块",
-                  "视觉识别" in seen["ai"][0][0], seen["ai"][0][0][:120])
+        check("★ 不落回视觉读图", not seen["vision"], seen["vision"])
+        check("也不额外生成文字", not seen["ai"], str(seen["ai"])[:80])
     finally:
         restore()
 
 
 def test_group_vision_gate():
-    print("\n=== ④ 群聊：顺带甩表情、话里没说图 → 不读（照片不受影响）===")
+    print("\n=== ④ 群聊：图片只在被点名或询问时解读 ===")
     g = _make_gif(os.path.join(TMP, "a.gif"))
     j = _make_jpg(os.path.join(TMP, "b.jpg"))
     bot_core._remember_image_kind(g, "meme")
@@ -287,14 +292,38 @@ def test_group_vision_gate():
         # 话里在说图 → 照常读
         seen["ai"].clear()
         _run_group("_t_gate_ask", "[小明] 你收到这个表情包了吗", [g], mode="native")
-        check("★ 问表情包本身：仍然交图理解",
-              bool(seen["ai"]) and bool(seen["ai"][0][1]), str(seen["ai"][0])[:100])
-        # 照片（JPG）→ 维持原行为，无条件读
+        check("★ 问表情包时只走标签语义，不把 GIF 交给视觉",
+              bool(seen["ai"]) and not seen["ai"][0][1]
+              and "【表情包】" in seen["ai"][0][0],
+              str(seen["ai"][0])[:160])
+        # 普通照片 + 无关聊天 → 只参与文字闲聊，不把原图交给视觉/主模型
         seen["ai"].clear()
         _run_group("_t_gate_photo", "[小明] 你和他们去吃饭了吗 [图片]", [j],
                    mode="native")
-        check("★ 照片/截图不受门禁影响（照旧交图）",
+        check("★ 无关聊天里的照片不再无条件读图",
+              bool(seen["ai"]) and not seen["ai"][0][1], str(seen["ai"][0])[:100])
+        # 明确问图 → 可以读取普通照片
+        seen["ai"].clear()
+        _run_group("_t_gate_photo_ask", "[小明] 这张图里是谁 [图片]", [j],
+                   mode="native")
+        check("★ 明确问照片内容时仍然读图",
               bool(seen["ai"]) and bool(seen["ai"][0][1]), str(seen["ai"][0])[:100])
+        # 纯照片未点名 → 不调用主模型、不调用视觉
+        seen["ai"].clear()
+        _run_group("_t_gate_photo_bare", "[小明] [图片]", [j], mode="describe")
+        check("★ 纯照片未点名时静默跳过", not seen["ai"], seen["ai"])
+        # 表情包和照片混发：只把照片送视觉，表情包只作为标签语义注入上下文
+        seen["ai"].clear()
+        seen["vision"].clear()
+        bot_core.describe_image = lambda ref, prompt="": (
+            seen["vision"].append(ref) or "照片里是一张风景")
+        _run_group("_t_gate_mixed", "[小明] 这两张是什么 [图片][图片]",
+                   [g, j], mode="describe")
+        check("★ 混发时视觉只收到普通图片",
+              seen["vision"] == [j], seen["vision"])
+        check("表情包语义作为独立上下文注入",
+              bool(seen["ai"]) and "【表情包】" in seen["ai"][0][0],
+              seen["ai"][0][0][:180] if seen["ai"] else "没调模型")
         # describe 模式同样受门禁：不注入视觉块
         seen["ai"].clear()
         _run_group("_t_gate_desc", "[小明] 你和他们去吃饭了吗 [图片]", [g],

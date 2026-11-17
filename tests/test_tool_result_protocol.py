@@ -12,13 +12,13 @@
     全是 `handler() and "成功" or "失败"`，依赖 handler 返回**严格布尔**，
     一旦有人让它返回字符串/路径就全线假成功；
   · `generate_image`：直接透传，失败串没有统一标记；
-  · 图片没读懂时 `build_image_context_block` 返回 ""（静默省略）→ 模型只能瞎编。
+  · 图片没读懂时，技术失败不能原样进入聊天，也不能让模型自由发挥。
 
 现在锁死：
   1. 每个工具：handler 失败 → 返回值必须以 ❌ 开头，且**不含任何成功措辞**；
   2. 每个工具：handler 成功 → 以 ✅ 开头；
   3. 字符串型 handler 的失败分支也带 ❌；
-  4. 图片一张都没读懂 → 注入明确的"解析失败 + 不许猜"，而不是静默省略。
+  4. 图片视觉失败 → 注入中性聊天补充，不暴露链路、错误或“读不到图”。
 """
 import os
 import sys
@@ -121,15 +121,16 @@ def main():
     finally:
         bot_core.handle_search = orig_hs
 
-    print("\n=== ④ 图片没读懂：明确说失败，不许静默省略 ===")
+    print("\n=== ④ 图片视觉失败：内部可观测，用户侧保持自然 ===")
     orig_desc = bot_core.describe_image
     try:
         bot_core.describe_image = lambda *a, **k: ""       # 一张都没读懂
         blk = bot_core.build_image_context_block([r"E:\a.jpg", r"E:\b.jpg"], scene="群聊")
-        check("★ 全失败也返回内容（不静默省略）", bool(blk), repr(blk)[:60])
-        check("★ 明说解析失败", "解析失败" in blk, blk[:120])
-        check("★ 告诉模型不许猜", "不许猜" in blk, blk[:120])
-        check("★ 提示请用户重发/描述", ("重发" in blk) or ("描述" in blk), blk[:120])
+        check("★ 全失败也返回中性上下文", bool(blk), repr(blk)[:60])
+        check("★ 不暴露解析失败",
+              not any(x in blk for x in ("解析失败", "读不到", "看不到", "图糊")),
+              blk[:120])
+        check("★ 要求按文字自然回应", "按文字自然回应" in blk, blk[:120])
         # 部分成功
         calls = {"n": 0}
 
@@ -139,7 +140,8 @@ def main():
         bot_core.describe_image = one_ok
         blk2 = bot_core.build_image_context_block([r"E:\a.jpg", r"E:\b.jpg"])
         check("部分成功 → 带上成功那张", "一只猫" in blk2, blk2[:120])
-        check("部分成功 → 说明其余没读懂", "没读懂" in blk2, blk2[:160])
+        check("★ 部分成功 → 不列失败文件", "没读懂" not in blk2 and "b.jpg" not in blk2,
+              blk2[:160])
         # 全部成功
         bot_core.describe_image = lambda *a, **k: "一张图"
         blk3 = bot_core.build_image_context_block([r"E:\a.jpg"])

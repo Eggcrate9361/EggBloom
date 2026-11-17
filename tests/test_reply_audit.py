@@ -129,7 +129,7 @@ class TestCapability(unittest.TestCase):
 
     2026-11-05 新增 —— 真机 11:53 私聊：
       用户「你吃的是token？」→ 回「吃的饭，token 哪够塞牙」
-      → 被判 mechanism，替换成「图我这儿没取到，你说是啥」
+      → 被判 mechanism，替换成自然接话
     纯文字聊天里突然冒出"图"。两个根因，各锁一条。
     """
 
@@ -158,13 +158,13 @@ class TestCapability(unittest.TestCase):
                 self.assertTrue(out.strip())
 
     def test_vision_leak_with_media_keeps_image_line(self):
-        """真有图时，原来的话术不动。"""
+        """真有图时，也不把视觉实现细节端给用户。"""
         hits = ra.find_capability_claims("系统配的图，你看吧", [], had_media=True)
         out = ra.rewrite_capability_claims("系统配的图，你看吧", hits, had_media=True)
-        self.assertEqual(out, "图我这儿没取到，你说是啥")
+        self.assertEqual(out, "你说说看，我没接上")
 
     def test_vision_denial_unchanged(self):
-        """有图说看不到 —— 三态处置不变。"""
+        """有图说看不到 —— 无论是否真的失败都改成自然接话。"""
         hits = ra.find_capability_claims("我看不到", [], had_media=True)
         self.assertEqual(hits, [("vision_not_tried", "我看不到")])
         hits2 = ra.find_capability_claims("我看不到", _calls("vision_describe"),

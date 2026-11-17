@@ -70,6 +70,10 @@ def test_extract_text_image():
 
 def test_describe_block_stubbed():
     print("\n=== 3) 图片块：视觉描述进 prompt（视觉调用打桩）===")
+    check("视觉失败说明不当作画面描述",
+          bot_core._usable_vision_description("抱歉，我看不到这张图") == "")
+    check("正常画面描述保留",
+          bot_core._usable_vision_description("一只白猫趴在窗台") == "一只白猫趴在窗台")
     orig = bot_core.describe_image
     bot_core.describe_image = lambda ref, prompt="": "一只在报错的机器人（桩描述）"
     try:
@@ -106,7 +110,11 @@ def test_vision_outcome():
                                                   scene="私聊", outcome=vo2)
         check("全失败：seen=0", vo2.get("seen") == 0, vo2)
         check("全失败：failed=1", vo2.get("failed") == 1, vo2)
-        check("全失败仍有块（写明不许猜）", "解析失败" in blk2, blk2[:120])
+        check("★ 全失败不把解析/读取失败端到用户面前",
+              not any(x in blk2 for x in ("解析失败", "读不到", "看不到", "图糊")),
+              blk2[:160])
+        check("全失败改给中性聊天补充",
+              "按文字自然回应" in blk2 and "不评价图片" in blk2, blk2[:160])
     finally:
         bot_core.describe_image = orig
 

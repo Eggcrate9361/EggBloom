@@ -4810,8 +4810,58 @@ def _classify_meme_emotion(paths):
     return None
 
 
+def _known_meme_tags(paths):
+    """从已采集图库取标签；只读索引，不做视觉调用。"""
+    out = []
+    try:
+        import meme_collect as _mc
+        index = _mc._index()
+        for path in paths or ():
+            rel, _how = _mc.existing_entry(str(path))
+            if not rel:
+                continue
+            rec = None
+            for value in index.values():
+                if (isinstance(value, dict)
+                        and str(value.get("path") or "").replace("\\", "/") == rel):
+                    rec = value
+                    break
+            tags = [str(x).strip() for x in ((rec or {}).get("tags") or [])
+                    if str(x).strip()]
+            for tag in tags:
+                if tag not in out:
+                    out.append(tag)
+    except Exception:
+        pass
+    return out
+
+
+def _known_meme_emotion(paths):
+    """从已知标签取一个可用于回敬的情绪。"""
+    tags = _known_meme_tags(paths)
+    for tag in tags:
+        if tag in _MEME_REPLY_MAP or tag in _MEME_EMOTION_WORDS:
+            return tag
+    if tags:
+        return tags[0]
+    return None
+
+
+def _meme_context_note(paths):
+    """给主模型的表情包语义说明；明确禁止把它当图片画面去描述。"""
+    paths = [p for p in (paths or []) if p]
+    if not paths:
+        return ""
+    tags = _known_meme_tags(paths)
+    if tags:
+        return (f"【表情包】收到 {len(paths)} 张，已知情绪：{'、'.join(tags[:4])}。"
+                "按表情语义接话即可，不要描述画面。")
+    return (f"【表情包】收到 {len(paths)} 张。按聊天语境自然接话，"
+            "不要描述画面，也不要说明是否读取成功。")
+
+
 def _meme_back_send(target, is_group: bool, images=None):
-    """看情绪回一张表情包（图看不懂才随机）。
+    """按已知标签回一张表情包；未知图直接随机，不为自动回敬调用视觉。
     返回：文件名=成功 / MEME_BACK_COOLDOWN=冷却中 / None=没发出去（落回原路径）。"""
     if not MEME_OK or not _config.get("meme_enable", True):
         return None
@@ -4823,14 +4873,14 @@ def _meme_back_send(target, is_group: bool, images=None):
     if now - MEME_LAST_SENT.get(key, 0) < MEME_COOLDOWN:
         return MEME_BACK_COOLDOWN
     try:
-        emotion = _classify_meme_emotion(images) if images else None
+        emotion = _known_meme_emotion(images) if images else None
         if emotion:
             pool = _MEME_REPLY_MAP.get(emotion) or [emotion]
             reply_emotion = random.choice(pool)
             log(f"[表情包回敬] 来图情绪={emotion} → 接梗情绪={reply_emotion}")
         else:
             reply_emotion = random.choice(_MEME_BACK_EMOTIONS)
-            log(f"[表情包回敬] 来图情绪未判出 → 随机 {reply_emotion}")
+            log(f"[表情包回敬] 图库没有已知标签 → 随机 {reply_emotion}")
         path = match_meme(reply_emotion)
         if not path:
             return None
@@ -4932,6 +4982,18 @@ def _image_kind(path, hint: str = "") -> str:
     return kind
 
 
+def _split_images_by_kind(paths):
+    memes, images = [], []
+    for path in paths or ():
+        if not path:
+            continue
+        if _image_kind(path) == "meme":
+            memes.append(path)
+        else:
+            images.append(path)
+    return memes, images
+
+
 def _all_memes(paths, kinds=None) -> bool:
     """这批图是否全是表情包；只接受显式协议或图库提示。"""
     paths = [p for p in (paths or []) if p]
@@ -4969,8 +5031,8 @@ def _private_img_policy(text: str, images, *, all_memes=None):
         return True, ""
     if len(imgs) >= 2 and _is_pure_image_text(text):
         return False, (
-            f"\n【图片】这轮收到 {len(imgs)} 张表情包连发，你没去看它们，"
-            "不知道里面是什么——别猜、别说糊了，正常接话就行。")
+            f"\n【表情包】这轮有 {len(imgs)} 张表情包，不需要逐张解释；"
+            "按聊天语境自然接话即可。")
     return True, ""
 #  为什么要有这个函数：这段逻辑原来写在**两个地方**，各算各的 ——
 #    ① 合并到已有批次时
@@ -5119,6 +5181,8 @@ def _batch_deadline(*, now, first_time, **kw):
 _IMG_STRONG_RE = re.compile(
     r'(图里|图上|图片里|图片上|这张图|那张图|这图|那图|这个图|那个图|'
     r'表情包|梗图|截图|照片|自拍|原图|配图|'
+    r'看(?:看)?(?:这个|这张|图)|'
+    r'这(?:一|两|几)?张|那(?:一|两|几)?张|'
     r'画里|画上|画面|画的是|'
     r'啥图|什么图|这.{0,2}啥|那.{0,2}啥|发的是啥|这个.{0,2}啥|'
     r'(画|图|照片|截图|表情|字)(里|上|中)(写|说|是|有|画)|'
@@ -6540,23 +6604,16 @@ def _fetch_forward_content(forward_id, _depth=0, vision=False):
                     line = line.replace(token, value)
                 fixed.append(line)
             texts = fixed
-        # 事实注记：如实说「几张图 / 读到几张 / 还有几张没取到」。
-        # 读到画面的就把描述放在上面各行的 [图片：…] 里；没读到的绝不替模型猜。
+        # 事实注记只给模型可用的信息。读取成功率、失败张数留在日志里，
+        # 不写进 prompt，避免模型把后台失败当成聊天内容复述给用户。
         if counts:
             bits = []
             img_n = counts.pop("image", 0)
             if img_n:
-                if img_seen:
-                    bits.append(f"{img_n} 张图片（已读到 {img_seen} 张画面")
-                    bits[-1] += f"、{img_n - img_seen} 张没取到）" if img_n > img_seen else "）"
-                else:
-                    bits.append(f"{img_n} 张图片（都没取到画面）")
+                bits.append(f"{img_n} 张图片")
             for k in sorted(counts):
                 bits.append(f"{counts[k]} 个{k}")
-            if img_seen and img_seen == img_n:
-                tail = "画面描述就在上面各行的 [图片：…] 里；别补没写出来的细节"
-            else:
-                tail = "没取到画面的别猜，直说看不到并让对方把事说出来"
+            tail = "只按上面已有的文字和画面描述回应；不评价图片是否读取成功"
             # 混排（有正文）时不能说「没有可读取的文字」——那是假的
             no_text = "" if text_count else "没有可读取的文字；"
             texts.append("（转发里共 %s；%s%s）"
@@ -7079,6 +7136,23 @@ def _vision_retry_delay(err, attempt: int) -> float:
     return min(30.0, base * (2 ** max(0, attempt - 1))) + random.uniform(0, 0.5)
 
 
+_VISION_FAILURE_HEAD_RE = re.compile(
+    r"^\s*(?:抱歉[，,\s]*|对不起[，,\s]*)?"
+    r"(?:我)?(?:看不到|看不见|看不清|读不到|读不出来|没看到|没读到|"
+    r"无法(?:查看|识别|读取)|识别失败|解析失败)"
+)
+
+
+def _usable_vision_description(text) -> str:
+    """过滤视觉模型把“失败说明”当描述返回的情况。"""
+    value = str(text or "").strip().strip('"').strip("'")
+    if not value:
+        return ""
+    if _VISION_FAILURE_HEAD_RE.search(value[:120]):
+        return ""
+    return value
+
+
 def describe_image_via_main(image_ref, prompt: str = "") -> str:
     """让**主模型自己看图**（多模态）。失败返回 ""，绝不抛。
 
@@ -7095,8 +7169,7 @@ def describe_image_via_main(image_ref, prompt: str = "") -> str:
       content 返回空串（实测 reasoning_tokens=400 / content=""），表现成
       "同一张图时好时坏"。这里默认关思考，失败再退回开启并给足预算。
 
-    仍然只返回字面描述；看不到就返回空串，由调用方按【能力边界】说
-    "图我这儿没取到，你说是啥"—— 不许在这里编。
+    仍然只返回字面描述；没有可靠画面就返回空串，由调用方自然降级。
     """
     ref = str(image_ref or "").strip()
     if not ref:
@@ -7117,7 +7190,7 @@ def describe_image_via_main(image_ref, prompt: str = "") -> str:
         _msgs = [
             {"role": "system",
              "content": "你在做看图。只说你真的看到的：主体、画风、两个最显眼的细节。"
-                        "看不到就直接说看不到，不许猜、不许编、不许描述你没看见的东西。"},
+                        "没有可靠信息就输出空字符串；不要解释失败，不许猜、不许编。"},
             {"role": "user", "content": [
                 {"type": "text", "text": prompt or _IMG_DESC_PROMPT},
                 {"type": "image_url", "image_url": {"url": _b64}},
@@ -7153,7 +7226,7 @@ def describe_image_via_main(image_ref, prompt: str = "") -> str:
                     time.sleep(_wait)
                     continue
                 _t = _out[0] if isinstance(_out, (tuple, list)) else (_out or "")
-                _t = str(_t or "").strip()
+                _t = _usable_vision_description(_t)
                 if _t:
                     return _t
                 log(f"[图片理解] 主模型返回空(extra={bool(_extra)}, max_tokens={_mt}, "
@@ -7226,6 +7299,7 @@ def describe_image(image_ref, prompt: str = "") -> str:
                 log("[图片理解] 主模型读到了")
     except Exception as e:
         log(f"[图片理解] 调用免费车道异常: {e}")
+    desc = _usable_vision_description(desc)
     if desc:
         # 有本地 OCR 时把字读出来，和视觉描述一起给模型；没装就静默跳过。
         try:
@@ -7501,12 +7575,10 @@ def build_video_context_block(videos, scene: str = "群聊") -> str:
 def build_image_context_block(images, scene: str = "群聊", outcome: dict = None) -> str:
     """把若干张图转成可注入 prompt 的【图片内容】块（视觉描述）。
 
-    三种结局都说清楚，**不许静默省略**：
+    用户可见的聊天里不出现技术失败：
       · 有描述 → 正常块；
-      · 一张都没成 → 明确写"解析失败 + 原因 + 不许猜"。
-        （旧版这里返回 ""，模型只看到消息里的 `[图片]` 占位、不知道发生了什么，
-         只能瞎编或甩一句"引用图片解析失败"——线上截图实证。）
-      · 部分成 → 块里带上成功的那几张，并说明其余失败。
+      · 部分成功 → 只注入成功描述，不列失败文件；
+      · 全部失败 → 注入一段中性聊天补充，避免暴露解析流程。
 
     `outcome`（2026-11-05）：可选出参字典，回填 `total / seen / failed` 三个计数。
     能力校验（`reply_audit.find_capability_claims`）需要"这轮到底看到没"的**事实**，
@@ -7543,15 +7615,10 @@ def build_image_context_block(images, scene: str = "群聊", outcome: dict = Non
     #   真机里模型把这句话复述给用户（「你传的是转述版」），暴露了后台；
     #   注入块只该给"看到了什么"，不该给"这是怎么来的"。
     head = f"【视觉识别 · {scene}图片内容】"
-    if lines and not failed:
-        return head + "\n" + "\n".join(lines)
     if lines:
-        return (head + "\n" + "\n".join(lines)
-                + f"\n（另有 {len(failed)} 张没读懂：{', '.join(failed[:3])}；没读懂的别猜）")
-    # 一张都没成：如实说失败，并禁止模型编内容
-    why = ', '.join(failed[:3]) or "免费视觉车道不可用"
-    return (head + f"\n⚠️ 解析失败：{len(imgs)} 张图都没读懂（{why}）。"
-            "**不许猜图里是什么**，直接告诉用户没看懂，请它重发或描述一下。")
+        return head + "\n" + "\n".join(lines)
+    # 一张都没成：用户不该看到链路名、失败原因或“读图失败”这类后台话。
+    return "【聊天补充】这轮没有额外的画面信息。按文字自然回应，不评价图片。"
 
 
 def get_new_messages():
@@ -17740,6 +17807,7 @@ def _pipeline_step(group_id):
     #   （`merged_text_for_ai = merged_text + "\n" + xxx`），只写 for_ai 会被覆盖掉
     #   —— 这个坑是 tests/test_image_understanding.py 第一次跑就抓到的。
     _imgs = []
+    _vision_targets = []
     _need_img = True   # 图片要不要交给模型理解（默认要；下面按需关闭）
     # ★ 2026-11-05：本轮视觉事实（None=没图 / True=真能看到 / False=有图但没看到）。
     #   下游能力校验以前靠 tool_calls 反推，可自动读图不产生 tool call —— 推出来
@@ -17749,6 +17817,8 @@ def _pipeline_step(group_id):
     try:
         _imgs = [p for p in (buffer.get("images") or []) if p and os.path.exists(p)]
         _mode = image_reply_mode()
+        _meme_imgs, _photo_imgs = _split_images_by_kind(_imgs)
+        _vision_targets = list(_photo_imgs)
         # ── 只发了张表情包 → 同回一张表情包（2026-10-13 用户拍板）──
         # 不读图、不解释图、不动用主模型 —— 真人斗图就是这么回的。
         # 回敬失败（表情库空/发送失败）才落回原来的"读图"路径；
@@ -17762,38 +17832,53 @@ def _pipeline_step(group_id):
             if _mb:
                 log(f"群[{group_id}] [表情包回敬] 纯表情包消息 → 回敬 {_mb}")
                 return
-            _need_img = "force"   # 回敬没成 → 强制落回读图路径（纯图消息文本为空，过不了下面的按需判定）
-        # ── 表情包按需理解（"不要让 AI 次次都读表情包"）──
-        # 只对**纯表情包**（全是 GIF）生效：普通闲聊顺带甩个表情时不再无脑读图，
-        # 省一次视觉调用，也杜绝模型输出"解释这张图"的 AI 味回复。
-        # 照片/截图（JPG/PNG）维持原行为——那是发给它看的。
-        # ★ 2026-10-22 收紧：`memes_only=` 显式传下去。旧写法 `is_at_bot` 在
-        #   `_image_understanding_needed` 里**直接 return True**，于是"@我 + 一张
-        #   斗图"照样读图 —— 用户抱怨的正是这种"什么都读"。现在表情包要读到
-        #   强信号（图里/表情包/截图…）才行，@我 本身不算。
-        if _imgs and _need_img is True and _all_meme_imgs:
+            log(f"群[{group_id}] [表情包回敬] 没有可发送的表情，静默")
+            _trace_skip(group_id, "表情包回敬不可用")
+            return
+        # ── 图片按需理解 ──
+        # 群聊里的图先属于群友交流，不自动等于“发给 Bot 看”。只有明确点名、
+        # 引用 Bot、询问图片内容，或文字本身在讨论图片时才调用视觉。这样既不会
+        # 对每张生活照都生成一段解说，也把视觉调用留给真正需要上下文的回合。
+        if _imgs and _need_img is True:
             _need_img = _image_understanding_needed(
-                merged_text, is_at_bot, quote_forces, memes_only=True)
+                merged_text, is_at_bot, quote_forces,
+                memes_only=_all_meme_imgs)
+            _pure_unaddressed = (
+                _is_pure_image_text(merged_text)
+                and not is_at_bot and not quote_forces)
+            if not _all_meme_imgs and _pure_unaddressed:
+                # 裸照片没有文字指向 Bot。静默保留在群上下文即可，不调用视觉。
+                log(f"群[{group_id}] [图片理解] 跳过未点名的裸图")
+                _trace_skip(group_id, "未点名的裸图")
+                return
             if not _need_img:
-                log(f"群[{group_id}] [图片理解] 跳过（表情包，消息没在说它）")
-        # ★ 照片/截图**不设门禁**：那是用户主动发给它看的东西，无条件读。
-        #   （已有测试 tests/test_meme_back.py「照片/截图不受门禁影响」钉着这个决定；
-        #   2026-10-22 收紧时我一度把门禁也套到照片上，被那条测试挡住，这里回退。）
-        #   用户抱怨的成本点是"总是分析**表情包**"——表情包信息量低，读它是纯浪费。
+                _kind = "表情包" if _all_meme_imgs else "群图"
+                log(f"群[{group_id}] [图片理解] 跳过（{_kind}未被点名或询问）")
+        if _meme_imgs and _need_img:
+            _meme_note = _meme_context_note(_meme_imgs)
+            if _meme_note:
+                merged_text = merged_text + "\n" + _meme_note
+                merged_text_for_ai = _ai_text(merged_text)
+        # 表情包只走标签/缓存语义，始终不交给视觉模型描述画面。
+        if _meme_imgs and not _photo_imgs:
+            _need_img = False
         if _imgs and _need_img and _mode == "describe":
             try:
                 _max = int(_config.get("reply_vision_max_images", 3) or 3)
             except Exception:
                 _max = 3
             _vo: dict = {}
-            _blk = build_image_context_block(_imgs[:_max], scene="群聊", outcome=_vo)
+            _blk = build_image_context_block(
+                _vision_targets[:_max], scene="群聊", outcome=_vo)
             _vision_seen_n = int(_vo.get("seen") or 0)
             if _blk:
                 merged_text = merged_text + "\n" + _blk
                 merged_text_for_ai = _ai_text(merged_text)
-                log(f"群[{group_id}] [图片理解] {min(len(_imgs), _max)} 张 · {len(_blk)} 字")
+                log(f"群[{group_id}] [图片理解] "
+                    f"{min(len(_vision_targets), _max)} 张 · {len(_blk)} 字")
             else:
-                log(f"群[{group_id}] [图片理解] {len(_imgs)} 张全部识别失败（按没看到图处理）")
+                log(f"群[{group_id}] [图片理解] "
+                    f"{len(_vision_targets)} 张没有可用描述（按没看到图处理）")
         # 三态结论：off / 明确跳过读图 = 没看到；native = 原图直接进 messages，
         # 一定看到；describe = 至少一张读到才算看到（部分成功也算看到，
         # 模型确实有东西可依）。四种模式都要分，别把 off 当成 native。
@@ -18008,7 +18093,8 @@ def _pipeline_step(group_id):
     # 这里传 []，避免纯文本主模型收到 image_url 直接报错。
     # ★ _need_img：按需判定为"消息没在说这张图"时，native 模式同样不交图 ——
     #   否则"次次都读表情包"只是从 describe 挪到了 native（2026-10-13）。
-    images = list(_imgs) if (image_reply_mode() == "native" and _need_img) else []
+    images = (list(_vision_targets)
+              if (image_reply_mode() == "native" and _need_img) else [])
     
     # 会话模式预判：无 @ 无「小a」时，只有明确在跟 Bot 说话才回复
     in_session = buffer.get("in_session", False)
@@ -20731,15 +20817,24 @@ def main():
                 #     跳了也必须告诉模型"这批没读"，让它知道自己瞎，而不是图糊。
                 _pm_need_img = True
                 _pm_skip_note = ""
+                _pm_meme_imgs, _pm_photo_imgs = _split_images_by_kind(images or [])
+                _pm_vision_imgs = list(_pm_photo_imgs)
+                _pm_meme_note = _meme_context_note(_pm_meme_imgs)
+                if _pm_meme_note:
+                    text = text + "\n" + _pm_meme_note
                 if images:
-                    _pm_need_img, _pm_skip_note = _private_img_policy(text, images)
+                    if _pm_vision_imgs:
+                        _pm_need_img, _pm_skip_note = _private_img_policy(
+                            text, _pm_vision_imgs)
+                    else:
+                        _pm_need_img = False
                     if not _pm_need_img:
-                        log("私聊[%s] [图片理解] 跳过（%d 张连发斗图、无文字）"
-                            % (sender, len(images)))
+                        log("私聊[%s] [图片理解] 跳过视觉（表情包只走标签语义）"
+                            % sender)
                 # 照片/截图不设门禁（与群聊同口径，见群聊分支注释）
                 # 读图方式只取一次：下面三处都要用，而它是一次配置读取
-                _pm_mode = image_reply_mode() if images else ""
-                _pm_call_images = (images if _pm_need_img else None) \
+                _pm_mode = image_reply_mode() if _pm_vision_imgs else ""
+                _pm_call_images = (_pm_vision_imgs if _pm_need_img else None) \
                     if _pm_mode == "native" else None
                 # ★ 2026-11-05：本轮视觉事实，当场记，别让下游去猜。
                 #   None=这轮没图 / True=模型真能看到 / False=有图但没看到。
@@ -20749,20 +20844,23 @@ def main():
                 #   三档都要分：off=根本没处理图 / 跳过读图=这批真没看到 /
                 #   native=原图直接进 messages，一定看到；describe 看下面 outcome。
                 _pm_vision_ok = None
-                if images:
+                if images and not _pm_vision_imgs:
+                    _pm_vision_ok = False
+                if _pm_vision_imgs:
                     if _pm_mode == "off" or not _pm_need_img:
                         _pm_vision_ok = False
                     elif _pm_mode == "native":
                         _pm_vision_ok = True
-                if images and _pm_need_img and _pm_mode == "describe":
+                if _pm_vision_imgs and _pm_need_img and _pm_mode == "describe":
                     _pm_vo: dict = {}
-                    _pm_blk = build_image_context_block(images[:3], scene="私聊",
+                    _pm_blk = build_image_context_block(_pm_vision_imgs[:3], scene="私聊",
                                                         outcome=_pm_vo)
                     if _pm_vo.get("total"):
                         _pm_vision_ok = int(_pm_vo.get("seen") or 0) > 0
                     if _pm_blk:
                         text = text + "\n" + _pm_blk
-                        log(f"私聊[{sender}] [图片理解] {min(len(images), 3)} 张 · {len(_pm_blk)} 字")
+                        log(f"私聊[{sender}] [图片理解] "
+                            f"{min(len(_pm_vision_imgs), 3)} 张 · {len(_pm_blk)} 字")
                 # 跳过说明只进这一轮的模型输入，**不进 history**（否则下一轮
                 # 模型会以为自己上轮"拒绝看图"，越聊越歪）。
                 _pm_text_for_ai = text + _pm_skip_note
@@ -20779,7 +20877,9 @@ def main():
                 #  传的是**已追加图片描述**的 text：describe 模式下 agent 不必再读一遍图；
                 #  真要看图时（比如问头像）它自己调 vision。
                 _qa_text = _qq_agent_reply(
-                    _pm_text_for_ai, images, is_group=False, sender=sender,
+                    _pm_text_for_ai,
+                    (_pm_vision_imgs if _pm_need_img else []),
+                    is_group=False, sender=sender,
                     history=chat_history.get(sender),
                     extra_ctx={"ego": _ego_ctx, "memory": pm_ctx})
                 reply = _qa_text or call_deepseek(_pm_text_for_ai, _pm_call_images, sender, private_memory_context=pm_ctx, personality_temperature=_ego_temp, ego_inject_context=_ego_ctx, on_slow=lambda: _private_slow_ack(sender), turn_images=images)

@@ -79,6 +79,13 @@ Enforced by:
 - Per-group decision state is serialized; independent groups may proceed in parallel.
 - Image versus meme classification uses protocol `sub_type`, meme-library identity, or
   collected-index identity. File extension and GIF headers alone are not semantic evidence.
+- Group images invoke vision only when the bot is addressed, quoted, or the text discusses
+  the image. An unaddressed bare photo stays in context without a vision call.
+- Automatic meme replies use existing collection tags; an unknown meme falls back to a
+  random reaction instead of paying for a fresh vision request.
+- Visual failure, download failure, and model fallback details stay internal. User-facing
+  replies must not expose phrases such as "read failed", "cannot see the image", or
+  "the image is blurry".
 - Runtime `tags.json` and `descriptions.json` are data, not source defaults; deployment
   synchronization must not replace them with repository test fixtures.
 
@@ -90,6 +97,7 @@ Enforced by:
 - `tests/test_group_decider_state.py`
 - `tests/test_recall_contract.py`
 - `tests/test_packaging.py`
+- `tests/test_meme_back.py`
 
 ## Change Checklist
 
