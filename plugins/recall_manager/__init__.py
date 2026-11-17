@@ -28,10 +28,12 @@ import json
 import threading
 import time
 
+from recall_contract import plugin_owns
+
 PLUGIN_SPEC = 1
 PLUGIN_MANIFEST = {
     "name": "recall_manager",
-    "version": "0.1.0",
+    "version": "0.2.0",
     "api_version": 1,
     "author": "EggBloom",
     "description": "撤回反馈：订阅 notice.recall，按策略层判定后再回一句（默认关闭）",
@@ -52,6 +54,7 @@ STATE_KEY = "recall_state"
 #   占位必须**同步**做（主线程里、加锁），只有真正的投递进线程。
 _INST_LOCK = threading.Lock()
 _INST_RECENT: dict = {}
+_INST_EPISODES: dict = {}
 _INST_TTL = 180.0
 
 _ctx = None
@@ -109,6 +112,38 @@ def _dedupe_id(payload: dict, key: str) -> str:
         key, hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24])
 
 
+def _reserve_delivery(dedupe: str, episode_key: str, *, now: float,
+                      cooldown: float) -> str:
+    """同步占住一条撤回和它的会话冷却窗口。
+
+    仅按 message_id 去重挡不住“一个人连续撤回四条不同消息”：四个后台线程会在
+    第一条发送完成、写回冷却状态之前同时通过判定。这里按 episode_key 先占位，
+    发送成功写回持久状态后再释放。
+    """
+    with _INST_LOCK:
+        for key, stamp in list(_INST_RECENT.items()):
+            if now - float(stamp or 0) > _INST_TTL:
+                _INST_RECENT.pop(key, None)
+        for key, expires in list(_INST_EPISODES.items()):
+            if float(expires or 0) <= now:
+                _INST_EPISODES.pop(key, None)
+        if dedupe in _INST_RECENT:
+            return "重复事件（同一条撤回已处理）"
+        if float(_INST_EPISODES.get(episode_key) or 0) > now:
+            return "同一轮撤回已有一条反馈待发送"
+        _INST_RECENT[dedupe] = now
+        if cooldown > 0:
+            _INST_EPISODES[episode_key] = now + float(cooldown)
+    return ""
+
+
+def _release_delivery(dedupe: str, episode_key: str, *, keep_episode: bool = False) -> None:
+    with _INST_LOCK:
+        _INST_RECENT.pop(dedupe, None)
+        if not keep_episode:
+            _INST_EPISODES.pop(episode_key, None)
+
+
 def on_event(ctx, event_name: str = "", payload: dict = None, **kwargs):
     """只接 `notice.recall`，其余一律不管（事件总线是广播的）。"""
     if str(event_name or "") != "notice.recall":
@@ -116,10 +151,12 @@ def on_event(ctx, event_name: str = "", payload: dict = None, **kwargs):
     from plugins.recall_manager import policy
 
     p = payload if isinstance(payload, dict) else {}
-    route = str(_cfg(ctx).get("recall_feedback_by", "core")).strip().lower()
-    if route not in ("plugin", "proactivity"):
+    cfg = _cfg(ctx)
+    route = cfg.get("recall_feedback_by", "core")
+    if not plugin_owns(route):
         try:
-            ctx.log("[撤回/跳过] 主链仍负责撤回反馈（recall_feedback_by 未切换到插件）")
+            ctx.log("[撤回/跳过] recall_manager 不是当前负责人 "
+                    f"(recall_feedback_by={route})")
         except Exception:
             pass
         return None
@@ -128,7 +165,7 @@ def on_event(ctx, event_name: str = "", payload: dict = None, **kwargs):
     if not p.get("notice_type"):
         p = dict(p, notice_type="group_recall" if p.get("group_id") else "friend_recall")
     now = time.time()
-    d = policy.decide(p, cfg=_cfg(ctx), now=now, state=_state(ctx))
+    d = policy.decide(p, cfg=cfg, now=now, state=_state(ctx))
     if d.get("act") != policy.ACT_SAY:
         # 跳过也要留痕：静默跳过等于把"为什么不回"变成不可观测，
         # 2026-11-03 真机就是因为插件一声不吭，排查方向被带偏了三轮。
@@ -156,17 +193,21 @@ def on_event(ctx, event_name: str = "", payload: dict = None, **kwargs):
 
     # 同步占位：同一条撤回（含协议层重复推送）只允许一个线程去投递。
     _dedupe = _dedupe_id(p, str(d.get("key") or ""))
-    with _INST_LOCK:
-        _now_chk = time.time()
-        for _k in [k for k, t in _INST_RECENT.items() if _now_chk - t > _INST_TTL]:
-            _INST_RECENT.pop(_k, None)
-        if _dedupe in _INST_RECENT:
-            try:
-                ctx.log(f"[撤回/跳过] 重复事件（同一条撤回已处理）")
-            except Exception:
-                pass
-            return None
-        _INST_RECENT[_dedupe] = _now_chk
+    episode_key = str(d.get("key") or "")
+    cooldown_key = ("recall_private_cooldown" if not gid
+                    else "recall_feedback_cooldown")
+    try:
+        cooldown = float(cfg.get(cooldown_key, 60) or 0)
+    except (TypeError, ValueError):
+        cooldown = 60.0
+    gate_reason = _reserve_delivery(
+        _dedupe, episode_key, now=time.time(), cooldown=cooldown)
+    if gate_reason:
+        try:
+            ctx.log(f"[撤回/跳过] {gate_reason}")
+        except Exception:
+            pass
+        return None
 
     # ★ 2026-11-03（真机教训）：发送**绝不能阻塞主循环**。
     #   on_event 是在 bot_core 的主循环线程里被调用的，而 ctx.send_text 要
@@ -183,20 +224,20 @@ def on_event(ctx, event_name: str = "", payload: dict = None, **kwargs):
                 ctx.log(f"撤回反馈发送异常: {e}", "warn")
             except Exception:
                 pass
-            with _INST_LOCK:
-                _INST_RECENT.pop(_dedupe, None)
+            _release_delivery(_dedupe, episode_key)
             return
         if not ok:
             # 发送失败不吃冷却 —— 否则一次网络抖动就让这个群沉默一分钟
-            with _INST_LOCK:
-                _INST_RECENT.pop(_dedupe, None)
+            _release_delivery(_dedupe, episode_key)
             return
+        persisted = False
         try:
-            ctx.set_state(STATE_KEY, policy.remember(
+            persisted = bool(ctx.set_state(STATE_KEY, policy.remember(
                 _state(ctx), d.get("key") or "", now=now,
-                message_id=str(p.get("message_id") or "")))
+                message_id=str(p.get("message_id") or ""))))
         except Exception:
             pass
+        _release_delivery(_dedupe, episode_key, keep_episode=not persisted)
         try:
             ctx.log(f"[撤回/{d.get('kind')}] {gid or op}: {text[:30]}")
         except Exception:
@@ -205,8 +246,7 @@ def on_event(ctx, event_name: str = "", payload: dict = None, **kwargs):
     try:
         threading.Thread(target=_deliver, daemon=True, name="recall-deliver").start()
     except Exception:
-        with _INST_LOCK:
-            _INST_RECENT.pop(_dedupe, None)
+        _release_delivery(_dedupe, episode_key)
     return None
 
 
@@ -220,13 +260,14 @@ def get_api_status():
     if ctx is None:
         return {"ok": False, "status": "unloaded", "detail": "未加载",
                 "cooldown_keys": 0, "seen": 0}
-    by = str(_cfg(ctx).get("recall_feedback_by", "core")).lower()
+    by = _cfg(ctx).get("recall_feedback_by", "core")
+    owns = plugin_owns(by)
     st = _state(ctx)
     return {
         "ok": True,
-        "status": "ready" if by in ("plugin", "proactivity") else "idle",
-        "detail": ("主链已让位" if by in ("plugin", "proactivity")
-                   else "主链仍在自己回（recall_feedback_by=core）—— 开启本插件前请先改配置"),
+        "status": "ready" if owns else "idle",
+        "detail": (f"recall_manager 负责（recall_feedback_by={by}）" if owns
+                   else f"当前负责人不是 recall_manager（recall_feedback_by={by}）"),
         "cooldown_keys": len((st.get("last_fire") or {})),
         "seen": len((st.get("seen") or {})),
     }

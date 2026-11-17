@@ -72,9 +72,15 @@ Enforced by:
 ## 6. Plugin Routing and State
 
 - One behavior has one active owner. Recall feedback cannot be emitted by both the core and a plugin.
+- `recall_feedback_by` has exactly one owner: `core`, `plugin`, or `proactivity`.
+  A burst of recall events for one conversation becomes one feedback episode.
 - Plugin routing checks must use the same configuration value as the host.
 - Decision caches include group, sender, message identity, and retry mode.
 - Per-group decision state is serialized; independent groups may proceed in parallel.
+- Image versus meme classification uses protocol `sub_type`, meme-library identity, or
+  collected-index identity. File extension and GIF headers alone are not semantic evidence.
+- Runtime `tags.json` and `descriptions.json` are data, not source defaults; deployment
+  synchronization must not replace them with repository test fixtures.
 
 Enforced by:
 
@@ -82,6 +88,8 @@ Enforced by:
 - `tests/test_recall_ab.py`
 - `tests/test_group_decider_logic.py`
 - `tests/test_group_decider_state.py`
+- `tests/test_recall_contract.py`
+- `tests/test_packaging.py`
 
 ## Change Checklist
 

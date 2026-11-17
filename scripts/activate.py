@@ -61,6 +61,7 @@ RUNTIME_SKIP_NAMES = {"config.json", "history.json", "last_port.txt",
 SYNC_EXCLUDED_NAMES = {"last_port.txt", "bot_config.json", "plugin_state.json",
                        "secret.json", "local_config.json", "machine_config.json",
                        "ui_version.txt",
+                       "tags.json", "descriptions.json",
                        "slang_dict.json", "slang_replies.json", "slang_conflicts.json"}
 # 说明：**源码库里没有**这些文件（`git ls-files` 为空），它们是程序首次运行时
 # 自己生成的默认配置/状态。所以两边不同属正常，绝不能当同步失败。

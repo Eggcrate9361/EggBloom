@@ -78,6 +78,20 @@ class FailSendCtx(FakeCtx):
         return False
 
 
+class BlockingCtx(FakeCtx):
+    def __init__(self, cfg=None):
+        super().__init__(cfg)
+        import threading
+        self.started = threading.Event()
+        self.release = threading.Event()
+
+    def send_text(self, text, target=None, group_id=None):
+        self.sent.append({"text": text, "target": target, "group_id": group_id})
+        self.started.set()
+        self.release.wait(2)
+        return True
+
+
 def fire(ctx, **kw):
     """调用 on_event 并等投递线程落地（发送已改为后台线程，不阻塞主循环）。
 
@@ -85,6 +99,7 @@ def fire(ctx, **kw):
     否则前面用例占过的 message_id 会让后面误判成重复事件。
     """
     rm._INST_RECENT.clear()
+    rm._INST_EPISODES.clear()
     rm.on_event(ctx, **kw)
     time.sleep(0.2)
 
@@ -182,10 +197,22 @@ def main():
     print("\n[E3] 同一条撤回被推两遍，只发一条（协议层重复推送）")
     ctx = FakeCtx()
     rm._INST_RECENT.clear()
+    rm._INST_EPISODES.clear()
     rm.on_event(ctx, event_name="notice.recall", payload=recall_ev(message_id="dup1"))
     rm.on_event(ctx, event_name="notice.recall", payload=recall_ev(message_id="dup1"))
     time.sleep(0.45)
     check("★ 重复事件只发一条", len(ctx.sent) == 1, ctx.sent)
+
+    print("\n[E4] 同一波多条不同 message_id，在首条发送完成前也只发一条")
+    ctx = BlockingCtx()
+    rm._INST_RECENT.clear()
+    rm._INST_EPISODES.clear()
+    rm.on_event(ctx, event_name="notice.recall", payload=recall_ev(message_id="burst1"))
+    check("首条后台发送已开始", ctx.started.wait(2), ctx.sent)
+    rm.on_event(ctx, event_name="notice.recall", payload=recall_ev(message_id="burst2"))
+    ctx.release.set()
+    time.sleep(0.25)
+    check("★ 不同 ID 的连续撤回仍只发一条", len(ctx.sent) == 1, ctx.sent)
 
     print("\n[F] 发送失败不吃冷却")
     ctx = FailSendCtx()
@@ -199,10 +226,14 @@ def main():
     ctx = FakeCtx(cfg={"recall_feedback_by": "core"})
     fire(ctx, event_name="notice.recall", payload=recall_ev(message_id="route-core"))
     check("★ core 路由下插件不发", ctx.sent == [], ctx.sent)
+    ctx = FakeCtx(cfg={"recall_feedback_by": "proactivity"})
+    fire(ctx, event_name="notice.recall", payload=recall_ev(message_id="route-proactivity"))
+    check("★ proactivity 路由下 recall_manager 也让位", ctx.sent == [], ctx.sent)
 
     print("\n[F3] 缺 message_id 时不同事件不会共用空键")
     ctx = FakeCtx(cfg={"recall_feedback_cooldown": 0})
     rm._INST_RECENT.clear()
+    rm._INST_EPISODES.clear()
     rm.on_event(ctx, event_name="notice.recall",
                 payload=recall_ev(message_id="", ts=NOW_BASE))
     rm.on_event(ctx, event_name="notice.recall",
@@ -226,6 +257,9 @@ def main():
     check("★ 提示要先改配置", "recall_feedback_by" in str(st_core.get("detail")), st_core)
     rm.on_load(FakeCtx(cfg={"recall_feedback_by": "plugin"}))
     check("plugin 时状态是 ready", rm.get_api_status().get("status") == "ready")
+    rm.on_load(FakeCtx(cfg={"recall_feedback_by": "proactivity"}))
+    check("★ proactivity 时 recall_manager 状态是 idle",
+          rm.get_api_status().get("status") == "idle", rm.get_api_status())
 
     print("\n" + "=" * 60)
     print(f"通过 {PASS} / 失败 {FAIL}")

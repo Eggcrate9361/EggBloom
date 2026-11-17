@@ -12,6 +12,14 @@ from typing import Dict, List, Optional, Tuple, Any
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from socketserver import ThreadingMixIn
 
+from recall_contract import (
+    PRIVATE_PRESET,
+    SEEN_PRESET,
+    TRUNCATED_PRESET,
+    core_owns,
+    normalize_owner,
+)
+
 import capabilities_view
 import inbound
 import meme_desc
@@ -4850,22 +4858,89 @@ def _is_pure_image_text(text: str) -> bool:
     return not t.strip()
 
 
-def _all_memes(paths) -> bool:
-    """这批图是不是**全是**表情包。QQ 表情包几乎都是 GIF；照片/截图是 JPG/PNG。
-    ⚠ 不能只看扩展名 —— extract_images 把下载的东西统一存成 .jpg，
-    所以必须读文件头（GIF87a/GIF89a）。
-    照片/截图混在里面时按"要看的图"处理，维持原行为 ——
-    用户拍板的是"别次次读**表情包**"，不是"别读图"。"""
+_IMAGE_KIND_LOCK = Lock()
+_IMAGE_KIND_HINTS: Dict[str, str] = {}
+_IMAGE_KIND_CACHE: Dict[str, str] = {}
+
+
+def _norm_image_path(path) -> str:
+    try:
+        return os.path.normcase(os.path.abspath(str(path)))
+    except Exception:
+        return str(path or "")
+
+
+def _image_segment_is_meme(data) -> bool:
+    """OneBot 明确标成表情时返回真；普通 image 段不会被猜成表情。"""
+    if not isinstance(data, dict):
+        return False
+    sub_type = str(data.get("sub_type") or data.get("subType") or "").strip().lower()
+    if sub_type in ("1", "true", "face", "meme", "sticker"):
+        return True
+    joined = " ".join(str(data.get(k) or "") for k in (
+        "file", "file_id", "image", "name", "summary", "url"))
+    low = joined.lower()
+    return any(marker in low for marker in (
+        "mface", "marketface", "sticker", "meme", "表情"))
+
+
+def _remember_image_kind(path, kind: str) -> None:
+    key = _norm_image_path(path)
+    value = "meme" if str(kind or "").lower() == "meme" else "image"
+    if not key:
+        return
+    with _IMAGE_KIND_LOCK:
+        _IMAGE_KIND_HINTS[key] = value
+        _IMAGE_KIND_CACHE[key] = value
+        if len(_IMAGE_KIND_HINTS) > 2000:
+            for old in list(_IMAGE_KIND_HINTS)[:500]:
+                _IMAGE_KIND_HINTS.pop(old, None)
+
+
+def _image_kind(path, hint: str = "") -> str:
+    """返回 ``meme`` 或 ``image``。
+
+    判据顺序：本轮协议提示 → 图库内路径/已收藏索引 → 默认普通图片。
+    扩展名和 GIF 文件头不再单独决定语义：静态表情通常是 JPG/PNG，
+    普通聊天里也会有 GIF；把格式当种类就是“图和表情分不清”的根因。
+    """
+    key = _norm_image_path(path)
+    hint = str(hint or "").lower()
+    if hint == "meme":
+        return "meme"
+    if hint == "image":
+        return "image"
+    with _IMAGE_KIND_LOCK:
+        known = _IMAGE_KIND_HINTS.get(key) or _IMAGE_KIND_CACHE.get(key)
+    if known in ("meme", "image"):
+        return known
+    try:
+        root = _norm_image_path(MEME_DIR)
+        kind = "meme" if key == root or key.startswith(root + os.sep) else "image"
+    except Exception:
+        kind = "image"
+    if kind != "meme":
+        try:
+            import meme_collect as _mc
+            rel, _how = _mc.existing_entry(str(path))
+            if rel:
+                kind = "meme"
+        except Exception:
+            pass
+    with _IMAGE_KIND_LOCK:
+        _IMAGE_KIND_CACHE[key] = kind
+    return kind
+
+
+def _all_memes(paths, kinds=None) -> bool:
+    """这批图是否全是表情包；只接受显式协议或图库提示。"""
     paths = [p for p in (paths or []) if p]
     if not paths:
         return False
-    for p in paths:
-        try:
-            if not str(p).lower().endswith(".gif"):
-                with open(p, "rb") as f:
-                    if f.read(3) != b"GIF":
-                        return False
-        except Exception:
+    hints = list(kinds or [])
+    for i, path in enumerate(paths):
+        hint = hints[i] if i < len(hints) else ""
+        if _image_kind(path, hint=hint) != "meme":
             return False
     return True
 
@@ -6576,6 +6651,7 @@ def extract_images(msg):
     for seg in raw:
         if isinstance(seg, dict) and seg.get("type") == "image":
             data = seg.get("data", {})
+            _meme_hint = _image_segment_is_meme(data)
             url = data.get("url", "") or data.get("file", "") or data.get("image", "")
             # 也尝试 data 直接是 URL 的情况
             if not url and isinstance(data, str) and data.startswith("http"):
@@ -6608,6 +6684,7 @@ def extract_images(msg):
                         os.makedirs(IMAGE_CACHE, exist_ok=True)
                         with open(local, "wb") as f:
                             f.write(base64.b64decode(_b64))
+                    _remember_image_kind(local, "meme" if _meme_hint else "image")
                     images.append(local)
                     continue
                 except Exception as e:
@@ -6622,6 +6699,7 @@ def extract_images(msg):
                 elif local.startswith("file:"):
                     local = local[5:].replace("/", "\\")
                 if os.path.exists(local):
+                    _remember_image_kind(local, "meme" if _meme_hint else "image")
                     images.append(local)
                     continue
                 log(f"[图片提取] 本地文件不存在: {url}")
@@ -6644,6 +6722,7 @@ def extract_images(msg):
                     except Exception as e:
                         log(f"图片下载失败: {e}")
                         continue
+                _remember_image_kind(local, "meme" if _meme_hint else "image")
                 images.append(local)
     # 群聊表情包自动采集（2026-10-30）：只收群里的（私聊图是对方的照片，
     # 收进表情库越界）；后台线程跑，失败不影响这条消息。
@@ -6668,7 +6747,8 @@ def extract_images(msg):
             _msender = str(_m.get("user_id") or _m.get("sender_id") or "")
             for _p in images:
                 _mcollect.maybe_collect_async(_p, source="group", from_group=_gid,
-                                              pure_image=_pure, sender=_msender)
+                                              pure_image=_pure, sender=_msender,
+                                              meme_hint=(_image_kind(_p) == "meme"))
     except Exception:
         pass
     return images
@@ -12301,12 +12381,15 @@ def _recall_should_fire(*, buffer_cancelled: bool, last_bot_msg: float,
         return False
 
 
-def _model_oneliner(action: str, context: str = "", max_chars: int = 40) -> str:
+def _model_oneliner(action: str, context: str = "", max_chars: int = 40,
+                    style: str = "") -> str:
     """让主模型按人格说一句（用于"预设关掉"的动作反馈）。失败返回空串。"""
     try:
         res = _call_chat_sync([
             {"role": "system",
-             "content": "你在 QQ 里聊天。只输出一句话，不要解释，不要提系统/预设/动作。"},
+             "content": ("你在 QQ 里聊天。只输出一句话，不要解释，"
+                         "不要提系统/预设/动作。"
+                         + (f"语气要求：{style}" if style else ""))},
             {"role": "user",
              "content": f"{context}\n（系统动作：{action}。用你自己的口气说一句。）"},
         ], max_tokens=80, stream=False, with_tools=False)
@@ -12450,8 +12533,9 @@ def _handle_recall_event(ev):
         # ★ 2026-11-03（刀 2）：撤回反馈交给 recall_manager 插件时，主链不再自己回。
         #   位置很关键 —— 必须在**取消缓冲区之后**：截断未发出的回复是安全动作，
         #   跟"要不要回一句"是两回事，不能因为换了执行者就不截断。
-        if str(_config.get("recall_feedback_by", "core")).lower() in ("plugin", "proactivity"):
-            log("[撤回反馈] 交给 recall_manager 插件，主链不再回")
+        _recall_owner = normalize_owner(_config.get("recall_feedback_by"))
+        if not core_owns(_recall_owner):
+            log(f"[撤回反馈] 主链让位，当前负责人={_recall_owner}")
             return
 
         # 2026-10-30：不再要求"活跃会话"——用户撤回了就该有反应。
@@ -12494,36 +12578,14 @@ def _handle_recall_event(ev):
         if buffer_cancelled:
             custom_pre = _recall_texts(_config.get("recall_feedback_pre_messages", []))
             if not custom_pre:
-                custom_pre = [
-                    "？",
-                    "你撤回了一条消息",
-                    "还好你撤了 我差点就回了",
-                    "撤回了？行 那我也不用回了",
-                    "还没看呢 你就撤了",
-                    "手速可以啊 我还没来得及回",
-                    "撤了就撤了吧 反正我也没打算回",
-                    "哎哟 差点就点发送了",
-                    "你撤回的速度比我打字快",
-                    "还好还好 还没发出去",
-                    "撤回+1 这条我当没看见",
-                    "不回了不回了 你都撤了我还回啥",
-                    "撤得好 我正愁怎么接",
-                    "你撤回 我省事",
-                    "这波属于是你跑得快",
-                    "撤都撤了 那就算了",
-                    "还没读呢就撤了 算你识相",
-                    "行吧 本AI的回复可以省了",
-                    "撤回=跳过 这局不算",
-                    "差点白打字了 幸好你撤了",
-                    "你撤你的 我当无事发生",
-                    "撤回成功 已为你拦截一条AI回复",
-                ]
+                custom_pre = list(TRUNCATED_PRESET)
             if custom_pre and (not _sep_on) and bool(_config.get("recall_feedback_use_preset", True)):
                 recall_msg = random.choice(custom_pre)
             else:
                 recall_msg = _model_oneliner(
-                    "对方刚撤回了一条消息，你要接一句",
-                    context=f"群聊里，{recall_qq} 撤回了消息", max_chars=40) \
+                    "对方撤回了消息。自然接一句即可，不追问原因，不评价对方",
+                    context=f"群聊里，{recall_qq} 撤回了消息", max_chars=40,
+                    style="短、轻，不施压；没有合适的话就输出空") \
                     or ("" if _sep_on else (random.choice(custom_pre) if custom_pre else ""))
         else:
             # Bot已回复 → 撤回反馈
@@ -12540,47 +12602,31 @@ def _handle_recall_event(ev):
             if user_recent_msg_time > 0:
                 custom_post = _recall_texts(_config.get("recall_feedback_post_messages", []))
                 if not custom_post:
-                    custom_post = [
-                        "看到了 晚了",
-                        "看到了哦 不说",
-                        "太慢了 我已经看到了",
-                        "来不及了 嘿嘿",
-                        "刚看到就撤回了",
-                        "晚了 我看到了",
-                        "回复已经发出去了 哈哈",
-                        "不好意思 你撤的时候我已经看到了",
-                        "看到了 不过我不说",
-                        "来不及啦 我已经读过了",
-                        "晚啦 眼睛比你手快",
-                        "没事，看到了",
-                        "看到了看到了 别费劲了",
-                        "我看到了 你撤了个寂寞",
-                        "撤晚了 我已经知道了",
-                        "不巧 我刚好在看",
-                        "被我看到了吧 嘿嘿",
-                        "你撤回的速度还是不够快啊",
-                        "看到了 但我会装作没看到",
-                        "太迟了 消息已送达我脑子里",
-                    ]
+                    custom_post = list(SEEN_PRESET)
                 if custom_post and (not _sep_on) and bool(_config.get("recall_feedback_use_preset", True)):
                     recall_msg = random.choice(custom_post)
                 else:
                     recall_msg = _model_oneliner(
-                        "对方在你看到之后撤回了消息，你要接一句",
-                        context=f"群聊里，{recall_qq} 撤回了消息", max_chars=40) \
+                        "对方在你看过后撤回了消息。自然接一句即可",
+                        context=f"群聊里，{recall_qq} 撤回了消息", max_chars=40,
+                        style="轻松、克制，不评价对方，不追问撤了什么") \
                         or ("" if _sep_on else (random.choice(custom_post) if custom_post else ""))
 
         if recall_msg:
             try:
-                _with_outbound_origin("rule", smart_send_group, str(recall_gid), recall_msg)
-                # 撤回反馈此前只有 stdout：对方看得见、下一轮模型看不见，
-                # 被引用时只能否认（2026-11-15 全补）。
-                _note_self_action("recall", text=recall_msg, scene="group",
-                                  target=str(recall_gid), group_id=str(recall_gid),
-                                  detail="撤回反馈", to_history=True)
-                RECALL_FEEDBACK_TIME[recall_key] = now
-                fb_type = "截断反馈" if buffer_cancelled else "撤回反馈"
-                log(f"群[{recall_gid}] [{fb_type}]: {recall_msg[:40]}")
+                _sent = _with_outbound_origin(
+                    "rule", smart_send_group, str(recall_gid), recall_msg)
+                if _sent:
+                    # 撤回反馈此前只有 stdout：对方看得见、下一轮模型看不见，
+                    # 被引用时只能否认（2026-11-15 全补）。
+                    _note_self_action("recall", text=recall_msg, scene="group",
+                                      target=str(recall_gid), group_id=str(recall_gid),
+                                      detail="撤回反馈", to_history=True)
+                    RECALL_FEEDBACK_TIME[recall_key] = now
+                    fb_type = "截断反馈" if buffer_cancelled else "撤回反馈"
+                    log(f"群[{recall_gid}] [{fb_type}]: {recall_msg[:40]}")
+                else:
+                    log(f"群[{recall_gid}] 撤回反馈未送达")
             except Exception as e:
                 log(f"群[{recall_gid}] 撤回反馈发送失败: {e}")
         else:
@@ -12605,8 +12651,9 @@ def _handle_recall_event(ev):
         _cancel_private_buffer(_pkey)
 
         # ★ 2026-11-03（刀 2）：同上 —— 取消私聊合并批次之后才让位给插件。
-        if str(_config.get("recall_feedback_by", "core")).lower() in ("plugin", "proactivity"):
-            log("[撤回反馈] 交给 recall_manager 插件，主链不再回")
+        _recall_owner = normalize_owner(_config.get("recall_feedback_by"))
+        if not core_owns(_recall_owner):
+            log(f"[撤回反馈] 主链让位，当前负责人={_recall_owner}")
             return
 
         _p_session = PRIVATE_SESSION.get(_pkey)
@@ -12626,25 +12673,27 @@ def _handle_recall_event(ev):
             log("私聊撤回反馈冷却中，跳过")
             return
 
-        recall_msgs = _config.get("recall_private_post_messages") or [
-            "撤回了？我还没看到", "什么情况 手滑了？", "你撤回的速度比打字快多了",
-            "怎么了，手滑了？", "好家伙 说撤就撤", "没事，看到了",
-        ]
+        recall_msgs = (_config.get("recall_private_post_messages")
+                       or list(PRIVATE_PRESET))
         if _sep_on:
             # 分离态：私聊也不吃预设，措辞交给模型；模型给空就干脆不回
             recall_msg = _model_oneliner(
-                "对方刚撤回了一条消息，你要接一句",
-                context=f"私聊里，{_pkey} 撤回了消息", max_chars=40) or ""
+                "对方撤回了消息。自然接一句即可，不追问原因，不评价对方",
+                context=f"私聊里，{_pkey} 撤回了消息", max_chars=40,
+                style="短、轻，不施压；没有合适的话就输出空") or ""
         else:
             recall_msg = random.choice(recall_msgs)
         if recall_msg and recall_uid and recall_uid != 'None' and recall_uid != '0':
             try:
-                _with_outbound_origin("rule", send_message, recall_msg, recall_uid)
-                _note_self_action("recall", text=recall_msg, scene="private",
-                                  target=str(recall_uid), detail="私聊撤回反馈",
-                                  to_history=True)
-                RECALL_FEEDBACK_TIME[recall_key] = now
-                log(f"私聊撤回反馈: {recall_msg[:30]}")
+                _sent = _with_outbound_origin("rule", send_message, recall_msg, recall_uid)
+                if _sent:
+                    _note_self_action("recall", text=recall_msg, scene="private",
+                                      target=str(recall_uid), detail="私聊撤回反馈",
+                                      to_history=True)
+                    RECALL_FEEDBACK_TIME[recall_key] = now
+                    log(f"私聊撤回反馈: {recall_msg[:30]}")
+                else:
+                    log("私聊撤回反馈未送达")
             except Exception as e:
                 log(f"私聊撤回反馈失败: {e}")
         else:

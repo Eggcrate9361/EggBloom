@@ -139,7 +139,13 @@ def main():
         check("插件没开（0 句）", plug == 0, plug)
         check("★ 合计 0 —— 只改一半配置就会静默少一句话", core + plug == 0, (core, plug))
 
-        print("\n[D] 配置写错/缺省时回落到主链")
+        print("\n[D] recall_feedback_by=proactivity")
+        core, plug = run("proactivity", plugin_enabled=True)
+        check("★ 主链让位（0 句）", core == 0, core)
+        check("★ recall_manager 也让位（0 句）", plug == 0, plug)
+        check("★ 主动性获得唯一负责人身份", core + plug == 0, (core, plug))
+
+        print("\n[E] 配置写错/缺省时回落到主链")
         bot_core._config.pop("recall_feedback_by", None)
         del core_sent[:]
         del events[:]

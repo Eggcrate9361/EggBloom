@@ -48,6 +48,12 @@ def main():
     check("lock 不按目录清单搬", "SEPARATION.lock" not in block)
     check("rootAlways 带 lock", '"SEPARATION.lock"' in text)
     check("rootAlways 带 archive", '"constraints.archive"' in text)
+    ex_m = re.search(r"\$excludeFiles\s*=\s*@\((.*?)\n\)", text, re.S)
+    ex_block = ex_m.group(1) if ex_m else ""
+    check("★ 不用源码空表情索引覆盖运行库 tags.json",
+          '"tags.json"' in ex_block, ex_block[-500:])
+    check("★ 不用源码描述桩覆盖运行库 descriptions.json",
+          '"descriptions.json"' in ex_block, ex_block[-500:])
 
     print("=" * 58)
     if FAIL:

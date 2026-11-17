@@ -25,6 +25,7 @@ except ImportError:
     sys.exit(0)
 
 import bot_core  # noqa: E402
+import meme_collect as mc  # noqa: E402
 
 PASS = 0
 FAIL = 0
@@ -93,13 +94,34 @@ def test_helpers():
 
     g = _make_gif(os.path.join(TMP, "a.gif"))
     j = _make_jpg(os.path.join(TMP, "b.jpg"))
-    check("全 GIF → 是表情包", bot_core._all_memes([g]))
+    check("协议标记为表情的 GIF → 是表情包",
+          bot_core._all_memes([g], kinds=["meme"]))
+    check("未标记的 GIF 不靠扩展名猜表情", not bot_core._all_memes([g]))
     check("JPG（照片）→ 不是表情包", not bot_core._all_memes([j]))
-    check("GIF+JPG 混合 → 按要看的图处理", not bot_core._all_memes([g, j]))
+    bot_core._remember_image_kind(j, "meme")
+    check("★ 协议标成表情的静态 JPG 仍是表情包",
+          bot_core._all_memes([j]), bot_core._image_kind(j))
+    bot_core._remember_image_kind(j, "image")
+    check("★ OneBot sub_type=1 识别为表情",
+          bot_core._image_segment_is_meme({"sub_type": "1"}))
+    check("★ OneBot sub_type=0 仍是普通图片",
+          not bot_core._image_segment_is_meme({"sub_type": "0"}))
+    check("GIF+JPG 混合 → 按要看的图处理",
+          not bot_core._all_memes([g, j], kinds=["meme", "image"]))
     check("空列表 → False", not bot_core._all_memes([]))
-    # 下载链路会把图统一存成 .jpg —— 必须靠文件头而不是扩展名
+    # 下载链路会把图统一存成 .jpg；协议提示仍然优先于扩展名。
     fake = _make_gif(os.path.join(TMP, "fake.jpg"))  # 内容是 GIF，扩展名是 .jpg
-    check("扩展名骗人（GIF 内容存成 .jpg）仍认表情包", bot_core._all_memes([fake]))
+    check("扩展名骗人但协议标了表情 → 仍认表情包",
+          bot_core._all_memes([fake], kinds=["meme"]))
+
+    wide = os.path.join(TMP, "wide_meme.jpg")
+    os.makedirs(TMP, exist_ok=True)
+    Image.new("RGB", (1260, 720), (120, 30, 180)).save(wide, "JPEG")
+    check("未标记的 16:9 大图仍按截图规则",
+          bool(mc._looks_like_meme(wide)), mc._looks_like_meme(wide))
+    check("★ 协议确认是表情时，不因 16:9 被当游戏截图",
+          mc._looks_like_meme(wide, meme_hint=True) == "",
+          mc._looks_like_meme(wide, meme_hint=True))
 
     # ── 该不该读图（2026-10-22 收紧后语义）──
     # 非表情包（照片/截图）场景：@我 / 引用我 → 读
@@ -193,6 +215,7 @@ def _run_group(gid, text, imgs, mode="native", session=True, **buf_extra):
 def test_group_pure_meme():
     print("\n=== ② 群聊：只发表情包 → 同回一张，不读不解释 ===")
     g = _make_gif(os.path.join(TMP, "a.gif"))
+    bot_core._remember_image_kind(g, "meme")
     seen, restore = _stub_env()
     try:
         _run_group("_t_meme_pure", "[小明] [图片]", [g], is_at_bot=True)
@@ -212,6 +235,7 @@ def test_group_pure_meme():
     seen, restore = _stub_env()
     _orig_auto = bot_core.auto_detect_emotion
     try:
+        bot_core._remember_image_kind(g, "meme")
         bot_core.describe_image = lambda ref, prompt="": "嫌弃|猫猫翻白眼甩尾巴"
         picked = []
         bot_core.match_meme = lambda emo: (picked.append(emo) or
@@ -235,6 +259,7 @@ def test_group_pure_meme():
     print("\n=== ③ 群聊：回敬失败 → 落回读图路径（看懂再说）===")
     seen, restore = _stub_env()
     try:
+        bot_core._remember_image_kind(g, "meme")
         bot_core.match_meme = lambda emo: None      # 表情库空
         _run_group("_t_meme_fallback", "[小明] [图片]", [g],
                    mode="describe", is_at_bot=True)
@@ -250,6 +275,8 @@ def test_group_vision_gate():
     print("\n=== ④ 群聊：顺带甩表情、话里没说图 → 不读（照片不受影响）===")
     g = _make_gif(os.path.join(TMP, "a.gif"))
     j = _make_jpg(os.path.join(TMP, "b.jpg"))
+    bot_core._remember_image_kind(g, "meme")
+    bot_core._remember_image_kind(j, "image")
     seen, restore = _stub_env()
     try:
         # native：表情包 + 无关文字 → 原图不交主模型

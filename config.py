@@ -5,6 +5,13 @@ import logging
 import os
 import sys
 
+from recall_contract import (
+    PRIVATE_PRESET,
+    SEEN_PRESET,
+    TRUNCATED_PRESET,
+    migrate_legacy_copy,
+)
+
 try:
     from cred_store import MODEL_API_KEY_CRED, read_cred, exists_cred
 except Exception:
@@ -523,52 +530,8 @@ DEFAULT_CONFIG = {
 
     # 撤回反馈
     "recall_feedback_enable": True,
-    "recall_feedback_pre_messages": [
-        "？",
-        "你撤回了一条消息",
-        "还好你撤了 我差点就回了",
-        "撤回了？行 那我也不用回了",
-        "还没看呢 你就撤了",
-        "手速可以啊 我还没来得及回",
-        "撤了就撤了吧 反正我也没打算回",
-        "哎哟 差点就点发送了",
-        "你撤回的速度比我打字快",
-        "还好还好 还没发出去",
-        "撤回+1 这条我当没看见",
-        "不回了不回了 你都撤了我还回啥",
-        "撤得好 我正愁怎么接",
-        "你撤回 我省事",
-        "这波属于是你跑得快",
-        "撤都撤了 那就算了",
-        "还没读呢就撤了 算你识相",
-        "行吧 本AI的回复可以省了",
-        "撤回=跳过 这局不算",
-        "差点白打字了 幸好你撤了",
-        "你撤你的 我当无事发生",
-        "撤回成功 已为你拦截一条AI回复",
-    ],
-    "recall_feedback_post_messages": [
-        "看到了 晚了",
-        "看到了哦 不说",
-        "太慢了 我已经看到了",
-        "来不及了 嘿嘿",
-        "撤回慢了 已截获",
-        "晚了 我看到了",
-        "回复已经发出去了 哈哈",
-        "不好意思 你撤的时候我已经看到了",
-        "看到了 不过我不说",
-        "来不及啦 我已经读过了",
-        "晚啦 眼睛比你手快",
-        "撤回无效 本人已阅",
-        "看到了看到了 别费劲了",
-        "我看到了 你撤了个寂寞",
-        "撤晚了 我已经知道了",
-        "不巧 我刚好在看",
-        "被我看到了吧 嘿嘿",
-        "你撤回的速度还是不够快啊",
-        "看到了 但我会装作没看到",
-        "太迟了 消息已送达我脑子里",
-    ],
+    "recall_feedback_pre_messages": list(TRUNCATED_PRESET),
+    "recall_feedback_post_messages": list(SEEN_PRESET),
     "recall_feedback_cooldown": 60,
     # ★ 2026-11-03：撤回反馈由谁执行 —— "core" = 主链（默认，行为不变）；
     #   "plugin" = 让位给 recall_manager 插件（插件页还要同时启用它，
@@ -578,14 +541,7 @@ DEFAULT_CONFIG = {
     # 撤回反馈（私聊）：独立开关/冷却/文案，与群聊撤回互不影响
     "recall_private_enable": True,
     "recall_private_cooldown": 60,
-    "recall_private_post_messages": [
-        "撤回了？我还没看到",
-        "什么情况 手滑了？",
-        "你撤回的速度比打字快多了",
-        "心虚了吧",
-        "好家伙 说撤就撤",
-        "别撤回啊 发都发了",
-    ],
+    "recall_private_post_messages": list(PRIVATE_PRESET),
 
     # 功能开关
     "image_cache_enable": True,
@@ -976,6 +932,7 @@ def load_config():
         cfg["api_url"] = API_PROVIDERS.get(prov, {}).get(
             "url", "https://api.deepseek.com/chat/completions")
 
+    migrate_legacy_copy(cfg, _file_keys)
     _config_cache = cfg
     _config_cache_sig = sig
     return _apply_separation(cfg)

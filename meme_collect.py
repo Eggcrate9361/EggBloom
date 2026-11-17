@@ -53,7 +53,7 @@ MIN_BYTES = 2 * 1024
 MAX_BYTES = 3 * 1024 * 1024
 
 
-def _looks_like_meme(path: str, cfg=None) -> str:
+def _looks_like_meme(path: str, cfg=None, *, meme_hint: bool = False) -> str:
     """这张图像不像表情包；不像就返回原因（空串 = 像）。
 
     ★ 2026-11-02 用户：「表情包会把普通图片放进去」。
@@ -63,6 +63,8 @@ def _looks_like_meme(path: str, cfg=None) -> str:
         · 长宽比 > 3 或 < 1/3 → 像截图/长图；
       PIL 不可用 / 读图失败 → 放行（不因为环境问题把采集关死）。
     """
+    if meme_hint:
+        return ""
     cfg = cfg if isinstance(cfg, dict) else _cfg()
     try:
         from PIL import Image
@@ -605,7 +607,7 @@ def is_blocked(rel: str = "", sha: str = "", phash=None, max_dist: int = 4) -> b
     return False
 
 
-def skip_reason(path: str, *, cfg=None) -> str:
+def skip_reason(path: str, *, cfg=None, meme_hint: bool = False) -> str:
     """这张图为什么收不进去（空串 = 可以收）。
 
     2026-10-31 真机：用户连说三次「存」，模型只能反复说"存不进去"，
@@ -630,6 +632,10 @@ def skip_reason(path: str, *, cfg=None) -> str:
         return f"图太小（{sz}B）"
     if sz > _hi:
         return f"图太大（{sz / 1024 / 1024:.1f}MB，上限 {_hi // 1024 // 1024}MB）"
+    if not meme_hint:
+        _bad = _looks_like_meme(src, c)
+        if _bad:
+            return _bad
     try:
         with open(src, "rb") as f:
             sha = hashlib.sha1(f.read(_hi + 1)).hexdigest()
@@ -693,7 +699,7 @@ def visual_dup_of(path: str, idx: dict, max_dist: int = 4):
 
 def maybe_collect(path: str, *, tags=None, source: str = "auto",
                   from_group: str = "", pure_image=None,
-                  sender: str = "") -> str:
+                  sender: str = "", meme_hint: bool = False) -> str:
     """把一张图收进图库。返回相对路径；跳过返回空串。
 
     ★ 2026-11-02 真机：群里 41 张图只入库 28 张，剩下 13 张**一声不吭**就没了，
@@ -734,7 +740,7 @@ def maybe_collect(path: str, *, tags=None, source: str = "auto",
     #   那就照做，别让开关骗人。
     if _with_text and bool(cfg.get("meme_collect_require_pure_image", False)):
         return _skip(src, "开了「只收纯图」，这条消息带文字")
-    _bad = _looks_like_meme(src, cfg)
+    _bad = _looks_like_meme(src, cfg, meme_hint=meme_hint)
     if _bad:
         return _skip(src, _bad)
     try:
@@ -824,12 +830,14 @@ def maybe_collect(path: str, *, tags=None, source: str = "auto",
 
 
 def maybe_collect_async(path: str, *, source: str = "auto", pure_image=None,
-                        from_group: str = "", sender: str = "") -> None:
+                        from_group: str = "", sender: str = "",
+                        meme_hint: bool = False) -> None:
     """后台收（下载完立刻返回，不挡回复）。"""
     def _run():
         try:
             maybe_collect(path, source=source, from_group=from_group,
-                          pure_image=pure_image, sender=sender)
+                          pure_image=pure_image, sender=sender,
+                          meme_hint=meme_hint)
         except Exception:
             pass
     try:

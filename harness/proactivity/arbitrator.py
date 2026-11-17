@@ -31,6 +31,8 @@ import random
 import time
 from typing import Any, Dict, List, Optional
 
+from recall_contract import proactivity_owns
+
 #: 滑条档位 → 实际数值。改这里就是改产品手感，别散落在各行为里。
 BUDGET_LEVELS = {
     0: {"label": "关闭", "per_hour": 0, "cooldown_s": 0, "min_gap_s": 0},
@@ -405,7 +407,7 @@ def gate(obs: Dict[str, Any], *, cfg: Dict[str, Any], now: float,
         return {"ok": False, "reason": "行为 %s 未启用" % kind}
     # ④ 撤回：主链/recall_manager 还在跑时绝不允许接，否则一次撤回两条回复。
     #   要接管必须**同时**把 recall_feedback_by 改成 "proactivity"（两处一起改）。
-    if kind == "recall" and str(cfg.get("recall_feedback_by") or "main") != "proactivity":
+    if kind == "recall" and not proactivity_owns(cfg.get("recall_feedback_by")):
         return {"ok": False, "reason": "撤回未交棒（recall_feedback_by≠proactivity，防双回）"}
     lv = level_of(cfg)
     if lv["per_hour"] <= 0:

@@ -38,6 +38,12 @@ from __future__ import annotations
 import random
 from typing import Any, Dict, List, Optional
 
+from recall_contract import (
+    PRIVATE_PRESET as _CONTRACT_PRIVATE,
+    SEEN_PRESET as _CONTRACT_SEEN,
+    TRUNCATED_PRESET as _CONTRACT_TRUNCATED,
+)
+
 #: 场景
 SCENE_GROUP = "group"
 SCENE_PRIVATE = "private"
@@ -54,31 +60,10 @@ KIND_PRIVATE = "private"       # 私聊撤回
 #: 默认会话空闲上限（与 bot_core.PRIVATE_SESSION_IDLE_TIMEOUT 同值）
 DEFAULT_IDLE_TIMEOUT = 1800.0
 
-#: 预置文案（与主链内置的那几组一致；自定义配置为空时用它）
-PRESET_TRUNCATED = (
-    "？",
-    "你撤回了一条消息",
-    "还好你撤了 我差点就回了",
-    "撤回了？行 那我也不用回了",
-    "还没看呢 你就撤了",
-    "手速可以啊 我还没来得及回",
-)
-PRESET_SEEN = (
-    "看到了 晚了",
-    "看到了哦 不说",
-    "太慢了 我已经看到了",
-    "来不及了 嘿嘿",
-    "刚看到就撤回了",
-    "晚了 我看到了",
-    "没事，看到了",
-)
-PRESET_PRIVATE = (
-    "撤回了？我还没看到",
-    "什么情况 手滑了？",
-    "你撤回的速度比打字快多了",
-    "怎么了，手滑了？",
-    "好家伙 说撤就撤",
-)
+#: 预置文案来自共享契约，主链、插件和配置迁移不再各存一份。
+PRESET_TRUNCATED = tuple(_CONTRACT_TRUNCATED)
+PRESET_SEEN = tuple(_CONTRACT_SEEN)
+PRESET_PRIVATE = tuple(_CONTRACT_PRIVATE)
 
 
 def _num(v, default: float) -> float:

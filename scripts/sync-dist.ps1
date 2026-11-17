@@ -177,6 +177,10 @@ $excludeFiles = @(
     #   （2026-10-08：v4 已完工、默认切到 v4，但旧包里的 v3 标记会覆盖默认值）。
     #   正确做法：发行包**不带**这个文件，让后端用 UI_DEFAULT_VERSION。
     "ui_version.txt",
+    # ★ 表情目录里的 tags.json / descriptions.json 是运行时台账：
+    #   源码树只有测试桩，整目录同步会把 Full/Standard 的完整索引覆盖成 4 条，
+    #   结果图片都在、match_meme 却返回 None。发行包自带哪份就保留哪份。
+    "tags.json", "descriptions.json",
     # ★ 黑话词典：这是**运行时数据**（由 slang_learner 在运行中写入），
     #   源码库里那份只是空壳（{"entries":{}}）。
     #   2026-10-03 事故：根目录 .json 在白名单里，同步时空壳把发行包里的

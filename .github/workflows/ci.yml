@@ -85,6 +85,8 @@ jobs:
           $tests = @(
             "test_trace_id",
             "test_group_pipeline",
+            "test_bot_core_events",
+            "test_action_coverage",
             "test_task_center",
             "test_job_persistence",
             "test_job_wait",
@@ -94,11 +96,21 @@ jobs:
             "test_autonomy_devloop",
             "test_plugin_forge_verify",
             "test_proactive_deliver",
+            "test_meme_back",
+            "test_meme_audit",
+            "test_meme_collect_reason",
+            "test_meme_collect",
+            "test_private_image_policy",
+            "test_image_understanding",
+            "test_image_subtype",
             "test_outbound",
             "test_outbound_verify",
+            "test_recall_contract",
+            "test_recall_texts",
             "test_recall_manager_plugin",
             "test_recall_ab",
-            "test_group_decider_state"
+            "test_group_decider_state",
+            "test_packaging"
           )
           $failed = @()
           foreach ($t in $tests) {
