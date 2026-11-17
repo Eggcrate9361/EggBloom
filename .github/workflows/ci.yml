@@ -60,3 +60,54 @@ jobs:
             exit 1
           }
           Write-Host "全部通过"
+
+  stability:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install minimal deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests Pillow
+
+      - name: Run runtime stability gates
+        shell: pwsh
+        env:
+          PYTHONUTF8: "1"
+          PYTHONIOENCODING: "utf-8"
+        run: |
+          $tests = @(
+            "test_trace_id",
+            "test_group_pipeline",
+            "test_task_center",
+            "test_job_persistence",
+            "test_job_wait",
+            "test_workflow",
+            "test_subagent",
+            "test_subagent_resume",
+            "test_autonomy_devloop",
+            "test_plugin_forge_verify",
+            "test_proactive_deliver",
+            "test_outbound",
+            "test_outbound_verify",
+            "test_recall_manager_plugin",
+            "test_recall_ab",
+            "test_group_decider_state"
+          )
+          $failed = @()
+          foreach ($t in $tests) {
+            Write-Host "::group::$t"
+            python "tests/$t.py"
+            if ($LASTEXITCODE -ne 0) { $failed += $t }
+            Write-Host "::endgroup::"
+          }
+          if ($failed.Count -gt 0) {
+            Write-Host "::error::运行时稳定性失败: $($failed -join ', ')"
+            exit 1
+          }

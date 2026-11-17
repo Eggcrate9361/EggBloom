@@ -503,7 +503,7 @@ AIGC 开箱后端、分离态在生产安装真启用。语义记忆**不是**�
 [部署教程](docs/USAGE.md) · [English](docs/USAGE_en.md) · [插件规范](docs/PLUGIN_SPEC.md) ·
 [插件开发](docs/PLUGIN_DEV.md) · [Agent 手册](docs/agent_manual.md) · [自愈](docs/self_heal.md) ·
 [配置项说明](docs/配置项说明.md) · [发布清单](docs/RELEASE_CHECKLIST.md) ·
-[变更日志](CHANGELOG.md) · [贡献指南](CONTRIBUTING.md)
+[运行时架构不变量](docs/architecture-invariants.md) · [变更日志](CHANGELOG.md) · [贡献指南](CONTRIBUTING.md)
 
 ## 许可
 

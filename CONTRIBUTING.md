@@ -179,7 +179,7 @@ logger_setup.get_logger 里写着 from config import get_log_level，
   "subject_template": "<type>(<scope>): <MM-DD> <做了什么>",
   "effective": "2026-10-24",
   "body_effective": "2026-11-05",
-  "baseline": "4bd68e3",
+  "baseline": "65a6d26",
   "rule_since": {
     "CM-01": "2026-10-24",
     "CM-02": "2026-11-05",

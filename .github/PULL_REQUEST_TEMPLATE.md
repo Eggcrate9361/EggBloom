@@ -24,3 +24,4 @@ python tests/test_xxx.py
 - [ ] 改动经过 `python scripts/activate.py` 同步并校验（若改了运行时源码）
 - [ ] 新增行为有测试，或在 PR 里说明为什么没有
 - [ ] 影响的文档（README / docs / CHANGELOG）已更新
+- [ ] 涉及状态机、线程、插件事件或发送路径时，已核对 `docs/architecture-invariants.md`
