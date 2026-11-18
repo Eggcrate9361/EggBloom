@@ -65,6 +65,7 @@ def main():
     orig_api = bc.api_call
     orig_extract = bc.extract_images
     orig_desc = bc.describe_image
+    orig_bot_qq = bc.BOT_QQ
     old_vision = bc._config.get("forward_vision_enable")
     calls = {"api": 0, "vision": 0, "extract": 0}
     desc_ok = [True]
@@ -100,6 +101,7 @@ def main():
         bc.api_call = fake_api
         bc.extract_images = fake_extract
         bc.describe_image = fake_desc
+        bc.BOT_QQ = "10001"
         bc._config["forward_vision_enable"] = True
         resp = [_fwd_resp([[_img(1), _img(2), _img(3)],
                            [_img(4), _img(5), _img(6)]])]
@@ -272,6 +274,7 @@ def main():
         bc.api_call = orig_api
         bc.extract_images = orig_extract
         bc.describe_image = orig_desc
+        bc.BOT_QQ = orig_bot_qq
         bc._FWD_CACHE.clear()
         if old_vision is None:
             bc._config.pop("forward_vision_enable", None)
