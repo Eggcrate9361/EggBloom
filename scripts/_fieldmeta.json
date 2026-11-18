@@ -691,6 +691,16 @@
       "default": 180,
       "default_text": "180"
     },
+    "meme_density": {
+      "label": "梗密度",
+      "desc": "0-100。越高越容易在回复里带一个当下相关的梗；低于 30 只给很短提示，问题里的词仍会正常解释",
+      "ctl": "number",
+      "panel": "meme",
+      "unit": "",
+      "id": "sMemeDensity",
+      "default": 50,
+      "default_text": "50"
+    },
     "meme_collect_phash_dedupe": {
       "label": "采集视觉去重（同图换编码不再收第二份）",
       "desc": "",

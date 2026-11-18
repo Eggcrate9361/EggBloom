@@ -10,16 +10,31 @@
 
 用法：python tests/test_memewiki.py
 """
+import atexit
 import os
+import shutil
 import sys
+import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
+TD = tempfile.mkdtemp(prefix=".codex-memewiki-", dir=ROOT)
+os.environ["EGGBLOOM_MEMEWIKI_DB"] = os.path.join(TD, "memewiki.db")
+
 from plugins.memewiki import wiki                       # noqa: E402
 import plugins.memewiki as mw                           # noqa: E402
+from plugins.memewiki import store as meme_store        # noqa: E402
+
+
+def _cleanup():
+    meme_store.reset_default()
+    shutil.rmtree(TD, ignore_errors=True)
+
+
+atexit.register(_cleanup)
 
 PASS, FAIL = [], []
 
@@ -94,7 +109,7 @@ try:
     check("detail 吞掉错误返回 None", wiki.detail("x") is None)
     check("random_entry 吞掉错误返回 None", wiki.random_entry() is None)
     check("query 不抛异常、明说连不上",
-          "连不上" in mw.query("yyds") and "瞎猜" in mw.query("yyds"))
+          "连不上" in mw.query("完全未知梗") and "瞎猜" in mw.query("完全未知梗"))
 finally:
     wiki._get = orig
 
@@ -122,10 +137,13 @@ try:
     check("详情第二次走缓存，不再请求", calls["n"] == n1, calls["n"])
     check("random_entry 取到条目", (wiki.random_entry() or {}).get("title") == "随机条")
     out = mw.query("yyds")
-    check("query 命中时给条目而不是列表", "【YYDS】" in out, out)
+    check("★ 本地命中不访问上游", "【yyds】" in out and "夸人" in out, out)
+    remote = mw.query("网络未知梗")
+    check("★ 本地未命中时仍联网给条目而非列表", "【YYDS】" in remote, remote)
     check("query 空词给用法", "!梗" in mw.query("  "))
     check("query --raw 回 JSON 片段",
-          mw.query("--raw yyds").startswith("{") and "slug" in mw.query("--raw yyds"))
+          mw.query("--raw 网络未知梗").startswith("{")
+          and "slug" in mw.query("--raw 网络未知梗"))
 finally:
     wiki._get = orig
     wiki._CACHE.clear()

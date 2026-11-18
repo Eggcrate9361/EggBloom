@@ -103,6 +103,8 @@ jobs:
             "test_plugin_forge_verify",
             "test_proactive_deliver",
             "test_meme_back",
+            "test_memewiki",
+            "test_memewiki_v2",
             "test_meme_audit",
             "test_meme_collect_reason",
             "test_meme_collect",

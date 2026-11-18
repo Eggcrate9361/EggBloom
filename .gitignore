@@ -34,6 +34,7 @@ logs/
 # 结果包里带着它、库里没有（2026-11-16 包闸 --strict 报出来的）。
 /personality/
 plugins/state/
+plugins/memewiki/data/
 plugins/conversation_state/
 plugins/plugin_state.json
 

@@ -1,0 +1,63 @@
+# -*- coding: utf-8 -*-
+"""Local seed data for the meme-understanding layer.
+
+The corpus intentionally stays small and curated. Network search remains a fallback;
+these entries make common chat memes usable offline.
+"""
+
+SEEDS = [
+    {"word": "yyds", "aliases": ["永远的神", "yongyuandeshen"], "meaning": "夸人或事物非常强", "origin": "直播和电竞圈缩写", "tone": "praise", "circle": "通用", "risk": 0, "freshness": 20260801},
+    {"word": "绝绝子", "aliases": ["juejuezi"], "meaning": "用夸张语气表达无语、好笑或赞叹", "origin": "社交平台夸张式表达", "tone": "neutral", "circle": "通用", "risk": 0, "freshness": 20260810},
+    {"word": "抽象", "aliases": ["太抽象", "抽象话"], "meaning": "行为或表达离谱、难以理解", "origin": "直播圈和抽象文化", "tone": "mock", "circle": "抽象", "risk": 0, "freshness": 20261001},
+    {"word": "绷不住", "aliases": ["绷不住乐", "绷不住了"], "meaning": "没忍住笑或情绪", "origin": "网络口语", "tone": "neutral", "circle": "通用", "risk": 0, "freshness": 20261020},
+    {"word": "破防", "aliases": ["破防了", "破大防"], "meaning": "被戳中情绪，防线垮了", "origin": "游戏和社交平台", "tone": "vent", "circle": "通用", "risk": 0, "freshness": 20261015},
+    {"word": "离谱", "aliases": ["离大谱"], "meaning": "事情荒唐到难以理解", "origin": "网络口语", "tone": "neutral", "circle": "通用", "risk": 0, "freshness": 20261010},
+    {"word": "逆天", "aliases": ["太逆天", "逆天发言"], "meaning": "行为或观点极端、反常", "origin": "网络口语", "tone": "mock", "circle": "通用", "risk": 0, "freshness": 20261028},
+    {"word": "典", "aliases": ["太典了", "典中典"], "meaning": "某句话或行为是典型样本，常带讽刺", "origin": "抽象文化", "tone": "mock", "circle": "抽象", "risk": 0, "freshness": 20260920},
+    {"word": "急了", "aliases": ["你急了", "急急急"], "meaning": "认为对方被戳中后失去冷静", "origin": "网络争论", "tone": "mock", "circle": "抽象", "risk": 0, "freshness": 20260925},
+    {"word": "小丑", "aliases": ["小丑竟是我自己"], "meaning": "嘲笑自己或别人做了难堪的事", "origin": "网络自嘲句", "tone": "self_deprecate", "circle": "通用", "risk": 1, "freshness": 20260820},
+    {"word": "人机", "aliases": ["像个人机", "人机味"], "meaning": "说话机械、套路，像自动回复", "origin": "游戏机器人引申", "tone": "mock", "circle": "通用", "risk": 1, "freshness": 20261101},
+    {"word": "赛博朋克", "aliases": ["cyberpunk"], "meaning": "高科技与破败现实并置的科幻感", "origin": "科幻文化", "tone": "neutral", "circle": "技术", "risk": 0, "freshness": 20260601},
+    {"word": "工具人", "aliases": ["纯工具人"], "meaning": "只被需要功能、不被当作平等对象", "origin": "网络自嘲", "tone": "self_deprecate", "circle": "通用", "risk": 0, "freshness": 20260715},
+    {"word": "躺平", "aliases": ["躺了", "平躺"], "meaning": "不再参与高强度竞争，先顾自己", "origin": "社会话题", "tone": "neutral", "circle": "通用", "risk": 0, "freshness": 20260701},
+    {"word": "内卷", "aliases": ["卷死", "卷起来了"], "meaning": "低收益的过度竞争", "origin": "社会学词汇网络化", "tone": "vent", "circle": "通用", "risk": 0, "freshness": 20260701},
+    {"word": "摆烂", "aliases": ["摆大烂"], "meaning": "明知会坏也不再努力", "origin": "网络口语", "tone": "self_deprecate", "circle": "通用", "risk": 0, "freshness": 20260901},
+    {"word": "开摆", "aliases": ["直接开摆"], "meaning": "决定开始摆烂", "origin": "网络口语", "tone": "self_deprecate", "circle": "通用", "risk": 0, "freshness": 20260901},
+    {"word": "已老实", "aliases": ["已老实求放过"], "meaning": "被现实教育后服软", "origin": "短视频流行语", "tone": "self_deprecate", "circle": "通用", "risk": 0, "freshness": 20261001},
+    {"word": "孝", "aliases": ["太孝了", "孝死我了"], "meaning": "反讽式说某人过度维护或顺从", "origin": "饭圈和抽象文化", "tone": "mock", "circle": "抽象", "risk": 1, "freshness": 20260801},
+    {"word": "双标", "aliases": ["双重标准"], "meaning": "对相同事情使用不同标准", "origin": "网络讨论", "tone": "mock", "circle": "通用", "risk": 0, "freshness": 20260501},
+    {"word": "整活", "aliases": ["整大活", "会整活"], "meaning": "主动制造有节目效果的事情", "origin": "直播文化", "tone": "praise", "circle": "直播", "risk": 0, "freshness": 20260820},
+    {"word": "神金", "aliases": ["神金发言", "太神金了"], "meaning": "对荒唐发言的调侃，带轻微贬义", "origin": "抽象文化", "tone": "mock", "circle": "抽象", "risk": 1, "freshness": 20260915},
+    {"word": "纯路人", "aliases": ["路人一枚"], "meaning": "声明自己旁观、没有立场", "origin": "论坛回帖", "tone": "neutral", "circle": "通用", "risk": 0, "freshness": 20260601},
+    {"word": "前排", "aliases": ["前排围观", "火钳刘明"], "meaning": "在热帖或事件刚开始时占位围观", "origin": "论坛文化", "tone": "neutral", "circle": "通用", "risk": 0, "freshness": 20260401},
+    {"word": "笑死", "aliases": ["笑不活了", "笑飞了"], "meaning": "觉得很好笑", "origin": "网络口语", "tone": "neutral", "circle": "通用", "risk": 0, "freshness": 20261110},
+    {"word": "鼠鼠", "aliases": ["鼠鼠我啊"], "meaning": "自称底层小人物，常带自嘲", "origin": "贴吧自称", "tone": "self_deprecate", "circle": "贴吧", "risk": 1, "freshness": 20260701},
+    {"word": "寄", "aliases": ["寄了", "已经寄了"], "meaning": "事情完了、没救了", "origin": "谐音 Game Over", "tone": "vent", "circle": "通用", "risk": 0, "freshness": 20261001},
+    {"word": "臭底边", "aliases": ["底边"], "meaning": "挖苦没有热度、缺乏存在感的人", "origin": "虚拟主播圈", "tone": "mock", "circle": "V圈", "risk": 2, "freshness": 20260601},
+    {"word": "下头", "aliases": ["下头男", "太下头了"], "meaning": "让人瞬间失去好感", "origin": "社交平台", "tone": "vent", "circle": "通用", "risk": 1, "freshness": 20260801},
+    {"word": "上分", "aliases": ["狠狠上分"], "meaning": "表现加分，赢得认可", "origin": "游戏排位引申", "tone": "praise", "circle": "游戏", "risk": 0, "freshness": 20261001},
+    {"word": "嘴硬", "aliases": ["还在嘴硬"], "meaning": "明显输了或错了仍不承认", "origin": "网络争论", "tone": "mock", "circle": "通用", "risk": 0, "freshness": 20260901},
+    {"word": "细说", "aliases": ["细说一下", "展开说说"], "meaning": "请对方继续讲细节", "origin": "论坛口语", "tone": "neutral", "circle": "通用", "risk": 0, "freshness": 20261001},
+    {"word": "确实", "aliases": ["确实如此"], "meaning": "认同对方说法", "origin": "日常口语", "tone": "neutral", "circle": "通用", "risk": 0, "freshness": 20261101},
+    {"word": "泰裤辣", "aliases": ["太酷啦", "taikula"], "meaning": "发音梗，表达太酷了", "origin": "短视频口音梗", "tone": "praise", "circle": "短视频", "risk": 0, "freshness": 20260701},
+    {"word": "活久见", "aliases": ["活得久什么都能见"], "meaning": "少见的事情居然真的发生了", "origin": "网络口语", "tone": "neutral", "circle": "通用", "risk": 0, "freshness": 20260501},
+    {"word": "大佬", "aliases": ["巨佬"], "meaning": "对能力强者的称呼", "origin": "论坛和游戏圈", "tone": "praise", "circle": "通用", "risk": 0, "freshness": 20260101},
+    {"word": "菜就多练", "aliases": ["菜就多練"], "meaning": "挖苦技术差，把问题归到练习不足", "origin": "游戏圈", "tone": "mock", "circle": "游戏", "risk": 1, "freshness": 20260801},
+    {"word": "就这", "aliases": ["就这啊"], "meaning": "轻蔑地表示表现不过如此", "origin": "网络口语", "tone": "mock", "circle": "通用", "risk": 0, "freshness": 20260901},
+    {"word": "汗流浃背", "aliases": ["汗流浃背了吧", "流汗了"], "meaning": "被戳中后紧张尴尬", "origin": "网络反讽", "tone": "vent", "circle": "通用", "risk": 0, "freshness": 20261001},
+    {"word": "我勒个豆", "aliases": ["我嘞个豆"], "meaning": "表示惊讶，带一点搞笑感", "origin": "短视频口音梗", "tone": "neutral", "circle": "短视频", "risk": 0, "freshness": 20260901},
+    {"word": "尊嘟假嘟", "aliases": ["真的假的", "zundujiadu"], "meaning": "卖萌式问“真的还是假的”", "origin": "短视频谐音", "tone": "neutral", "circle": "短视频", "risk": 0, "freshness": 20260801},
+    {"word": "老六", "aliases": ["你个老六", "六子"], "meaning": "爱蹲点、阴人或行为出人意料的人", "origin": "游戏战术用语", "tone": "mock", "circle": "游戏", "risk": 1, "freshness": 20260701},
+    {"word": "666", "aliases": ["6666", "六六六"], "meaning": "夸操作顺、表现厉害", "origin": "游戏和直播", "tone": "praise", "circle": "通用", "risk": 0, "freshness": 20261101},
+    {"word": "gkd", "aliases": ["搞快点", "快点端上来"], "meaning": "催对方赶快继续", "origin": "贴吧拼音缩写", "tone": "neutral", "circle": "贴吧", "risk": 0, "freshness": 20260601},
+    {"word": "u1s1", "aliases": ["有一说一"], "meaning": "先客观说一句", "origin": "网络缩写", "tone": "neutral", "circle": "通用", "risk": 0, "freshness": 20260401},
+    {"word": "退退退", "aliases": ["退退退退"], "meaning": "用玩笑方式赶走麻烦或对方", "origin": "短视频大妈手势梗", "tone": "mock", "circle": "短视频", "risk": 0, "freshness": 20260601},
+    {"word": "拿捏", "aliases": ["狠狠拿捏", "拿捏住了"], "meaning": "完全掌控或准确掌握", "origin": "网络口语", "tone": "praise", "circle": "通用", "risk": 0, "freshness": 20260901},
+    {"word": "emo", "aliases": ["emo了", "emo中"], "meaning": "情绪低落、伤感", "origin": "情绪化缩写", "tone": "vent", "circle": "通用", "risk": 0, "freshness": 20261101},
+    {"word": "班味", "aliases": ["一身班味", "牛马味"], "meaning": "被上班消耗后的疲惫气质", "origin": "社交平台职场梗", "tone": "vent", "circle": "职场", "risk": 0, "freshness": 20261020},
+    {"word": "电子榨菜", "aliases": ["我的电子榨菜"], "meaning": "吃饭时拿来消磨时间的视频或内容", "origin": "网络生活梗", "tone": "neutral", "circle": "生活", "risk": 0, "freshness": 20261005},
+    {"word": "唐", "aliases": ["太唐了", "唐人"], "meaning": "用疾病相关称呼嘲讽对方，攻击性强", "origin": "网络争议性贬称", "tone": "mock", "circle": "抽象", "risk": 2, "freshness": 20261101},
+    {"word": "伞兵", "aliases": ["纯伞兵"], "meaning": "谐音骂人，常用于攻击性争吵", "origin": "网络谐音", "tone": "mock", "circle": "抽象", "risk": 2, "freshness": 20260601},
+]
+
+__all__ = ["SEEDS"]

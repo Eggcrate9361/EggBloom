@@ -1,10 +1,11 @@
 {
   "id": "memewiki",
   "title": "梗百科",
-  "version": "1.0.0",
-  "description": "接 cnmeme.wiki：!梗 <词> 查出处/用法/标签，查不到直说，不瞎编",
+  "version": "2.0.0",
+  "description": "本地梗理解层：匹配、关系/风险过滤、本轮注入、反馈学习；cnmeme.wiki 只作联网兜底",
   "provides": [
-    "meme.lookup"
+    "meme.lookup",
+    "meme.understand"
   ],
   "requires": [],
   "budget": {

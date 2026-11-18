@@ -89,6 +89,13 @@ Enforced by:
   the image. An unaddressed bare photo stays in context without a vision call.
 - Automatic meme replies use existing collection tags; an unknown meme falls back to a
   random reaction instead of paying for a fresh vision request.
+- Meme recognition uses the bounded local corpus first; the network is a fallback only.
+- Meme context is generation-scoped, capped at two entries and 300 characters, and
+  cannot by itself force the group decider to reply.
+- Risky memes are filtered by relation and require the sender to have used the meme
+  first; direct questions may still receive a neutral definition.
+- Meme usage is committed only after confirmed delivery. Observed reactions may change
+  later ranking, while learned definitions stay in review until explicitly accepted.
 - Visual failure, download failure, and model fallback details stay internal. User-facing
   replies must not expose phrases such as "read failed", "cannot see the image", or
   "the image is blurry".
@@ -107,6 +114,8 @@ Enforced by:
 - `tests/test_recall_contract.py`
 - `tests/test_packaging.py`
 - `tests/test_meme_back.py`
+- `tests/test_memewiki.py`
+- `tests/test_memewiki_v2.py`
 - `tests/test_group_facts.py`
 
 ## Change Checklist

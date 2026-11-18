@@ -17566,7 +17566,8 @@ def _decide(group_id, batch):
                 for _tpn, _tpr in _dispatch_typed_before_reply(
                         pm, message=merged_text, group_id=group_id,
                         context=_decider_ctx):
-                    if isinstance(_tpr, dict) and _tpr.get("action") == "inject":
+                    if (isinstance(_tpr, dict) and _tpr.get("action") == "inject"
+                            and _tpr.get("decision", True)):
                         _go = True
                         log(f"群[{group_id}] [typed 决策] {_tpn} 建议插话")
         except Exception as e:
@@ -18120,12 +18121,20 @@ def _pipeline_step(group_id):
                 #   不命中：同一批跑两遍完整决策，第二次还可能返回 skip 把第一次
                 #   的放行作废（plugin_skip → 直接 return，群里没有回复）。
                 _snap_recent, _snap_breps = _batch_snapshot(group_id, buffer)
+                try:
+                    _rel_tier, _rel_note, _ = _relation_tier(
+                        group_id, buffer.get("sender", ""))
+                except Exception:
+                    _rel_tier, _rel_note = "", ""
                 _plugin_ctx = {
                     "recent_msgs": _snap_recent,
                     "bot_replies": _safe_extract_col(_snap_breps, 1),
                     "sender": buffer.get("sender", ""),
                     "user_id": buffer.get("sender", ""),
                     "message_id": str(buffer.get("message_id") or ""),
+                    "relation_tier": _rel_tier,
+                    "relation_note": _rel_note,
+                    "mood": dict(_form or {}),
                     "trace": _cur_trace(),
                     "is_at_bot": buffer.get("is_at_bot", False),
                     "has_xiao_a": buffer.get("has_xiao_a", False),
