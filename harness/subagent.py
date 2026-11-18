@@ -181,6 +181,7 @@ def submit(goal: str, *, run_fn: Callable[[str], str],
     # 新线程里 thread-local 是空的，交给 _runner 判断会被绕过）。
     if getattr(_ACTIVE, "in_worker", False):
         _finish(tid, state="failed", error="子 agent 里不允许再派活")
+        _settle(tid)
         return tid
     _spawn(tid, rec["goal"], run_fn, on_done, timeout, rec["meta"])
     return tid

@@ -1,11 +1,11 @@
 {
  "group": {
-  "len": 3683,
-  "sha256": "db39c9e5afac20473cb254ccad42b9def66eef7bdc48f6052e0b6f21adbe588b"
+  "len": 3805,
+  "sha256": "ecbadb6738be3720b419dd5e91dd4f84fe8caec7f0fc311cd478ce8788bd7bb2"
  },
  "private": {
-  "len": 3195,
-  "sha256": "ce00248898367c99f7d73e29092d77ed8c876c67d478027dbb30115eb03232d9"
+  "len": 3229,
+  "sha256": "e73c7b3e54ba84a307ff1f019f44d5337a2a06f8ff2f0a4e57c60c20f3356cc6"
  },
- "_说明": "2026-11-08 重算：11-08 的 persona 提交给 plugins/personality.txt 的【回答多样性】加了反模板规则，静态提示词 group 3534→3683、private 3046→3195。身份块 / 人格 / de_ai 段仍按 test_prompt_segments.py 钉死，这里守的是『同一钉死环境下别再意外变』，不是冻结人格内容。"
+ "_说明": "2026-11-18 重算：11-18 的人格与看图规则使 group 3683→3805、private 3195→3229。身份块、基础人格文本与 de_ai 段仍按 test_prompt_segments.py 钉死；这里守的是同一固定环境中静态提示词的意外变化。"
 }

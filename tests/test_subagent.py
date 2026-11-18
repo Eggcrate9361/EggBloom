@@ -41,7 +41,8 @@ def wait_done(tid, timeout=5.0):
     t0 = time.time()
     while time.time() - t0 < timeout:
         st = sa.status(tid)
-        if st.get("state") in ("done", "failed", "timeout", "cancelled"):
+        if (st.get("state") in ("done", "failed", "timeout", "cancelled")
+                and st.get("settled")):
             return st
         time.sleep(0.05)
     return sa.status(tid)

@@ -71,6 +71,8 @@ def main():
             if k in prev:
                 d = out[k]["len"] - prev[k]["len"]
                 print("  %s: %d → %d（%+d）" % (k, prev[k]["len"], out[k]["len"], d))
+        if prev.get("_说明"):
+            out["_说明"] = prev["_说明"]
 
     io.open(GOLDEN, "w", encoding="utf-8", newline="").write(
         json.dumps(out, ensure_ascii=False, indent=1) + "\n")

@@ -69,6 +69,8 @@ def main():
     calls = {"api": 0, "vision": 0, "extract": 0}
     desc_ok = [True]
     desc_delay = [0.0]
+    desc_active = [0]
+    desc_peak = [0]
     lock = threading.Lock()
 
     def fake_api(method, params=None, **kw):
@@ -84,9 +86,15 @@ def main():
     def fake_desc(ref, prompt=""):
         with lock:
             calls["vision"] += 1
-        if desc_delay[0]:
-            time.sleep(desc_delay[0])
-        return "一张手绘的黑白街景" if desc_ok[0] else ""
+            desc_active[0] += 1
+            desc_peak[0] = max(desc_peak[0], desc_active[0])
+        try:
+            if desc_delay[0]:
+                time.sleep(desc_delay[0])
+            return "一张手绘的黑白街景" if desc_ok[0] else ""
+        finally:
+            with lock:
+                desc_active[0] -= 1
 
     try:
         bc.api_call = fake_api
@@ -180,6 +188,7 @@ def main():
         bc._FWD_CACHE.clear()
         resp = [_fwd_resp([[_img(i, "slow") for i in range(6)]])]
         desc_delay[0] = 0.25
+        desc_peak[0] = 0
         calls.update(api=0, vision=0, extract=0)
         t0 = time.time()
         out7 = bc._fetch_forward_content("fid-H", vision=True)
@@ -188,7 +197,8 @@ def main():
         check("★ 6 张都描述了",
               calls["vision"] == 6
               and out7.count("[图片：一张手绘的黑白街景]") == 6, calls)
-        check("★ 明显快于串行 1.5s（实测 %.2fs）" % dt, dt < 0.9, "%.2fs" % dt)
+        check("★ 存在真实并发重叠（peak=%d，实测 %.2fs）"
+              % (desc_peak[0], dt), desc_peak[0] >= 2, "peak=%d" % desc_peak[0])
         check("★ 顺序不乱（6 个描述都在行内）", "（转发里共 6 张图片" in out7,
               out7[-140:])
 
