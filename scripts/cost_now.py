@@ -37,9 +37,9 @@ import pricing  # noqa: E402
 
 
 def find_stats_file() -> str:
-    """找正在写的那份 token_stats.jsonl（副本优先，其次仓库）。"""
+    """找正在写的那份 token_stats.jsonl（环境变量优先，其次仓库）。"""
     cands = [
-        r"D:\EggBloom水星\EggBloom Desktop-new\resources\app\logs\token_stats.jsonl",
+        os.environ.get("EGGBLOOM_TOKEN_STATS", "").strip(),
         os.path.join(ROOT, "logs", "token_stats.jsonl"),
     ]
     live = [p for p in cands if os.path.exists(p)]

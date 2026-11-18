@@ -2,7 +2,7 @@
 """separation.enable —— 一次性启用脚本（设计 §3）。
 
 用法：
-    python -m separation.enable --root D:\\git\\EggBloom --statement "..." --yes
+    python -m separation.enable --root <repo> --statement "..." --yes
 
 **默认 dry-run**：不加 `--yes` 只打印计划，不写任何文件。
 启用是不可逆的：会快照、剥离人格规则、删限制键、写 lock；

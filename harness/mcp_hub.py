@@ -19,7 +19,7 @@
 venv 解析顺序（_resolve_venv_python）
     1. 环境变量 EGGBLOOM_MCP_VENV 指向的目录（或其 Scripts/bin 下的 python）
     2. <data_dir>/mcp-venv
-    3. 程序目录旁 E:\\EggBloomMCP（开发期默认；随包部署时可改 1/2）
+    3. 环境变量 EGGBLOOM_MCP_VENV_PYTHON 指向的解释器
     ★ 可用 mcp_hub.configure(venv_dir=..., python_exe=...) 显式指定。
 
 配置来源（按优先级）
@@ -91,9 +91,10 @@ def _candidate_venv_pys():
         v = os.path.normpath(os.path.join(root, rel))
         out.append(os.path.join(v, "Scripts", "python.exe"))
         out.append(os.path.join(v, "bin", "python"))
-    # ★ 开发期遗留位置兜底（2026-10-10：E:\EggBloomMCP 是早期手建的野 venv；
-    #   正规位置是上面 <data_dir>/mcp-venv，随主目录走。保留兼容存量机器。）
-    out.append(r"E:\EggBloomMCP\Scripts\python.exe")
+    # 旧开发目录可通过环境变量显式兼容，源码不保存本机绝对路径。
+    legacy = str(os.environ.get("EGGBLOOM_MCP_VENV_PYTHON") or "").strip()
+    if legacy:
+        out.append(legacy)
     # 去重保序
     seen, uniq = set(), []
     for p in out:

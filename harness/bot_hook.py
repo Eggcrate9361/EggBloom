@@ -110,7 +110,7 @@ def _mentions_local_path(text):
     """这句话里有没有出现**像本机路径**的片段。
 
     为什么要单独判：上面 _DESKTOP_KW 是措辞表，永远补不完。
-    「E:\\EggBloom水星\\dist\\EggBloom-Full.zip 发出来」这种句子，
+    「E:\\Example\\dist\\EggBloom-Full.zip 发出来」这种句子，
     真正说明"要动本机文件"的是那个路径，不是动词。
     用户只要给出路径，要么想让我们读，要么想让我们发，两种都需要 desktop 组。
     """

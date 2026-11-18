@@ -22,6 +22,7 @@ import io
 import os
 import re
 import sys
+import tempfile
 import glob
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -114,7 +115,7 @@ except Exception as e:
     check(f"GET 调用可执行（{type(e).__name__}: {e}）", False)
 
 print("\n=== B. 能力没丢：POST 的动作集 ⊇ 原 GET ∪ 原 POST ===")
-backup = r"D:\workbuddy_tmp\_get_block_backup.txt"
+backup = os.path.join(tempfile.gettempdir(), "_get_block_backup.txt")
 if os.path.exists(backup):
     old_get = io.open(backup, encoding="utf-8").read()
 else:

@@ -484,7 +484,7 @@ def health_check() -> dict:
         _unemb = int(vs.get("facts_unembedded", 0)) + int(vs.get("events_unembedded", 0))
         _check("memory_vector", _vec_ok, "记忆向量化",
                ("向量服务在线" if _vec_ok else f"向量服务不可用（{_unemb} 条记忆待向量化）"),
-               fix="检查 D:/LiGGUF-CN/ligguf_build_port/ligguf_embed.dll 与模型文件是否存在；或启动 llama-server 到 8083",
+               fix="检查插件设置中的 embed_dll / embed_model_path；或启动 llama-server 到 8083",
                goto="super_memory", level="warn")
     except Exception as e:
         _check("memory", False, "记忆模块", f"加载失败: {e}", fix="检查插件代码或依赖", goto="super_memory")

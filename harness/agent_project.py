@@ -128,7 +128,7 @@ HARD_RULES = """【EggBloom 铁律】以下几条违反会真出问题，回答�
    时要先想闸门有没有开。
 
 6. **别把源码库和发行包搞混**。源码库是 git clone 下来的那份（改代码 + 提交）；
-   发行包是 E:\\EggBloom水星\\EggBloom Desktop-new（用户实际在跑的）。
+   发行包是用户实际运行的应用目录（可用 `EGGBLOOM_DIST` 指向）。
    运行时数据（.neurobase / slang_dict.json / bot_config.json / plugins/state/）
    只存在于发行包，**源码库里没有**，不要看到源码库没有就说"数据丢了"。
 """

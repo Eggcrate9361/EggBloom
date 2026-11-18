@@ -1,6 +1,6 @@
 # Meme Library Audit
 
-- Root: `D:\EggBloom水星\EggBloom Desktop-new\resources\app\memes\memes`
+- Root: `memes/memes`（运行时图库根目录）
 - Image files: 363
 - Tag entries: 4
 - Read-only fallback tag entries: 283

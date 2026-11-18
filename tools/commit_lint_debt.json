@@ -1,6 +1,6 @@
 {
   "schema": 1,
   "note": "活跃期违规的例外登记表。规则见 CONTRIBUTING.md §6.5.3：每条必须写清 sha / 规则 / 原因 / 处置 / 复核日；条目一旦不再违规，tests/test_commit_format.py 会判为过期并要求删除。这不是白名单 —— 发布闸 `commit_lint.py --strict` 不认这张表。",
-  "history": "2026-11-13 建表时登记了 9 处活跃违规（6×CM-02 + 3×CM-03），涉及 b250cbf / 64373b2 / 9a70c50 / 4671a6b / 31320c1 / 1a88ecd / 8a7b21a。这 7 个提交全部已推（6 个在 origin，b250cbf 在 server），单改任一处要重排其后 57~101 个提交并强推，且改完 --publish 仍是 387 处 —— 所以改用整条历史线处置：orphan 重建公开链（新根 1b551b6，旧链存 legacy/main）。那 7 个提交不在新链上，9 条同时过期，故清空。要复查旧链：commit_lint.py --rev-range legacy/main --publish（387 处 / 226 提交）。（2026-11-14 补：`legacy/main` 等旧 ref 已整体归档为 D:\\_archive\\EggBloom-allrefs-20261114.bundle 后删除，`--rev-range legacy/main` 在本仓库里跑不动了。）",
+  "history": "2026-11-13 建表时登记了 9 处活跃违规（6×CM-02 + 3×CM-03），涉及 b250cbf / 64373b2 / 9a70c50 / 4671a6b / 31320c1 / 1a88ecd / 8a7b21a。这 7 个提交全部已推（6 个在 origin，b250cbf 在 server），单改任一处要重排其后 57~101 个提交并强推，且改完 --publish 仍是 387 处 —— 所以改用整条历史线处置：orphan 重建公开链（新根 1b551b6，旧链存 legacy/main）。那 7 个提交不在新链上，9 条同时过期，故清空。要复查旧链：commit_lint.py --rev-range legacy/main --publish（387 处 / 226 提交）。（2026-11-14 补：`legacy/main` 等旧 ref 已整体归档到本地备份后删除，`--rev-range legacy/main` 在本仓库里跑不动了。）",
   "entries": []
 }

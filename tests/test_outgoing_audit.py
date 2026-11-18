@@ -49,17 +49,17 @@ def main():
                   f"{out[:50]!r} {f}")
 
     print("\n=== ② 本机路径：群里脱、私聊保留（我们本来要报路径）===")
-    win = "文件在 E:\\EggBloom水星\\dist\\EggBloom-Full.zip"
+    win = "文件在 E:\\Example\\dist\\EggBloom-Full.zip"
     out_g, f_g = bot_core.audit_outgoing(win, is_group=True)
     check("群里：Windows 路径被脱", "[本机路径已隐藏]" in out_g, f"{out_g[:60]!r}")
     out_p, f_p = bot_core.audit_outgoing(win, is_group=False)
-    check("私聊：Windows 路径保留（要告诉用户文件在哪）", "E:\\EggBloom水星" in out_p and not f_p,
+    check("私聊：Windows 路径保留（要告诉用户文件在哪）", "E:\\Example" in out_p and not f_p,
           f"{out_p[:60]!r}")
-    unix = "配置在 /home/administrator/.dsh/settings.json 里"
+    unix = "配置在 /home/example/.dsh/settings.json 里"
     out_u, f_u = bot_core.audit_outgoing(unix, is_group=True)
     check("群里：Unix 路径被脱", "[本机路径已隐藏]" in out_u, f"{out_u[:60]!r}")
     out_u2, _ = bot_core.audit_outgoing(unix, is_group=False)
-    check("私聊：Unix 路径保留", "/home/administrator" in out_u2, out_u2[:60])
+    check("私聊：Unix 路径保留", "/home/example" in out_u2, out_u2[:60])
 
     print("\n=== ③ 不能误伤正常内容 ===")
     safe = [

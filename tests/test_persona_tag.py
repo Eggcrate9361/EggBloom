@@ -91,6 +91,9 @@ def main():
           (len(persona_tag.TAG) == persona_tag._TAG_LEN
            and all(c in "0123456789abcdef" for c in persona_tag.TAG)),
           persona_tag.TAG)
+    check("TAG 只从环境变量读取",
+          persona_tag.TAG == os.environ.get("EGGBLOOM_PERSONA_TAG", "").strip().lower(),
+          persona_tag.TAG)
     check("模板不含数字", not any(ch.isdigit() for ch in persona_tag.TEMPLATE))
 
     print("\n" + "=" * 56)

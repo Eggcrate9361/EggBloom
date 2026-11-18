@@ -4,19 +4,19 @@
 ## 用户要的是什么
 
 > 记忆隔离的意思是按私聊人分开记忆，就是 bot 知道谁是谁，
-> 阿蛋/开发者/老大/爹，Sample/朋友，他们做了什么，说了什么 bot 知道是谁做的。
+> 示例昵称/开发者/老大/爹，Sample/朋友，他们做了什么，说了什么 bot 知道是谁做的。
 
 所以隔离有两半：
 1. **分开存/分开取**（§63/§68 已做：facts/events/messages 按 scope_id+user_id；
    沙漏日期召回私聊返回空）；
-2. **知道谁是谁**（本条）：同一个人多个叫法要对上；说"阿蛋"时 bot 知道是主人。
+2. **知道谁是谁**（本条）：同一个人多个叫法要对上；说"示例昵称"时 bot 知道是主人。
 
 ## 契约
 
 - `people.add_alias(uid, name)`：追加别名（去重、最多 12 个）；
-- `people.label(uid)`：记忆块短标签，如 `老大（阿蛋/开发者）(1000000005)`；
+- `people.label(uid)`：记忆块短标签，如 `老大（示例昵称/开发者）(1000000005)`；
 - `people.resolve(text)`：一句话反查是谁；**多个候选命中就不猜**（返回空）；
-- `people.roster_block()`：`【你认识的人】老大（阿蛋/开发者）：主要管理员；Sample：朋友。`
+- `people.roster_block()`：`【你认识的人】老大（示例昵称/开发者）：主要管理员；Sample：朋友。`
   只列有名字/身份的人，私聊注入（群聊另有【群内人物】，不跨界带名字）。
 
 运行：python tests/test_people_identity.py
@@ -45,38 +45,38 @@ people.EXTRA_FILE = os.path.join(tmp, "people_extra.json")
 people.PEOPLE_FILE = os.path.join(tmp, "people.json")
 people.reload()
 
-OWNER, TEXAS = "1000000005", "1000000006"
+OWNER, FRIEND = "1000000005", "1000000006"
 try:
     # ── 1. 别名 + 主别名 ────────────────────────────────────────
     people.set_alias(OWNER, "老大")
-    check("加别名 阿蛋", people.add_alias(OWNER, "阿蛋") is True)
+    check("加别名 示例昵称", people.add_alias(OWNER, "示例昵称") is True)
     check("加别名 开发者", people.add_alias(OWNER, "开发者") is True)
-    check("重复别名不重复加", people.add_alias(OWNER, "阿蛋") is False)
+    check("重复别名不重复加", people.add_alias(OWNER, "示例昵称") is False)
     people.add_alias(OWNER, "爹")
     _lbl = people.label(OWNER)
     check("label 汇总三个叫法",
-          all(x in _lbl for x in ("老大", "阿蛋", "开发者")), _lbl)
+          all(x in _lbl for x in ("老大", "示例昵称", "开发者")), _lbl)
     check("label 带 QQ", OWNER in people.label(OWNER), people.label(OWNER))
 
     # ── 2. 反查：谁是谁 ────────────────────────────────────────
-    check("★ 提到「阿蛋」→ 主人", people.resolve("阿蛋说今晚不睡") == OWNER,
-          people.resolve("阿蛋说今晚不睡"))
+    check("★ 提到「示例昵称」→ 主人", people.resolve("示例昵称说今晚不睡") == OWNER,
+          people.resolve("示例昵称说今晚不睡"))
     check("★ 提到「开发者」→ 主人", people.resolve("开发者又在改代码") == OWNER)
     check("提到「老大」→ 主人", people.resolve("老大呢？") == OWNER)
     check("无关句子不乱认", people.resolve("今天天气不错") == "")
 
     # ── 3. Sample = 朋友 ───────────────────────────────────────
-    people.set_alias(TEXAS, "Sample")
-    people.add_fact(TEXAS, "身份", "朋友（老大的朋友）")
+    people.set_alias(FRIEND, "Sample")
+    people.add_fact(FRIEND, "身份", "朋友（老大的朋友）")
     roster = people.roster_block()
-    check("★ 小抄里有主人", "老大" in roster and "阿蛋" in roster, roster)
+    check("★ 小抄里有主人", "老大" in roster and "示例昵称" in roster, roster)
     check("★ 小抄里 Sample 是朋友", "Sample" in roster and "朋友" in roster, roster)
     check("小抄一句话结尾", roster.startswith("【你认识的人】") and roster.endswith("。"),
           roster[:40])
 
     # ── 4. 反查不猜（两个人都叫「小」→ 空）───────────────────
     people.set_alias("999", "小a")
-    people.add_alias(TEXAS, "小ab")
+    people.add_alias(FRIEND, "小ab")
     check("多候选命中不猜", people.resolve("小abc") == "", people.resolve("小abc"))
 
     # ── 5. 主链接线 ────────────────────────────────────────────

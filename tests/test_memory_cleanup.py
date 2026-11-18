@@ -5,7 +5,7 @@
 
   1. **`events` 跨人**：events 表只有 scope_id、没有"这是谁的事"，
      群里所有人的事件混在一行里 —— 「事件：吃饭」会出现在别人的对话里。
-  2. **`[身份]` 事实质量差**：群里随口一句「我是阿蛋」「我是小狗」被正则抽成
+  2. **`[身份]` 事实质量差**：群里随口一句「我是示例昵称」「我是小狗」被正则抽成
      `身份`，再经 `persona_kernel` 进【长期人格】，每轮无条件注入给所有人。
 
 本文件锁四件事：
@@ -143,7 +143,7 @@ def _identity(text):
 
 def test_identity_denoise():
     print("\n[C] 身份事实形态闸")
-    check("「我是阿蛋」不进身份", not _identity("我是阿蛋"), _identity("我是阿蛋"))
+    check("「我是示例昵称」不进身份", not _identity("我是示例昵称"), _identity("我是示例昵称"))
     check("「我是小狗」不进身份", not _identity("我是小狗"), _identity("我是小狗"))
     check("「我是来吃饭的」不进身份", not _identity("我是来吃饭的"))
     check("「我是学生哈哈」不进身份（玩笑信号）", not _identity("我是学生哈哈"), _identity("我是学生哈哈"))
@@ -184,7 +184,7 @@ def test_persona_per_user():
     check("B 的长期人格只有自己的身份", pb.get("user_identity") == "程序员", pb)
 
     sm._memory._update_persona_kernel(
-        GID, [{"category": "身份", "content": "阿蛋", "confidence": 0.35}], B)
+        GID, [{"category": "身份", "content": "示例昵称", "confidence": 0.35}], B)
     pb2 = sm._memory.get_persona_export(GID, focus_user=B, scope="group")
     check("低置信度事实不覆盖长期人格", pb2.get("user_identity") == "程序员", pb2)
 
@@ -237,7 +237,7 @@ def test_legacy_migration():
         INSERT INTO events (scope_id, event_type, summary, participants, emotion, timestamp, importance)
             VALUES ('g1', '事件', '迁移前的老事件', '', '', 1.0, 0.9);
         INSERT INTO persona_kernel (scope_id, key, value, confidence, last_updated)
-            VALUES ('g1', 'user_identity', '阿蛋', 0.9, 1.0);
+            VALUES ('g1', 'user_identity', '示例昵称', 0.9, 1.0);
     """)
     conn.commit()
     conn.close()

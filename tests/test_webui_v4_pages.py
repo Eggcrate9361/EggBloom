@@ -34,7 +34,7 @@ except Exception as _e:
     print(f"[SKIP] 未安装 Playwright（{type(_e).__name__}）→ 跳过 v4 页面验证")
     sys.exit(0)
 
-# ★ 2026-10-22：原来是写死的 `Path(r"D:\git\EggBloom\webui")` 和 `D:\workbuddy_tmp`。
+# ★ 2026-10-22：原来写死了开发机源码目录和临时输出目录。
 #   本机能跑，但换机器 / 换路径 / 上 CI 就必然失败 —— 测试要能跟着仓库走。
 #   WEBUI 由本文件位置反推；截图输出到系统临时目录（不污染仓库，也不要求 D 盘存在）。
 _HERE = Path(__file__).resolve().parent

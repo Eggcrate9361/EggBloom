@@ -18,8 +18,10 @@ import io
 
 from playwright.sync_api import sync_playwright
 
-SRC = Path(r"D:\git\EggBloom\webui\webui_artistic_v3.html")
-OUT = Path(r"D:\workbuddy_tmp")
+ROOT = Path(__file__).resolve().parent.parent
+SRC = ROOT / "webui" / "webui_artistic_v3.html"
+OUT = ROOT / "data"
+OUT.mkdir(parents=True, exist_ok=True)
 
 s = io.open(SRC, encoding="utf-8").read()
 

@@ -5,7 +5,7 @@
 >
 > **2026-11-07 方向重定**：主脊是实验，不是发版；权限取消进程边界；
 > 内容层零拦截；限制按「删 / 默认值可改 / 不动」三档处理。
-> 详见 `D:\git\EggBloom-plan\1.6.0-分离方向.md` 与 `1.6.0-限制清单.md`。
+> 详见 1.6.0 分离方向与限制清单（内部设计资料）。
 
 ## 状态
 
@@ -19,10 +19,10 @@ python -c "import separation; print(separation.active())"
 
 ```bash
 # 只检查，不写盘
-python -m separation.enable --root D:\git\EggBloom
+python -m separation.enable --root .
 
 # 真启用（不可逆）
-python -m separation.enable --root D:\git\EggBloom \
+python -m separation.enable --root . \
   --statement "你的交接一句话" \
   --publisher "你的名字" --publisher-version "1.0.0" --yes
 ```

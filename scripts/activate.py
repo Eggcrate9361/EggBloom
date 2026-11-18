@@ -4,7 +4,7 @@
 为什么需要这个脚本
     EggBloom 的"生效"不是一步，而是两步，任何一步漏了都会**静默失败**：
 
-      1. 源码库 (D:\\git\\EggBloom) → 发行目录 (resources\\app)
+      1. 源码库（当前仓库）→ 发行目录 (resources\\app)
          由 scripts/sync-dist.ps1 负责。它是 **只增不删** 的 robocopy /E。
          漏了这一步 → 程序跑的还是旧文件。
 
@@ -24,7 +24,7 @@
 用法
     python scripts/activate.py                      # 同步 + 体检 + 校验
     python scripts/activate.py --check-only         # 只校验（不改动任何东西）
-    python scripts/activate.py --dist "E:\\..."     # 指定发行包根目录
+    python scripts/activate.py --dist "<发行目录>"  # 指定发行包根目录
     python scripts/activate.py --no-sync            # 跳过同步（只体检 + 校验）
 """
 import argparse
@@ -36,7 +36,7 @@ import subprocess
 import sys
 
 SRC_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DEFAULT_DIST = r"E:\EggBloom水星\EggBloom Desktop-new"
+DEFAULT_DIST = os.environ.get("EGGBLOOM_DIST", "").strip()
 
 # 这些顶层项由 sync-dist.ps1 负责（与脚本的 $dirItems 保持一致 + 根目录文件）
 ROOT_FILES = ["bot_core.py", "webui_server.py"]
@@ -129,7 +129,6 @@ def find_dist(explicit=None):
     if explicit:
         cands.append(explicit)
     cands += [DEFAULT_DIST,
-              r"E:\EggBloomDist",
               os.path.join(os.path.expanduser("~"), "EggBloom Desktop-new")]
     for c in cands:
         if c and os.path.isfile(os.path.join(c, "resources", "app", "webui", "webui_server.py")):

@@ -1,10 +1,13 @@
 ﻿# -*- coding: utf-8 -*-
 """截图验证：全局蒸馏进度条（用拦截把 distill_status 伪造成"运行中"）。"""
 import io, sys, urllib.parse
+from pathlib import Path
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 from playwright.sync_api import sync_playwright
 
 PID = "这样脆弱的东西"
+OUT = Path(__file__).resolve().parent.parent / "data"
+OUT.mkdir(parents=True, exist_ok=True)
 with sync_playwright() as p:
     b = p.chromium.launch(args=["--no-sandbox"])
     pg = b.new_page(viewport={"width": 1360, "height": 900}, device_scale_factor=2)
@@ -24,7 +27,7 @@ with sync_playwright() as p:
     pg.goto("http://127.0.0.1:8080/page?plugin_id=" + urllib.parse.quote(PID),
             wait_until="networkidle", timeout=30000)
     pg.wait_for_timeout(2500)
-    pg.screenshot(path=r"D:\git\EggBloom\data\_distill_globalbar.png")
+    pg.screenshot(path=OUT / "_distill_globalbar.png")
     txt = pg.inner_text("#globalProg") if pg.query_selector("#globalProg") else "(无)"
     print("banner:", txt.replace("\n", " | ")[:120])
     b.close()

@@ -9,6 +9,7 @@
 import io
 import os
 import sys
+from pathlib import Path
 
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 
@@ -54,10 +55,11 @@ def main() -> int:
 
         # 触发一次「检查更新」，让版本号与结果区有内容（用本地 manifest）
         try:
-            page.evaluate("""() => {
+            _manifest = (Path(ROOT) / "dist" / "latest.json").resolve().as_uri()
+            page.evaluate("""(manifest) => {
                 const el = document.querySelector('input#sUpdateManifestUrl, [data-k="update_manifest_url"] input');
-                if (el) { el.value = 'file:///D:/git/EggBloom/dist/latest.json'; el.dispatchEvent(new Event('input', {bubbles:true})); }
-            }""")
+                if (el) { el.value = manifest; el.dispatchEvent(new Event('input', {bubbles:true})); }
+            }""", _manifest)
             page.click("#cfUpdCheck")
             page.wait_for_timeout(2500)
         except Exception as e:

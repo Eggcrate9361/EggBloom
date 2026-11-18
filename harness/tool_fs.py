@@ -2,7 +2,7 @@
 """harness/tool_fs.py —— 工作区文件工具（read / write / edit / glob / grep）。
 
 为什么是这几个、以及为什么这样设计
-    对照 DeepSeek Harness（`D:\\deepseek` 的 dsh-tool-fs / dsh-tool-fs-search）
+    对照 DeepSeek Harness（其 dsh-tool-fs / dsh-tool-fs-search）
     与 Claude Code / Codex 的工具集，结论是：agent 真正的地基只有五件事
     —— **按模式找、按内容搜、读、写、改**。EggBloom 原本只有"按文件名模糊搜"
     （search_files），没有读/写/改，所以 agent 一旦要动真格的活就只能空转。

@@ -2,7 +2,7 @@
 #
 # 用法（在 EggBloom 源码目录下运行）：
 #     powershell -ExecutionPolicy Bypass -File scripts/sync-dist.ps1
-#     powershell -ExecutionPolicy Bypass -File scripts/sync-dist.ps1 -DistPath "E:\Somewhere\EggBloom"
+#     powershell -ExecutionPolicy Bypass -File scripts/sync-dist.ps1 -DistPath "<EggBloom distribution>"
 #     powershell -ExecutionPolicy Bypass -File scripts/sync-dist.ps1 -DryRun      # 只列出会改什么，不写盘
 #
 # ── 2026-10-03 修复记录 ────────────────────────────────────────────────
@@ -13,7 +13,7 @@
 #     于是产生 webui\webui\、plugins\web_operator\web_operator\、memes\memes\
 #     这类目录，跑一次多一层。现在改用 robocopy（语义是「合并」）。
 #
-#  2) 默认路径写死 e:\EggBloomDist，与实际安装位置不符，且从未生成过 VERSION
+#  2) 默认路径写死旧安装目录，与实际安装位置不符，且从未生成过 VERSION
 #     （说明从没成功跑过）。现在改为自动探测：在 C:\ D:\ E:\ 下按两层深度
 #     查找含 resources\app\webui\webui_server.py 的目录。
 #
@@ -66,8 +66,7 @@ if (-not $DistPath) {
         $DistPath = ""
     } else {
         # 有多个候选时**绝不擅自挑选**。
-        # 血泪教训（2026-10-03）：本机同时存在 E:\EggBloomDist（8 月的旧副本）与
-        # E:\EggBloom水星\EggBloom Desktop-new（在用的那份），旧逻辑取"第一个匹配"
+# 血泪教训（2026-10-03）：本机同时存在旧副本与在用的发行目录，旧逻辑取"第一个匹配"
         # 把文件同步进了废弃副本。同步会覆盖目标文件，猜错 = 改错项目。
         Write-Host ""
         Write-Host "错误：发现多个发行包目录，无法自动确定同步目标。" -ForegroundColor Red
@@ -100,7 +99,7 @@ if (-not (Test-DistRoot $DistPath)) {
     Write-Host "  判定标准  : 该目录下存在 resources\app\webui\webui_server.py"
     Write-Host ""
     Write-Host "请用 -DistPath 明确指定，例如:" -ForegroundColor Yellow
-    Write-Host '  powershell -ExecutionPolicy Bypass -File scripts/sync-dist.ps1 -DistPath "E:\EggBloom水星\EggBloom Desktop-new"'
+Write-Host '  powershell -ExecutionPolicy Bypass -File scripts/sync-dist.ps1 -DistPath "<EGGBLOOM_DIST>"'
     exit 1
 }
 

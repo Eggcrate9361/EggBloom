@@ -4,13 +4,13 @@
 ## 要的是什么
 
 - 按私聊人分开记忆（§63/§68 已做：facts/events/messages 按 scope_id+user_id）；
-- **bot 知道谁是谁**：阿蛋/开发者/老大/爹 是同一个人；Sample 是朋友；
+- **bot 知道谁是谁**：示例昵称/开发者/老大/爹 是同一个人；Sample 是朋友；
 - 每条记忆标上**是谁的**，不匿名。
 
 ## 契约
 
 1. `people.resolve_hit(text)` → (uid, 命中的那个叫法)；多候选命中不猜；
-2. `people.label(uid, with_uid=False)` → 「老大（阿蛋/开发者）」；
+2. `people.label(uid, with_uid=False)` → 「老大（示例昵称/开发者）」；
 3. `bot_core._mention_identity_hint()`：消息里点到熟人 → 一句「谁是谁」；
 4. `super_memory.get_prompt_block` 每行带 `【名字】` 前缀（事实/事件/好感度）；
 5. `memory_context` 的检索条目同样带前缀。
@@ -41,35 +41,35 @@ people.EXTRA_FILE = os.path.join(tmp, "people_extra.json")
 people.PEOPLE_FILE = os.path.join(tmp, "people.json")
 people.reload()
 
-OWNER, TEXAS = "1000000005", "1000000006"
+OWNER, FRIEND = "1000000005", "1000000006"
 try:
     people.set_alias(OWNER, "老大")
-    for a in ("阿蛋", "开发者", "爹"):
+    for a in ("示例昵称", "开发者", "爹"):
         people.add_alias(OWNER, a)
     people.add_fact(OWNER, "身份", "主要管理员（老大/爹）")
-    people.set_alias(TEXAS, "Sample")
-    people.add_fact(TEXAS, "身份", "朋友（老大的朋友）")
+    people.set_alias(FRIEND, "Sample")
+    people.add_fact(FRIEND, "身份", "朋友（老大的朋友）")
 
-    uid, said = people.resolve_hit("阿蛋说今晚不睡")
+    uid, said = people.resolve_hit("示例昵称说今晚不睡")
     check("★ 反查命中主人", uid == OWNER, uid)
-    check("★ 带回他用的叫法", said == "阿蛋", said)
+    check("★ 带回他用的叫法", said == "示例昵称", said)
     uid2, said2 = people.resolve_hit("Sample 帮我看看")
-    check("★ 反查命中 Sample", uid2 == TEXAS, uid2)
+    check("★ 反查命中 Sample", uid2 == FRIEND, uid2)
     check("多候选不猜", people.resolve_hit("小abc")[0] == "")
 
     lbl = people.label(OWNER, with_uid=False)
-    check("标签含三个叫法", all(x in lbl for x in ("老大", "阿蛋", "开发者")), lbl)
+    check("标签含三个叫法", all(x in lbl for x in ("老大", "示例昵称", "开发者")), lbl)
     check("标签不带 QQ", OWNER not in lbl, lbl)
 
     # ── 2. bot_core：谁是谁提示 ─────────────────────────────
     import bot_core as bc  # noqa: E402
 
-    hint = bc._mention_identity_hint("阿蛋说今晚不睡", TEXAS)
+    hint = bc._mention_identity_hint("示例昵称说今晚不睡", FRIEND)
     check("★ 提示里点出是同一个人", "同一个人" in hint, hint[:60])
     check("★ 提示带 QQ", OWNER in hint, hint[:80])
     check("提示带身份", "主要管理员" in hint, hint[:100])
-    check("说的是自己就不提示", bc._mention_identity_hint("阿蛋呢", OWNER) == "")
-    check("无关句子不提示", bc._mention_identity_hint("今天天气不错", TEXAS) == "")
+    check("说的是自己就不提示", bc._mention_identity_hint("示例昵称呢", OWNER) == "")
+    check("无关句子不提示", bc._mention_identity_hint("今天天气不错", FRIEND) == "")
 
     # ── 3. super_memory：记忆带【名字】 ─────────────────────
     os.environ.setdefault("EGGBLOOM_SUPER_MEMORY_DB",
@@ -83,7 +83,7 @@ try:
 
     conn = sqlite3.connect(sm_mod.DB_PATH)
     cols = {str(r[1]) for r in conn.execute("PRAGMA table_info(facts)").fetchall()}
-    row = {"scope_id": TEXAS, "user_id": TEXAS, "category": "身份",
+    row = {"scope_id": FRIEND, "user_id": FRIEND, "category": "身份",
            "content": "高三学生", "confidence": 0.9,
            "created_at": 0, "created": 0, "last_used": 0}
     use = {k: v for k, v in row.items() if k in cols}
@@ -102,8 +102,8 @@ try:
         sm.config["use_vector_recall"] = False
     except Exception:
         pass
-    blk = sm.get_prompt_block("private", TEXAS, current_msg="我昨天干了什么",
-                              focus_user=TEXAS)
+    blk = sm.get_prompt_block("private", FRIEND, current_msg="我昨天干了什么",
+                              focus_user=FRIEND)
     check("★ 记忆块有【名字】前缀", "【Sample" in blk, blk[:120])
     check("记忆内容还在", "高三学生" in blk, blk[:120])
 

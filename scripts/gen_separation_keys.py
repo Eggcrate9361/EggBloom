@@ -14,8 +14,8 @@ import re
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)   # 脚本在 <repo>/scripts/ 下，ROOT 上跳一层
-# ★ 原来硬编码 D:\git\EggBloom，换个 clone 位置就直接跑不动
-#   （干净 clone / 别的盘上根本没有 D:）。改成按 __file__ 定位。
+# ★ 原来硬编码本机源码目录，换个 clone 位置就直接跑不动。
+#   改成按 __file__ 定位。
 
 KEYS = {
     "闸": ["reply_question_guard", "reply_stale_turns", "reply_stale_drop_sec",

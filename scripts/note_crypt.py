@@ -4,7 +4,7 @@
 用途
     有些话只想给自己（或愿意动手解密的人）看，不想在公开仓库里明晃晃写着。
     本脚本把一段文字变成 `v1:<base64>`，解密需要同一个 key。
-    典型用法：`persona_tag._FRAGMENTS` 里那几条碎碎念。
+    典型用法：个人本地备忘；处理结果应放在被 `.gitignore` 排除的文件里。
 
 ⚠ 这是混淆，不是加密
     · 密钥来自 config.focus_qq（或 --key），不写在仓库里；
@@ -33,7 +33,8 @@ import json
 import os
 import sys
 
-DEFAULT_CFG = r"E:\EggBloom水星\EggBloom Desktop-new\resources\app\bot_config.json"
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DEFAULT_CFG = os.environ.get("EGGBLOOM_CONFIG") or os.path.join(_ROOT, "bot_config.json")
 PREFIX = "v1:"
 
 

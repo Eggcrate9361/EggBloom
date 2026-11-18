@@ -24,7 +24,7 @@
 用法
 ====
     python scripts/prepublish.py                     # 树 + 历史
-    python scripts/prepublish.py --dist E:\\EggBloom水星\\dist
+    python scripts/prepublish.py --dist "<dist-dir>"
     python scripts/prepublish.py --github --tag v1.6.0
     python scripts/prepublish.py --all --strict      # 发布前该跑的就是这条
 

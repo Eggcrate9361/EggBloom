@@ -105,7 +105,7 @@ class TestPathLike(_Reg):
     """路径形态是硬信号，不依赖措辞表补全。"""
 
     def test_windows_path(self):
-        self.assertTrue(bot_hook._mentions_local_path(r"看下 E:\EggBloom\dist\a.zip"))
+        self.assertTrue(bot_hook._mentions_local_path(r"看下 E:\Example\dist\a.zip"))
 
     def test_unix_path(self):
         self.assertTrue(bot_hook._mentions_local_path("看下 /home/user/report.pdf"))
@@ -115,7 +115,7 @@ class TestPathLike(_Reg):
 
     def test_path_alone_opens_desktop(self):
         """没有「发」「给」这类动词，只给路径，也要能读到文件。"""
-        self.assertTrue(self._has_desktop(r"E:\EggBloom\dist\EggBloom-Full.zip"))
+        self.assertTrue(self._has_desktop(r"E:\Example\dist\EggBloom-Full.zip"))
 
     def test_not_path(self):
         # 「1.5.8」这种版本号不是扩展名；「比如」也不是路径

@@ -229,6 +229,7 @@ def run_ensure(case, popen_calls):
             "_EMBED_DEFAULT_MODEL": Path(""), "_EMBED_BUILTIN_MODEL": Path("unused.gguf"),
             "_embed_config": lambda: {"embed_exe": str(exe),
                                       "embed_model_path": str(model_arg)},
+            "_embed_warn_once": lambda msg: logs.append("[embed] " + str(msg)),
             "print": lambda *a: logs.append(" ".join(str(x) for x in a)),
         }
         mod = ast.Module(body=[n for n in TREE.body

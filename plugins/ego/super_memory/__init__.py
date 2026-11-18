@@ -43,7 +43,7 @@ PLUGIN_META = {
         "embed_url": {"type": "str", "default": "http://127.0.0.1:8083/v1/embeddings"},
         "embed_model": {"type": "str", "default": "bge-small-zh"},
         # 内置默认：模型与 LiGGUF DLL 随插件打包在 models/（体量小，无需外部依赖）
-        "embed_exe": {"type": "str", "default": "D:\\llama-b10068\\llama-server.exe"},
+        "embed_exe": {"type": "str", "default": os.environ.get("EGGBLOOM_LLAMA_SERVER", "")},
         "embed_model_path": {"type": "str", "default": os.path.join("models", "bge-small-zh-v1.5-f16.gguf")},
         "embed_dll": {"type": "str", "default": os.path.join("models", "ligguf_embed.dll")},
         "embed_min_sim": {"type": "float", "default": 0.35},
@@ -337,12 +337,12 @@ def _is_meaningful_fact(content: str) -> bool:
 
 
 # ── 身份事实质量闸（2026-10-31，1.5.11「记忆清洗」）────────────────────
-# 真机遗留：群里随口一句「我是阿蛋」「我是小狗」被抽成 `身份`，经
+# 真机遗留：群里随口一句「我是示例昵称」「我是小狗」被抽成 `身份`，经
 # `_update_persona_kernel` 进【长期人格】，每轮注入给所有人。用户原话
-# 「[身份] 事实质量差（阿蛋/小狗被抽成身份）」。
+# 「[身份] 事实质量差（示例昵称/小狗被抽成身份）」。
 #
 # 这里只做**形态判断**（零成本、不调 LLM）：身份是有词尾规律的
-# （学生 / 程序员 / 老师 / 上海人），玩笑是随口的裸名词（阿蛋 / 小狗 / 饿）。
+# （学生 / 程序员 / 老师 / 上海人），玩笑是随口的裸名词（示例昵称 / 小狗 / 饿）。
 
 #: 像「身份」的词尾
 _IDENTITY_SUFFIXES = (
@@ -407,7 +407,7 @@ def _fact_is_usable(category: str, content: str) -> bool:
     """「这条事实值不值得注入」的形态闸 —— 读写两侧共用。
 
     为什么要有读侧：2026-10-31 之前的库里有 19 条 facts，能用的不到 3 条
-    （`身份=老大` / `身份=阿蛋` / `偏好=概率：多少`）。写入侧的闸只能拦新的，
+    （`身份=老大` / `身份=示例昵称` / `偏好=概率：多少`）。写入侧的闸只能拦新的，
     存量垃圾得在读的时候也挡一道，否则老库永远脏。
     """
     v = str(content or "").strip()
@@ -437,7 +437,7 @@ def _fact_is_usable(category: str, content: str) -> bool:
             return False
         if v.endswith(_IDENTITY_TAILS):
             return False
-        # 2~3 字又没有身份词尾：老大 / 小狗 / 阿蛋 / 张雪峰（真机垃圾的主要形态）
+        # 2~3 字又没有身份词尾：老大 / 小狗 / 示例昵称 / 张雪峰（真机垃圾的主要形态）
         if len(v) <= 3 and not v.endswith(_IDENTITY_SUFFIXES):
             return False
         return True
@@ -771,7 +771,7 @@ class SuperMemory:
                     content = extractor(m)
                     if not content or len(content) >= 50:
                         continue
-                    # 身份类走形态闸：裸名词（阿蛋/小狗）直接丢，不留给
+                    # 身份类走形态闸：裸名词（示例昵称/小狗）直接丢，不留给
                     # persona_kernel 每轮注入。
                     conf = float(base_conf or 0.7)
                     if category == "身份":

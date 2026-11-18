@@ -393,7 +393,7 @@ python tools/commit_lint.py --publish             # 公开：整条历史，必�
 删除前做了全量归档（**这是唯一的副本，仓库里已经恢复不出来了**）：
 
 ```
-D:\_archive\EggBloom-allrefs-20261114.bundle   12 MB，含全部分支/标签/远端跟踪 ref
+<backup-dir>/EggBloom-allrefs-20261114.bundle   12 MB，含全部分支/标签/远端跟踪 ref
 git bundle verify <文件>                        # 校验
 git clone <文件> /tmp/legacy && cd /tmp/legacy  # 要复查旧链就从这个 clone 里看
 ```

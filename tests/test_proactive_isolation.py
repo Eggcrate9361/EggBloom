@@ -40,7 +40,7 @@ def check(name, cond, extra=""):
 
 from plugins import proactive_talk as P  # noqa: E402
 
-OWNER, TEXAS = "1000000001", "1000000002"
+OWNER, FRIEND = "1000000001", "1000000002"
 
 
 class FakeCtx:
@@ -64,7 +64,7 @@ class FakeCtx:
 
 cfg = {
     "target_qq": OWNER,
-    "target_qqs": [OWNER, TEXAS],
+    "target_qqs": [OWNER, FRIEND],
     "bot_qq": "999",
     "recent_window": 6,
     "max_bubbles": 3,
@@ -83,20 +83,20 @@ P._ctx = ctx
 
 # ── 1. 私聊按人分桶 ─────────────────────────────────────────────
 P.on_message(ctx, {"type": "private", "sender": OWNER, "text": "我今天在改代码"})
-P.on_message(ctx, {"type": "private", "sender": TEXAS, "text": "我在打游戏"})
+P.on_message(ctx, {"type": "private", "sender": FRIEND, "text": "我在打游戏"})
 recent = ctx.get_state("recent_msgs", {}) or {}
 check("★ 老大说的一句记在老大名下", any("改代码" in m["text"] for m in recent.get(OWNER, [])),
       recent)
 check("★ Sample 说的一句记在 Sample 名下",
-      any("打游戏" in m["text"] for m in recent.get(TEXAS, [])), recent)
+      any("打游戏" in m["text"] for m in recent.get(FRIEND, [])), recent)
 check("★ Sample 的桶里没有老大的话",
-      not any("改代码" in m["text"] for m in recent.get(TEXAS, [])), recent.get(TEXAS))
+      not any("改代码" in m["text"] for m in recent.get(FRIEND, [])), recent.get(FRIEND))
 check("老大的桶里没有 Sample 的话",
       not any("打游戏" in m["text"] for m in recent.get(OWNER, [])), recent.get(OWNER))
 
 # ── 2. 群聊：只记目标本人 ───────────────────────────────────────
 P.on_message(ctx, {"type": "group", "sender": OWNER, "text": "群里这句是老大的"})
-P.on_message(ctx, {"type": "group", "sender": TEXAS, "text": "群里这句是Sample的"})
+P.on_message(ctx, {"type": "group", "sender": FRIEND, "text": "群里这句是Sample的"})
 recent = ctx.get_state("recent_msgs", {}) or {}
 check("群聊里目标本人的话记下了",
       any("老大的" in m["text"] for m in recent.get(OWNER, [])), recent.get(OWNER))
@@ -105,13 +105,13 @@ check("★ 群聊里别人的话不进桶",
 
 # ── 3. 冷却按人 ────────────────────────────────────────────────
 ts = ctx.get_state("last_user_ts_by", {}) or {}
-check("★ 两个人各自的最后说话时间都在", OWNER in ts and TEXAS in ts, ts)
+check("★ 两个人各自的最后说话时间都在", OWNER in ts and FRIEND in ts, ts)
 st = ctx.get_state()
-check("_last_ts_for 取到本人", P._last_ts_for(st, TEXAS) == ts[TEXAS])
+check("_last_ts_for 取到本人", P._last_ts_for(st, FRIEND) == ts[FRIEND])
 check("没记录的人退回全局", P._last_ts_for({"last_user_ts": 123}, "404") == 123)
 
 # ── 4. 给 B 生成时不能出现 A 的话 ──────────────────────────────
-msgs = P._build_messages(dict(cfg), st, TEXAS)
+msgs = P._build_messages(dict(cfg), st, FRIEND)
 blob = "\n".join(str(m.get("content") or "") for m in msgs)
 check("★ 对 Sample 开口时不带老大的私聊", "改代码" not in blob, blob[-200:])
 check("Sample 自己的话在", "打游戏" in blob, blob[-200:])

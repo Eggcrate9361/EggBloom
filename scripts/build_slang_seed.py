@@ -9,9 +9,9 @@ scripts/build_slang_seed.py — 把 slang_seed.py 编译成运行时真源。
         校验 → 剔除 → 合并 → 原子写入 → 打印差异
 
 三个去向（--app 决定写哪）：
-    1. 不带 --app：写源码库根（D:\\git\\EggBloom\\slang_dict.json）
+    1. 不带 --app：写源码库根（<repo>/slang_dict.json）
        —— **仅用于开发自测**，这个文件不进 git
-    2. --app "<resources\\app>"：写运行副本（E:\\EggBloom水星\\...\\resources\\app）
+    2. --app "<resources\\app>"：写运行副本（<dist-dir>/resources/app）
        —— 让正在跑的 Desktop v1.5.5 立刻吃到新词典
 
 ★ 本脚本**默认是加法**，不会删掉用户自己学来的词：
@@ -22,7 +22,7 @@ scripts/build_slang_seed.py — 把 slang_seed.py 编译成运行时真源。
 用法：
     python scripts/build_slang_seed.py --dry-run
     python scripts/build_slang_seed.py
-    python scripts/build_slang_seed.py --app "E:\\EggBloom水星\\EggBloom Desktop-new\\resources\\app"
+    python scripts/build_slang_seed.py --app "<dist-dir>\\resources\\app"
     python scripts/build_slang_seed.py --app "..." --dry-run      # 先看差异
     python scripts/build_slang_seed.py --replace                  # 危险：丢弃 seed 之外的词
 '''

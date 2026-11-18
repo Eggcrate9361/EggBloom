@@ -8,7 +8,7 @@
 import io
 import os
 
-ROOT = r"D:\git\EggBloom"
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 KIT = io.open(os.path.join(ROOT, "plugins", "_ui", "kit.css"), encoding="utf-8").read()
 MARK = "/*PV-KIT*/"
 BLOCK = '<style id="pv-kit">' + MARK + "\n" + KIT + "</style>"

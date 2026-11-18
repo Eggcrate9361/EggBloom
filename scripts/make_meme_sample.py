@@ -29,7 +29,7 @@ import os
 import re
 import shutil
 
-DEFAULT_SRC = r"E:\EggBloom水星\EggBloom Desktop-new\resources\app\memes"
+DEFAULT_SRC = os.environ.get("EGGBLOOM_MEME_SRC", "").strip()
 SAMPLE_DIR = "sample"
 BAD_NUM = re.compile(r"\d{6,}")          # 6 位以上数字 = 疑似 QQ 号，一律不要
 IMG_EXT = (".gif", ".png", ".jpg", ".jpeg", ".webp")
@@ -68,11 +68,14 @@ def pick(src: str, count: int, max_mb: float):
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--src", default=DEFAULT_SRC, help="本机完整表情包库（含 memes/tags.json）")
+    ap.add_argument("--src", default=DEFAULT_SRC,
+                    help="完整表情包库（含 memes/tags.json）；也可设 EGGBLOOM_MEME_SRC")
     ap.add_argument("--dst", required=True, help="Standard 暂存树的 resources/app/memes/memes")
     ap.add_argument("--count", type=int, default=20)
     ap.add_argument("--max-mb", type=float, default=3.0)
     args = ap.parse_args()
+    if not args.src:
+        raise SystemExit("缺少完整表情包库：用 --src 指定，或设 EGGBLOOM_MEME_SRC")
 
     picked, total, pool = pick(args.src, args.count, args.max_mb)
     sample_dir = os.path.join(args.dst, SAMPLE_DIR)

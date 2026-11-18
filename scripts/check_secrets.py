@@ -72,6 +72,7 @@ PATTERNS = [
     ("Bearer token", re.compile(r"Bearer\s+[A-Za-z0-9\-_\.]{20,}")),
     ("私钥块", re.compile(r"BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY")),
     ("密码/密钥赋值", re.compile(r"(?i)(password|passwd|secret_key|access_key)\s*[:=]\s*['\"][^'\"]{6,}")),
+    ("本地可逆混淆个人文本", re.compile(r"\bv1:[A-Za-z0-9_-]{80,}={0,2}")),
     ("本机用户目录", re.compile(r"(?i)[A-Za-z]:\\\\?Users\\\\?(?!Public|Default)[A-Za-z0-9_.\-]{2,}")),
     ("11 位数字（疑似手机号）", re.compile(r"(?<!\d)1[3-9]\d{9}(?!\d)")),
     # 原来还有一条「配置键 + 数字」，只在 config 类文件里查群号/QQ。
@@ -101,8 +102,6 @@ HOME_PLACEHOLDERS = {"user", "username", "yourname", "someone", "example", "xxx"
 
 #: 确认是夹具/示例的命中，(文件, 命中片段) → 理由。加之前先确认它真的不是真机。
 INFRA_ALLOW = {
-    ("tests/test_outgoing_audit.py", "/home/administrator/"):
-        "脱敏用例的夹具：测的就是路径识别本身，不指向任何真实机器",
     ("tests/test_release_surface.py", "ssh://ubuntu@192.0.2.10/home/ubuntu/x.git"):
         "包闸/历史闸的夹具：断言「带地址的包会被拦」，IP 用文档段 192.0.2.0/24",
     ("tests/test_release_surface.py", "ubuntu@192.0.2.10"):
@@ -293,7 +292,7 @@ SELFTEST = [
     ("示例 192.0.2.10 / 198.51.100.7 / 203.0.113.9", set()),
     ('"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/131.0.0.0 Safari/537.36"', set()),
     ("看下 /home/user/report.pdf", set()),
-    ("配置在 /home/administrator/.dsh/settings.json", {"POSIX 家目录"}),
+    ("配置在 /home/fixture-account/.dsh/settings.json", {"POSIX 家目录"}),
     ("拷到 /root/.ssh/authorized_keys", {"root 家目录"}),
     ("ssh://git@github.com/x/y.git", {"SSH 地址"}),
 ]

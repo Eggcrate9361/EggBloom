@@ -33,7 +33,7 @@ try:
     os.makedirs(os.path.join(sandbox, "data"))
     os.makedirs(os.path.join(sandbox, "memes", "vrchat"))
     with open(os.path.join(sandbox, "data", "people.json"), "w", encoding="utf-8") as f:
-        f.write('{"texas": {"name": "Sample"}}')
+        f.write('{"friend": {"name": "Sample"}}')
     with open(os.path.join(sandbox, ".env"), "w", encoding="utf-8") as f:
         f.write("API_KEY=sk-secret")
     with open(os.path.join(sandbox, "token_store.txt"), "w", encoding="utf-8") as f:

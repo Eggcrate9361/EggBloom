@@ -1554,7 +1554,7 @@ _SPEAK_WIN_SEC = 1800
 
 #: 入站内容指纹判重。
 #: 窗口 1 秒 —— 它挡的是"同一条事件被协议层推了两次"（毫秒级），
-#: 不是"同一句话被说了两次"。30 秒会误伤真人重复发言（实测「我是阿蛋」
+#: 不是"同一句话被说了两次"。30 秒会误伤真人重复发言（实测「我是示例昵称」
 #: 隔 3 秒说第二遍被丢），6 秒仍然覆盖 3 秒，同样是误伤。
 #: 真人重复说话由模型看上下文处理，不靠字符串比对。
 _INBOUND_DUPE = inbound.DupeGuard(window=1.0)
@@ -11747,8 +11747,8 @@ def _owner_identity_line(sender) -> str:
     except Exception:
         titles = []
     titles = titles[:3] or ["老大"]
-    # ★ 2026-11-02：主人有多个叫法（阿蛋/开发者/老大/爹），一并说明，
-    #   否则他说"我是阿蛋"时模型不认识这是同一个人。
+    # ★ 2026-11-02：主人有多个叫法（示例昵称/开发者/老大/爹），一并说明，
+    #   否则他说"我是示例昵称"时模型不认识这是同一个人。
     try:
         import people as _id_pp
         _extra = [a for a in (_id_pp.get(qq).get("aliases") or [])
@@ -11766,7 +11766,7 @@ def _owner_identity_line(sender) -> str:
 def _mention_identity_hint(text, sender="") -> str:
     """消息里点到了谁 → 给一句「这人是谁」（2026-11-02）。
 
-    用户要的"bot 知道谁是谁"：他说「阿蛋呢」，模型得知道阿蛋就是老大，
+    用户要的"bot 知道谁是谁"：他说「示例昵称呢」，模型得知道示例昵称就是老大，
     不是另一个陌生人。只在**唯一命中**时给（`people.resolve` 不猜）。
     """
     t = str(text or "")
@@ -15178,7 +15178,7 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
     _add("relation_prior", _owner_friend_prior(_pl_sender, is_group))
     # 谁是谁（2026-11-02）：他刚才点名的人，模型要知道对应哪个熟人。
     _add("mention_id", _mention_identity_hint(user_msg, _pl_sender))
-    # 谁是谁（2026-11-02）：阿蛋/开发者/老大/爹 是同一个人；Sample 是朋友。
+    # 谁是谁（2026-11-02）：示例昵称/开发者/老大/爹 是同一个人；Sample 是朋友。
     # 只在私聊给（群里另有【群内人物】，且不该把别处的人名带进群）。
     if not is_group:
         try:

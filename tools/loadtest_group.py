@@ -146,7 +146,9 @@ def main():
     ap.add_argument("--rate", type=float, default=1.0, help="每人每秒条数")
     ap.add_argument("--duration", type=int, default=180)
     ap.add_argument("--check-only", action="store_true")
-    ap.add_argument("--out", default=r"D:\workbuddy_tmp\loadtest_result.json")
+    ap.add_argument("--out", default=os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "data", "loadtest_result.json"))
     args = ap.parse_args()
 
     ok, why = safety_check(args.group)

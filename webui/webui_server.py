@@ -602,7 +602,8 @@ _EMBED_DEFAULT_EXE = Path(_embed_exe_cfg).resolve() if _embed_exe_cfg else None
 _EMBED_DEFAULT_MODEL = Path(_embed_model_cfg).resolve() if _embed_model_cfg else None
 # 内置默认：模型随 EGO super_memory 打包分发（体量小）；llama-server 为 HTTP 兜底
 _EMBED_BUILTIN_MODEL = PROJECT / "plugins" / "ego" / "super_memory" / "models" / "bge-small-zh-v1.5-f16.gguf"
-_EMBED_BUILTIN_EXE = Path(r"D:\llama-b10068\llama-server.exe")
+_embed_exe_env = os.environ.get("EGGBLOOM_LLAMA_SERVER", "").strip()
+_EMBED_BUILTIN_EXE = Path(_embed_exe_env).resolve() if _embed_exe_env else None
 _EMBED_PORT = 8083
 _embed_proc = None
 

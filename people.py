@@ -113,7 +113,7 @@ def get(uid) -> Dict[str, Any]:
         "names": names,
         "alias": str(ext.get("alias") or ""),
         #: 别名/称号列表（2026-11-02）：一个人可能有多个叫法，
-        #  阿蛋=开发者=老大=爹 都是同一个人，记忆块要能对上一个。
+        #  示例昵称=开发者=老大=爹 都是同一个人，记忆块要能对上一个。
         "aliases": [str(a) for a in (ext.get("aliases") or []) if str(a).strip()],
         "accounts": [str(x) for x in (ext.get("accounts") or [])],
         "facts": list(ext.get("facts") or []),
@@ -190,7 +190,7 @@ def add_alias(uid, alias: str) -> bool:
 
 
 def label(uid, *, with_uid: bool = True, max_alias: int = 2) -> str:
-    """记忆块里用的短标签：`老大（阿蛋/开发者）（1000000005）`。
+    """记忆块里用的短标签：`老大（示例昵称/开发者）（1000000005）`。
 
     只取**名字层面**（主别名 > 全局名 > 别名列表），不塞 facts ——
     记忆行要短，身份/关系由【人物档案】那段去讲。
@@ -216,7 +216,7 @@ def roster_block(limit: int = 8, *, include_uids=(), skip=()) -> str:
     """一段「你认识的人」小抄（2026-11-02）。
 
     用户要的"隔离"不只是分开存 —— bot 还得知道**谁是谁**：
-    阿蛋/开发者/老大/爹 是同一个人（主人），Sample 是朋友。
+    示例昵称/开发者/老大/爹 是同一个人（主人），Sample 是朋友。
     这里只列**有名字信息**的人，每人一行：名字 + 别名 + 身份/关系事实。
     """
     seen, rows = set(), []

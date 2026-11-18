@@ -84,9 +84,9 @@ python scripts/check_secrets.py --message-file .git/COMMIT_EDITMSG   # 单验一
 - [x] **发行包闸（2026-11-15）**：`pack_all.py` 替换 `.zip.new` 之前调
       `check_package.scan_zip()`，不过闸就不替换。五条判据（内容 / 结构 / 溯源 /
       来源 / 文件名）见 `docs/发布打包.md` §5.1。三档包复验：
-      `python scripts/check_package.py --dist "E:\EggBloom水星\dist"` → 0 不合格。
+      `python scripts/check_package.py --dist "<dist-dir>"` → 0 不合格。
 - [x] **四个面一条命令（2026-11-15）**：
-      `python scripts/prepublish.py --all --dist "E:\EggBloom水星\dist" --strict`
+      `python scripts/prepublish.py --all --dist "<dist-dir>" --strict`
       跑工作树 / 历史 / 发行包 / Release 元数据（正文、标题、附件名、仓库描述）。
       **退出码 2 = 有面没验成，不算通过** —— 「没扫」和「干净」必须能分开，
       这是 11-13 那次假绿的根因。
@@ -185,7 +185,7 @@ git push --force-with-lease origin main   # 只推 main
 
 > **2026-11-14 补：上表里的旧链已经不在本仓库了。** `legacy/main`、三条 `backup/*`、
 > 四个指向旧提交的 tag、以及 `server/*` 的远端跟踪 ref 全部删除，删除前的全量归档是
-> `D:\_archive\EggBloom-allrefs-20261114.bundle`（12 MB，`git bundle verify` 可校验）。
+> `<backup-dir>/EggBloom-allrefs-20261114.bundle`（12 MB，`git bundle verify` 可校验）。
 > 上表这些数字（531 提交、387 处、226 提交）是当时的实测值，留着当记录；要复现得先
 > 从那个 bundle 展开成临时 clone。
 >
@@ -208,17 +208,17 @@ git push --force-with-lease origin main   # 只推 main
 > | `v1.5.9` / `v1.5.7` / `v1.5.6` / `v1.5.5` | **已发布** | 3 / 3 / 2 / 3 | **没有** |
 >
 > 备份下来的是 `v1.5.8` 与 `v1.5.10` 的 `EggBloom-Lite.zip` / `EggBloom-Standard.zip`，
-> 落在 `D:\_archive\releases\<版本>\`，四个文件的 SHA256 与各自 Release 里的
+> 落在 `<backup-dir>/releases/<版本>/`，四个文件的 SHA256 与各自 Release 里的
 > `SHA256SUMS.txt` 逐条比对通过（215.42 / 215.78 / 5.58 / 6.18 MB）。`v1.5.11` 的三档包
-> 在 `E:\EggBloom水星\dist` 有 11-01 同日副本，没另存。
+> 在 `<dist-dir>` 有 11-01 同日副本，没另存。
 >
 > **`v1.5.5`–`v1.5.9` 那四条已发布 Release 的附件没有先备份就被一起删了。**
 > 原因是删之前没把「要处理的 3 条草稿」和「接口这次返回的全部 7 条」核对清楚，
 > 脚本按「列出来的全删」执行。仓库是私有的，外部没有人下载得到，损失只在本地：
-> 能对上的历史构建还有 `D:\EggBloom备份\EggBloom水星\dist`（10-18）、
-> `D:\workspace\_tmp\sumscheck`（10-23）、`D:\EggBloom水星\dist`（10-29），但它们
+> 能对上的历史构建还有 `<backup-dir>/dist-20261018`（10-18）、
+> `<local-temp>/sumscheck`（10-23）、`<dist-dir>`（10-29），但它们
 > 是各自那天的快照，不保证与已删的那几个 zip 逐字节相同。要精确复现有两条路：
-> 用对应 tag 的源码重新打包（源码在 `D:\_archive\EggBloom-allrefs-20261114.bundle`
+> 用对应 tag 的源码重新打包（源码在 `<backup-dir>/EggBloom-allrefs-20261114.bundle`
 > 里），或走 GitHub Support 申请恢复已删附件。
 
 **为什么重建了三次。** 前两个根都废弃了，原因不同，记在这里免得重犯：
@@ -365,8 +365,8 @@ git log --all -S "<地址片段>" --oneline | wc -l
 
 # 2026-11-15 起：上面两步有闸了，一条命令跑完四个面（推荐）
 python scripts/check_history.py                 # 历史（默认跳过归档 ref）
-python scripts/check_package.py --dist "E:\EggBloom水星\dist"   # 发行包
-python scripts/prepublish.py --all --dist "E:\EggBloom水星\dist" --strict
+python scripts/check_package.py --dist "<dist-dir>"   # 发行包
+python scripts/prepublish.py --all --dist "<dist-dir>" --strict
 #   退出码 0 全绿 / 1 有不干净的面 / 2 有面没验成（不算通过）
 
 # 版本

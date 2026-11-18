@@ -18,8 +18,8 @@ import sys
 import time
 from datetime import datetime
 
-HERE = os.path.dirname(os.path.abspath(__file__))      # D:\git\EggBloom\tests
-ROOT = os.path.dirname(HERE)                            # D:\git\EggBloom
+HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(HERE)
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 

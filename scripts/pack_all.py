@@ -31,6 +31,9 @@ import sys
 import time
 import zipfile
 
+DEFAULT_REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DEFAULT_BUILD_ROOT = (os.environ.get("EGGBLOOM_BUILD_ROOT")
+                      or os.path.join(os.path.dirname(DEFAULT_REPO), "EggBloom-build"))
 VARIANTS = [("lite", "EggBloom-Lite"), ("standard", "EggBloom-Standard"), ("full", "EggBloom-Full")]
 # Standard 里 memes 只留代码（图片库是 Full 的卖点，Standard 用户就是为了不带它）。
 # 2026-10-18 改为**压缩期排除**：暂存树不再删文件 —— 递归删几百个文件会被本机安全
@@ -160,12 +163,17 @@ def main():
         except (AttributeError, OSError):
             pass
     ap = argparse.ArgumentParser()
-    ap.add_argument("--repo", default=r"D:\git\EggBloom", help="源码库根")
-    ap.add_argument("--base", default=r"E:\EggBloom水星", help="发行工作区（含 build/ 与 dist/）")
-    ap.add_argument("--7z", dest="sevenz", default=r"C:\Program Files\7-Zip\7z.exe")
+    ap.add_argument("--repo", default=DEFAULT_REPO, help="源码库根")
+    ap.add_argument("--base", default=DEFAULT_BUILD_ROOT,
+                    help="发行工作区（含 build/ 与 dist/）；也可设 EGGBLOOM_BUILD_ROOT")
+    ap.add_argument("--7z", dest="sevenz",
+                    default=os.environ.get("EGGBLOOM_7Z") or shutil.which("7z")
+                    or r"C:\Program Files\7-Zip\7z.exe")
     ap.add_argument("--only", default="", help="只打包某个变体：lite / standard / full")
     ap.add_argument("--skip-sync", action="store_true", help="跳过 Standard/Full 的源码同步")
-    ap.add_argument("--meme-src", default=r"E://EggBloom水星//EggBloom Desktop-new//resources//app//memes",
+    ap.add_argument("--meme-src",
+                    default=os.environ.get("EGGBLOOM_MEME_SRC")
+                    or os.path.join(DEFAULT_REPO, "memes", "memes"),
                     help="本机完整表情包库（Standard 取样用）")
     ap.add_argument("--meme-count", type=int, default=20, help="Standard 附带表情包张数")
     ap.add_argument("--allow-stale", action="store_true",

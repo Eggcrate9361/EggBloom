@@ -16,7 +16,8 @@ import time
 LOG = sys.argv[1] if len(sys.argv) > 1 else os.path.join(
     os.path.expanduser("~"), "AppData", "Local", "EggBloom_v3", "qq_bot.log")
 DURATION = int(sys.argv[2]) if len(sys.argv) > 2 else 2400
-OUT = sys.argv[3] if len(sys.argv) > 3 else r"D:\workbuddy_tmp\soak_report.md"
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+OUT = sys.argv[3] if len(sys.argv) > 3 else os.path.join(_ROOT, "data", "soak_report.md")
 STATE = OUT + ".json"
 
 # 拿来做归类的模式（顺序即优先级）

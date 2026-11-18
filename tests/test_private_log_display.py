@@ -83,9 +83,9 @@ def test_replacer_ignores_non_qq_numbers():
 def test_replacer_does_not_corrupt_trace():
     """trace 是 12 位 hex；其中偶然出现的 5–12 位数字不能被当 QQ。"""
     orig = bc.resolve_qq_nick
-    bc.resolve_qq_nick = lambda qq: "污染昵称" if qq == "5578485" else ""
+    bc.resolve_qq_nick = lambda qq: "污染昵称" if qq == "1234567" else ""
     try:
-        line = "私聊已发送 trace=4d4d5578485f"
+        line = "私聊已发送 trace=aaa1234567bb"
         out = bc._replace_qq_with_nick(line)
         check("★ trace 原样保留", out == line, out)
     finally:

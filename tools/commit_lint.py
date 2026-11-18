@@ -4,7 +4,7 @@
 
 为什么有这个文件
 ================
-2026-11-13 的全量体检（`D:\\git\\EggBloom-plan\\提交历史体检-20261113.md`）发现：
+2026-11-13 的全量体检（内部设计资料《提交历史体检-20261113》）发现：
 `tests/test_commit_format.py` 的 `[3]` 报「2026-11-05 起的 105 个提交正文没有转述句式」，
 而实际至少有 6 个提交正文写着「用户说……」。原因不是运气不好，是判据本身错了：
 
@@ -106,7 +106,20 @@ _RE_HEX = re.compile(r"0[xX][0-9A-Fa-f]+")
 
 # CM-04 昵称/称呼：不是号码，但转公开后同样是身份残留。
 # 只在 --strict（发布闸）里阻断，平时 warn —— 这些词在技术叙述里可能合法。
-_RE_NICK = re.compile(r"Texas|老大|(?i:aaa无理由退货)|\(\s*/?\s*ω\s*\\\s*\)|/ω＼")
+_RE_NICK = re.compile(r"老大")
+
+
+def _nick_pattern():
+    """内置规则只放通用称呼；真实昵称由本地环境变量提供，不进仓库。"""
+    extra = [x.strip() for x in
+             str(os.environ.get("EGGBLOOM_COMMIT_NICK_BLOCKLIST") or "").split(",")
+             if x.strip()]
+    if not extra:
+        return _RE_NICK
+    return re.compile(
+        "|".join([_RE_NICK.pattern] + [re.escape(x) for x in extra]),
+        re.I,
+    )
 # `小a` 是内置人格预设名，属于产品功能名。描述人格预设时不报，
 # 否则「去掉一个预设，只剩 小a / 娱乐向」这种正常改动会被判成身份残留。
 _RE_NICK_PERSONA = re.compile(r"(?i)小a(?![a-z])")
@@ -260,7 +273,8 @@ def lint_message(msg: str, policy: dict | None = None, blocked: dict | None = No
         for num, why in cm03_numbers(line, blocked):
             add("CM-03", lineno, line, why + f"（{mask(num)}）")
 
-        if _RE_NICK.search(line):
+        _nick = _nick_pattern()
+        if _nick.search(line):
             add("CM-04", lineno, line, "昵称/称呼残留")
         elif _RE_NICK_PERSONA.search(line) and not _RE_PERSONA_CTX.search(line):
             add("CM-04", lineno, line, "昵称残留（人格名以外的语境）")
@@ -287,7 +301,7 @@ def lint_message(msg: str, policy: dict | None = None, blocked: dict | None = No
         add("CM-03", 1, subject, why + f"（{mask(num)}）")
     if _RE_SECRET.search(subject):
         add("CM-06", 1, subject, "疑似密钥/凭据写在标题")
-    if _RE_NICK.search(subject):
+    if _nick_pattern().search(subject):
         add("CM-04", 1, subject, "昵称/称呼写在标题")
     if _RE_WORKPLACE.search(subject):
         add("CM-09", 1, subject, "职场拟人化措辞写在标题")
