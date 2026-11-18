@@ -20,7 +20,9 @@
 运行：python tests/test_poke_private_gate.py
 """
 import os
+import shutil
 import sys
+import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -34,6 +36,9 @@ from _sandbox import sandbox_neurobase  # noqa: E402
 sandbox_neurobase()
 
 import bot_core  # noqa: E402
+
+POLICY_TMP = tempfile.mkdtemp(prefix="poke-policy-gate-")
+os.environ["EGGBLOOM_POKE_STATE"] = os.path.join(POLICY_TMP, "state.json")
 
 OWNER = "1234567890"
 FRIEND2 = "1234567891"
@@ -76,6 +81,7 @@ class _Ctx:
         o["_config"] = dict(bot_core._config)
         o["chat_history"] = dict(bot_core.chat_history)
         o["PRIVATE_SESSION"] = dict(bot_core.PRIVATE_SESSION)
+        o["decide"] = bot_core.poke_policy.decide
 
         bot_core.TARGET_QQS = [OWNER, FRIEND2]
         bot_core.log = lambda *a, **k: None
@@ -90,6 +96,14 @@ class _Ctx:
         bot_core.PRIVATE_SESSION = {}
         bot_core._config["poke_timeout"] = 600
         bot_core._config["friend_restrictions"] = {}
+        try:
+            os.remove(os.environ["EGGBLOOM_POKE_STATE"])
+        except OSError:
+            pass
+        bot_core.poke_policy.decide = lambda facts: {
+            "action": "model", "emotion": "", "confidence": 0.2,
+            "reason": "test_model", "scores": {},
+        }
         return self
 
     def __exit__(self, *exc):
@@ -109,6 +123,7 @@ class _Ctx:
         bot_core._config.update(o["_config"])
         bot_core.chat_history = o["chat_history"]
         bot_core.PRIVATE_SESSION = o["PRIVATE_SESSION"]
+        bot_core.poke_policy.decide = o["decide"]
         return False
 
     def _fake_ai(self, *a, **kw):
@@ -241,4 +256,8 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        code = main()
+    finally:
+        shutil.rmtree(POLICY_TMP, ignore_errors=True)
+    sys.exit(code)

@@ -27,6 +27,8 @@ import people_alias
 import reply_budget
 import reply_drop
 import speech_pace
+import poke_policy
+from harness import poke_state as poke_store
 # 消息壳（[引用:…] / [当前]）的唯一拆解口：存档 / 日志 / 检索都用同一判据
 import message_shell
 
@@ -1302,6 +1304,8 @@ _PRIVATE_PACE = speech_pace.SpeechPace()
 _REQUEUE_FLAG = "_egg_merged"
 #: 重新入队的私聊戳事件。只有这种合成消息允许模型输出动作标记 `[POKE]`。
 _POKE_EVENT_FLAG = "_egg_poke_event"
+_POKE_EVENT_KEY = "_egg_poke_state_key"
+_POKE_ALLOW_ACTION_FLAG = "_egg_poke_allow_action"
 
 
 def _private_batch_delay(*, first_time, now=None, has_image=False,
@@ -12485,19 +12489,191 @@ def _send_poke_back(user_id, group_id=None):
         return False
 
 
-_POKE_ACTION_RE = re.compile(r"\[\s*(?:POKE|戳|戳一戳|反戳)\s*\]", re.I)
-_POKE_ACTION_HINT = (
-    "\n【可选动作】想戳回去才输出 [POKE]；也可以回话、只发表情或保持沉默。"
-    "不要默认反戳，[POKE] 只表示动作，不要附正文。"
-)
+_POKE_ACTION_HINT = poke_policy.MODEL_ACTION_HINT
 
 
 def parse_poke_intent(text):
     """从模型输出中提取戳一戳动作。返回 (去掉标记的文本, 是否要求戳回)。"""
-    raw = str(text or "")
-    wanted = bool(_POKE_ACTION_RE.search(raw))
-    clean = _POKE_ACTION_RE.sub("", raw).strip() if wanted else raw
-    return clean, wanted
+    return poke_policy.parse_model_action(text)
+
+
+_POKE_SERIOUS_WORDS = (
+    "考试", "面试", "工作", "辞职", "生病", "医院", "难过", "崩溃",
+    "严肃", "别闹", "睡觉", "作业", "吵架", "道歉", "分手",
+)
+
+
+def _poke_policy_key(scene, uid, group_id="") -> str:
+    return poke_store.scope_key(scene, uid, group_id)
+
+
+def _poke_relationship_level(uid, group_id="", state=None) -> str:
+    uid = str(uid or "").strip()
+    if uid and uid in {str(x) for x in _get_admin_qqs()}:
+        return "very_close"
+
+    facts = []
+    affection = 0.0
+    try:
+        import people as _pp
+        p = _pp.get(uid) or {}
+        for item in (p.get("facts") or []):
+            if isinstance(item, dict):
+                facts.append(str(item.get("k") or "") + str(item.get("v") or ""))
+        facts.append(str(p.get("alias") or ""))
+    except Exception:
+        pass
+    try:
+        from plugins.ego.personality_engine import get_state as _personality_state
+        scope = str(group_id or uid)
+        affection = float(getattr(_personality_state(scope), "affection", 0.0) or 0.0)
+    except Exception:
+        affection = 0.0
+    blob = " ".join(facts)
+    if "陌生" in blob or "路人" in blob:
+        return "ordinary"
+    if any(w in blob for w in ("朋友", "同学", "熟人", "好友")) or affection >= 0.68:
+        return "close"
+    return "ordinary"
+
+
+def _poke_policy_persona(uid, group_id="", state=None) -> str:
+    affection = 0.0
+    emotion = ""
+    mode = ""
+    try:
+        from plugins.ego.personality_engine import get_state as _personality_state
+        scope = str(group_id or uid)
+        ps = _personality_state(scope)
+        affection = float(getattr(ps, "affection", 0.0) or 0.0)
+        emotion = str(getattr(ps, "emotion", "") or "")
+        mode = str(getattr(ps, "mode", "") or "")
+    except Exception:
+        pass
+    if emotion in ("sad", "angry") or mode == "serious":
+        return "tired"
+    if affection >= 0.78:
+        return "clingy"
+    return "playful"
+
+
+def _poke_policy_mood(group_id="") -> str:
+    try:
+        from plugins.ego.mood_engine import get_form_params as _mood_form
+        valence = float((_mood_form(str(group_id or "default")) or {}).get("valence") or 0.0)
+        if valence >= 0.25:
+            return "positive"
+        if valence <= -0.25:
+            return "negative"
+    except Exception:
+        pass
+    return "neutral"
+
+
+def _poke_recent_text(scene, uid, group_id="", limit=6):
+    out = []
+    try:
+        if scene == "group":
+            for row in (GROUP_TIMELINE.get(str(group_id)) or [])[-limit:]:
+                if row and len(row) > 3:
+                    out.append(str(row[3] or ""))
+        else:
+            for row in (chat_history.get(str(uid)) or [])[-limit:]:
+                if isinstance(row, dict) and row.get("role") == "user":
+                    out.append(str(row.get("content") or ""))
+    except Exception:
+        pass
+    return "\n".join(out)
+
+
+def _poke_policy_facts(scene, uid, group_id, state):
+    relation = _poke_relationship_level(uid, group_id, state)
+    persona = _poke_policy_persona(uid, group_id, state)
+    mood = _poke_policy_mood(group_id if scene == "group" else "")
+    recent = _poke_recent_text(scene, uid, group_id)
+    serious = any(w in recent for w in _POKE_SERIOUS_WORDS)
+    try:
+        from plugins.ego.personality_engine import get_state as _personality_state
+        scope = str(group_id or uid)
+        serious = serious or str(getattr(_personality_state(scope), "mode", "") or "") == "serious"
+    except Exception:
+        pass
+    now = time.time()
+    if scene == "group":
+        active = now - float(GROUP_LAST_ANY_MSG.get(str(group_id)) or 0) < 180.0
+    else:
+        sess = PRIVATE_SESSION.get(str(uid)) or {}
+        active = now - float(sess.get("last_msg_time") or 0) < 180.0
+    hour = datetime.datetime.now().hour
+    return {
+        "scene": scene,
+        "relationship": relation,
+        "mood": mood,
+        "persona": persona,
+        "active_conversation": bool(active),
+        "serious_topic": bool(serious),
+        "night": hour < 7 or hour >= 23,
+        "poke_count": int((state or {}).get("poke_count") or 1),
+        "seconds_since_previous_poke": (state or {}).get("seconds_since_previous_poke"),
+        "last_action": (state or {}).get("last_action") or "",
+        "seconds_since_last_action": (state or {}).get("seconds_since_last_action"),
+        "feedback": dict((state or {}).get("feedback") or {}),
+    }
+
+
+def _poke_policy_meme(uid, group_id, emotion) -> bool:
+    emo = str(emotion or "呆滞")
+    try:
+        path = match_meme(emo)
+        if not path:
+            return False
+        if group_id:
+            return bool(_with_outbound_origin(
+                "policy action=表情", send_group_image, group_id, path))
+        return bool(_with_outbound_origin(
+            "policy action=表情", send_image, path, str(uid)))
+    except Exception as e:
+        log(f"[事件] 戳策略表情失败: {e}")
+        return False
+
+
+def _poke_record_outcome(key, action, decision=None, now=None):
+    if not key:
+        return
+    try:
+        decision = decision or {}
+        poke_store.record_action(
+            str(key), str(action or "skip"), now=now,
+            emotion=str(decision.get("emotion") or ""),
+            reason=str(decision.get("reason") or ""),
+        )
+    except Exception as e:
+        log(f"[事件] 戳策略状态落盘失败: {e}")
+
+
+def _poke_apply_direct(decision, *, scene, uid, group_id, key):
+    """执行反射层的高把握动作。返回 (是否已处理, 可能改写后的 decision)。"""
+    d = dict(decision or {})
+    action = str(d.get("action") or "model")
+    if action == "skip":
+        _poke_record_outcome(key, "skip", d)
+        return True, d
+    if action == "poke":
+        if not poke_store.can_poke(key, min_interval_sec=60):
+            d.update({"action": "skip", "reason": "poke_cooldown"})
+            _poke_record_outcome(key, "skip", d)
+            return True, d
+        ok = bool(_send_poke_back(uid, group_id))
+        _poke_record_outcome(key, "poke" if ok else "skip", d)
+        return True, d
+    if action == "meme":
+        if _poke_policy_meme(uid, group_id, d.get("emotion")):
+            _poke_record_outcome(key, "meme", d)
+            return True, d
+        d.update({"action": "skip", "reason": "meme_send_failed"})
+        _poke_record_outcome(key, "skip", d)
+        return True, d
+    return False, d
 
 
 def _handle_poke_event(ev):
@@ -12551,9 +12727,13 @@ def _handle_poke_event(ev):
         if not _group_allowed(poke_gid):
             _notice_group_blocked(str(poke_gid), _group_block_reason(str(poke_gid)))
             return
-        # 反戳不再由事件入口直接执行。事件先进入主链，由模型决定回话、
-        # 发表情、戳回去或沉默；只有模型输出 [POKE] 才触发动作。
         gid_str = str(poke_gid)
+        _state_key = _poke_policy_key("group", poke_uid, gid_str)
+        _event_id = str(ev.get("event_id") or ev.get("message_id") or "")
+        _state = poke_store.begin_event(_state_key, event_id=_event_id)
+        if _state.get("duplicate"):
+            log(f"[事件] 群戳重复事件忽略 user={poke_uid} group={gid_str}")
+            return
         # 戳一戳计数（同一人同一群，poke_timeout 内累计）
         _poke_key = f"{gid_str}_{poke_uid}"
         _poke_count = POKE_COUNTS.get(_poke_key, {"count": 0, "time": 0})
@@ -12563,37 +12743,35 @@ def _handle_poke_event(ev):
         _poke_count["time"] = time.time()
         POKE_COUNTS[_poke_key] = _poke_count
         poke_n = _poke_count["count"]
-        # forced=False 是关键：这条要过群聊决策器（[决策放行] / [跳过] / [观察]）。
-        # 当成会话内消息（forced=True）就整段跳过决策，只剩生成端的兜底。
-        # 会话额度也不在这里写：等这一批真的发出去之后由 _pipeline_step 补，
-        # 否则决策器 skip 了也会白送 2 轮免 @ 追问权。
-        #
-        # ★ 不手写 `[{昵称}]`（2026-10-25）：_pipeline_upsert 建批/并批时会统一加
-        #   `[群名片]`，这里再写一遍就变成 `[DeepSeek v41f] [Sample] （戳了戳你…）`。
-        #   线上 20:19 模型据此认定"戳我的是另一个人"，还解释"我收到的原文"。
-        #   名字只由 _display_name 给一次（群名片优先）。
-        # ★ 2026-11-09：注入文本里不带次数。原先「（戳了戳你，这是第 N 次）」
-        #   里的数字是强模板锚点 —— 模型看见「第 7 次」就顺着数数回一句
-        #   「第七次了哦」，同一句模板换个数字复读。次数只留在 POKE_COUNTS
-        #   和日志里，模型上下文里只有"被戳了"这个事实。
-        # pipeline 视同点名（forced=True），gated 仍交给决策器/发言闸。
-        # ★ 2026-11-10：正式版可选项。三档全部走同一条 pipeline，
-        #   不引入 1.5.x 已废弃的「独立小剧场」旁路（真机：戳+消息并行
-        #   生成两条、主循环被占 9 秒，见本分支上方注释）。
         _group_poke_mode = str(_config.get("poke_group_mode") or "pipeline")
         if _group_poke_mode not in ("pipeline", "gated", "off"):
             _group_poke_mode = "pipeline"
         if _group_poke_mode == "off":
             log(f"[事件] 群戳一戳按配置不回应: mode=off user={poke_uid}")
-        else:
-            # gated 放开 forced，让决策器 + 发言闸照常判；pipeline 把这次
-            # 事件视同点名。
-            _pipeline_upsert(
-                gid_str, sender=poke_uid,
-                text=(("（戳了戳你）" if poke_n <= 1 else "（又戳了你一下）")
-                      + _POKE_ACTION_HINT),
-                forced=(_group_poke_mode == "pipeline"),
-                source="poke", poke_uid=poke_uid)
+            _poke_record_outcome(_state_key, "skip", {"reason": "group_mode_off"})
+            return
+        _facts = _poke_policy_facts("group", poke_uid, gid_str, _state)
+        _decision = poke_policy.decide(_facts)
+        log(f"[事件] 群戳策略 user={poke_uid}: {poke_policy.explain(_decision)}")
+        _direct, _decision = _poke_apply_direct(
+            _decision, scene="group", uid=poke_uid,
+            group_id=poke_gid, key=_state_key)
+        if _direct:
+            return
+        _policy_action = _decision.get("action") or "model"
+
+        _event_text = "（戳了戳你）" if poke_n <= 1 else "（又戳了你一下）"
+        if _policy_action == "model":
+            _event_text += _POKE_ACTION_HINT
+        _forced = (_policy_action == "speak")
+        if _policy_action == "model" and _group_poke_mode == "pipeline":
+            _forced = True
+        _pipeline_upsert(
+            gid_str, sender=poke_uid,
+            text=_event_text,
+            forced=_forced,
+            source="poke", poke_uid=poke_uid,
+            poke_allow_action=(_policy_action == "model"))
     else:
         # 私聊戳一戳
         # ★ 2026-10-28：先过私聊名单（与私聊消息同一条门槛），再谈反戳。
@@ -12606,6 +12784,12 @@ def _handle_poke_event(ev):
             return
         if _friend_restriction(poke_qq, "reply_enabled", True) is False:
             log(f"[事件] 私聊戳一戳忽略: 好友自动回复已关闭 user={poke_qq}")
+            return
+        _state_key = _poke_policy_key("private", poke_qq)
+        _event_id = str(ev.get("event_id") or ev.get("message_id") or "")
+        _state = poke_store.begin_event(_state_key, event_id=_event_id)
+        if _state.get("duplicate"):
+            log(f"[事件] 私聊戳重复事件忽略 user={poke_qq}")
             return
         # 戳一戳 = 主动互动，登记私聊活跃会话（撤回反馈门槛）
         try:
@@ -12623,13 +12807,24 @@ def _handle_poke_event(ev):
         _poke_count["time"] = time.time()
         POKE_COUNTS[_poke_key] = _poke_count
         poke_n = _poke_count["count"]
-        # ★ 2026-11-10：正式版可选项，默认 standalone = 本改动之前的行为。
         _priv_mode = str(_config.get("poke_private_mode") or "standalone")
         if _priv_mode not in ("standalone", "mainline", "off"):
             _priv_mode = "standalone"
         if _priv_mode == "off":
             log(f"[事件] 私聊戳一戳按配置不回应: mode=off user={poke_qq}")
-        elif _priv_mode == "mainline":
+            _poke_record_outcome(_state_key, "skip", {"reason": "private_mode_off"})
+            return
+        _facts = _poke_policy_facts("private", poke_qq, "", _state)
+        _decision = poke_policy.decide(_facts)
+        log(f"[事件] 私聊戳策略 user={poke_qq}: {poke_policy.explain(_decision)}")
+        _direct, _decision = _poke_apply_direct(
+            _decision, scene="private", uid=poke_qq,
+            group_id=None, key=_state_key)
+        if _direct:
+            return
+        _policy_action = _decision.get("action") or "model"
+
+        if _priv_mode == "mainline":
             # 交回主链：把「被戳」当成一条普通私聊消息塞回 MSG_QUEUE，
             # 走同一套 system prompt / history / 记忆 / 表情包闸门。
             # _REQUEUE_FLAG 置位有两个用处：① _should_buffer_private 放行，
@@ -12648,6 +12843,8 @@ def _handle_poke_event(ev):
                     "message": [{"type": "text", "data": {"text": _poke_text}}],
                     _REQUEUE_FLAG: True,
                     _POKE_EVENT_FLAG: True,
+                    _POKE_EVENT_KEY: _state_key,
+                    _POKE_ALLOW_ACTION_FLAG: _policy_action == "model",
                 })
                 log(f"私聊戳一戳 → 交主链回复（第 {poke_n} 次，user={poke_nick}）")
             except Exception as e:
@@ -12662,55 +12859,71 @@ def _handle_poke_event(ev):
                 poke_vibe = f"TA戳了你{poke_n}次停不下来，炸毛或撒娇威胁。"
             else:
                 poke_vibe = f"TA已经戳了你{poke_n}次！崩溃抓狂摆烂。"
+            _poke_hint = _POKE_ACTION_HINT if _policy_action == "model" else ""
             poke_prompt = (
                 f"你是{_bot_nicknames()[0]}，18岁男生，毒舌带撒娇。{poke_nick}私聊戳了你。\n"
                 f"【当前情况】{poke_vibe}\n"
                 f"要求：先决定要不要回应。正常情况下15-25字，有性格，"
                 f"禁止「别戳了」「干嘛」「再戳要XX了」模板句式。"
                 f"每次句式不同，像朋友之间打闹。不要加前缀或引用标记。"
-                f"{_POKE_ACTION_HINT}"
+                f"{_poke_hint}"
             )
             try:
                 reply = call_deepseek(poke_prompt, [], target_qq=poke_qq)
                 if reply:
                     reply, _poke_wanted = parse_poke_intent(reply)
-                    if _poke_wanted:
-                        if _send_poke_back(poke_qq, None):
+                    if _poke_wanted and _policy_action == "model":
+                        _ok_poke = bool(_send_poke_back(poke_qq, None))
+                        if _ok_poke:
                             log(f"[事件] 私聊模型选择反戳 user={poke_qq}")
+                            _poke_record_outcome(_state_key, "poke", _decision)
                         else:
                             log(f"[事件] 私聊模型选择反戳但发送失败 user={poke_qq}")
+                            _poke_record_outcome(_state_key, "skip", _decision)
                         return
+                    if _poke_wanted:
+                        log(f"[事件] 私聊高把握 speak 回合忽略模型动作标记 user={poke_qq}")
                     from meme_engine import parse_meme_intent as _pmi
                     _rp = _pmi(reply)
-                    reply = _rp[0] or reply
+                    reply = str(_rp[0] or "").strip()
                     _emo = _rp[1]
-                    _with_outbound_origin("model action=戳回应",
-                                          send_message, reply, poke_qq)
-                    _note_self_action("say", text=reply, scene="private",
-                                      target=str(poke_qq),
-                                      detail="被戳了，回了一句")
-                    # ★ 单一大脑修复：私聊戳回复也补进 chat_history（与主链 9276 同格式），
-                    # 否则私聊下一轮同样看不到"我刚说过什么"。
-                    if poke_qq:
-                        _pch = chat_history.setdefault(poke_qq, [])
-                        _pch.append({"role": "user", "content": "（戳了戳你）",
-                                     "ts": time.time()})
-                        _pch.append({"role": "assistant", "content": reply[:_HISTORY_ENTRY_STORE_CHARS],
-                                     "ts": time.time()})
-                        chat_history[poke_qq] = _pch[-_PRIVATE_HISTORY_CAP:]
-                    log(f"私聊戳一戳回复: {reply[:40]}")
+                    _sent = False
+                    if reply:
+                        _sent = bool(_with_outbound_origin(
+                            "model action=戳回应", send_message, reply, poke_qq))
+                        _note_self_action("say", text=reply, scene="private",
+                                          target=str(poke_qq),
+                                          detail="被戳了，回了一句")
+                        # ★ 单一大脑修复：私聊戳回复也补进 chat_history（与主链 9276 同格式），
+                        # 否则私聊下一轮同样看不到"我刚说过什么"。
+                        if poke_qq:
+                            _pch = chat_history.setdefault(poke_qq, [])
+                            _pch.append({"role": "user", "content": "（戳了戳你）",
+                                         "ts": time.time()})
+                            _pch.append({"role": "assistant", "content": reply[:_HISTORY_ENTRY_STORE_CHARS],
+                                         "ts": time.time()})
+                            chat_history[poke_qq] = _pch[-_PRIVATE_HISTORY_CAP:]
+                        log(f"私聊戳一戳回复: {reply[:40]}")
                     # 只有模型明确标注 [表情:xx] 才补表情包，不再随机替它做动作。
+                    _meme_sent = False
                     if MEME_OK and _emo:
                         try:
                             _emotion = _emo
                             _mp = match_meme(_emotion)
                             if _mp and _with_outbound_origin(
                                     "model action=表情", send_image, _mp, poke_qq):
+                                _meme_sent = True
                                 log(f"私聊戳一戳表情包: {_emotion}")
                         except Exception as e2:
                             log(f"私聊戳一戳表情包失败: {e2}")
+                    _final_action = ("meme" if _meme_sent and not _sent
+                                     else ("speak" if _sent else "skip"))
+                    _poke_record_outcome(_state_key, _final_action, _decision)
+                else:
+                    _poke_record_outcome(_state_key, "skip", _decision)
             except Exception as e:
                 log(f"私聊戳一戳AI回复失败: {e}")
+                _poke_record_outcome(_state_key, "skip", _decision)
 
 def _recall_should_fire(*, buffer_cancelled: bool, last_bot_msg: float,
                         now: float, window: float = 300.0) -> bool:
@@ -17210,7 +17423,7 @@ def _pipeline_merge_locked(buffer, *, group_id, sender, text, now,
                            at_bot=False, xiao_a=False, bot_nick=False,
                            quote=False, text_at=False, in_session=False,
                            images=None, forced=False, source="message",
-                           poke_uid=None, force=False):
+                           poke_uid=None, poke_allow_action=False, force=False):
     """持 _buffer_lock 时把一条事件并进已有批次，返回要启动的 Timer。
 
     返回 None 表示没并（批次已过 deadline，或调用方传了空批次）。
@@ -17251,6 +17464,8 @@ def _pipeline_merge_locked(buffer, *, group_id, sender, text, now,
         buffer["poke_uid"] = str(poke_uid)
     if source == "poke":
         buffer["source"] = "poke"
+        buffer[_POKE_ALLOW_ACTION_FLAG] = bool(
+            buffer.get(_POKE_ALLOW_ACTION_FLAG) or poke_allow_action)
     # 图片也要跟着合并：窗口内多条消息可能各自带图
     _bi = list(buffer.get("images") or [])
     for _ip in (images or []):
@@ -17285,7 +17500,7 @@ def _pipeline_merge_locked(buffer, *, group_id, sender, text, now,
 
 def _pipeline_upsert(group_id, *, sender, text, images=None, flags=None,
                      forced=False, source="message", reply_mid=0,
-                     poke_uid=None):
+                     poke_uid=None, poke_allow_action=False):
     """把一个入站事件并入该群批次；必要时建批并启动 Timer。
 
     flags: {"at_bot","xiao_a","bot_nick","quote","quote_me","text_at","in_session"}，
@@ -17338,7 +17553,8 @@ def _pipeline_upsert(group_id, *, sender, text, images=None, flags=None,
             buf, group_id=group_id, sender=sender, text=text, now=now,
             at_bot=at_bot, xiao_a=xiao_a, bot_nick=bot_nick, quote=quote,
             text_at=text_at, in_session=in_session, images=images,
-            forced=forced, source=source, poke_uid=poke_uid, force=force)
+            forced=forced, source=source, poke_uid=poke_uid,
+            poke_allow_action=poke_allow_action, force=force)
 
     # ① 有批次且未过 deadline → 并进去
     with _buffer_lock:
@@ -17449,6 +17665,7 @@ def _pipeline_upsert(group_id, *, sender, text, images=None, flags=None,
             # ★ 2026-10-29：source 之前没进批次，speak_gate 的 source=="poke" 永不命中。
             "source": str(source or "message"),
             "poke_uid": str(poke_uid) if (source == "poke" and poke_uid) else None,
+            _POKE_ALLOW_ACTION_FLAG: bool(source == "poke" and poke_allow_action),
             "timer": _new_timer,
         }
     _new_timer.start()
@@ -18560,12 +18777,18 @@ def _pipeline_step(group_id):
         _poke_owner = buffer.get("poke_uid")
         if _poke_owner:
             reply, _poke_wanted = parse_poke_intent(reply)
-            if _poke_wanted:
+            if _poke_wanted and buffer.get(_POKE_ALLOW_ACTION_FLAG):
                 if _send_poke_back(_poke_owner, group_id):
                     log(f"群[{group_id}] 模型选择反戳 user={_poke_owner}")
+                    _poke_record_outcome(
+                        _poke_policy_key("group", _poke_owner, group_id), "poke")
                 else:
                     log(f"群[{group_id}] 模型选择反戳但发送失败 user={_poke_owner}")
+                    _poke_record_outcome(
+                        _poke_policy_key("group", _poke_owner, group_id), "skip")
                 return
+            if _poke_wanted:
+                log(f"群[{group_id}] 高把握 speak 回合忽略模型动作标记")
 
         if not reply or reply.strip() in ("[不说话]", "[跳过]"):
             # ★ 2026-10-27：把"没等到"和"不想说"拆开。
@@ -18588,6 +18811,9 @@ def _pipeline_step(group_id):
                 scene="group", target=str(group_id),
                 reason="AI决定不回复", group_id=str(group_id),
                 sender=str(buffer.get("sender") or ""))
+            if _poke_owner:
+                _poke_record_outcome(
+                    _poke_policy_key("group", _poke_owner, group_id), "skip")
             return
 
         if reply:
@@ -19006,6 +19232,9 @@ def _pipeline_step(group_id):
             if not sent_text and not meme_file:
                 _dropped = True
                 log(f"群[{group_id}] [纯图] 表情未发出，本轮静默")
+                if _poke_owner:
+                    _poke_record_outcome(
+                        _poke_policy_key("group", _poke_owner, group_id), "skip")
                 _report_turn_skipped(
                     scene="group", target=str(group_id),
                     reason="纯图回复没有可发送内容",
@@ -19029,6 +19258,14 @@ def _pipeline_step(group_id):
                     f"(仅戳主 {_poke_owner}，额度{_poke_cap})")
 
             if _sent_ok:
+                if _poke_owner:
+                    _poke_action_done = (
+                        "meme" if meme_file and not sent_text
+                        else ("speak" if sent_text else "meme")
+                    )
+                    _poke_record_outcome(
+                        _poke_policy_key("group", _poke_owner, group_id),
+                        _poke_action_done)
                 # 发送成功后才提交这一轮；提交前再审计一次，历史/记忆里存脱敏后的最终文本。
                 _commit_text = audit_outgoing(
                     sent_text or reply or "……", is_group=True)[0]
@@ -19073,6 +19310,11 @@ def _pipeline_step(group_id):
                     self_learn.maybe_learn(str(group_id))
     except Exception as e:
         log(f"群[{group_id}] AI 调用异常: {e}")
+        _poke_uid_failed = str(buffer.get("poke_uid") or "")
+        if _poke_uid_failed:
+            _poke_record_outcome(
+                _poke_policy_key("group", _poke_uid_failed, group_id),
+                "skip", {"reason": f"generation_failed:{type(e).__name__}"})
         try:
             from harness import turn_trace as _tt_fail
             _tt_fail.note(_cur_trace(), "FAILED", scene="group",
@@ -20505,6 +20747,11 @@ def main():
                         e for e in GROUP_RECENT_MSGS[group_id]
                         if current_time - e[0] <= GROUP_RECENT_MSGS_WINDOW
                     ]
+                    try:
+                        poke_store.observe_group_activity(
+                            group_id, sender, text, current_time)
+                    except Exception as _ps_e:
+                        log(f"[事件] 戳反馈观察失败: {_ps_e}")
                     # 更新群内最后消息时间（用于空闲退场判断）
                     if current_time > GROUP_LAST_ANY_MSG.get(group_id, 0):
                         GROUP_LAST_ANY_MSG[group_id] = current_time
@@ -21028,6 +21275,12 @@ def main():
                     except Exception as _p_e:
                         log(f"[Agent] 私聊执行异常: {_p_e}")
 
+                if not msg.get(_REQUEUE_FLAG):
+                    try:
+                        poke_store.observe_message(
+                            _poke_policy_key("private", sender), text, time.time())
+                    except Exception as _ps_e:
+                        log(f"[事件] 私聊戳反馈观察失败: {_ps_e}")
                 log("  → 进入AI聊天流程")
                 # 3. AI 聊天（super_memory 向量召回仍由 before_reply 的 ego 钩子注入，
                 #    见下方 ego 钩子；这里只管画像/元信息，检索已收口到 memory_api）
@@ -21195,14 +21448,19 @@ def main():
                 reply = _apply_search_tag_loop(reply, text, group_id=None,
                                                is_group=False, temperature=_ego_temp,
                                                target_qq=sender, ego_ctx=_ego_ctx)
+                _poke_event_key = str(msg.get(_POKE_EVENT_KEY) or "")
                 if msg.get(_POKE_EVENT_FLAG):
                     reply, _poke_wanted = parse_poke_intent(reply)
-                    if _poke_wanted:
+                    if _poke_wanted and msg.get(_POKE_ALLOW_ACTION_FLAG):
                         if _send_poke_back(sender, None):
                             log(f"[事件] 私聊模型选择反戳 user={sender}")
+                            _poke_record_outcome(_poke_event_key, "poke")
                         else:
                             log(f"[事件] 私聊模型选择反戳但发送失败 user={sender}")
+                            _poke_record_outcome(_poke_event_key, "skip")
                         continue
+                    if _poke_wanted:
+                        log(f"[事件] 私聊高把握 speak 回合忽略模型动作标记 user={sender}")
                 # ── 反问闸（私聊，1.5.9 §3.6）──
                 #   私聊是被点名的一对一，regen_private 在这里算"该重生"。
                 try:
@@ -21224,6 +21482,8 @@ def main():
                     log(f"[反问闸] 跳过: {_qe}")
                 if not reply or reply.strip() in ("[不说话]", "[跳过]"):
                     log(f"私聊[{sender}] AI决定不回复")
+                    if msg.get(_POKE_EVENT_FLAG):
+                        _poke_record_outcome(_poke_event_key, "skip")
                     _report_turn_skipped(
                         scene="private", target=str(sender),
                         reason="AI决定不回复", sender=str(sender))
@@ -21405,6 +21665,8 @@ def main():
                         log("[私聊表情] 引擎未加载")
                     
                     if ok or _pm_meme_ok:
+                        if msg.get(_POKE_EVENT_FLAG):
+                            _poke_record_outcome(_poke_event_key, "speak")
                         # 只在真的发出去之后提交：发送失败/被抑制的回复不进历史与记忆。
                         _pm_text = sent_text if ok else ""
                         _pm_text = audit_outgoing(_pm_text, is_group=False)[0]

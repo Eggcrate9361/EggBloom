@@ -14,7 +14,9 @@ _notify_admin / _append_target_and_reload / resolve_qq_nick / log / call_deepsee
 表情包相关），测试不触网、不发真实消息、不调 AI、不写配置、不写日志文件。
 """
 import os
+import shutil
 import sys
+import tempfile
 import time
 import unittest
 from unittest import mock
@@ -171,6 +173,10 @@ class TestRequestEvent(_EventHandlersBase):
 class TestRequestAllowed(_EventHandlersBase):
     def setUp(self):
         super().setUp()
+        self._poke_state_dir = tempfile.mkdtemp(prefix="poke-events-")
+        os.environ["EGGBLOOM_POKE_STATE"] = os.path.join(
+            self._poke_state_dir, "state.json")
+        self.addCleanup(shutil.rmtree, self._poke_state_dir, True)
         # 还原真实的 _request_allowed（基类 mock 掉了它），测真实判定逻辑
         self._real_ra = mock.patch.object(bot_core, "_request_allowed", _REAL_REQUEST_ALLOWED)
         self._real_ra.start()
@@ -406,7 +412,12 @@ class TestPokeEvent(_EventHandlersBase):
         self.send_group_image = mock.Mock(return_value=True)
         self.send_image = mock.Mock(return_value=True)
         self.poke_back = mock.Mock(return_value=True)
+        self.policy_decide = mock.Mock(return_value={
+            "action": "model", "emotion": "", "confidence": 0.2,
+            "reason": "test_model", "scores": {},
+        })
         self._poke_patchers = [
+            mock.patch.object(bot_core.poke_policy, "decide", self.policy_decide),
             mock.patch.object(bot_core, "call_deepseek", self.call_deepseek),
             mock.patch.object(bot_core, "track_bot_reply", self.track_bot_reply),
             mock.patch.object(bot_core, "match_meme", self.match_meme),
@@ -483,6 +494,36 @@ class TestPokeEvent(_EventHandlersBase):
         self.assertIn("[POKE]", buf.get("text") or "")
         self.assertIn("不要默认反戳", buf.get("text") or "")
         self.assertNotIn("10001", bot_core.GROUP_SESSION)
+
+    def test_group_policy_direct_actions(self):
+        self._reset_group()
+        self.policy_decide.return_value = {
+            "action": "poke", "emotion": "", "confidence": 0.9,
+            "reason": "test_poke", "scores": {},
+        }
+        bot_core._handle_poke_event(self._grp_poke())
+        self.poke_back.assert_called_once()
+        self.assertNotIn("10001", bot_core.GROUP_MSG_BUFFER)
+
+        self._reset_group()
+        self.poke_back.reset_mock()
+        self.match_meme.return_value = "/fake/poke.png"
+        self.policy_decide.return_value = {
+            "action": "meme", "emotion": "嫌弃", "confidence": 0.8,
+            "reason": "test_meme", "scores": {},
+        }
+        bot_core._handle_poke_event(self._grp_poke())
+        self.send_group_image.assert_called_once()
+        self.assertNotIn("10001", bot_core.GROUP_MSG_BUFFER)
+
+        self._reset_group()
+        self.policy_decide.return_value = {
+            "action": "skip", "emotion": "", "confidence": 0.95,
+            "reason": "test_skip", "scores": {},
+        }
+        bot_core._handle_poke_event(self._grp_poke())
+        self.assertNotIn("10001", bot_core.GROUP_MSG_BUFFER)
+        self.call_deepseek.assert_not_called()
 
     def test_self_poke_reentry_is_filtered_at_entry(self):
         self._reset_group()

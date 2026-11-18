@@ -120,6 +120,11 @@ Enforced by:
 - Group-management questions use fetched group owner, administrator, sender role, and
   available group settings. Facts that the protocol does not expose remain explicitly
   unknown and must not be inferred.
+- Poke handling is decided by the pure `poke_policy.py` reflex layer from relationship,
+  mood, persona, scene, streak, last action, and feedback. High-confidence actions run
+  directly; only ambiguous cases reach the main model.
+- Poke habits and feedback are stored per group+user, and a successful poke-back has a
+  hard one-minute cooldown. Model or action failure defaults to silence.
 
 Enforced by:
 
@@ -129,6 +134,7 @@ Enforced by:
 - `tests/test_group_decider_state.py`
 - `tests/test_poke_private_mode.py`
 - `tests/test_poke_consistency.py`
+- `tests/test_poke_policy.py`
 - `tests/test_recall_contract.py`
 - `tests/test_packaging.py`
 - `tests/test_meme_back.py`

@@ -72,6 +72,11 @@ try:
     check("★ model action marker is wired to poke",
           "parse_poke_intent(reply)" in src
           and "_send_poke_back(_poke_owner, group_id)" in src)
+    check("★ reflection layer owns direct actions",
+          "poke_policy.decide(_facts)" in src
+          and "_poke_apply_direct(" in src)
+    check("★ successful poke has a hard cooldown",
+          "poke_store.can_poke(" in src and "min_interval_sec=60" in src)
     check("★ synthetic poke turns do not enter dialogue memory",
           "戳事件文本降级只入动作账，不写对话历史" in src)
     prox = open(os.path.join(ROOT, "plugins", "proactivity", "__init__.py"),

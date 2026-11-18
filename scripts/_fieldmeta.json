@@ -555,7 +555,7 @@
     },
     "poke_group_mode": {
       "label": "群聊戳一戳回复方式",
-      "desc": "不自动反戳。pipeline 视同点名走主链，gated 由决策器和发言闸决定是否进入模型，off 静默。模型想反戳时才输出 [POKE]。改完即时生效",
+      "desc": "反射层先按关系、情绪、连戳和反馈直接决定动作；不确定时才进这里。pipeline 视同点名走主链，gated 由决策器和发言闸决定，off 静默。低把握时模型可输出 [POKE]。改完即时生效",
       "ctl": "select",
       "panel": "group",
       "unit": "",
@@ -579,7 +579,7 @@
     },
     "poke_private_mode": {
       "label": "私聊戳一戳回复方式",
-      "desc": "不自动反戳。standalone 单独生成一段短打闹回复；mainline 交回主链；off 静默。模型想反戳时才输出 [POKE]。改完即时生效",
+      "desc": "反射层先按关系、情绪、连戳和反馈直接决定动作；不确定时才进这里。standalone 单独生成；mainline 交回主链；off 静默。低把握时模型可输出 [POKE]。改完即时生效",
       "ctl": "select",
       "panel": "group",
       "unit": "",

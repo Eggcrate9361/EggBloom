@@ -4982,8 +4982,8 @@ window.FIELD_META = {
     "group_idle_exit_probability": {"label": "空闲退出概率", "desc": "满足静默条件时, 触发退场的概率（0-1, 0.3 = 30% 概率退场）", "ctl": "number", "panel": "group", "unit": "", "id": "sGroupIdleExitProb", "default": 0.3, "default_text": "0.3"},
     "group_idle_exit_min_silence": {"label": "退场静默时间（秒）", "desc": "Bot 是群里最后说话者, 且超过该时长无新消息 → 才考虑退场（下限 30 秒）", "ctl": "number", "panel": "group", "unit": "秒", "id": "sGroupIdleMinSilence", "default": 600, "default_text": "600"},
     "poke_timeout": {"label": "戳一戳超时（秒）", "desc": "同一人同一群戳 Bot 的连击计数保留时长, 超时后重新计数", "ctl": "number", "panel": "group", "unit": "秒", "id": "sPokeTimeout", "default": 600, "default_text": "600"},
-    "poke_group_mode": {"label": "群聊戳一戳回复方式", "desc": "不自动反戳。pipeline 视同点名走主链，gated 由决策器和发言闸决定是否进入模型，off 静默。模型想反戳时才输出 [POKE]。改完即时生效", "ctl": "select", "panel": "group", "unit": "", "id": "sPokeGroupMode", "options": [["pipeline", "走主链·视同点名，由模型决定动作（默认）"], ["gated", "走主链·先过决策器与发言闸"], ["off", "收到戳不回应"]], "default": "pipeline", "default_text": "pipeline"},
-    "poke_private_mode": {"label": "私聊戳一戳回复方式", "desc": "不自动反戳。standalone 单独生成一段短打闹回复；mainline 交回主链；off 静默。模型想反戳时才输出 [POKE]。改完即时生效", "ctl": "select", "panel": "group", "unit": "", "id": "sPokePrivateMode", "options": [["standalone", "独立生成回应，由模型决定动作（默认）"], ["mainline", "交回主链·接得上上下文"], ["off", "收到戳不回应"]], "default": "standalone", "default_text": "standalone"},
+    "poke_group_mode": {"label": "群聊戳一戳回复方式", "desc": "反射层先按关系、情绪、连戳和反馈直接决定动作；不确定时才进这里。pipeline 视同点名走主链，gated 由决策器和发言闸决定，off 静默。低把握时模型可输出 [POKE]。改完即时生效", "ctl": "select", "panel": "group", "unit": "", "id": "sPokeGroupMode", "options": [["pipeline", "不确定时走主链·视同点名（默认）"], ["gated", "不确定时走主链·先过决策器与发言闸"], ["off", "收到戳不回应"]], "default": "pipeline", "default_text": "pipeline"},
+    "poke_private_mode": {"label": "私聊戳一戳回复方式", "desc": "反射层先按关系、情绪、连戳和反馈直接决定动作；不确定时才进这里。standalone 单独生成；mainline 交回主链；off 静默。低把握时模型可输出 [POKE]。改完即时生效", "ctl": "select", "panel": "group", "unit": "", "id": "sPokePrivateMode", "options": [["standalone", "不确定时独立生成（默认）"], ["mainline", "不确定时交回主链·接得上上下文"], ["off", "收到戳不回应"]], "default": "standalone", "default_text": "standalone"},
     "group_send_max_parts": {"label": "单次回复最多拆几条", "desc": "一条回复最多分成几条发，超过就把尾部并成一条（防刷屏）。改完即时生效，不用重启", "ctl": "number", "panel": "group", "unit": "", "id": "sGroupSendMaxParts", "default": 5, "default_text": "5"},
     "group_send_block_threshold": {"label": "整块发送字数阈值", "desc": "有效字（符号不计）不超过这个数 → 拆成多条连发；超过 → 整块一次发完。改完即时生效", "ctl": "number", "panel": "group", "unit": "", "id": "sGroupSendBlockThreshold", "default": 100, "default_text": "100"},
     "quiet_hours": {"label": "静默时段", "desc": "Bot 睡觉的时间, 写 \"1:00-7:00\" 这种格式, 支持跨天。留空 = 不静默。群聊和私聊都生效; 主动开口插件没单独配置时也用它", "ctl": "text", "panel": "group", "unit": "", "id": "sQuietHours", "default": "", "default_text": "空"},
@@ -5142,11 +5142,11 @@ const CFG_OPTIONS = {
                          ['regen_private', 'regen_private（只在私聊 / 被 @ 时重生）']],
   /* 戳一戳回复路径（1.6.0 可选项）。bot_core 只认下面这几个字符串，
      非法值一律回落到各自默认档，所以不给自由文本。两处 v3 控件同值。 */
-  poke_group_mode: [['pipeline', '走主链·视同点名，由模型决定动作（默认）'],
-                    ['gated', '走主链·先过决策器与发言闸'],
+  poke_group_mode: [['pipeline', '不确定时走主链·视同点名（默认）'],
+                    ['gated', '不确定时走主链·先过决策器与发言闸'],
                     ['off', '收到戳不回应']],
-  poke_private_mode: [['standalone', '独立生成回应，由模型决定动作（默认）'],
-                      ['mainline', '交回主链·接得上上下文'],
+  poke_private_mode: [['standalone', '不确定时独立生成（默认）'],
+                      ['mainline', '不确定时交回主链·接得上上下文'],
                       ['off', '收到戳不回应']],
 };
 function cfGet(cfg, k) {

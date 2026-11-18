@@ -30,6 +30,7 @@ import io
 import json
 import os
 import sys
+import tempfile
 import types
 from unittest import mock
 
@@ -113,12 +114,21 @@ def poke_env(cfg=None):
     env.send_image = mock.Mock(return_value=True)
     env.match_meme = mock.Mock(return_value=None)
     env.nicknames = mock.Mock(return_value=["测试"])
+    env.decide = mock.Mock(return_value={
+        "action": "model", "emotion": "", "confidence": 0.2,
+        "reason": "test_model", "scores": {},
+    })
+    tempdir = tempfile.TemporaryDirectory(prefix="poke-mode-")
 
     fake_meme = types.ModuleType("meme_engine")
     fake_meme.parse_meme_intent = lambda s: (s, None)
     fake_meme.match_meme = lambda s: None
 
     patches = [
+        mock.patch.dict(os.environ, {
+            "EGGBLOOM_POKE_STATE": os.path.join(tempdir.name, "state.json")
+        }),
+        mock.patch.object(bot_core.poke_policy, "decide", env.decide),
         mock.patch.object(bot_core, "_config", conf),
         mock.patch.object(bot_core, "log", env.log),
         mock.patch.object(bot_core, "_emit_plugin_event", env.emit),
@@ -147,6 +157,7 @@ def poke_env(cfg=None):
         bot_core.POKE_COUNTS.clear(); bot_core.POKE_COUNTS.update(snap[0])
         bot_core.PRIVATE_SESSION.clear(); bot_core.PRIVATE_SESSION.update(snap[1])
         bot_core.chat_history.clear(); bot_core.chat_history.update(snap[2])
+        tempdir.cleanup()
 
 
 def queued_texts(env):
@@ -229,6 +240,8 @@ def test_group_modes():
                       repr(kw.get("forced")))
                 check(f"群聊 {mode}: source=poke / poke_uid 透传",
                       kw.get("source") == "poke" and kw.get("poke_uid") == "10086001")
+                check(f"群聊 {mode}: 低把握模型允许动作标记",
+                      kw.get("poke_allow_action") is True)
                 check(f"群聊 {mode}: 注入文本不带次数",
                       "（戳了戳你）" in (kw.get("text") or "")
                       and "第 " not in (kw.get("text") or ""),
@@ -268,6 +281,44 @@ def test_model_poke_action():
               env.send.call_count == 0 and env.queue.put.call_count == 0)
         check("私聊：动作回合不写 history",
               "10086001" not in bot_core.chat_history)
+
+
+def test_policy_direct_actions():
+    """反射层高把握时直接执行，不进入模型。"""
+    with poke_env() as env:
+        env.decide.return_value = {
+            "action": "poke", "emotion": "", "confidence": 0.9,
+            "reason": "test_poke", "scores": {},
+        }
+        env.poke_back.return_value = True
+        bot_core._handle_poke_event(private_poke())
+        check("直接 poke 调用反戳一次", env.poke_back.call_count == 1)
+        check("直接 poke 不调模型", env.deepseek.call_count == 0)
+        check("直接 poke 不发正文", env.send.call_count == 0)
+        bot_core._handle_poke_event(private_poke())
+        check("一分钟内第二次 poke 被硬闸拦下",
+              env.poke_back.call_count == 1, env.poke_back.call_count)
+
+    with poke_env() as env:
+        env.decide.return_value = {
+            "action": "meme", "emotion": "嫌弃", "confidence": 0.8,
+            "reason": "test_meme", "scores": {},
+        }
+        env.match_meme.return_value = "/fake/meme.png"
+        bot_core._handle_poke_event(private_poke())
+        check("直接 meme 调匹配", env.match_meme.call_args.args[0] == "嫌弃")
+        check("直接 meme 发图", env.send_image.call_count == 1)
+        check("直接 meme 不调模型", env.deepseek.call_count == 0)
+
+    with poke_env() as env:
+        env.decide.return_value = {
+            "action": "skip", "emotion": "", "confidence": 0.95,
+            "reason": "test_skip", "scores": {},
+        }
+        bot_core._handle_poke_event(private_poke())
+        check("直接 skip 不反戳 / 不调模型 / 不发送",
+              env.poke_back.call_count == 0 and env.deepseek.call_count == 0
+              and env.send.call_count == 0 and env.send_image.call_count == 0)
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -375,6 +426,7 @@ def main():
     test_config_chain()
     test_group_modes()
     test_model_poke_action()
+    test_policy_direct_actions()
     test_private_modes()
     test_requeue_downstream()
     print("\n" + "=" * 58)

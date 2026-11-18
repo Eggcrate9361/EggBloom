@@ -14,7 +14,9 @@
 运行：python tests/test_poke_pipeline.py
 """
 import os
+import shutil
 import sys
+import tempfile
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -29,6 +31,9 @@ from _sandbox import sandbox_neurobase  # noqa: E402
 sandbox_neurobase()
 
 import bot_core  # noqa: E402
+
+POLICY_TMP = tempfile.mkdtemp(prefix="poke-pipeline-")
+os.environ["EGGBLOOM_POKE_STATE"] = os.path.join(POLICY_TMP, "state.json")
 
 GID = "_test_poke_pipeline_"
 POKER = "10086001"
@@ -87,7 +92,8 @@ def _clean():
 
 
 def _run(plugin_results, *, poke_text=None, merge_text=None, merge_sender=OTHER,
-         merge_forced=True, send_raises=False, no_poke=False, reply=None):
+         merge_forced=True, send_raises=False, no_poke=False, reply=None,
+         allow_policy_action=False):
     """建一个戳批次（可选合并一条普通消息），同步跑一轮。返回观测结果。"""
     _clean()
     seen = {"ai": 0, "sent": [], "meme": 0, "poke": 0}
@@ -148,7 +154,8 @@ def _run(plugin_results, *, poke_text=None, merge_text=None, merge_sender=OTHER,
             bot_core._pipeline_upsert(
                 GID, sender=POKER,
                 text=poke_text or "（戳了戳你，这是第 1 次）",
-                forced=False, source="poke", poke_uid=POKER)
+                forced=False, source="poke", poke_uid=POKER,
+                poke_allow_action=allow_policy_action)
         if merge_text is not None:
             bot_core._pipeline_upsert(
                 GID, sender=merge_sender, text=merge_text,
@@ -187,9 +194,14 @@ def test_batch_carries_poke_source():
 def test_poke_event_name_appears_once():
     print("\n[1b] 真实入口：戳文本里的名字只出现一次（不叠昵称与群名片）")
     _clean()
-    orig = (bot_core._send_poke_back, bot_core.GROUP_MEMBERS.get(GID), bot_core.log)
+    orig = (bot_core._send_poke_back, bot_core.GROUP_MEMBERS.get(GID),
+            bot_core.log, bot_core.poke_policy.decide)
     bot_core._send_poke_back = lambda *a, **kw: None
     bot_core.log = lambda *a, **kw: None
+    bot_core.poke_policy.decide = lambda facts: {
+        "action": "model", "emotion": "", "confidence": 0.2,
+        "reason": "test_model", "scores": {},
+    }
     # 群里挂一张名片（_display_name 群名片优先）；同时让全局昵称不同，
     # 旧版会把两者都写进文本，模型据此以为说话人换了人。
     bot_core.GROUP_MEMBERS.setdefault(GID, {})[POKER] = "小明"
@@ -204,6 +216,7 @@ def test_poke_event_name_appears_once():
     finally:
         bot_core._send_poke_back = orig[0]
         bot_core.log = orig[2]
+        bot_core.poke_policy.decide = orig[3]
         if orig[1] is None:
             bot_core.GROUP_MEMBERS.pop(GID, None)
         else:
@@ -304,7 +317,7 @@ def test_model_can_choose_poke():
     print("\n[9] 模型输出 [POKE] → 只反戳，不发正文")
     seen, buf, _ = _run([("group_chat_decider",
                           {"action": "inject", "content": "【群聊氛围】可以接"})],
-                        reply="[POKE]")
+                        reply="[POKE]", allow_policy_action=True)
     check("调了一次模型", seen["ai"] == 1, seen["ai"])
     check("★ 反戳一次", seen["poke"] == 1, seen["poke"])
     check("★ 动作回合不发正文", not seen["sent"], seen["sent"])
@@ -332,4 +345,8 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        code = main()
+    finally:
+        shutil.rmtree(POLICY_TMP, ignore_errors=True)
+    sys.exit(code)
