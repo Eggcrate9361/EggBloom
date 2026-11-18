@@ -173,6 +173,14 @@ def main():
         check("未登记的可逆文本仍被拦住",
               any(h[2] == "本地可逆混淆个人文本"
                   for h in cs.scan_text("notes.txt", unknown_blob)))
+        historical_fixture = "配置在 /home/" + "administrator/.dsh/settings.json 里"
+        check("历史合成用户目录按精确路径登记",
+              not any(h[2] == "POSIX 家目录"
+                      for h in cs.scan_text("tests/test_outgoing_audit.py",
+                                            historical_fixture)))
+        check("新文件里的同一用户目录仍被拦住",
+              any(h[2] == "POSIX 家目录"
+                  for h in cs.scan_text("tests/other_test.py", historical_fixture)))
 
         hd = os.path.join(ROOT, ".githooks")
         read = lambda n: open(os.path.join(hd, n), encoding="utf-8").read()

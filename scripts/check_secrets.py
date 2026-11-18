@@ -107,6 +107,8 @@ HOME_PLACEHOLDERS = {"user", "username", "yourname", "someone", "example", "xxx"
 
 #: 确认是夹具/示例的命中，(文件, 命中片段) → 理由。加之前先确认它真的不是真机。
 INFRA_ALLOW = {
+    ("tests/test_outgoing_audit.py", "/home/administrator/"):
+        "历史脱敏用例夹具：只验证路径识别，不对应真实账户；当前树已改用通用占位名",
     ("tests/test_release_surface.py", "ssh://ubuntu@192.0.2.10/home/ubuntu/x.git"):
         "包闸/历史闸的夹具：断言「带地址的包会被拦」，IP 用文档段 192.0.2.0/24",
     ("tests/test_release_surface.py", "ubuntu@192.0.2.10"):
