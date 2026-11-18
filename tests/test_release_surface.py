@@ -167,6 +167,12 @@ def main():
               len(cs.scan_text("(commit message)", bad_msg)) >= 2)
         check("正常提交信息不误报",
               not cs.scan_text("(commit message)", good_msg))
+        check("有意公开的人设留言不被误报",
+              not cs.scan_text("persona_tag.py", "\n".join(cs.INTENTIONAL_PUBLIC_TEXT)))
+        unknown_blob = "v1:" + "A" * 96
+        check("未登记的可逆文本仍被拦住",
+              any(h[2] == "本地可逆混淆个人文本"
+                  for h in cs.scan_text("notes.txt", unknown_blob)))
 
         hd = os.path.join(ROOT, ".githooks")
         read = lambda n: open(os.path.join(hd, n), encoding="utf-8").read()

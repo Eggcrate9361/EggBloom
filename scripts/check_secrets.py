@@ -48,9 +48,14 @@ import subprocess
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 # 判据被删/改名时要当场炸，不能静默退化成「没有号码闸」—— 那正是 11-13 的形态。
 import identity_numbers as idn  # noqa: E402
+import persona_tag  # noqa: E402
+
+#: 有意随公开项目发布的人设留言。只放行逐字相等的值，其他可逆文本照拦。
+INTENTIONAL_PUBLIC_TEXT = frozenset(persona_tag.PUBLIC_FRAGMENTS)
 
 #: 明确是假值的片段 —— 测试夹具/示例配置里允许出现。
 #: 注意这只是给**下面 PATTERNS** 用的捷径（整行含它就跳过）；号码判据不吃这条，
@@ -262,6 +267,8 @@ def scan_text(path: str, text: str, blocked=None):
         for name, pat in PATTERNS:
             m = pat.search(line)
             if m:
+                if name == "本地可逆混淆个人文本" and m.group(0) in INTENTIONAL_PUBLIC_TEXT:
+                    continue
                 hits.append((path, lineno, name, m.group(0)[:40]))
     return hits
 

@@ -42,7 +42,7 @@
 
 ### 工具链
 
-- **推送前隐私收口**：本机路径默认改为仓库相对路径或环境变量；个人派生标签改由 `EGGBLOOM_PERSONA_TAG` 提供，源码中的可逆混淆个人备忘已移除，`check_secrets.py` 新增此类长文本的拦截规则、不再保留真实昵称名单。
+- **推送前隐私收口**：本机路径默认改为仓库相对路径或环境变量；个人派生标签改由 `EGGBLOOM_PERSONA_TAG` 提供，有意公开的人设留言按逐字白名单保留，其他可逆混淆文本由 `check_secrets.py` 拦截、不再保留真实昵称名单。
 - **一条命令跑完自检** `scripts/check_all.py`：语法 / 字段链 / 脱敏 / 页面对等 / 配置对等 / drive 记账六项合一，`-k` 单跑、`--fast` 跳浏览器项。退出码 `2` 专表「没跑成」（缺 node / playwright），跳过不算通过；`check_js_syntax.py` 找不到 node 从 `exit(0)` 改成 `exit(2)`，不再把「没装依赖」伪装成「语法通过」。
 - **字段链前置体检** `scripts/check_fieldmeta_chain.py`：注入前核对 v4 内联 / `_fieldmeta.json` / `DEFAULT_CONFIG` 三边。只读，不动任何文件。
 - **面板反向收编** `extract_field_meta.py`：`PANELS` 是手写常量，只列得出 v3 有面板的那些；v4 独有面板每重跑一次就被打回（19 → 17），配置页整块设置项消失且一声不响。改为沿用旧表顺序、追加重跑不再掉面板。
