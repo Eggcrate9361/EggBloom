@@ -621,32 +621,24 @@ class DecisionV3:
         return asdict(self)
 
     def to_prompt_injection(self) -> str:
-        """给主模型的现场参考（2026-10-25 收窄）。
+        """只传客观现场，不把决策器变成主模型的提词板。
 
-        旧版是一份「氛围 + 回复策略 + 置信度 + 对话链 + 建议语气 + 接梗建议」的
-        规格书，模型照单执行，回复变成「按条目交付」的汇报腔。现在只留现场
-        事实，并明确标注**不是指令**；置信度/能量/对话链这些仪表读数不进 prompt
-        —— 模型看到数字会跟着用分析口吻说话。
+        `strategy` / `strategy_detail` / `suggested_tone` / `hook_points` 仍保留在
+        决策元数据与日志里，供排查和仲裁使用；它们不再进入主模型 prompt。
         """
-        parts = ["【现场判断（系统参考，不是对方说的话；别复述这些词）】"]
-        parts.append(f"- 氛围：{self.atmosphere}")
-        if self.strategy:
-            _how = f"- 怎么接：{self.strategy}"
-            if self.strategy_detail:
-                _how += f"（{self.strategy_detail}）"
-            parts.append(_how)
+        parts = ["【现场状态（仅作背景感知，怎么回由你自己决定）】"]
+        if self.atmosphere:
+            parts.append(f"- 当前氛围：{self.atmosphere}")
         if self.topic and self.topic != "闲聊":
             parts.append(f"- 当前话题：{self.topic}"
                          f"（{'延续' if self.topic_continuation else '新话题'}）")
-        if self.emotion != "neutral":
-            parts.append(f"- 大家情绪：{self.emotion}")
+        if self.emotion not in ("", "neutral"):
+            parts.append(f"- 群友整体情绪：{self.emotion}")
         if self.memory_match and self.memory_items:
-            mem_summaries = [m.get("content", "") for m in self.memory_items[:3]]
-            parts.append(f"- 相关记忆：{'；'.join(mem_summaries)}")
-        if self.suggested_tone != "normal":
-            parts.append(f"- 语气：{self.suggested_tone}")
-        if self.hook_points:
-            parts.append(f"- 可以接的点：{', '.join(self.hook_points)}")
+            mem_summaries = [str(m.get("content") or "") for m in self.memory_items[:2]
+                             if str(m.get("content") or "").strip()]
+            if mem_summaries:
+                parts.append(f"- 相关前情：{'；'.join(mem_summaries)}")
         return "\n".join(parts)
 
 

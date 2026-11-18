@@ -101,6 +101,13 @@ Enforced by:
   first; direct questions may still receive a neutral definition.
 - Meme usage is committed only after confirmed delivery. Observed reactions may change
   later ranking, while learned definitions stay in review until explicitly accepted.
+- Group-decision metadata may tell the main model about objective atmosphere, topic, and
+  prior context; strategy, tone, and hook suggestions remain internal.
+- Images are evidence for a reaction, not a script to narrate. Vision descriptions
+  preserve important quoted text, and automatic collection logs never become prompt
+  memory or conversation topics.
+- Group and private conversation-topic state use separate buckets, so a private topic
+  cannot leak into group generation.
 - Visual failure, download failure, and model fallback details stay internal. User-facing
   replies must not expose phrases such as "read failed", "cannot see the image", or
   "the image is blurry".
@@ -129,6 +136,9 @@ Enforced by:
 - `tests/test_memewiki_v2.py`
 - `tests/test_grounding.py`
 - `tests/test_grounding_wire.py`
+- `tests/test_humanness_engineering.py`
+- `tests/test_ego_topic_real.py`
+- `tests/test_ego_turn_ratchet.py`
 - `tests/test_group_facts.py`
 
 ## Change Checklist

@@ -7274,7 +7274,10 @@ def describe_image_via_main(image_ref, prompt: str = "") -> str:
             return ""
         _msgs = [
             {"role": "system",
-             "content": "你在做看图。只说你真的看到的：主体、画风、两个最显眼的细节。"
+             "content": "你是帮群友看图的眼睛，只说你真的看到的：\n"
+                        "1. 图里是谁、在干嘛，一句话；\n"
+                        "2. 如果有文字或聊天截图，原样摘录最核心的一句，不要改写成新闻摘要；\n"
+                        "3. 这张图最明显的笑点、槽点或情绪气氛。\n"
                         "没有可靠信息就输出空字符串；不要解释失败，不许猜、不许编。"},
             {"role": "user", "content": [
                 {"type": "text", "text": prompt or _IMG_DESC_PROMPT},
@@ -7476,7 +7479,11 @@ def describe_video(path, question: str = "", frames=None, sheets=None,
                  _ask + f"\n\n这是同一段视频的第 {_i + 1}/{len(_sheet_list)} 张联系表，按时间顺序继续看。")
         _d = describe_image_via_main(_sheet, _this)
         if _d:
-            _parts.append((f"[第{_i + 1}/{len(_sheet_list)}张] " if len(_sheet_list) > 1 else "") + _d)
+            if len(_sheet_list) > 1:
+                _stage = ("开头", "前段", "中段", "后段")[min(_i, 3)]
+                _parts.append(f"[视频{_stage}] {_d}")
+            else:
+                _parts.append(_d)
     _desc = "\n".join(_parts).strip()
     log(f"[视频理解] {os.path.basename(ref) if not ref.startswith('http') else ref[:80]}"
         f" → {_r.get('frames')} 帧 / {len(_sheet_list)} 张 / 来源 {_r.get('source')}"

@@ -22,8 +22,25 @@ from typing import Any, Dict, List, Optional
 
 PLUGIN_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(PLUGIN_DIR, "data")
-DB_PATH = os.path.join(DATA_DIR, "chat_style.db")
+DB_PATH = os.environ.get("EGGBLOOM_CHAT_STYLE_DB") or os.path.join(DATA_DIR, "chat_style.db")
 CONFIG_PATH = os.path.join(DATA_DIR, "config.json")
+
+_STYLE_NOISE_EXACT = frozenset({"图片", "QQ", "用户", "AAA"})
+_STYLE_NOISE_MARKERS = (
+    "[图片", "[转发", "[引用", "都没取到画面", "对方发了语音", "<untrusted",
+)
+
+
+def _style_value_usable(value) -> bool:
+    """过滤系统占位符与解析残片，别把“图片”学成用户口头禅。"""
+    text = str(value or "").strip()
+    if not text or text in _STYLE_NOISE_EXACT:
+        return False
+    if any(mark in text for mark in _STYLE_NOISE_MARKERS):
+        return False
+    if text.startswith(("@", "图片", "转发", "引用")):
+        return False
+    return True
 
 PLUGIN_META = {
     "name": "chat_style",
@@ -123,6 +140,19 @@ class ChatStyleLearner:
                     conn.execute('ALTER TABLE style_features ADD COLUMN use_count INTEGER DEFAULT 0')
                 if 'last_used' not in cols:
                     conn.execute('ALTER TABLE style_features ADD COLUMN last_used REAL NOT NULL DEFAULT 0')
+                conn.commit()
+            except Exception:
+                pass
+            try:
+                conn.execute(
+                    "DELETE FROM style_features "
+                    "WHERE feature_value IN ('图片','QQ','用户','AAA') "
+                    "OR feature_value LIKE '%[图片%' "
+                    "OR feature_value LIKE '%[转发%' "
+                    "OR feature_value LIKE '%[引用%' "
+                    "OR feature_value LIKE '%都没取到画面%' "
+                    "OR feature_value LIKE '%对方发了语音%'"
+                )
                 conn.commit()
             except Exception:
                 pass
@@ -247,7 +277,7 @@ class ChatStyleLearner:
             for w in words:
                 word_freq[w] = word_freq.get(w, 0) + 1
         for word, freq in sorted(word_freq.items(), key=lambda x: x[1], reverse=True)[:10]:
-            if freq >= 2:
+            if freq >= 2 and _style_value_usable(word):
                 features.append({
                     "type": "口头禅",
                     "value": word,
@@ -260,7 +290,7 @@ class ChatStyleLearner:
             if len(msg) >= 2:
                 starters[msg[:2]] = starters.get(msg[:2], 0) + 1
         for starter, freq in sorted(starters.items(), key=lambda x: x[1], reverse=True)[:5]:
-            if freq >= 2:
+            if freq >= 2 and _style_value_usable(starter):
                 features.append({
                     "type": "开头句式",
                     "value": starter,
@@ -288,11 +318,12 @@ class ChatStyleLearner:
         for e in emoticons:
             common_emotes[e] = common_emotes.get(e, 0) + 1
         for emote, freq in sorted(common_emotes.items(), key=lambda x: x[1], reverse=True)[:5]:
-            features.append({
-                "type": "表情习惯",
-                "value": emote,
-                "weight": min(1.0, freq / 8)
-            })
+            if _style_value_usable(emote):
+                features.append({
+                    "type": "表情习惯",
+                    "value": emote,
+                    "weight": min(1.0, freq / 8)
+                })
 
         # 5. 标点习惯
         punct: Dict[str, int] = {}
@@ -383,6 +414,8 @@ class ChatStyleLearner:
         per_type: Dict[str, int] = {}
         for f in sorted(features, key=lambda x: _ORDER.get(x["type"], 5)):
             _t, _v = f["type"], str(f["value"])
+            if not _style_value_usable(_v):
+                continue
             if _t == "标点习惯" and _v in _MEANINGLESS_PUNCT:
                 continue
             if per_type.get(_t, 0) >= 2:      # 同类型最多 2 条，避免单一维度刷屏

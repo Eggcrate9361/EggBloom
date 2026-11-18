@@ -290,6 +290,7 @@ _INLINE_PLACEHOLDER_RE = re.compile(
 #: ★ 2026-11-09：注入文本不再带「第 N 次」，第 2 次起是「（又戳了你一下）」；
 #:   历史日志里的旧形态仍要认，所以两种前缀都匹配。
 _SYS_TEXT_RE = re.compile(r"^[（(]?\s*(?:戳了戳你|又戳了你一下)")
+_SYSTEM_BLOCK_RE = re.compile(r"^\s*(?:【视觉识别|【表情包】|<untrusted)")
 
 #: 指令型短句（`#sl` / `/help`）不是话题。真机 207 条（13.8%）是 `#sl`：
 #: 一个词、没有语义，当话题只会让模型每轮都被告知"你们在聊 #sl"。
@@ -531,8 +532,19 @@ class ConversationState:
         if not text:
             return ""
         # 只取第一条有实际内容的消息行
+        _in_system_block = False
         for line in text.split("\n"):
             line = _TIME_TAG_RE.sub("", line)
+            if _SYSTEM_BLOCK_RE.match(line):
+                _in_system_block = True
+                continue
+            if _in_system_block:
+                if not line.strip():
+                    _in_system_block = False
+                    continue
+                if not _SENDER_PREFIX_RE.match(line):
+                    continue
+                _in_system_block = False
             if _SELF_LINE_RE.match(line):
                 continue
             s = _strip_sender_prefix(line).strip()
@@ -1094,11 +1106,21 @@ def _get_user_id(context: Optional[dict] = None) -> str:
     return str(ctx.get("sender") or ctx.get("user_id") or "default")
 
 
+def _get_state_id(user_id: str, group_id: str = "",
+                  context: Optional[dict] = None) -> str:
+    """Conversation topic bucket: one per group, one per private chat."""
+    ctx = context or {}
+    gid = str(group_id or ctx.get("group_id") or "")
+    if gid:
+        return "group_" + gid
+    return "private_" + str(user_id or "default")
+
+
 def before_reply(message: str = "", group_id: str = "", context: Optional[dict] = None, **kwargs) -> Optional[dict]:
     """before_reply 钩子：注入人格引擎的 prompt/温度，不改动主流程。"""
     try:
         user_id = _get_user_id(context)
-        state = get_state(user_id)
+        state = get_state(_get_state_id(user_id, group_id, context))
         config = get_config()
         use_examples = config.get("example_enabled", True)
         retriever = get_example_retriever()
@@ -1133,7 +1155,7 @@ def after_reply(message: str = "", group_id: str = "", reply: str = "", context:
     """after_reply 钩子：更新会话状态，并做轻度后处理。"""
     try:
         user_id = _get_user_id(context)
-        state = get_state(user_id)
+        state = get_state(_get_state_id(user_id, group_id, context))
         state.update(message, reply)
         processed = post_process(reply, state)
         if processed != reply:

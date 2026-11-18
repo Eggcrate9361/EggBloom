@@ -53,7 +53,7 @@ MAX_FILE_LINES = 5000
 #: `notice` / `slow_ack` / `late` / `config` / `plugin` 也不进 —— 它们是短时状态，
 #: 长期记忆只留「事后值得翻出来」的事实。
 PERSIST_KINDS = frozenset({
-    "meme_save", "meme_send", "meme", "collect",
+    "meme_save", "meme_send", "meme",
     "task", "image", "file", "job", "proactive",
     "edit", "run", "admin",
     # 2026-11-15 全补：出站动作与身份变更
@@ -67,7 +67,7 @@ PROMPT_MAX_AGE_SEC = {"poke": 600.0}
 
 #: 各类动作写进记忆时的重要度（影响衰减/保留层级，见 super_memory._classify_tier）
 PERSIST_IMPORTANCE = {
-    "meme_save": 0.7, "collect": 0.7, "task": 0.65,
+    "meme_save": 0.7, "task": 0.65,
     "image": 0.6, "file": 0.6, "job": 0.6,
     "meme": 0.5, "meme_send": 0.5, "proactive": 0.5,
     "edit": 0.6, "run": 0.5, "admin": 0.6,
@@ -83,7 +83,7 @@ _PERSIST_ON = True
 #: 不是"我做了什么" —— 而 `render()` 只有 6 个格子，让群事件去挤占它，
 #: 模型开口时看到的就全是别人的进出，反而更记不住自己的动作。
 #: 用 `self_history(kind="group_event")` 照样查得到。
-QUIET_KINDS = frozenset({"group_event"})
+QUIET_KINDS = frozenset({"group_event", "collect"})
 
 _LOCK = threading.Lock()
 _MEM: Optional[deque] = None

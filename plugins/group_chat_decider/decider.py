@@ -41,11 +41,10 @@ class Decision:
         return asdict(self)
 
     def to_prompt_injection(self) -> str:
-        """现场参考（不是指令）。与 `__init__.py` 的正式实现保持同一口径。"""
-        parts = ["【现场判断（系统参考，不是对方说的话；别复述这些词）】"]
-        parts.append(f"- 氛围：{self.atmosphere}")
-        if self.strategy:
-            parts.append(f"- 怎么接：{self.strategy}")
+        """只传现场事实；策略与台词提纲留在决策器内部。"""
+        parts = ["【现场状态（仅作背景感知，怎么回由你自己决定）】"]
+        if self.atmosphere:
+            parts.append(f"- 当前氛围：{self.atmosphere}")
         return "\n".join(parts)
 
 

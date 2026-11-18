@@ -56,7 +56,8 @@ try:
 
     txt = sa.render(scene="group", target="777", minutes=15, now=now)
     check("渲染有标题", "【你刚做过的事】" in txt, txt)
-    check("渲染带动作", "表情包" in txt and "表情库" in txt, txt)
+    check("渲染带真实动作", "表情包" in txt, txt)
+    check("自动收图不进入动作提示", "表情库" not in txt, txt)
     check("不评价（没有'偷'字）", "偷" not in txt, txt)
     check("十分钟内戳动作仍可提示", "戳了对方" in sa.render(
         scene="private", target="10001", minutes=15, now=now), "")

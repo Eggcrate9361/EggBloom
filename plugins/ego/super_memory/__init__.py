@@ -481,6 +481,8 @@ ACTION_EVENT_TYPES = (
 #: 只对当下有效、不能隔十几分钟继续影响聊天的动作事件。
 #: 读取与清理共用这一张表，旧库里的历史行也会自然过期。
 EPHEMERAL_EVENT_TTL_SEC = {"poke": 600.0}
+#: 自动采集属于后台维护，不是聊天前情；短期动作账可查，prompt 永不注入。
+PROMPT_HIDDEN_EVENT_TYPES = frozenset({"collect"})
 
 
 def _event_scope_filter(scope: str, focus_user: str) -> Tuple[str, tuple]:
@@ -1101,6 +1103,8 @@ class SuperMemory:
             )
             for row in cur.fetchall():
                 age = now - row[4]
+                if str(row[0] or "") in PROMPT_HIDDEN_EVENT_TYPES:
+                    continue
                 if age >= decay_sec:
                     continue
                 ttl = EPHEMERAL_EVENT_TTL_SEC.get(str(row[0] or ""))
@@ -1444,6 +1448,9 @@ class SuperMemory:
             conn.execute(
                 "DELETE FROM events WHERE event_type='poke' AND timestamp < ?",
                 (now - float(EPHEMERAL_EVENT_TTL_SEC["poke"]),),
+            )
+            conn.execute(
+                "DELETE FROM events WHERE event_type='collect'"
             )
             conn.commit()
             conn.close()
