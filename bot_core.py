@@ -3026,7 +3026,24 @@ def _outbound_low_send(kind: str, target: str, payload: dict, is_group: bool = F
             endpoint = "send_private_msg"
         msg = payload.get("message")
         data["message"] = msg if msg is not None else str(payload.get("text") or "")
-        return api_call(endpoint, data)
+        resp = api_call(endpoint, data)
+        # 投递事实进事件总线：主动性用它区分“没看见”和“写了但没送到”。
+        # 这里只发事实，不改发送成功判定。
+        try:
+            _rc = int((resp or {}).get("retcode", -1))
+        except (TypeError, ValueError):
+            _rc = -1
+        _text = str(payload.get("text") or "")
+        if not _text and isinstance(msg, list):
+            _text = "".join(
+                str((seg.get("data") or {}).get("text") or "")
+                for seg in msg if isinstance(seg, dict) and seg.get("type") == "text")
+        _emit_plugin_event(
+            "outbound.sent" if _rc == 0 else "outbound.failed",
+            {"scene": "group" if is_group else "private",
+             "target": str(target or ""), "text": _text[:500],
+             "kind": str(kind or "text"), "retcode": _rc, "ts": time.time()})
+        return resp
     except Exception as e:
         log(f"[发送] 底层出口异常: {e}")
         return {"retcode": -1, "msg": str(e)[:80]}
@@ -3090,6 +3107,30 @@ def _outbound_verify(kind: str, target: str, payload: dict, is_group: bool = Fal
         return None
 
 
+def _outbound_retry_record(job: dict) -> None:
+    """后台重试成功后补 history/动作账；首次同步发送不经过这里。"""
+    try:
+        payload = (job or {}).get("payload") or {}
+        text = str(payload.get("text") or "").strip()
+        if not text:
+            msg = payload.get("message")
+            if isinstance(msg, list):
+                text = "".join(
+                    str((seg.get("data") or {}).get("text") or "")
+                    for seg in msg
+                    if isinstance(seg, dict) and seg.get("type") == "text").strip()
+        if not text:
+            return
+        scene = "group" if bool(job.get("is_group")) else "private"
+        target = str(job.get("target") or "")
+        _note_self_action(
+            "say", text=text, scene=scene, target=target,
+            group_id=(target if scene == "group" else ""),
+            detail="发送重试成功", to_history=True)
+    except Exception as e:
+        log(f"[发送] 重试成功补账失败: {e}")
+
+
 def _ob_init() -> None:
     """把出站队列接到宿主上（只接一次；失败不致命）。"""
     try:
@@ -3099,6 +3140,10 @@ def _ob_init() -> None:
             _ob.set_verifier(_outbound_verify)
         except Exception as e:
             log(f"[outbound] 送达校验器不可用（退回原重试逻辑）: {e}")
+        try:
+            _ob.set_retry_success_handler(_outbound_retry_record)
+        except Exception as e:
+            log(f"[outbound] 重试成功回账器不可用: {e}")
         _ob.set_logger(log)
         _ob.set_config(lambda: _config)
         # ★ 2026-11-02（A 方案 1/4）：先把 worker 起起来 —— 它会从落盘队列
@@ -9530,6 +9575,155 @@ def _note_evade(sender):
 
 #: bot 自己在群里的角色缓存：{gid: (ts, role)}，role ∈ owner/admin/member
 _BOT_ROLE_CACHE: Dict[str, Tuple[float, str]] = {}
+_GROUP_FACT_CACHE: Dict[str, Tuple[float, dict]] = {}
+_GROUP_FACT_LOCK = threading.Lock()
+
+
+_GROUP_FACT_CONTEXT_RE = re.compile(
+    r"群主|管理员|管理|权限|群规|群规|踢(?:人|我|掉)?|谁能|谁可以|"
+    r"禁言|全员|成员|下等人|上等人|规矩",
+    re.I,
+)
+
+
+def _fact_bool(value):
+    """把协议里的 bool/0/1/"true" 归一成 True/False；缺字段返回 None。"""
+    if value is None or value == "":
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    text = str(value).strip().lower()
+    if text in ("1", "true", "yes", "on", "enabled"):
+        return True
+    if text in ("0", "false", "no", "off", "disabled"):
+        return False
+    return None
+
+
+def _group_display(member: dict) -> str:
+    member = member if isinstance(member, dict) else {}
+    return str(member.get("card") or member.get("nickname")
+               or member.get("name") or "名字未知")[:40]
+
+
+def _load_group_facts(group_id) -> dict:
+    """读取群主、管理员和能拿到的群设置；缓存，失败也只返回已知事实。"""
+    gid = str(group_id or "")
+    if not gid or not gid.isdigit():
+        return {}
+    try:
+        ttl = float(_config.get("group_fact_cache_sec", 600) or 600)
+    except (TypeError, ValueError):
+        ttl = 600.0
+    now = time.time()
+    with _GROUP_FACT_LOCK:
+        hit = _GROUP_FACT_CACHE.get(gid)
+    if hit and now - hit[0] < ttl:
+        return dict(hit[1])
+
+    facts = {
+        "group_id": gid, "owner_id": "", "owner_name": "",
+        "admins": [], "members": {}, "bot_role": "",
+        "all_shut": None, "member_can_kick": None, "source_ok": False,
+    }
+    # 群资料：不同 OneBot 驱动字段名不完全一致，认识几个常见变体。
+    try:
+        resp = api_call("get_group_info",
+                        {"group_id": int(gid), "no_cache": True}, timeout=3)
+        info = resp.get("data") if isinstance(resp, dict) else {}
+        if isinstance(info, dict):
+            facts["source_ok"] = True
+            for key in ("group_all_shut", "all_shut", "whole_ban", "shutup_all"):
+                value = _fact_bool(info.get(key))
+                if value is not None:
+                    facts["all_shut"] = value
+                    break
+            for key in ("allow_member_kick", "member_can_kick",
+                        "group_member_kick", "kick_member"):
+                value = _fact_bool(info.get(key))
+                if value is not None:
+                    facts["member_can_kick"] = value
+                    break
+    except Exception as e:
+        log(f"[群事实] get_group_info 失败 group={gid}: {e}")
+
+    try:
+        resp = api_call("get_group_member_list", {"group_id": int(gid)}, timeout=5)
+        members = resp.get("data") if isinstance(resp, dict) else []
+        if isinstance(members, list) and members:
+            facts["source_ok"] = True
+            by_id = {}
+            for m in members:
+                if not isinstance(m, dict):
+                    continue
+                uid = str(m.get("user_id") or "")
+                if not uid:
+                    continue
+                role = str(m.get("role") or "member")
+                name = _group_display(m)
+                by_id[uid] = {"name": name, "role": role}
+                if role == "owner" and not facts["owner_id"]:
+                    facts["owner_id"], facts["owner_name"] = uid, name
+                elif role == "admin" and uid != str(BOT_QQ):
+                    facts["admins"].append({"user_id": uid, "name": name})
+                if uid == str(BOT_QQ):
+                    facts["bot_role"] = role
+            facts["members"] = by_id
+    except Exception as e:
+        log(f"[群事实] get_group_member_list 失败 group={gid}: {e}")
+
+    # 周期扫描早已维护了一份名字缓存；成员接口失败时仍可给出群主/管理员名字。
+    prior = GROUP_ROLES.get(gid) if isinstance(GROUP_ROLES, dict) else {}
+    if isinstance(prior, dict):
+        facts["owner_name"] = facts["owner_name"] or str(prior.get("owner") or "")
+        if not facts["admins"]:
+            facts["admins"] = [{"user_id": "", "name": str(x)}
+                               for x in (prior.get("admins") or []) if str(x)]
+    if not facts["bot_role"]:
+        facts["bot_role"] = _bot_group_role(gid)
+    with _GROUP_FACT_LOCK:
+        _GROUP_FACT_CACHE[gid] = (now, dict(facts))
+    return facts
+
+
+def _group_fact_block(group_id, sender="") -> str:
+    """群务问题所需的事实块。没有给出的权限/规则一律明确标为未知。"""
+    facts = _load_group_facts(group_id)
+    if not facts:
+        return ""
+    lines = ["【群务事实】回答群主、管理员、踢人、禁言、群规问题时只依据下面的事实。"]
+    owner = facts.get("owner_name") or "未知"
+    lines.append(f"- 群主：{owner}。")
+    admins = [str(x.get("name") or "名字未知")
+              for x in (facts.get("admins") or []) if isinstance(x, dict)]
+    lines.append("- 管理员：" + ("、".join(admins) if admins else "未知或没有。"))
+    bot_role = {"owner": "群主", "admin": "管理员",
+                "member": "普通成员"}.get(str(facts.get("bot_role") or ""), "未知")
+    lines.append(f"- 我在群里的身份：{bot_role}。")
+    member = (facts.get("members") or {}).get(str(sender or ""))
+    if member:
+        role = {"owner": "群主", "admin": "管理员",
+                "member": "普通成员"}.get(str(member.get("role") or ""), "未知")
+        lines.append(f"- 当前发言人的群身份：{role}（{member.get('name') or '名字未知'}）。")
+    else:
+        lines.append("- 当前发言人的群身份：未知。")
+    all_shut = facts.get("all_shut")
+    lines.append("- 全员禁言：" + (
+        "开启" if all_shut is True else "未开启" if all_shut is False else "未知"))
+    member_kick = facts.get("member_can_kick")
+    lines.append("- 普通成员能否踢人：" + (
+        "可以" if member_kick is True else "不可以" if member_kick is False else "未知"))
+    rules = _config.get("group_rules")
+    if isinstance(rules, dict):
+        rules = rules.get(str(group_id))
+    rules = str(rules or "").strip()
+    lines.append("- 本群群规文本：" + (rules[:500] if rules else "未提供，未知"))
+    lines.append(
+        "上面没有写明的内容不要推断。尤其不要编造“谁有权限”“群规写着什么”；"
+        "不知道就直接说不知道，可以补一句让对方问群管理。")
+    return "\n".join(lines)
 
 
 def _bot_group_role(group_id) -> str:
@@ -9763,6 +9957,20 @@ def _capability_block(*, is_group, group_id=None, sender="", tool_names=(),
             "最多损一句「你谁啊」或者「这得主人发话」，别装成自己权限不够的客服。")
     else:
         lines.append("当前没配管理员，谁都能让我干活。")
+    # ── 3b. 群务事实（群主/管理员/成员身份/可获得的群设置）──
+    # 「踢我你也得有权限」这类问题以前只有记忆和群画像，模型没有成员角色，
+    # 于是连续编出“你不是管理”“群规是摆设”。只在群务语境按需查询并缓存，
+    # 不给普通闲聊增加 API 调用。
+    if (is_group and group_id and _um
+            and _GROUP_FACT_CONTEXT_RE.search(_um)):
+        try:
+            _gf = _group_fact_block(group_id, sender=sender)
+            if _gf:
+                lines.append(_gf)
+        except Exception as _gfe:
+            log(f"[群事实] 注入失败 group={group_id}: {_gfe}")
+            lines.append("【群务事实】本群权限和群规暂时查不到；直说不知道，"
+                         "不要推断或编造。")
     # ── 4. 本条消息的发送者身份 ──
     if sender:
         _sender_name = ""
@@ -13370,6 +13578,7 @@ def _ai_worker() -> None:
                 ego_inject_context=params.get("ego_inject_context", ""),
                 scene_context=params.get("scene_context", ""),
                 sender=params.get("sender", ""),
+                trace_id=task_trace,
                 progress=_tick_progress)
             _trace_diag("worker-done", task_trace, task_id=task_id, outcome="ok")
             with _ai_results_lock:
@@ -14463,7 +14672,7 @@ def _agent_stream_chat(messages, tools=None, max_tokens=800,
 
 
 def _call_chat_sync(messages, runtime_cfg=None, max_tokens=AI_MAX_TOKENS, stream=False,
-                    with_tools=True, personality_temperature=None):
+                    with_tools=True, personality_temperature=None, turn_id=""):
     cfg = _llm_config(runtime_cfg)
     model_name = cfg.get("model_name") or "deepseek-flash"
     api_url = cfg.get("api_url") or DEEPSEEK_URL
@@ -14509,10 +14718,11 @@ def _call_chat_sync(messages, runtime_cfg=None, max_tokens=AI_MAX_TOKENS, stream
     #   网关不可用（旧部署/单测）时退回直连，行为与以前一致。
     if _model_gateway is not None:
         try:
-            _trace_diag("gateway-call", _cur_trace(), lane="main", task="chat")
+            _turn_for_log = str(turn_id or _cur_trace())
+            _trace_diag("gateway-call", _turn_for_log, lane="main", task="chat")
             resp = _model_gateway.call(
                 api_url, payload, api_key=api_key, timeout=60,
-                meta={"turn": _cur_trace(), "task": "chat", "plugin": "host",
+                meta={"turn": _turn_for_log, "task": "chat", "plugin": "host",
                       "lane": "main"})
         except Exception as _gw_e:
             # 预算/熔断：转成调用方认识的 ValueError（上层按"模型不可用"降级），
@@ -14631,7 +14841,8 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
                         personality_temperature: Optional[float] = None,
                         ego_inject_context: str = '', sender: str = '',
                         scene_context: str = '', progress=None,
-                        turn_images: Optional[List[str]] = None) -> Optional[str]:
+                        turn_images: Optional[List[str]] = None,
+                        trace_id: str = "") -> Optional[str]:
     # 表情包工具要看到"这一轮发了什么图"（2026-10-30，替代关键词硬判）。
     # ★ 2026-10-31：用 `turn_images`（这一轮真实收到的图）而不是 `images` ——
     #   describe 模式下图走视觉转文字、`images` 是 None，只认它的话
@@ -15198,7 +15409,8 @@ def _call_deepseek_sync(user_msg: str, images: Optional[List[str]] = None,
                 pass
             msg, usage = _call_chat_sync(messages, runtime_cfg=None, max_tokens=effective_max_tokens,
                                          stream=False, with_tools=tools_for_call,
-                                         personality_temperature=personality_temperature)
+                                         personality_temperature=personality_temperature,
+                                         turn_id=trace_id)
 
             tool_calls = msg.get("tool_calls")
             if tool_calls:

@@ -96,6 +96,9 @@ try:
     ids = [r["id"] for r in ob2.due()]
     check("★ 重启后 pending 还在", j5 in ids, ids)
     check("重启后 id 不重复", len(ids) == len(set(ids)), len(ids))
+    check("可按 id 读回执", (ob2.get(j5) or {}).get("id") == j5, ob2.get(j5))
+    check("可列出所有 pending（含未到点）",
+          any(r["id"] == j5 for r in ob2.list_pending()), ob2.list_pending())
 
     # ── 6. 清理 ────────────────────────────────────────────────
     with ob2._lock:

@@ -180,6 +180,16 @@ def on_event(ctx, event_name: str = "", payload: dict = None, **kwargs):
                 _ledger.update(scene, target,
                                lambda s, n: _led.observe_user_message(s, p, n), now)
             return None
+        if name in ("outbound.failed", "outbound.sent"):
+            scene = str(p.get("scene") or "group")
+            target = str(p.get("target") or "")
+            if target:
+                ok = name == "outbound.sent"
+                _ledger.update(
+                    scene, target,
+                    lambda s, n: _led.observe_delivery(s, p, n, ok=ok), now)
+                _ledger.save()
+            return None
         if name == "notice.poke":
             # 被戳也算一次互动：冷场计时从这里重新起算，不该"刚被戳完又去戳"
             gid = str(p.get("group_id") or "")
@@ -435,6 +445,9 @@ def _tick_once():
         "named_s": _num_or(cfg, "proactivity_name_min", 2) * 60,
         "resume_s": _num_or(cfg, "proactivity_resume_min", 3) * 60,
         "resume_gap_h": _num_or(cfg, "proactivity_resume_gap_h", 6),
+        # 明确投递失败期间只允许 outbox 重试原文，不再让模型生成“我没看见”。
+        "delivery_hold_s": max(600.0,
+                               _num_or(cfg, "proactivity_at_dropped_min", 3) * 60),
     }
     observations: List[Dict[str, Any]] = []
     for st in _ledger.states():

@@ -80,6 +80,16 @@ def main():
     check("### 块还在", raw.count("### ") >= 8, raw.count("### "))
     check("scope 标注还在", "scope=both" in raw)
 
+    print("\n[E] 大白话：少成语、少书面腔、少排比")
+    check("★ 明确不用成语", "不用成语" in raw)
+    check("★ 点掉书面腔", "书面腔" in raw)
+    check("★ 明确禁止排比", "排比句" in raw)
+    check("★ 一句话最多一个梗", "一句话最多一个梗" in raw)
+    check("群务事实要求未知就说不知道",
+          "群主、管理员、成员权限" in raw and "直接说不知道" in raw)
+    check("不再教模型说图片没取到",
+          "图没读到 → 「图我这儿没取到" not in raw)
+
     print("\n" + "=" * 60)
     print(f"通过 {PASS} / 失败 {FAIL}")
     if FAILURES:

@@ -85,6 +85,9 @@ def new_state(scene: str, target: str) -> Dict[str, Any]:
         "named_text": "",
         "resume_gap_h": 0.0,        # 这次开口距上次互动多少小时（长时间静默后回来了）
         "events_recent": [],       # 群活跃度：最近 6 小时的消息时间戳（要看冷场前多热闹）
+        "delivery_failed_ts": 0.0,  # 最近一次发送明确失败；用于区分“没回”与“没送到”
+        "delivery_failed_text": "",
+        "delivery_ok_ts": 0.0,      # 最近一次发送成功
         "updated_at": 0.0,
     }
 
@@ -220,11 +223,33 @@ def observe_notice(state: Optional[Dict[str, Any]], event: Dict[str, Any],
     return s
 
 
+def observe_delivery(state: Optional[Dict[str, Any]], event: Dict[str, Any],
+                     now: float, *, ok: bool) -> Dict[str, Any]:
+    """记录底层投递结果；只在消息**真的发出去**后清除失败标记。"""
+    e = event or {}
+    scene = str(e.get("scene") or "group")
+    target = str(e.get("target") or "")
+    s = _clone(state, scene, target)
+    if not target:
+        return s
+    ts = float(e.get("ts") or now)
+    if ok:
+        s["delivery_ok_ts"] = ts
+        s["delivery_failed_ts"] = 0.0
+        s["delivery_failed_text"] = ""
+    else:
+        s["delivery_failed_ts"] = ts
+        s["delivery_failed_text"] = str(e.get("text") or "")[:200]
+    s["updated_at"] = now
+    return s
+
+
 def scan(state: Dict[str, Any], now: float, *, no_reply_s: float,
          at_dropped_s: float, promise_s: float, idle_s: float = 0.0,
          burst_n: int = 3, burst_s: float = 120.0, image_s: float = 120.0,
          named_s: float = 120.0, resume_s: float = 180.0,
-         resume_gap_h: float = 6.0) -> List[Dict[str, Any]]:
+         resume_gap_h: float = 6.0, delivery_hold_s: float = 300.0
+         ) -> List[Dict[str, Any]]:
     """从状态里产出**候选**观察（不是决定）。纯函数，按时间只读。"""
     s = state or {}
     if not s.get("target"):
@@ -234,6 +259,10 @@ def scan(state: Dict[str, Any], now: float, *, no_reply_s: float,
     k = key_of(scene, target)
     last_user = float(s.get("last_user_ts") or 0)
     last_bot = float(s.get("last_bot_ts") or 0)
+    delivery_failed = float(s.get("delivery_failed_ts") or 0)
+    if delivery_failed and now - delivery_failed < max(0.0, delivery_hold_s):
+        # 原文仍在 outbox 重试。此时模型生成新一句只会制造重复或“我刚没看见”。
+        return []
 
     # ① 发出后无人回应
     if (s.get("pending") and last_bot > 0 and last_user < last_bot

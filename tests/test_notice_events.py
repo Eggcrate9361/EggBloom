@@ -60,6 +60,8 @@ def main():
 
     orig_pm = bot_core.get_plugin_manager
     orig_send, orig_send_g = bot_core.smart_send, bot_core.smart_send_group
+    orig_api = bot_core.api_call
+    orig_note = bot_core._note_self_action
     bot_core.get_plugin_manager = lambda: _PM()
     bot_core.smart_send = lambda *a, **k: True
     bot_core.smart_send_group = lambda *a, **k: True
@@ -151,9 +153,43 @@ def main():
             ok = False
             check("派发异常被吞掉", False, f"{type(e).__name__}: {e}")
         check("★ 插件抛异常不影响 poke 处理", ok)
+
+        print("\n[G] 底层投递结果进事件总线")
+        bot_core.get_plugin_manager = lambda: _PM()
+        events.clear()
+        bot_core.api_call = lambda *a, **k: {"retcode": 100, "msg": "rejected"}
+        bot_core._outbound_low_send(
+            "text", GID, {"text": "原始回复"}, is_group=True)
+        fail = last("outbound.failed")
+        check("★ 明确失败发 outbound.failed", bool(fail), events)
+        check("失败事件带场景/目标/原文/retcode",
+              fail.get("scene") == "group" and fail.get("target") == GID
+              and fail.get("text") == "原始回复" and fail.get("retcode") == 100, fail)
+        events.clear()
+        bot_core.api_call = lambda *a, **k: {"retcode": 0}
+        bot_core._outbound_low_send(
+            "text", USER, {"text": "重试成功"}, is_group=False)
+        okv = last("outbound.sent")
+        check("★ 重试成功发 outbound.sent",
+              okv.get("scene") == "private" and okv.get("target") == USER
+              and okv.get("text") == "重试成功", okv)
+
+        print("\n[H] 后台重试成功补历史")
+        noted = []
+        bot_core._note_self_action = lambda kind, **kw: noted.append((kind, kw))
+        bot_core._outbound_retry_record({
+            "kind": "text", "target": GID, "is_group": True,
+            "retry": True, "payload": {"text": "原始回复"}})
+        check("★ 重试成功按 say 入账",
+              noted and noted[0][0] == "say"
+              and noted[0][1].get("text") == "原始回复"
+              and noted[0][1].get("group_id") == GID
+              and noted[0][1].get("to_history") is True, noted)
     finally:
         bot_core.get_plugin_manager = orig_pm
         bot_core.smart_send, bot_core.smart_send_group = orig_send, orig_send_g
+        bot_core.api_call = orig_api
+        bot_core._note_self_action = orig_note
 
     print("\n" + "=" * 60)
     print(f"通过 {PASS} / 失败 {FAIL}")

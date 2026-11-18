@@ -56,6 +56,7 @@ _SENDER: Optional[Callable[..., dict]] = None
 #:   ★ 2026-11-09：只在「不确定发没发出去」（超时 / 网络异常 / retcode=-1）
 #:   时才问它 —— 这时候盲目重发就会让用户收到两条一模一样的消息。
 _VERIFIER: Optional[Callable[..., Optional[bool]]] = None
+_RETRY_SUCCESS: Optional[Callable[[dict], None]] = None
 #: 可选的 Channel 发送器来源（默认 None = 关闭）。设了之后 _do_job 优先用它的
 #: .send()，签名与 _SENDER 一致；不设时逐字节保持现有行为（只用 _SENDER）。
 _CHANNEL = None
@@ -66,6 +67,7 @@ _LOCK = threading.Lock()
 _QUEUE: "queue.Queue[dict]" = queue.Queue()
 #: 已经在内存队列里的 jid（恢复时跳过，防止同一条发两次）
 _INMEM_IDS: set = set()
+_RETRY_TIMERS: Dict[str, threading.Timer] = {}
 _WORKER: Optional[threading.Thread] = None
 _STARTED = False
 #: 停机信号（见 shutdown()）。哨兵对象要比任何 job 都唯一。
@@ -135,6 +137,12 @@ def set_verifier(fn: Optional[Callable[..., Optional[bool]]]) -> None:
     _VERIFIER = fn if callable(fn) else None
 
 
+def set_retry_success_handler(fn: Optional[Callable[[dict], None]]) -> None:
+    """后台重试成功时通知宿主补历史；首次同步成功不重复通知。"""
+    global _RETRY_SUCCESS
+    _RETRY_SUCCESS = fn if callable(fn) else None
+
+
 def _is_uncertain(resp: Dict[str, Any]) -> bool:
     """这次失败到底「确不确定没发出去」？
 
@@ -171,6 +179,15 @@ def _log(msg: str) -> None:
             _LOGGER(msg)
         except Exception:
             pass
+
+
+def _notify_retry_success(job: dict) -> None:
+    if not job.get("retry") or _RETRY_SUCCESS is None:
+        return
+    try:
+        _RETRY_SUCCESS(dict(job))
+    except Exception as e:
+        _log(f"[发送] 重试成功回账失败: {e}")
 
 
 def _cfg() -> dict:
@@ -216,24 +233,88 @@ def _recover_from_disk() -> int:
         n += ob.recover()
         with _LOCK:
             _skip = set(_INMEM_IDS)
+        due_ids = set()
         for chat in ob.chats_with_pending():
             for row in ob.due(chat):
                 if row["id"] in _skip:
                     continue
-                job = {"kind": row["kind"], "target": row["target"],
-                       "payload": row["payload"], "is_group": row["is_group"],
-                       "suffix": "", "jid": row["id"],
-                       "done": threading.Event(), "ok": None}
-                job["done"].set()          # 恢复的任务没有等待者
-                _QUEUE.put(job)
+                job = _job_from_row(row)
                 with _LOCK:
-                    _INMEM_IDS.add(row["id"])
+                    if job["jid"] in _INMEM_IDS:
+                        continue
+                    _INMEM_IDS.add(job["jid"])
+                _QUEUE.put(job)
+                due_ids.add(row["id"])
                 n += 1
+        # 尚未到点的 pending 在旧实现里要等下次重启才会被处理。进程保持
+        # 运行时应由定时器按 next_at 自动续跑。
+        now = time.time()
+        for row in ob.list_pending():
+            if row["id"] in _skip or row["id"] in due_ids:
+                continue
+            _schedule_retry(row, delay=max(0.0, float(row.get("next_at") or now) - now))
         if n:
             _log(f"[发送] 重启恢复 {n} 条未发出的消息")
     except Exception as e:
         _log(f"[发送] 恢复失败（本次不恢复）: {e}")
     return n
+
+
+def _job_from_row(row: dict) -> dict:
+    """把 outbox 行转成 worker job；恢复任务没有同步等待者。"""
+    job = {"kind": row.get("kind") or "text",
+           "target": str(row.get("target") or ""),
+           "payload": row.get("payload") or {},
+           "is_group": bool(row.get("is_group")),
+           "suffix": "", "jid": str(row.get("id") or ""),
+           "done": threading.Event(), "ok": None, "retry": True}
+    job["done"].set()
+    return job
+
+
+def _schedule_retry(row: dict, *, delay: Optional[float] = None) -> None:
+    """给持久 pending 行安排一次进程内重试；dead/sent 不再安排。"""
+    jid = str((row or {}).get("id") or "")
+    if not jid or _STOP.is_set():
+        return
+    try:
+        wait = (max(0.0, float(row.get("next_at") or 0) - time.time())
+                if delay is None else max(0.0, float(delay)))
+    except (TypeError, ValueError):
+        wait = 2.0
+    with _LOCK:
+        old = _RETRY_TIMERS.get(jid)
+        if old is not None and old.is_alive():
+            return
+        # 从"正在处理"集合移除，定时器触发时会重新放回；这样 recover()
+        # 不会把同一条 pending 立刻再塞进内存队列。
+        _INMEM_IDS.discard(jid)
+        timer = threading.Timer(wait, _enqueue_retry, args=(jid,))
+        timer.daemon = True
+        _RETRY_TIMERS[jid] = timer
+    _log(f"[发送] 已排重试 {jid}：{wait:.1f}s 后再次发送")
+    timer.start()
+
+
+def _enqueue_retry(jid: str) -> None:
+    """定时器回调：从落盘队列重新读取最新状态后入内存队列。"""
+    try:
+        with _LOCK:
+            _RETRY_TIMERS.pop(str(jid), None)
+        if _STOP.is_set():
+            return
+        row = _outbox.default().get(str(jid))
+        if not row or row.get("status") != "pending":
+            return
+        job = _job_from_row(row)
+        with _LOCK:
+            if job["jid"] in _INMEM_IDS:
+                return
+            _INMEM_IDS.add(job["jid"])
+            _STATS["queued"] += 1
+        _QUEUE.put(job)
+    except Exception as e:
+        _log(f"[发送] 重试入队失败 {jid}: {e}")
 
 
 def _ensure_worker() -> None:
@@ -272,6 +353,14 @@ def shutdown(timeout: float = 1.0) -> None:
     在 atexit 里先 join 掉，finalize 阶段就没有线程还攥着 stdout。
     """
     _STOP.set()
+    with _LOCK:
+        timers = list(_RETRY_TIMERS.values())
+        _RETRY_TIMERS.clear()
+    for timer in timers:
+        try:
+            timer.cancel()
+        except Exception:
+            pass
     try:
         _QUEUE.put(_SENTINEL)          # 唤醒阻塞在 get() 上的 worker
     except Exception:
@@ -305,12 +394,23 @@ def _run() -> None:
             break
         try:
             _do_job(job)
+            if job.get("retry_status") == "pending" and job.get("jid"):
+                try:
+                    row = _outbox.default().get(job["jid"]) or {}
+                    _schedule_retry(row)
+                except Exception as e:
+                    _log(f"[发送] 安排重试失败 {job.get('jid')}: {e}")
+                    _forget(job)
+            elif job.get("retry_status") == "dead" or (
+                    job.get("ok") is False and not job.get("jid")):
+                _forget(job)
         except Exception as e:                       # worker 绝不能死
             _log(f"[发送] 队列异常（继续跑）: {e}")
             try:
                 job["done"].set()
             except Exception:
                 pass
+            _forget(job)
         finally:
             # ★ 出站动作账本：不论成功/失败/异常，一个 job 只记一条。
             #   挂在 finally 而不是 _do_job 的三个 return 上，避免漏记；
@@ -355,8 +455,18 @@ def _do_job(job: dict) -> None:
         except Exception:
             pass
         job["ok"] = False
+        job["retry_status"] = "dead"
         job["done"].set()
         return
+
+    # 一次 worker 执行可能包含两次即时握手；持久 attempts 只计一次执行。
+    # 旧实现从未调用 mark_sending，attempts 永远是 0，失败永远被算成第一次，
+    # 重试次数上限和指数退避都失效。
+    try:
+        if job.get("jid"):
+            _outbox.default().mark_sending(job["jid"])
+    except Exception:
+        pass
 
     resp: Dict[str, Any] = {}
     for attempt in (1, 2):
@@ -384,6 +494,7 @@ def _do_job(job: dict) -> None:
             job["ok"] = True
             job["resp"] = resp
             _forget(job)
+            _notify_retry_success(job)
             job["done"].set()
             return
         # ★ 2026-11-09（§2 #32）：失败分两类。协议层明确回了业务错误码
@@ -404,6 +515,7 @@ def _do_job(job: dict) -> None:
             job["ok"] = True
             job["resp"] = {"retcode": 0, "verified": True}
             _forget(job)
+            _notify_retry_success(job)
             job["done"].set()
             return
         if attempt == 1:
@@ -414,11 +526,14 @@ def _do_job(job: dict) -> None:
     _log(f"[发送] {label} → {target}: retcode={resp.get('retcode')} "
          f"msg={str(resp.get('msg') or '')[:80]}{job.get('suffix') or ''}")
     _mark(failed=True)
+    persistent_status = ""
     try:
         if job.get("jid"):
-            _outbox.default().mark_failed(job["jid"], str(resp.get("msg") or ""), resp)
+            persistent_status = _outbox.default().mark_failed(
+                job["jid"], str(resp.get("msg") or ""), resp)
     except Exception:
         pass
+    job["retry_status"] = persistent_status or "dead"
     job["ok"] = False
     job["resp"] = resp
     job["done"].set()

@@ -32,6 +32,32 @@ check("_set_trace 返回同一 id", bot_core._set_trace("abc123") == "abc123")
 check("_cur_trace 读回", bot_core._cur_trace() == "abc123", bot_core._cur_trace())
 check("_trace_suffix 形如 ' trace=abc123'", bot_core._trace_suffix() == " trace=abc123", bot_core._trace_suffix())
 
+print("\n[1b] 模型网关显式接收 turn")
+class _GW:
+    def __init__(self):
+        self.meta = None
+    def call(self, url, payload, **kw):
+        self.meta = dict(kw.get("meta") or {})
+        return {"choices": [{"message": {"content": "ok"}}], "usage": {}}
+
+_gw = _GW()
+_orig_gw = bot_core._model_gateway
+_orig_provider = bot_core._config.get("provider_type")
+try:
+    bot_core._model_gateway = _gw
+    bot_core._config["provider_type"] = "openai"
+    bot_core._call_chat_sync(
+        [{"role": "user", "content": "hi"}],
+        with_tools=False, turn_id="turn-abc")
+    check("★ gateway meta.turn 使用显式值",
+          _gw.meta and _gw.meta.get("turn") == "turn-abc", _gw.meta)
+finally:
+    bot_core._model_gateway = _orig_gw
+    if _orig_provider is None:
+        bot_core._config.pop("provider_type", None)
+    else:
+        bot_core._config["provider_type"] = _orig_provider
+
 print("\n[2] 出站事件带同一个 trace")
 events = []
 
@@ -73,6 +99,8 @@ check("★ 新批次写 trace_id", '"trace_id": _tid,' in src)
 check("★ 批次入口恢复 trace", '_batch_tid = _set_trace(str(buffer.get("trace_id")' in src)
 check("★ AI worker 显式恢复任务 trace", 'task_trace = str(params.get("_trace_id") or "")' in src)
 check("★ 提交 AI 任务时捕获当前 trace", 'params["_trace_id"] = task_trace' in src)
+check("★ worker 把 trace 显式传给模型调用", "trace_id=task_trace" in src)
+check("★ 模型网关显式使用调用方的 turn", 'turn_id=trace_id' in src)
 check("★ 并入现有批次时记录 MERGED", '_trace_note(_tid, "MERGED"' in src)
 check("★ 决策放行日志带 trace 后缀", '{_trace_suffix()}' in src)
 

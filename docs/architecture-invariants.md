@@ -62,10 +62,16 @@ Enforced by:
 - A partial multi-bubble send commits only delivered bubbles.
 - Failed sends release temporary deduplication reservations.
 - Unknown delivery outcomes must remain distinguishable from confirmed failure.
+- Confirmed send failures remain in the persistent outbox and are retried in-process
+  from the persisted schedule; callers keep the original generated text.
+- Proactive follow-up is suspended while a conversation has a recent delivery failure,
+  so "not delivered" is not observed as "bot did not see the message".
 
 Enforced by:
 
 - `tests/test_proactive_deliver.py`
+- `tests/test_outbound_persistent_retry.py`
+- `tests/test_outbound_no_dup_retry.py`
 - `tests/test_outbound.py`
 - `tests/test_outbound_verify.py`
 
@@ -88,6 +94,9 @@ Enforced by:
   "the image is blurry".
 - Runtime `tags.json` and `descriptions.json` are data, not source defaults; deployment
   synchronization must not replace them with repository test fixtures.
+- Group-management questions use fetched group owner, administrator, sender role, and
+  available group settings. Facts that the protocol does not expose remain explicitly
+  unknown and must not be inferred.
 
 Enforced by:
 
@@ -98,6 +107,7 @@ Enforced by:
 - `tests/test_recall_contract.py`
 - `tests/test_packaging.py`
 - `tests/test_meme_back.py`
+- `tests/test_group_facts.py`
 
 ## Change Checklist
 

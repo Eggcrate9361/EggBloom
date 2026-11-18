@@ -93,6 +93,21 @@ def main():
           not any(o["kind"] == "at_dropped" for o in L.scan(cleared, t + 400, **args)),
           L.scan(cleared, t + 400, **args))
 
+    print("\n=== D2) 明确投递失败 ≠ 没看见 ===")
+    failed = L.observe_delivery(
+        at, {"scene": "group", "target": "1000000006",
+             "text": "我已经回了", "ts": t + 10}, t + 10, ok=False)
+    held = L.scan(failed, t + 200, **dict(args, delivery_hold_s=600))
+    check("★ 发送失败冷却期内不生成 at_dropped", held == [], held)
+    check("失败标记带原文", failed.get("delivery_failed_text") == "我已经回了", failed)
+    later = L.scan(failed, t + 700, **dict(args, delivery_hold_s=600))
+    check("失败保留超过保护期后才允许重新判断",
+          any(o["kind"] == "at_dropped" for o in later), later)
+    delivered = L.observe_delivery(
+        failed, {"scene": "group", "target": "1000000006",
+                 "text": "我已经回了", "ts": t + 20}, t + 20, ok=True)
+    check("★ 成功投递清除失败保护", not delivered.get("delivery_failed_ts"), delivered)
+
     pr = L.observe_bot_reply(None, {"scene": "private", "user_id": "1000000006",
                                     "text": "我等下发你那张图", "ts": t,
                                     "trace_id": "p1"}, t)

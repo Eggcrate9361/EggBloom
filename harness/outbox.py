@@ -202,6 +202,21 @@ class Outbox:
                 (max(1, int(limit)),)).fetchall()
         return [self._row(r) for r in rows]
 
+    def get(self, jid: str) -> Optional[Dict[str, Any]]:
+        """按 id 读一条任务；不存在返回 None。"""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM jobs WHERE id=?", (str(jid),)).fetchone()
+        return self._row(row) if row else None
+
+    def list_pending(self, *, limit: int = 1000) -> List[Dict[str, Any]]:
+        """列出所有 pending 任务（含未到点的），用于恢复重试定时器。"""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM jobs WHERE status='pending' ORDER BY seq LIMIT ?",
+                (max(1, int(limit)),)).fetchall()
+        return [self._row(r) for r in rows]
+
     def recover(self) -> int:
         """重启恢复：sending（上次死在这）→ pending；返回恢复条数。"""
         with self._lock:
