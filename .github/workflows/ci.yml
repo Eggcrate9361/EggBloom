@@ -86,6 +86,8 @@ jobs:
             "test_trace_id",
             "test_group_pipeline",
             "test_bot_core_events",
+            "test_poke_private_mode",
+            "test_poke_consistency",
             "test_notice_events",
             "test_action_coverage",
             "test_group_facts",
@@ -114,6 +116,8 @@ jobs:
             "test_forward_vision",
             "test_capability_audit",
             "test_reply_audit",
+            "test_grounding",
+            "test_grounding_wire",
             "test_tool_result_protocol",
             "test_outbound",
             "test_outbound_verify",
@@ -125,6 +129,9 @@ jobs:
             "test_recall_manager_plugin",
             "test_recall_ab",
             "test_group_decider_state",
+            "test_self_actions",
+            "test_action_log",
+            "test_private_log_display",
             "test_packaging"
           )
           $failed = @()

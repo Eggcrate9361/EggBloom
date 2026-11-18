@@ -403,11 +403,11 @@ DEFAULT_CONFIG = {
     # 用户看到的就是"计数不动"。改为 10 分钟，覆盖正常人连续戳的间隔。
     "poke_timeout": 600,
     # ── 戳一戳回复路径（1.6.0 正式版可选项，2026-11-10）──────────────
-    # 两个场景各自独立可配；默认值都等于本项加入之前的既有行为，发版零变化。
-    # 群聊三档全部走同一条 pipeline，只改 forced 或干脆不回，不引入 1.5.x
-    # 已废弃的「独立小剧场」旁路（真机：戳+消息并行生成两条、主循环阻塞 9 秒）。
+    # 两个场景各自独立可配；默认档只在反戳失败时决定文本降级走哪条路。
+    # 反戳成功时这次戳事件已经处理完，三档都不再生成文本；只有反戳失败才按
+    # 下面的模式做文本降级。群聊降级仍走同一条 pipeline，不引入独立小剧场。
     "poke_group_mode": "pipeline",      # pipeline / gated / off
-    # 私聊 standalone = 单独拼 prompt 的独立小剧场（现状）；
+    # 私聊反戳失败时才走这里。standalone = 单独拼 prompt 的独立小剧场；
     # mainline = 把「被戳」当普通私聊消息塞回 MSG_QUEUE，接得上上下文；
     # off = 只反戳不回。mainline 的注入文本不带次数（数字会被顺着数数复读）。
     "poke_private_mode": "standalone",  # standalone / mainline / off

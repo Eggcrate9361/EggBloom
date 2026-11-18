@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""私聊日志的 QQ 号显示（2026-10-28）
+r"""私聊日志的 QQ 号显示（2026-10-28）
 
 ## 线上症状
 
@@ -80,10 +80,23 @@ def test_replacer_ignores_non_qq_numbers():
         bc.resolve_qq_nick = orig
 
 
+def test_replacer_does_not_corrupt_trace():
+    """trace 是 12 位 hex；其中偶然出现的 5–12 位数字不能被当 QQ。"""
+    orig = bc.resolve_qq_nick
+    bc.resolve_qq_nick = lambda qq: "污染昵称" if qq == "5578485" else ""
+    try:
+        line = "私聊已发送 trace=4d4d5578485f"
+        out = bc._replace_qq_with_nick(line)
+        check("★ trace 原样保留", out == line, out)
+    finally:
+        bc.resolve_qq_nick = orig
+
+
 def main():
     test_no_truncated_qq_in_source()
     test_replacer_formats_known_nick()
     test_replacer_ignores_non_qq_numbers()
+    test_replacer_does_not_corrupt_trace()
     print("\n" + "=" * 56)
     if _fail:
         print(f"FAILED ({len(_fail)}): " + ", ".join(_fail))

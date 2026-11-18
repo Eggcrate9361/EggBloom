@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
 """戳一戳「回复路径可选项」回归（1.6.0 正式版，2026-11-10）。
 
-两个场景各自独立三态，默认值必须等于本项加入之前的既有行为（发版零变化）：
+两个场景各自独立三态。反戳成功时本次互动已经完成，不再进入文本生成；
+只有反戳失败才按下面的模式做文本降级：
 
     群聊  poke_group_mode   = pipeline（视同点名，forced=True）
                             | gated（同一条主链，forced=False，过决策器/发言闸）
@@ -11,7 +12,7 @@
                             | off（只反戳不回）
 
 钉住的几件事：
-  · 群聊三档**全部落在现有 pipeline 上**，不新建 1.5.x 已废弃的独立小剧场
+  · 群聊文本降级**全部落在现有 pipeline 上**，不新建 1.5.x 已废弃的独立小剧场
     （真机事故：戳+消息并行生成两条、主循环被占 9 秒）。offs 不 upsert。
   · 私聊 mainline 的注入文本**不带「第 N 次」**（数字是模板锚点，模型会顺着
     数数复读；R2 第一批 57aa2a4 已把次数从注入文本里拿掉）。
@@ -104,7 +105,7 @@ def poke_env(cfg=None):
     env.emit = mock.Mock()
     env.save_event = mock.Mock()
     env.nick = mock.Mock(side_effect=lambda u: f"昵称{u}" if u else "")
-    env.poke_back = mock.Mock()
+    env.poke_back = mock.Mock(return_value=False)
     env.upsert = mock.Mock(return_value="created")
     env.queue = mock.Mock()
     env.deepseek = mock.Mock(return_value="别戳啦～")
@@ -247,6 +248,20 @@ def test_group_modes():
                   and env.upsert.call_args.kwargs.get("forced") is True)
 
 
+def test_back_success_is_the_whole_response():
+    """反戳成功后不再走文本降级，群聊和私聊都一样。"""
+    for label, event in (("群聊", group_poke()), ("私聊", private_poke())):
+        with poke_env() as env:
+            env.poke_back.return_value = True
+            bot_core._handle_poke_event(event)
+            check(f"{label}：反戳成功只做一次", env.poke_back.call_count == 1)
+            check(f"{label}：不再进群流水线",
+                  env.upsert.call_count == 0 if label == "群聊" else True)
+            check(f"{label}：不再生成或发送文本",
+                  env.deepseek.call_count == 0 and env.send.call_count == 0)
+            check(f"{label}：不再回灌主链", env.queue.put.call_count == 0)
+
+
 # ══════════════════════════════════════════════════════════════════════
 # 3. 私聊三态：standalone / mainline / off
 # ══════════════════════════════════════════════════════════════════════
@@ -342,6 +357,7 @@ def test_requeue_downstream():
 def main():
     test_config_chain()
     test_group_modes()
+    test_back_success_is_the_whole_response()
     test_private_modes()
     test_requeue_downstream()
     print("\n" + "=" * 58)

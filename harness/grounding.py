@@ -173,7 +173,11 @@ def _overlap(claim: str, evidence: str) -> float:
 
 def _quote_after(text: str, start: int) -> str:
     seg = text[start:start + _WINDOW]
-    # 必须一起去掉换行：否则 span 会跨到下一句，把无辜的句子一起删掉
+    # 主张窗口不能跨行/跨句：否则 span 会从上一句伸到下一句，
+    # sanitize 会把两句一起删掉。真机形态：
+    #   「自己转的图还问我啥\n倒立的二次元妹妹……」
+    # 第一句里的「问我」把第二句也带走了。
+    seg = re.split(r"[\n。！？!?]", seg, maxsplit=1)[0]
     return seg.strip("，,。！？!? \t\n")
 
 

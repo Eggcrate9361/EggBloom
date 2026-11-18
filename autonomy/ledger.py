@@ -88,6 +88,8 @@ def new_state(scene: str, target: str) -> Dict[str, Any]:
         "delivery_failed_ts": 0.0,  # 最近一次发送明确失败；用于区分“没回”与“没送到”
         "delivery_failed_text": "",
         "delivery_ok_ts": 0.0,      # 最近一次发送成功
+        "last_skip_ts": 0.0,        # 主链明确选择不接这条
+        "last_skip_reason": "",
         "updated_at": 0.0,
     }
 
@@ -204,6 +206,27 @@ def observe_user_message(state: Optional[Dict[str, Any]], event: Dict[str, Any],
     return s
 
 
+def observe_skip(state: Optional[Dict[str, Any]], event: Dict[str, Any],
+                 now: float) -> Dict[str, Any]:
+    """主链明确决定“这条不接”，不能被主动性误判成漏回复。"""
+    e = event or {}
+    gid = str(e.get("group_id") or "")
+    scene = "group" if gid else "private"
+    target = gid if gid else str(e.get("sender") or e.get("user_id") or "")
+    s = _clone(state, scene, target)
+    if not target:
+        return s
+    ts = float(e.get("ts") or now)
+    s["last_skip_ts"] = ts
+    s["last_skip_reason"] = str(e.get("reason") or "")[:120]
+    # 明确不接 = 这条 @ 已经处理过，不再进入「被叫到却没回」。
+    if float(s.get("last_at_ts") or 0) <= ts:
+        s["last_at_ts"] = 0.0
+        s["last_at_text"] = ""
+    s["updated_at"] = now
+    return s
+
+
 def observe_notice(state: Optional[Dict[str, Any]], event: Dict[str, Any],
                    now: float) -> Dict[str, Any]:
     """`notice.recall` 等：只留痕，判断交给仲裁层。"""
@@ -259,6 +282,7 @@ def scan(state: Dict[str, Any], now: float, *, no_reply_s: float,
     k = key_of(scene, target)
     last_user = float(s.get("last_user_ts") or 0)
     last_bot = float(s.get("last_bot_ts") or 0)
+    last_skip = float(s.get("last_skip_ts") or 0)
     delivery_failed = float(s.get("delivery_failed_ts") or 0)
     if delivery_failed and now - delivery_failed < max(0.0, delivery_hold_s):
         # 原文仍在 outbox 重试。此时模型生成新一句只会制造重复或“我刚没看见”。
@@ -279,7 +303,8 @@ def scan(state: Dict[str, Any], now: float, *, no_reply_s: float,
 
     # ② 被 @ 却没等到 bot 的回复
     at_ts = float(s.get("last_at_ts") or 0)
-    if at_ts > 0 and last_bot < at_ts and now - at_ts >= at_dropped_s:
+    if (at_ts > 0 and last_bot < at_ts and last_skip < at_ts
+            and now - at_ts >= at_dropped_s):
         out.append({
             "kind": "at_dropped", "scene": scene, "target": target,
             "since": at_ts, "elapsed_s": round(now - at_ts, 1),
@@ -307,6 +332,7 @@ def scan(state: Dict[str, Any], now: float, *, no_reply_s: float,
     st_last = float(s.get("streak_last_ts") or 0)
     need = burst_n if scene == "private" else max(2, burst_n - 1)
     if (streak >= need and st_start > 0 and last_bot < st_start
+            and last_skip < st_last
             and now - st_last >= burst_s):
         quiet = (scene == "private") or (float(s.get("last_other_ts") or 0) < st_start)
         if quiet:
@@ -321,7 +347,7 @@ def scan(state: Dict[str, Any], now: float, *, no_reply_s: float,
 
     # ⑥ 只发了图/文件，一个字没配
     img_ts = float(s.get("image_only_ts") or 0)
-    if img_ts > last_bot and now - img_ts >= image_s:
+    if img_ts > last_bot and img_ts > last_skip and now - img_ts >= image_s:
         out.append({
             "kind": "image_only", "scene": scene, "target": target,
             "since": img_ts, "elapsed_s": round(now - img_ts, 1),
@@ -333,7 +359,7 @@ def scan(state: Dict[str, Any], now: float, *, no_reply_s: float,
 
     # ⑦ 提到了名字，但没真的 @（被当成耳旁风）
     nm_ts = float(s.get("named_ts") or 0)
-    if nm_ts > last_bot and now - nm_ts >= named_s:
+    if nm_ts > last_bot and nm_ts > last_skip and now - nm_ts >= named_s:
         out.append({
             "kind": "name_dropped", "scene": scene, "target": target,
             "since": nm_ts, "elapsed_s": round(now - nm_ts, 1),
@@ -344,7 +370,7 @@ def scan(state: Dict[str, Any], now: float, *, no_reply_s: float,
 
     # ⑧ 隔了很久没说话，回来第一句：接上次的话头
     gap = float(s.get("resume_gap_h") or 0)
-    if (gap >= resume_gap_h and last_user > last_bot
+    if (gap >= resume_gap_h and last_user > last_bot and last_user > last_skip
             and now - last_user >= resume_s):
         out.append({
             "kind": "resume_topic", "scene": scene, "target": target,

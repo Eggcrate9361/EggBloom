@@ -8,6 +8,11 @@ This document defines the state and side-effect rules that runtime changes must 
 - A merged message points to the batch that owns the reply turn.
 - Trace IDs must survive queue and worker boundaries.
 - Record-only paths must not emit messages.
+- A poke that is answered by a successful poke-back is complete; it must not
+  also enter text generation, and its synthetic event must not become chat history.
+- Self-originated poke notices are rejected before plugin dispatch or action handling.
+- Transient poke state expires independently from durable action history and cannot
+  be recalled as an active event after its short window.
 
 Enforced by:
 
@@ -99,6 +104,10 @@ Enforced by:
 - Visual failure, download failure, and model fallback details stay internal. User-facing
   replies must not expose phrases such as "read failed", "cannot see the image", or
   "the image is blurry".
+- When grounding removes every claim from a generated reply, the turn ends silently.
+  Bare filler such as "嗯" or "……" is not a valid substitute for having nothing to say.
+- An intentional silent turn is reported to proactivity so it is not later mistaken
+  for a missed reply and answered by a follow-up generator.
 - Runtime `tags.json` and `descriptions.json` are data, not source defaults; deployment
   synchronization must not replace them with repository test fixtures.
 - Group-management questions use fetched group owner, administrator, sender role, and
@@ -111,11 +120,15 @@ Enforced by:
 - `tests/test_recall_ab.py`
 - `tests/test_group_decider_logic.py`
 - `tests/test_group_decider_state.py`
+- `tests/test_poke_private_mode.py`
+- `tests/test_poke_consistency.py`
 - `tests/test_recall_contract.py`
 - `tests/test_packaging.py`
 - `tests/test_meme_back.py`
 - `tests/test_memewiki.py`
 - `tests/test_memewiki_v2.py`
+- `tests/test_grounding.py`
+- `tests/test_grounding_wire.py`
 - `tests/test_group_facts.py`
 
 ## Change Checklist

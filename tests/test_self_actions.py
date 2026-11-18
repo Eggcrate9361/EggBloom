@@ -58,6 +58,13 @@ try:
     check("渲染有标题", "【你刚做过的事】" in txt, txt)
     check("渲染带动作", "表情包" in txt and "表情库" in txt, txt)
     check("不评价（没有'偷'字）", "偷" not in txt, txt)
+    check("十分钟内戳动作仍可提示", "戳了对方" in sa.render(
+        scene="private", target="10001", minutes=15, now=now), "")
+    sa.record("poke", scene="private", target="stale", ts=now - 701)
+    check("★ 十一分钟前的戳不再进 prompt",
+          sa.render(scene="private", target="stale", minutes=15, now=now) == "", "")
+    check("★ 戳动作不再写长期记忆", "poke" not in sa.PERSIST_KINDS,
+          sorted(sa.PERSIST_KINDS))
 
     check("没有动作 → 空串",
           sa.render(scene="group", target="999", minutes=5, now=now) == "")

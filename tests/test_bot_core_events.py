@@ -45,6 +45,7 @@ class _EventHandlersBase(unittest.TestCase):
         self.auto_accept = mock.Mock(return_value={})
         self.group_restriction = mock.Mock(return_value=None)
         self.request_allowed = mock.Mock(return_value=(True, "allowed"))
+        self.poke_back = mock.Mock(return_value=False)
 
         self._patchers = [
             mock.patch.object(bot_core, "api_call", self.api_call),
@@ -57,6 +58,7 @@ class _EventHandlersBase(unittest.TestCase):
             mock.patch.object(bot_core, "_auto_accept_cfg", self.auto_accept),
             mock.patch.object(bot_core, "_group_restriction", self.group_restriction),
             mock.patch.object(bot_core, "_request_allowed", self.request_allowed),
+            mock.patch.object(bot_core, "_send_poke_back", self.poke_back),
         ]
         for p in self._patchers:
             p.start()
@@ -470,6 +472,23 @@ class TestPokeEvent(_EventHandlersBase):
         self.assertEqual(len(bot_core.GROUP_RECENT_MSGS.get("10001", [])), recent_before)
         self.assertEqual(len(bot_core.GROUP_TIMELINE.get("10001", [])), timeline_before)
 
+    def test_poke_back_success_does_not_enqueue_text(self):
+        self._reset_group()
+        self.poke_back.return_value = True
+        bot_core._handle_poke_event(self._grp_poke())
+        self.poke_back.assert_called_once()
+        self.assertNotIn("10001", bot_core.GROUP_MSG_BUFFER)
+        self.assertNotIn("10001", bot_core.GROUP_SESSION)
+
+    def test_self_poke_reentry_is_filtered_at_entry(self):
+        self._reset_group()
+        with mock.patch.object(bot_core, "BOT_QQ", "999999"), \
+                mock.patch.object(bot_core, "_emit_plugin_event") as emit:
+            bot_core._handle_poke_event(self._grp_poke(user_id="999999", target_id="10001"))
+        self.poke_back.assert_not_called()
+        emit.assert_not_called()
+        self.assertNotIn("10001", bot_core.GROUP_MSG_BUFFER)
+
     def test_group_poke_other_target_ignored(self):
         self._reset_group()
         bot_core._handle_poke_event(self._grp_poke(target_id="222", user_id="111"))
@@ -541,13 +560,28 @@ class TestPokeEvent(_EventHandlersBase):
     def test_private_poke_numeric_sends_and_registers_session(self):
         bot_core.PRIVATE_SESSION.clear()
         # 2026-10-28：私聊戳一戳要过私聊名单（与私聊消息同一条门槛）。
-        # 名单内的人戳 → 照旧回复 + 登记会话。
+        # 名单内的人戳 → 反戳失败时才走文本降级并登记会话。
         with mock.patch.object(bot_core, "TARGET_QQS", ["10086001"]):
-            bot_core._handle_poke_event({"post_type": "notice", "notice_type": "notify",
-                                         "sub_type": "poke", "user_id": "10086001"})
+            bot_core._handle_poke_event({
+                "post_type": "notice", "notice_type": "notify",
+                "sub_type": "poke", "user_id": "10086001",
+            })
         self.send_message.assert_called_once()
         self.assertEqual(self.send_message.call_args[0][1], "10086001")
-        self.assertIn("10086001", bot_core.PRIVATE_SESSION)  # 登记私聊活跃会话
+        self.assertIn("10086001", bot_core.PRIVATE_SESSION)
+        bot_core.PRIVATE_SESSION.clear()
+
+    def test_private_poke_back_success_stays_silent(self):
+        bot_core.PRIVATE_SESSION.clear()
+        self.poke_back.return_value = True
+        with mock.patch.object(bot_core, "TARGET_QQS", ["10086001"]):
+            bot_core._handle_poke_event({
+                "post_type": "notice", "notice_type": "notify",
+                "sub_type": "poke", "user_id": "10086001",
+            })
+        self.send_message.assert_not_called()
+        self.call_deepseek.assert_not_called()
+        self.assertIn("10086001", bot_core.PRIVATE_SESSION)
         bot_core.PRIVATE_SESSION.clear()
 
     def test_private_poke_stranger_ignored(self):

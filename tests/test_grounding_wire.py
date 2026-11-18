@@ -76,13 +76,22 @@ def main():
         check("定义 + 统一入口里各一次", n >= 1, n)
         n2 = srcf.count("_guard_outbound(")
         check("★ 至少 3 处走统一出口", n2 >= 3, n2)
+        _priv_guard = srcf.find("current_text=text")
         check("私聊在 smart_send 之前",
-              srcf.find("_apply_grounding_guard(sent_text, _ev_p")
-              < srcf.find('_with_outbound_origin("model", smart_send, sent_text, sender)'))
+              _priv_guard >= 0
+              and _priv_guard < srcf.find('"model", smart_send', _priv_guard))
+        _group_guard = srcf.find("current_text=merged_text")
         check("群聊在去重闸之前",
-              srcf.find("_apply_grounding_guard(sent_text, _ev_g") < srcf.find("def _rough(s):"))
-        check("★ 私聊删空退「嗯」", "整条无据，退成「嗯」" in srcf)
-        check("★ 群聊删空退「嗯」", "整条无据，退成「嗯」" in srcf)
+              _group_guard >= 0
+              and _group_guard < srcf.find("def _rough(s):", _group_guard))
+        check("★ 私聊删空走静默", "整条无据，本轮静默" in srcf)
+        check("★ 群聊删空走静默", "整条无据，本轮静默" in srcf)
+        check("★ 不再用「嗯」冒充有效回复", "退成「嗯」" not in srcf)
+        check("★ 纯图没有可发内容时不再补「……」",
+              '_fallback = "……"' not in srcf
+              and "纯图回复没有可发送内容" in srcf)
+        check("★ 当前输入也作为事实证据",
+              "current_text=text" in srcf and "current_text=merged_text" in srcf)
         # 2026-11-04：证据拼装搬进 _guard_outbound（按 scene 取 history）
         check("★ 统一出口按场景取 history",
               "group_chat_history" in srcf and "chat_history" in srcf)
@@ -121,6 +130,17 @@ def main():
                     pass
             else:
                 bc.chat_history = _hist_bak
+
+        bc.chat_history = {"t_current": []}
+        try:
+            current = bc._guard_outbound(
+                "刚问这是啥，画面里是草地",
+                scene="private", target="t_current", where="测",
+                current_text="这是啥\n[图片：画面里是草地]")
+            check("★ 当前轮的图片说明能支撑回复",
+                  "画面里是草地" in current, current)
+        finally:
+            bc.chat_history.pop("t_current", None)
 
     finally:
         if old is None:

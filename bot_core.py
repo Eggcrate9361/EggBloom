@@ -208,6 +208,22 @@ def _trace_suffix() -> str:
     return f" trace={t}" if t else ""
 
 
+def _report_turn_skipped(*, scene: str, target: str, reason: str,
+                         group_id: str = "", sender: str = "") -> None:
+    """Record an intentional no-reply for trace and proactive observation."""
+    target = str(target or "")
+    reason = str(reason or "主动选择不回复")[:120]
+    _trace_note(_cur_trace(), "SKIPPED", scene=scene, target=target, why=reason[:80])
+    _emit_plugin_event("turn.skipped", {
+        "group_id": str(group_id or ""),
+        "sender": str(sender or ""),
+        "user_id": str(sender or target),
+        "scene": str(scene or "group"),
+        "reason": reason,
+        "ts": time.time(),
+    })
+
+
 def _with_outbound_origin(origin: str, fn, *args, **kwargs):
     """给**一次**出站发送打上来路标记（出站动作账本用）。
 
@@ -2782,15 +2798,32 @@ def _replace_qq_with_nick(msg):
     if _log_replacing:
         return msg
     import re
+
+    # trace 是 12 位十六进制。旧正则会从其中截出 5–12 位纯数字，把 trace
+    # 拼成一个昵称；这里先按完整 token 保护，昵称替换只处理其余片段。
+    _trace_re = re.compile(r"(?<![0-9A-Za-z])trace=[0-9a-f]{12}(?![0-9A-Za-z])",
+                           re.I)
+
     def replacer(m):
         qq = m.group(1)
         nick = resolve_qq_nick(qq)
         if nick:
             return f"{nick}({qq})"
         return qq
+
+    def replace_segment(segment):
+        return re.sub(r'(?<!\d)(\d{5,12})(?!\d)', replacer, segment)
+
     _log_replacing = True
     try:
-        return re.sub(r'(?<!\d)(\d{5,12})(?!\d)', replacer, msg)
+        out = []
+        pos = 0
+        for match in _trace_re.finditer(msg):
+            out.append(replace_segment(msg[pos:match.start()]))
+            out.append(match.group(0))
+            pos = match.end()
+        out.append(replace_segment(msg[pos:]))
+        return "".join(out)
     finally:
         _log_replacing = False
 
@@ -4154,7 +4187,8 @@ def _apply_grounding_guard(text: str, evidence, *, where: str = "",
         return text
 
 
-def _guard_outbound(text: str, *, scene: str, target: str = "", where: str = "") -> str:
+def _guard_outbound(text: str, *, scene: str, target: str = "", where: str = "",
+                    current_text: str = "") -> str:
     """唯一的出口闸：任何要发出去的话都从这里过一遍。
 
     scene: "private" / "group"。证据取自对应 history（模型这一轮能看到的全部）。
@@ -4169,6 +4203,12 @@ def _guard_outbound(text: str, *, scene: str, target: str = "", where: str = "")
         _ev = [str(h.get("content") or "") for h in _hist][-14:]
         _users = [str(h.get("content") or "") for h in _hist if h.get("role") == "user"][-10:]
         _owns = [str(h.get("content") or "") for h in _hist if h.get("role") == "assistant"][-8:]
+        # 当前输入尚未进 history，但它同样是模型可见的真实证据。
+        # 少了这一条，图片描述、引用正文和刚说完的话都会被事实围栏当成编造。
+        _current = str(current_text or "").strip()
+        if _current:
+            _ev.append(_current)
+            _users.append(_current)
         # 时长类判据的尺子：这段对话**看得见的最早时间戳**。
         # 只在最近 24 小时里取，否则老历史会把跨度撑到几天，判据永远不触发。
         _now = time.time()
@@ -12440,19 +12480,23 @@ def _handle_poke_event(ev):
     """notice.notify.poke 事件：群戳 → 进群回复流水线；私戳 → AI 回复 + 登记私聊活跃会话。"""
     poke_uid = str(ev.get("user_id", ""))
     poke_gid = ev.get("group_id")
+    # Bot 刚发起的反戳会作为 notice 回流。入口就挡掉，别等到 target 校验，
+    # 更不能把它发给事件总线或再反戳一次。
+    if str(BOT_QQ or "") and poke_uid == str(BOT_QQ):
+        log("[事件] 戳一戳自回流忽略（发起者是 Bot）")
+        return
     # ★ 2026-11-03（1.6.0 P1，§8.1 #5）：notice.poke 进事件总线。
     #   发在下面"目标是不是 Bot"的过滤**之前** —— 群友互戳同样是事实，
     #   插件要靠它判断"没人在戳我"（主动戳一戳的冷却就依赖这条）。
     #   载荷字段固定：group_id / operator / target / ts。
     # ★ 2026-11-16：Bot 自己戳人不算「有人戳我」。群友互戳仍照发（那是事实，
     #   主动戳一戳的冷却要靠它）；这里只挡 operator 是 Bot 自己的情况。
-    if str(ev.get("user_id", "") or "") != str(BOT_QQ):
-        _emit_plugin_event("notice.poke", {
-            "group_id": str(poke_gid or ""),
-            "operator": str(ev.get("user_id", "") or ""),
-            "target": str(ev.get("target_id", "") or ""),
-            "ts": time.time(),
-        })
+    _emit_plugin_event("notice.poke", {
+        "group_id": str(poke_gid or ""),
+        "operator": str(ev.get("user_id", "") or ""),
+        "target": str(ev.get("target_id", "") or ""),
+        "ts": time.time(),
+    })
     # 防御：若事件带 target_id 且目标不是 Bot，忽略（群友互戳不触发）
     _poke_target = ev.get("target_id")
     if _poke_target is not None and str(_poke_target) != "" and str(_poke_target) != str(BOT_QQ):
@@ -12483,8 +12527,12 @@ def _handle_poke_event(ev):
         if not _group_allowed(poke_gid):
             _notice_group_blocked(str(poke_gid), _group_block_reason(str(poke_gid)))
             return
-        # 反戳：先戳回去，让对方知道 Bot 反应了
-        _send_poke_back(poke_uid, poke_gid)
+        # 反戳本身就是完整回应。动作成功后不再生成一段文本，避免
+        # 「刚戳回去又问对方为什么戳我」这种互相抵消的两层反应。
+        if _send_poke_back(poke_uid, poke_gid):
+            log(f"[事件] 反戳成功，本次戳事件已处理，不再生成文本 user={poke_uid}")
+            return
+        log(f"[事件] 反戳失败，按 poke_group_mode 进入文本降级 user={poke_uid}")
         gid_str = str(poke_gid)
         # 戳一戳计数（同一人同一群，poke_timeout 内累计）
         _poke_key = f"{gid_str}_{poke_uid}"
@@ -12508,11 +12556,8 @@ def _handle_poke_event(ev):
         #   里的数字是强模板锚点 —— 模型看见「第 7 次」就顺着数数回一句
         #   「第七次了哦」，同一句模板换个数字复读。次数只留在 POKE_COUNTS
         #   和日志里，模型上下文里只有"被戳了"这个事实。
-        # ★ 2026-10-29（真机 14:44）：原来 forced=False，结果"戳一下"要过两道闸 ——
-        #   决策器先判 observe（评分 0.36 < 0.50），25 秒后发言闸再按档 3 概率拦一次，
-        #   用户体感就是"戳了不理"。戳一戳是**直接指向 Bot 的动作**，等价于点名：
-        #   只反戳不说话等于没反应。所以这里改成 forced=True（进决策器、放行发言闸），
-        #   频率由 POKE_COUNTS/poke_timeout 计数和回复预算约束，不会无限刷。
+        # 只有反戳失败才会到这里。pipeline 视同点名（forced=True），
+        # gated 仍交给决策器/发言闸；反戳已成功时根本不会生成文本。
         # ★ 2026-11-10：正式版可选项。三档全部走同一条 pipeline，
         #   不引入 1.5.x 已废弃的「独立小剧场」旁路（真机：戳+消息并行
         #   生成两条、主循环被占 9 秒，见本分支上方注释）。
@@ -12522,8 +12567,8 @@ def _handle_poke_event(ev):
         if _group_poke_mode == "off":
             log(f"[事件] 群戳一戳按配置只反戳不回复: mode=off user={poke_uid}")
         else:
-            # gated 放开 forced，让决策器 + 发言闸照常判（1.5.9 之前的旧行为，
-            # 更安静但可能「戳了不理」）；pipeline 视同点名，戳了必回。
+            # gated 放开 forced，让决策器 + 发言闸照常判；pipeline 把这次
+            # 文本降级视同点名。两者都只在反戳失败后执行。
             _pipeline_upsert(
                 gid_str, sender=poke_uid,
                 text=("（戳了戳你）" if poke_n <= 1 else "（又戳了你一下）"),
@@ -12543,7 +12588,7 @@ def _handle_poke_event(ev):
             log(f"[事件] 私聊戳一戳忽略: 好友自动回复已关闭 user={poke_qq}")
             return
         # 名单内才反戳
-        _send_poke_back(poke_qq, None)
+        _private_poked_back = bool(_send_poke_back(poke_qq, None))
         # 戳一戳 = 主动互动，登记私聊活跃会话（撤回反馈门槛）
         try:
             with _session_lock:
@@ -12551,6 +12596,10 @@ def _handle_poke_event(ev):
                     PRIVATE_SESSION[poke_qq] = {"last_msg_time": time.time()}
         except Exception:
             pass
+        if _private_poked_back:
+            log(f"[事件] 私聊反戳成功，本次戳事件已处理，不再生成文本 user={poke_qq}")
+            return
+        log(f"[事件] 私聊反戳失败，按 poke_private_mode 进入文本降级 user={poke_qq}")
         poke_nick = resolve_qq_nick(poke_uid) or poke_uid
         _poke_key = f"private_{poke_uid}"
         _poke_count = POKE_COUNTS.get(_poke_key, {"count": 0, "time": 0})
@@ -17828,6 +17877,10 @@ def _pipeline_step(group_id):
                            is_group=True)
         except Exception:
             pass
+        _report_turn_skipped(
+            scene="group", target=str(group_id),
+            reason=_gate_why or "发言闸跳过", group_id=str(group_id),
+            sender=str(buffer.get("sender") or ""))
         return
     _decision = _decide(group_id, buffer)
     # P2-1（2026-10-30）：决策摘要落 chat_logs。此前"回不回 / 为什么不回"只在
@@ -17859,12 +17912,10 @@ def _pipeline_step(group_id):
         log(f"群[{group_id}] [跳过] 无触发条件，忽略消息"
             + (f" · 决策理由：{_why}" if _why else "")
             + f": {merged_text[:80]}")
-        try:
-            from harness import turn_trace as _tt_sk
-            _tt_sk.note(_cur_trace(), "SKIPPED", scene="group", target=str(group_id),
-                        why=(_why or "无触发条件")[:80])
-        except Exception:
-            pass
+        _report_turn_skipped(
+            scene="group", target=str(group_id),
+            reason=_why or "无触发条件", group_id=str(group_id),
+            sender=str(buffer.get("sender") or ""))
         return
     if _decision.get("reason") == "触发":
         log(f"群[{group_id}] [决策放行] 触发: {merged_text[:60]}{_trace_suffix()}")
@@ -18499,7 +18550,10 @@ def _pipeline_step(group_id):
                     f"（不是模型决定沉默；该次生成的 token 已经计费）")
             else:
                 log(f"群[{group_id}] AI决定不回复: {reply[:30] if reply else '(空)'}")
-            _trace_skip(group_id, "AI决定不回复")
+            _report_turn_skipped(
+                scene="group", target=str(group_id),
+                reason="AI决定不回复", group_id=str(group_id),
+                sender=str(buffer.get("sender") or ""))
             return
 
         if reply:
@@ -18846,14 +18900,21 @@ def _pipeline_step(group_id):
                 #  放在去重闸之前：去重要比的是**真正会发出去的**那一版。
                 #  证据 = 这个群最近的 history（user 行自带说话人前缀）。
                 try:
-                    _g_g = _guard_outbound(sent_text, scene="group",
-                                           target=str(group_id), where=f"群[{group_id}]")
+                    _g_g = _guard_outbound(
+                        sent_text, scene="group", target=str(group_id),
+                        where=f"群[{group_id}]", current_text=merged_text)
                     if _g_g != sent_text:
                         if _g_g:
                             sent_text = _g_g
                         else:
-                            sent_text = "嗯"
-                            log(f"群[{group_id}] [事实围栏] 整条无据，退成「嗯」")
+                            sent_text = ""
+                            _dropped = True
+                            log(f"群[{group_id}] [事实围栏] 整条无据，本轮静默")
+                            _report_turn_skipped(
+                                scene="group", target=str(group_id),
+                                reason="事实围栏无可发送内容",
+                                group_id=str(group_id),
+                                sender=str(buffer.get("sender") or ""))
                 except Exception as _ge_g:
                     log(f"[事实围栏] 群校验跳过: {_ge_g}")
 
@@ -18894,6 +18955,7 @@ def _pipeline_step(group_id):
             else:
                 log(f"群[{group_id}] 仅表情标记，跳过文本发送")
 
+            _poke_owner = buffer.get("poke_uid")
             # 表情包附着：AI 标注了 [表情] 或自动检测到情绪时发一张
             # emoji_bonus 来自情绪形式参数（兴奋）+ persona_warmth（亲近），
             # 只在"没检测到情绪"时当概率兜底用（见 try_send_meme）。
@@ -18904,22 +18966,18 @@ def _pipeline_step(group_id):
             if meme_file:
                 _sent_ok = True
 
-            # ── 纯图回复的兜底（1.5.7）──
+            # ── 纯图回复没有可发送内容 ──
             #    模型只写了 [表情:xxx] 时上面不会走文字发送，全靠这一张图。
-            #    但 try_send_meme 会因为**冷却/引擎禁用/匹配不到**返回 None ——
-            #    那样这条回复就彻底消失了：群里什么都没发生，日志里只有一行
-            #    "仅表情标记，跳过文本发送"，看起来像 Bot 没收到消息。
-            #    这里兜一句最简文本，宁可发个"草"也不能凭空失踪。
-            if not sent_text and not meme_file:
-                try:
-                    _fallback = "……"
-                    if _with_outbound_origin("model", smart_send_group, group_id,
-                                             _fallback, reply_id=_quote_id):
-                        _sent_ok = True
-                        log(f"群[{group_id}] [纯图兜底] 表情未发出，改发文字「{_fallback}」")
-                        track_bot_reply(group_id, _fallback)
-                except Exception as _e:
-                    log(f"群[{group_id}] [纯图兜底] 失败: {_e}")
+            #    冷却、引擎禁用或匹配不到时，不再拿「嗯」「……」这类空话
+            #    强制补位；记录为主动静默，交给下一个真实话头。
+            if not sent_text and not meme_file and not _poke_owner:
+                _dropped = True
+                log(f"群[{group_id}] [纯图] 表情未发出，本轮静默")
+                _report_turn_skipped(
+                    scene="group", target=str(group_id),
+                    reason="纯图回复没有可发送内容",
+                    group_id=str(group_id),
+                    sender=str(buffer.get("sender") or ""))
 
             # ── 戳一戳的"炸毛"表情包（2026-10-25 补回）──
             # 旧版 `_handle_poke_event` 末尾无条件发一张 POKE_MEME_EMOTIONS 里的图，
@@ -18928,7 +18986,6 @@ def _pipeline_step(group_id):
             # 模型本批已经用 [表情:xx] 发过一张就不再补 —— 否则一个戳换来两张图。
             # 发成功也记 `_sent_ok`：只有图、没有文字时同样算"回应过了"，
             # 追问权该解（旧版就是这样，这里不能因为"没文本"就不给）。
-            _poke_owner = buffer.get("poke_uid")
             if _poke_owner and MEME_OK and not meme_file:
                 try:
                     _emotion = random.choice(POKE_MEME_EMOTIONS)
@@ -18960,18 +19017,31 @@ def _pipeline_step(group_id):
                 # 发送成功后才提交这一轮；提交前再审计一次，历史/记忆里存脱敏后的最终文本。
                 _commit_text = audit_outgoing(
                     sent_text or reply or "……", is_group=True)[0]
-                _commit_group_turn(group_id, merged_text, _commit_text)
-                save_instruction(merged_text, _commit_text)
-                # ★ 2026-11-16（路线图 3.3）：SuperMemory 也在**发送成功后**提交。
-                #   after_reply 已不再写库 —— 被丢弃/被抑制/发送失败的回复不该
-                #   在记忆里留下一条「Bot 说过这句话」。
-                try:
-                    from plugins.ego import super_memory as _sm
-                    _sm.commit_sent_turn(scope="group", scope_id=str(group_id),
-                                         user_id=str(buffer.get("sender") or ""),
-                                         message=merged_text, reply=_commit_text)
-                except Exception as _sm_e:
-                    log(f"[记忆] 群本轮提交失败（不影响发送）: {_sm_e}")
+                _is_poke_turn = bool(
+                    buffer.get("poke_uid") or buffer.get("source") == "poke")
+                if _is_poke_turn:
+                    # 「（戳了戳你）」是系统合成事件，不是群友原话。把它写成
+                    # user/assistant 轮次后，十几分钟后的普通接话还会翻出旧戳。
+                    # 文本动作留在短期行为账本，对话历史只收真实消息。
+                    if sent_text:
+                        _note_self_action(
+                            "say", text=sent_text, scene="group",
+                            target=str(group_id), group_id=str(group_id),
+                            detail="被戳后的文本降级")
+                    log(f"群[{group_id}] 戳事件文本降级只入动作账，不写对话历史")
+                else:
+                    _commit_group_turn(group_id, merged_text, _commit_text)
+                    save_instruction(merged_text, _commit_text)
+                    # ★ 2026-11-16（路线图 3.3）：SuperMemory 也在**发送成功后**提交。
+                    #   after_reply 已不再写库 —— 被丢弃/被抑制/发送失败的回复不该
+                    #   在记忆里留下一条「Bot 说过这句话」。
+                    try:
+                        from plugins.ego import super_memory as _sm
+                        _sm.commit_sent_turn(scope="group", scope_id=str(group_id),
+                                             user_id=str(buffer.get("sender") or ""),
+                                             message=merged_text, reply=_commit_text)
+                    except Exception as _sm_e:
+                        log(f"[记忆] 群本轮提交失败（不影响发送）: {_sm_e}")
                 # ★ 2026-11-16（路线图 3.1）：发送与提交两个终点。
                 try:
                     from harness import turn_trace as _tt_sent
@@ -21127,6 +21197,12 @@ def main():
                             reply = _qr
                 except Exception as _qe:
                     log(f"[反问闸] 跳过: {_qe}")
+                if not reply or reply.strip() in ("[不说话]", "[跳过]"):
+                    log(f"私聊[{sender}] AI决定不回复")
+                    _report_turn_skipped(
+                        scene="private", target=str(sender),
+                        reason="AI决定不回复", sender=str(sender))
+                    continue
                 if reply:
                     log(f"私聊AI回复({sender}): {reply[:80]}")
                     # 表情包匹配：剥离 [表情] 标记后发送文本
@@ -21182,6 +21258,9 @@ def main():
                                 if _t_new is not None and _t_new != sent_text:
                                     if _t_new == "":
                                         log(f"私聊[{sender}] [插件抑制] typed after_reply 返回空串 → 不发送")
+                                        _report_turn_skipped(
+                                            scene="private", target=str(sender),
+                                            reason="插件抑制", sender=str(sender))
                                     else:
                                         log(f"私聊[{sender}] [typed 覆盖] {_t_new[:60]}")
                                     sent_text = _t_new
@@ -21246,18 +21325,26 @@ def main():
                         #  证据 = 这一段私聊 history 的全部内容 + 这一轮用户消息。
                         #  模型只能知道这些，之外的细节（"你刚说…"、"我听到…"）就是编的。
                         try:
-                            _g_p = _guard_outbound(sent_text, scene="private",
-                                                   target=sender, where=f"私聊[{sender}]")
+                            _g_p = _guard_outbound(
+                                sent_text, scene="private", target=sender,
+                                where=f"私聊[{sender}]", current_text=text)
                             if _g_p != sent_text:
                                 if _g_p:
                                     sent_text = _g_p
                                 else:
-                                    # 全删了：退一句短的，别静默
-                                    sent_text = "嗯"
-                                    log(f"私聊[{sender}] [事实围栏] 整条无据，退成「嗯」")
+                                    sent_text = ""
+                                    log(f"私聊[{sender}] [事实围栏] 整条无据，本轮静默")
+                                    _report_turn_skipped(
+                                        scene="private", target=str(sender),
+                                        reason="事实围栏无可发送内容",
+                                        sender=str(sender))
                         except Exception as _ge:
                             log(f"[事实围栏] 私聊校验跳过: {_ge}")
-                        ok = _with_outbound_origin("model", smart_send, sent_text, sender)
+                        if sent_text:
+                            ok = _with_outbound_origin(
+                                "model", smart_send, sent_text, sender)
+                        else:
+                            ok = False
                     else:
                         log("私聊 仅表情标记，跳过文本发送")
                     
@@ -21294,7 +21381,7 @@ def main():
                     
                     if ok or _pm_meme_ok:
                         # 只在真的发出去之后提交：发送失败/被抑制的回复不进历史与记忆。
-                        _pm_text = sent_text if ok else (reply or "")
+                        _pm_text = sent_text if ok else ""
                         _pm_text = audit_outgoing(_pm_text, is_group=False)[0]
                         ch = chat_history.setdefault(sender, [])
                         ch.append({"role": "user", "content": text, "ts": time.time()})

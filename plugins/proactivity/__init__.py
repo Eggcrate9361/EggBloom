@@ -180,6 +180,14 @@ def on_event(ctx, event_name: str = "", payload: dict = None, **kwargs):
                 _ledger.update(scene, target,
                                lambda s, n: _led.observe_user_message(s, p, n), now)
             return None
+        if name == "turn.skipped":
+            gid = str(p.get("group_id") or "")
+            scene = "group" if gid else "private"
+            target = gid if gid else str(p.get("sender") or p.get("user_id") or "")
+            if target:
+                _ledger.update(scene, target,
+                               lambda s, n: _led.observe_skip(s, p, n), now)
+            return None
         if name in ("outbound.failed", "outbound.sent"):
             scene = str(p.get("scene") or "group")
             target = str(p.get("target") or "")

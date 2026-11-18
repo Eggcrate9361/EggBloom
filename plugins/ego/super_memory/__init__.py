@@ -478,6 +478,10 @@ ACTION_EVENT_TYPES = (
     "task", "image", "file", "job", "proactive", "action",
 )
 
+#: 只对当下有效、不能隔十几分钟继续影响聊天的动作事件。
+#: 读取与清理共用这一张表，旧库里的历史行也会自然过期。
+EPHEMERAL_EVENT_TTL_SEC = {"poke": 600.0}
+
 
 def _event_scope_filter(scope: str, focus_user: str) -> Tuple[str, tuple]:
     """事件按人过滤 —— 但 **Bot 自己的动作不按人切开**。
@@ -1099,6 +1103,9 @@ class SuperMemory:
                 age = now - row[4]
                 if age >= decay_sec:
                     continue
+                ttl = EPHEMERAL_EVENT_TTL_SEC.get(str(row[0] or ""))
+                if ttl is not None and age > ttl:
+                    continue
                 decayed = row[3] * max(0.0, (decay_sec - age) / decay_sec)
                 if decayed <= 0.3:
                     continue
@@ -1433,6 +1440,10 @@ class SuperMemory:
             conn.execute(
                 "DELETE FROM events WHERE scope_id=? AND tier='long' AND timestamp < ? AND importance < 0.6",
                 (str(scope_id), long_cutoff),
+            )
+            conn.execute(
+                "DELETE FROM events WHERE event_type='poke' AND timestamp < ?",
+                (now - float(EPHEMERAL_EVENT_TTL_SEC["poke"]),),
             )
             conn.commit()
             conn.close()

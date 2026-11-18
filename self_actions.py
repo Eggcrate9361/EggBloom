@@ -53,17 +53,22 @@ MAX_FILE_LINES = 5000
 #: `notice` / `slow_ack` / `late` / `config` / `plugin` 也不进 —— 它们是短时状态，
 #: 长期记忆只留「事后值得翻出来」的事实。
 PERSIST_KINDS = frozenset({
-    "meme_save", "meme_send", "meme", "collect", "poke",
+    "meme_save", "meme_send", "meme", "collect",
     "task", "image", "file", "job", "proactive",
     "edit", "run", "admin",
     # 2026-11-15 全补：出站动作与身份变更
     "upload", "video", "profile", "request", "qzone", "group_event", "remark",
 })
 
+#: 短期动作进入 prompt 的最长时效。poke 是当下互动，过了十分钟仍被
+#: 模型当成“正在发生”就会冒出一句无关的「别戳我」；动作本身仍可通过
+#: `self_history(kind="poke")` 查到。
+PROMPT_MAX_AGE_SEC = {"poke": 600.0}
+
 #: 各类动作写进记忆时的重要度（影响衰减/保留层级，见 super_memory._classify_tier）
 PERSIST_IMPORTANCE = {
     "meme_save": 0.7, "collect": 0.7, "task": 0.65,
-    "poke": 0.6, "image": 0.6, "file": 0.6, "job": 0.6,
+    "image": 0.6, "file": 0.6, "job": 0.6,
     "meme": 0.5, "meme_send": 0.5, "proactive": 0.5,
     "edit": 0.6, "run": 0.5, "admin": 0.6,
     "upload": 0.55, "video": 0.55, "profile": 0.6,
@@ -385,9 +390,11 @@ def render(*, scene: str = "", target: str = "", minutes: float = 15.0,
     `include_group_say`：私聊里问"你刚在群里说什么了"时，把自己的群发言
     也带进来（只带**自己说的**，不带群友的话）。
     """
-    rows = recent(scene=scene, target=target, minutes=minutes, limit=limit, now=now)
+    now_ts = time.time() if now is None else float(now)
+    rows = recent(scene=scene, target=target, minutes=minutes,
+                  limit=MAX_KEEP, now=now_ts)
     if include_group_say and scene == "private":
-        extra = [r for r in recent(scene="group", minutes=minutes, limit=3, now=now)
+        extra = [r for r in recent(scene="group", minutes=minutes, limit=3, now=now_ts)
                  if str(r.get("kind") or "") == "say"]
         if extra:
             rows = sorted(rows + extra, key=lambda r: float(r.get("ts") or 0))[-limit:]
@@ -398,6 +405,13 @@ def render(*, scene: str = "", target: str = "", minutes: float = 15.0,
         kind = str(r.get("kind") or "")
         if kind in QUIET_KINDS:
             continue
+        max_age = PROMPT_MAX_AGE_SEC.get(kind)
+        if max_age is not None:
+            try:
+                if now_ts - float(r.get("ts") or 0) > max_age:
+                    continue
+            except (TypeError, ValueError):
+                continue
         word = _KIND_WORD.get(kind, kind or "做了点什么")
         detail = str(r.get("detail") or "").strip()
         src = str(r.get("source") or "").strip()
@@ -413,6 +427,8 @@ def render(*, scene: str = "", target: str = "", minutes: float = 15.0,
         if src and src != str(r.get("target") or ""):
             line += f"〔来源 {src}〕"
         lines.append(line)
+        if len(lines) >= max(1, int(limit)):
+            break
     if not lines:                     # 全被 QUIET_KINDS 滤掉了：不要只剩一个空标题
         return ""
     return ("【你刚做过的事】（都是你自己干的；要查更早/更多的，用 self_history）\n"

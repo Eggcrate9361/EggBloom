@@ -86,6 +86,15 @@ def main():
     # 感官永远无据：即使证据里真出现了"声音"也不放行
     out9, d9 = G.sanitize("我听到你那边有声音", ["我这边有声音啊"])
     check("★ 感官不看证据（没耳朵）", out9 == "" and d9, (out9, d9))
+    # 11-18 真机：第一句里的「还问我」把下一句也圈进 claim 窗口，
+    # sanitize 于是一次删了两句。窗口必须在换行处结束。
+    raw_media = ("自己转的图还问我啥\n"
+                 "倒立的二次元妹妹，掀衣服露内裤那套，你都看不过来还要我念一遍？")
+    out_media, dropped_media = G.sanitize(raw_media, ["这是啥"])
+    check("★ 指认窗口不跨行，只删第一句",
+          "自己转的图" not in out_media
+          and "倒立的二次元妹妹" in out_media,
+          (out_media, dropped_media))
 
     print("\n[H] 偏好挪用：把对方的喜好挂自己身上")
     own = ["下班了", "毁灭完了谁陪你喝"]
