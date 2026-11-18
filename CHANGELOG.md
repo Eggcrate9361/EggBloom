@@ -12,6 +12,7 @@
 
 ### 新增
 
+- **戳一戳动作自主化**：收到戳事件不再先自动反戳或补表情包，而是进入所选回复路径，由模型决定回话、发表情、输出 `[POKE]` 反戳或沉默；`pipeline` 与 `gated` 的决策语义同步拆开。
 - **统一上下文**：`harness/life_context.compose()` 单一入口，`life_context_enable` 可回退；人格、记忆、插件注入、场感、时间锚不再散在四处。
 - **agent 从模式变工具**：`agent_service.run_chat` 包成 `deep_task`，由模型决定要不要多一双手；`agent_can_work` 合并两个旧开关；agent 路径并入预算 / 发言 / 反问 / 丢弃四道闸。
 - **出口单队列**：`harness/outbound.py` 串行 + 限频 + 去重 + 重试，文本 / 图片 / 表情 / 戳一戳统一走一处；`smart_send*` 退化为薄封装。

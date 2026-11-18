@@ -2,12 +2,14 @@
 """戳一戳接入流水线后的行为（2026-10-25）。
 
 `_handle_poke_event` 只把"被戳"写成一条入站事件，真正的判断与发送在
-`_pipeline_step` 里。这个文件跑完整的一轮，钉住四件事：
+`_pipeline_step` 里。入口不自动反戳，只有模型输出 `[POKE]` 才执行动作。
+这个文件跑完整的一轮，钉住：
 
 1. 决策器 skip → 不调模型、不发送、**不写**免 @ 追问权。
 2. 决策器放行 → 只调一次模型、只发一次，**发送之后**才写追问权（poke_owner 是戳的人）。
 3. 戳与别人的消息合并成一批 → 只有一次生成；额度记给戳的人，不记给说话的人。
 4. 发送抛异常 → 不写追问权（额度只给真的被回应的人）。
+5. 普通文本与纯表情不自动附带反戳；模型动作标记才反戳。
 
 运行：python tests/test_poke_pipeline.py
 """
@@ -88,12 +90,12 @@ def _run(plugin_results, *, poke_text=None, merge_text=None, merge_sender=OTHER,
          merge_forced=True, send_raises=False, no_poke=False, reply=None):
     """建一个戳批次（可选合并一条普通消息），同步跑一轮。返回观测结果。"""
     _clean()
-    seen = {"ai": 0, "sent": [], "meme": 0}
+    seen = {"ai": 0, "sent": [], "meme": 0, "poke": 0}
     orig = (bot_core.call_deepseek, bot_core.smart_send_group,
             bot_core.get_plugin_manager, bot_core.PLUGIN_OK,
             bot_core._dispatch_typed_before_reply, bot_core.startup_time,
             bot_core.MEME_OK, bot_core.match_meme, bot_core.send_group_image,
-            bot_core.try_send_meme)
+            bot_core.try_send_meme, bot_core._send_poke_back)
     orig_cfg = dict(bot_core._config)
     fake = _FakePM(plugin_results)
 
@@ -111,6 +113,16 @@ def _run(plugin_results, *, poke_text=None, merge_text=None, merge_sender=OTHER,
         seen["meme"] += 1
         return True
 
+    def fake_poke_back(uid, gid=None):
+        seen["poke"] += 1
+        return True
+
+    def fake_try_send_meme(gid, txt, prob_bonus=0.0):
+        if "[表情:" in str(txt or ""):
+            seen["meme"] += 1
+            return "/fake/meme.png"
+        return None
+
     bot_core.call_deepseek = fake_call
     bot_core.smart_send_group = fake_send
     bot_core.get_plugin_manager = lambda: fake
@@ -123,7 +135,8 @@ def _run(plugin_results, *, poke_text=None, merge_text=None, merge_sender=OTHER,
     bot_core.MEME_OK = True
     bot_core.match_meme = lambda x: "/fake/meme.png"
     bot_core.send_group_image = fake_send_img
-    bot_core.try_send_meme = lambda gid, txt, prob_bonus=0.0: None
+    bot_core.try_send_meme = fake_try_send_meme
+    bot_core._send_poke_back = fake_poke_back
     bot_core._config["quiet_hours"] = ""
     # 发言闸（1.5.9 §3.8 提交 6）在决策器之前就拦非触发批次；
     # 这两个用例测的是决策/观察链本身，把档位开到 4（全响应）绕开它。
@@ -151,7 +164,7 @@ def _run(plugin_results, *, poke_text=None, merge_text=None, merge_sender=OTHER,
          bot_core.get_plugin_manager, bot_core.PLUGIN_OK,
          bot_core._dispatch_typed_before_reply, bot_core.startup_time,
          bot_core.MEME_OK, bot_core.match_meme, bot_core.send_group_image,
-         bot_core.try_send_meme) = orig
+         bot_core.try_send_meme, bot_core._send_poke_back) = orig
         bot_core._config.clear()
         bot_core._config.update(orig_cfg)
     return seen, batched, fake
@@ -217,6 +230,7 @@ def test_decider_reply_sends_once_and_unlocks():
                           {"action": "inject", "content": "【群聊氛围】可以接"})])
     check("★ 只调一次模型", seen["ai"] == 1, seen["ai"])
     check("★ 只发一次", len(seen["sent"]) == 1, seen["sent"])
+    check("★ 文本回应不自动反戳", seen["poke"] == 0, seen["poke"])
     gs = bot_core.GROUP_SESSION.get(GID) or {}
     check("★ 发送后写了追问权", bool(gs), gs)
     check("poke_owner 是戳的人", gs.get("poke_owner") == POKER, gs.get("poke_owner"))
@@ -255,12 +269,12 @@ def test_send_failure_writes_nothing():
     _clean()
 
 
-def test_poke_sends_meme():
-    print("\n[6] 戳批次补发「炸毛」表情包（接流水线时漏掉的那一步）")
+def test_poke_does_not_auto_meme():
+    print("\n[6] 戳批次不自动补表情包，动作由模型选择")
     seen, buf, _ = _run([("group_chat_decider",
                           {"action": "inject", "content": "【群聊氛围】可以接"})])
-    check("★ 发了表情包", seen["meme"] >= 1, seen["meme"])
-    check("★ 只发一张（不叠 try_send_meme）", seen["meme"] == 1, seen["meme"])
+    check("★ 没自动发表情包", seen["meme"] == 0, seen["meme"])
+    check("★ 没自动反戳", seen["poke"] == 0, seen["poke"])
     _clean()
 
 
@@ -286,6 +300,17 @@ def test_meme_only_still_unlocks():
     _clean()
 
 
+def test_model_can_choose_poke():
+    print("\n[9] 模型输出 [POKE] → 只反戳，不发正文")
+    seen, buf, _ = _run([("group_chat_decider",
+                          {"action": "inject", "content": "【群聊氛围】可以接"})],
+                        reply="[POKE]")
+    check("调了一次模型", seen["ai"] == 1, seen["ai"])
+    check("★ 反戳一次", seen["poke"] == 1, seen["poke"])
+    check("★ 动作回合不发正文", not seen["sent"], seen["sent"])
+    _clean()
+
+
 def main():
     test_batch_carries_poke_source()
     test_poke_event_name_appears_once()
@@ -293,9 +318,10 @@ def main():
     test_decider_reply_sends_once_and_unlocks()
     test_merged_batch_counts_once_and_unlocks_poker()
     test_send_failure_writes_nothing()
-    test_poke_sends_meme()
+    test_poke_does_not_auto_meme()
     test_plain_msg_sends_no_poke_meme()
     test_meme_only_still_unlocks()
+    test_model_can_choose_poke()
 
     print("\n" + "=" * 56)
     if _fail:

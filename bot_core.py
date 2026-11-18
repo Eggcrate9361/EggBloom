@@ -1300,6 +1300,8 @@ PRIVATE_MSG_BUFFER: Dict[str, Dict[str, Any]] = {}
 _PRIVATE_PACE = speech_pace.SpeechPace()
 # 重新入队时打的标记：二次经过入口不再入缓冲，直接往下走
 _REQUEUE_FLAG = "_egg_merged"
+#: 重新入队的私聊戳事件。只有这种合成消息允许模型输出动作标记 `[POKE]`。
+_POKE_EVENT_FLAG = "_egg_poke_event"
 
 
 def _private_batch_delay(*, first_time, now=None, has_image=False,
@@ -12483,6 +12485,21 @@ def _send_poke_back(user_id, group_id=None):
         return False
 
 
+_POKE_ACTION_RE = re.compile(r"\[\s*(?:POKE|戳|戳一戳|反戳)\s*\]", re.I)
+_POKE_ACTION_HINT = (
+    "\n【可选动作】想戳回去才输出 [POKE]；也可以回话、只发表情或保持沉默。"
+    "不要默认反戳，[POKE] 只表示动作，不要附正文。"
+)
+
+
+def parse_poke_intent(text):
+    """从模型输出中提取戳一戳动作。返回 (去掉标记的文本, 是否要求戳回)。"""
+    raw = str(text or "")
+    wanted = bool(_POKE_ACTION_RE.search(raw))
+    clean = _POKE_ACTION_RE.sub("", raw).strip() if wanted else raw
+    return clean, wanted
+
+
 def _handle_poke_event(ev):
     """notice.notify.poke 事件：群戳 → 进群回复流水线；私戳 → AI 回复 + 登记私聊活跃会话。"""
     poke_uid = str(ev.get("user_id", ""))
@@ -12534,12 +12551,8 @@ def _handle_poke_event(ev):
         if not _group_allowed(poke_gid):
             _notice_group_blocked(str(poke_gid), _group_block_reason(str(poke_gid)))
             return
-        # 反戳本身就是完整回应。动作成功后不再生成一段文本，避免
-        # 「刚戳回去又问对方为什么戳我」这种互相抵消的两层反应。
-        if _send_poke_back(poke_uid, poke_gid):
-            log(f"[事件] 反戳成功，本次戳事件已处理，不再生成文本 user={poke_uid}")
-            return
-        log(f"[事件] 反戳失败，按 poke_group_mode 进入文本降级 user={poke_uid}")
+        # 反戳不再由事件入口直接执行。事件先进入主链，由模型决定回话、
+        # 发表情、戳回去或沉默；只有模型输出 [POKE] 才触发动作。
         gid_str = str(poke_gid)
         # 戳一戳计数（同一人同一群，poke_timeout 内累计）
         _poke_key = f"{gid_str}_{poke_uid}"
@@ -12563,8 +12576,7 @@ def _handle_poke_event(ev):
         #   里的数字是强模板锚点 —— 模型看见「第 7 次」就顺着数数回一句
         #   「第七次了哦」，同一句模板换个数字复读。次数只留在 POKE_COUNTS
         #   和日志里，模型上下文里只有"被戳了"这个事实。
-        # 只有反戳失败才会到这里。pipeline 视同点名（forced=True），
-        # gated 仍交给决策器/发言闸；反戳已成功时根本不会生成文本。
+        # pipeline 视同点名（forced=True），gated 仍交给决策器/发言闸。
         # ★ 2026-11-10：正式版可选项。三档全部走同一条 pipeline，
         #   不引入 1.5.x 已废弃的「独立小剧场」旁路（真机：戳+消息并行
         #   生成两条、主循环被占 9 秒，见本分支上方注释）。
@@ -12572,13 +12584,14 @@ def _handle_poke_event(ev):
         if _group_poke_mode not in ("pipeline", "gated", "off"):
             _group_poke_mode = "pipeline"
         if _group_poke_mode == "off":
-            log(f"[事件] 群戳一戳按配置只反戳不回复: mode=off user={poke_uid}")
+            log(f"[事件] 群戳一戳按配置不回应: mode=off user={poke_uid}")
         else:
             # gated 放开 forced，让决策器 + 发言闸照常判；pipeline 把这次
-            # 文本降级视同点名。两者都只在反戳失败后执行。
+            # 事件视同点名。
             _pipeline_upsert(
                 gid_str, sender=poke_uid,
-                text=("（戳了戳你）" if poke_n <= 1 else "（又戳了你一下）"),
+                text=(("（戳了戳你）" if poke_n <= 1 else "（又戳了你一下）")
+                      + _POKE_ACTION_HINT),
                 forced=(_group_poke_mode == "pipeline"),
                 source="poke", poke_uid=poke_uid)
     else:
@@ -12594,8 +12607,6 @@ def _handle_poke_event(ev):
         if _friend_restriction(poke_qq, "reply_enabled", True) is False:
             log(f"[事件] 私聊戳一戳忽略: 好友自动回复已关闭 user={poke_qq}")
             return
-        # 名单内才反戳
-        _private_poked_back = bool(_send_poke_back(poke_qq, None))
         # 戳一戳 = 主动互动，登记私聊活跃会话（撤回反馈门槛）
         try:
             with _session_lock:
@@ -12603,10 +12614,6 @@ def _handle_poke_event(ev):
                     PRIVATE_SESSION[poke_qq] = {"last_msg_time": time.time()}
         except Exception:
             pass
-        if _private_poked_back:
-            log(f"[事件] 私聊反戳成功，本次戳事件已处理，不再生成文本 user={poke_qq}")
-            return
-        log(f"[事件] 私聊反戳失败，按 poke_private_mode 进入文本降级 user={poke_qq}")
         poke_nick = resolve_qq_nick(poke_uid) or poke_uid
         _poke_key = f"private_{poke_uid}"
         _poke_count = POKE_COUNTS.get(_poke_key, {"count": 0, "time": 0})
@@ -12621,7 +12628,7 @@ def _handle_poke_event(ev):
         if _priv_mode not in ("standalone", "mainline", "off"):
             _priv_mode = "standalone"
         if _priv_mode == "off":
-            log(f"[事件] 私聊戳一戳按配置只反戳不回复: mode=off user={poke_qq}")
+            log(f"[事件] 私聊戳一戳按配置不回应: mode=off user={poke_qq}")
         elif _priv_mode == "mainline":
             # 交回主链：把「被戳」当成一条普通私聊消息塞回 MSG_QUEUE，
             # 走同一套 system prompt / history / 记忆 / 表情包闸门。
@@ -12640,6 +12647,7 @@ def _handle_poke_event(ev):
                     "message_id": f"_poke_{poke_qq}_{int(time.time() * 1000)}",
                     "message": [{"type": "text", "data": {"text": _poke_text}}],
                     _REQUEUE_FLAG: True,
+                    _POKE_EVENT_FLAG: True,
                 })
                 log(f"私聊戳一戳 → 交主链回复（第 {poke_n} 次，user={poke_nick}）")
             except Exception as e:
@@ -12657,12 +12665,21 @@ def _handle_poke_event(ev):
             poke_prompt = (
                 f"你是{_bot_nicknames()[0]}，18岁男生，毒舌带撒娇。{poke_nick}私聊戳了你。\n"
                 f"【当前情况】{poke_vibe}\n"
-                f"要求：15-25字，有性格，禁止「别戳了」「干嘛」「再戳要XX了」模板句式。"
+                f"要求：先决定要不要回应。正常情况下15-25字，有性格，"
+                f"禁止「别戳了」「干嘛」「再戳要XX了」模板句式。"
                 f"每次句式不同，像朋友之间打闹。不要加前缀或引用标记。"
+                f"{_POKE_ACTION_HINT}"
             )
             try:
                 reply = call_deepseek(poke_prompt, [], target_qq=poke_qq)
                 if reply:
+                    reply, _poke_wanted = parse_poke_intent(reply)
+                    if _poke_wanted:
+                        if _send_poke_back(poke_qq, None):
+                            log(f"[事件] 私聊模型选择反戳 user={poke_qq}")
+                        else:
+                            log(f"[事件] 私聊模型选择反戳但发送失败 user={poke_qq}")
+                        return
                     from meme_engine import parse_meme_intent as _pmi
                     _rp = _pmi(reply)
                     reply = _rp[0] or reply
@@ -12682,14 +12699,13 @@ def _handle_poke_event(ev):
                                      "ts": time.time()})
                         chat_history[poke_qq] = _pch[-_PRIVATE_HISTORY_CAP:]
                     log(f"私聊戳一戳回复: {reply[:40]}")
-                    # 补发戳一戳表情包（AI 标注了 [表情:xx] 则用该情绪，否则随机）
-                    if MEME_OK:
+                    # 只有模型明确标注 [表情:xx] 才补表情包，不再随机替它做动作。
+                    if MEME_OK and _emo:
                         try:
-                            _emotion = _emo or random.choice(POKE_MEME_EMOTIONS)
+                            _emotion = _emo
                             _mp = match_meme(_emotion)
-                            _poke_by = "model" if _emo else "rule"
                             if _mp and _with_outbound_origin(
-                                    _poke_by + " action=表情", send_image, _mp, poke_qq):
+                                    "model action=表情", send_image, _mp, poke_qq):
                                 log(f"私聊戳一戳表情包: {_emotion}")
                         except Exception as e2:
                             log(f"私聊戳一戳表情包失败: {e2}")
@@ -17543,8 +17559,9 @@ def _decide(group_id, batch):
                       or batch.get("has_bot_nick") or batch.get("has_text_at")
                       or batch.get("in_session")
                       or (batch.get("has_quote") and batch.get("quote_me")))
-    if not forced and batch.get("source") == "poke":
-        forced = True   # 戳一戳是直接指向 Bot 的动作（2026-10-29）
+    if (not forced and batch.get("source") == "poke"
+            and str(_config.get("poke_group_mode") or "pipeline") == "pipeline"):
+        forced = True   # pipeline 视同点名；gated 仍交给决策器和发言闸
     if forced:
         return {"act": "reply", "reason": "触发", "ctx": "", "after": 0}
 
@@ -18540,6 +18557,16 @@ def _pipeline_step(group_id):
                                        temperature=_ST.get("personality_temperature"),
                                        ego_ctx=_ego_ctx, scene_ctx=_scene_ctx)
 
+        _poke_owner = buffer.get("poke_uid")
+        if _poke_owner:
+            reply, _poke_wanted = parse_poke_intent(reply)
+            if _poke_wanted:
+                if _send_poke_back(_poke_owner, group_id):
+                    log(f"群[{group_id}] 模型选择反戳 user={_poke_owner}")
+                else:
+                    log(f"群[{group_id}] 模型选择反戳但发送失败 user={_poke_owner}")
+                return
+
         if not reply or reply.strip() in ("[不说话]", "[跳过]"):
             # ★ 2026-10-27：把"没等到"和"不想说"拆开。
             #   两者都是空字符串，但原因完全相反：一个是我们放弃了、钱已经花掉、
@@ -18962,7 +18989,6 @@ def _pipeline_step(group_id):
             else:
                 log(f"群[{group_id}] 仅表情标记，跳过文本发送")
 
-            _poke_owner = buffer.get("poke_uid")
             # 表情包附着：AI 标注了 [表情] 或自动检测到情绪时发一张
             # emoji_bonus 来自情绪形式参数（兴奋）+ persona_warmth（亲近），
             # 只在"没检测到情绪"时当概率兜底用（见 try_send_meme）。
@@ -18977,7 +19003,7 @@ def _pipeline_step(group_id):
             #    模型只写了 [表情:xxx] 时上面不会走文字发送，全靠这一张图。
             #    冷却、引擎禁用或匹配不到时，不再拿「嗯」「……」这类空话
             #    强制补位；记录为主动静默，交给下一个真实话头。
-            if not sent_text and not meme_file and not _poke_owner:
+            if not sent_text and not meme_file:
                 _dropped = True
                 log(f"群[{group_id}] [纯图] 表情未发出，本轮静默")
                 _report_turn_skipped(
@@ -18985,24 +19011,6 @@ def _pipeline_step(group_id):
                     reason="纯图回复没有可发送内容",
                     group_id=str(group_id),
                     sender=str(buffer.get("sender") or ""))
-
-            # ── 戳一戳的"炸毛"表情包（2026-10-25 补回）──
-            # 旧版 `_handle_poke_event` 末尾无条件发一张 POKE_MEME_EMOTIONS 里的图，
-            # 接进流水线时整段重写把这一步漏了 → 群戳变安静，只剩模型自己标
-            # [表情] 时才有图。这里放回，只加一个条件：`not meme_file`。
-            # 模型本批已经用 [表情:xx] 发过一张就不再补 —— 否则一个戳换来两张图。
-            # 发成功也记 `_sent_ok`：只有图、没有文字时同样算"回应过了"，
-            # 追问权该解（旧版就是这样，这里不能因为"没文本"就不给）。
-            if _poke_owner and MEME_OK and not meme_file:
-                try:
-                    _emotion = random.choice(POKE_MEME_EMOTIONS)
-                    _poke_meme = match_meme(_emotion)
-                    if _poke_meme and _with_outbound_origin(
-                            "rule action=表情", send_group_image, group_id, _poke_meme):
-                        _sent_ok = True
-                        log(f"群[{group_id}] 戳一戳表情包: {_emotion}")
-                except Exception as _pe:
-                    log(f"群[{group_id}] 戳一戳表情包失败: {_pe}")
 
             # ── 戳主的追问权：只在戳这一批真的发出之后生效（2026-10-25 定）──
             # skip / observe / 生成为空 / 发送抛异常都到不了这里 —— 额度只给已经
@@ -21162,6 +21170,8 @@ def main():
                 # 跳过说明只进这一轮的模型输入，**不进 history**（否则下一轮
                 # 模型会以为自己上轮"拒绝看图"，越聊越歪）。
                 _pm_text_for_ai = text + _pm_skip_note
+                if msg.get(_POKE_EVENT_FLAG):
+                    _pm_text_for_ai += _POKE_ACTION_HINT
 
                 # ── 反应延迟（2026-10-22，与群聊同款）──
                 #    私聊原来也是"收到 → 生成 → 发出"，中间 0 等待。
@@ -21185,6 +21195,14 @@ def main():
                 reply = _apply_search_tag_loop(reply, text, group_id=None,
                                                is_group=False, temperature=_ego_temp,
                                                target_qq=sender, ego_ctx=_ego_ctx)
+                if msg.get(_POKE_EVENT_FLAG):
+                    reply, _poke_wanted = parse_poke_intent(reply)
+                    if _poke_wanted:
+                        if _send_poke_back(sender, None):
+                            log(f"[事件] 私聊模型选择反戳 user={sender}")
+                        else:
+                            log(f"[事件] 私聊模型选择反戳但发送失败 user={sender}")
+                        continue
                 # ── 反问闸（私聊，1.5.9 §3.6）──
                 #   私聊是被点名的一对一，regen_private 在这里算"该重生"。
                 try:

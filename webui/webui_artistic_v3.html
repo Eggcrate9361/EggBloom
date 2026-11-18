@@ -1892,18 +1892,18 @@ function renderGroupPanel(root){
       <input class="input" id="sPokeTimeout" type="number" min="0"></div>
     <div class="field"><div class="field-label">群聊戳一戳回复方式</div>
       <select class="input" id="sPokeGroupMode">
-        <option value="pipeline">反戳失败时走主链·视同点名（默认）</option>
-        <option value="gated">反戳失败时走主链·过决策器与发言闸</option>
-        <option value="off">反戳失败也不生成文本</option>
+        <option value="pipeline">走主链·视同点名，由模型决定动作（默认）</option>
+        <option value="gated">走主链·先过决策器与发言闸</option>
+        <option value="off">收到戳不回应</option>
       </select>
-      <div class="field-desc">反戳成功时只反戳、不再生成文本；反戳失败才走这里。pipeline 视同点名走主链，gated 由决策器和发言闸决定是否回，off 不做文本降级。改完即时生效</div></div>
+      <div class="field-desc">不自动反戳。pipeline 视同点名走主链，gated 由决策器和发言闸决定是否进入模型，off 静默。模型想反戳时才输出 [POKE]。改完即时生效</div></div>
     <div class="field"><div class="field-label">私聊戳一戳回复方式</div>
       <select class="input" id="sPokePrivateMode">
-        <option value="standalone">反戳失败时独立小剧场（默认）</option>
-        <option value="mainline">反戳失败时交回主链·接得上上下文</option>
-        <option value="off">反戳失败也不生成文本</option>
+        <option value="standalone">独立生成回应，由模型决定动作（默认）</option>
+        <option value="mainline">交回主链·接得上上下文</option>
+        <option value="off">收到戳不回应</option>
       </select>
-      <div class="field-desc">反戳成功时只反戳、不再生成文本；反戳失败才走这里。standalone 单独生成一段短打闹回复；mainline 交回主链；off 不做文本降级。改完即时生效</div></div>
+      <div class="field-desc">不自动反戳。standalone 单独生成一段短打闹回复；mainline 交回主链；off 静默。模型想反戳时才输出 [POKE]。改完即时生效</div></div>
     <div class="field"><div class="field-label">单次回复最多拆几条</div>
       <div class="field-desc">一条回复最多分成几条发，超过就把尾部并成一条（防刷屏）。改完即时生效，不用重启</div>
       <input class="input" id="sGroupSendMaxParts" type="number" min="2" max="10"></div>

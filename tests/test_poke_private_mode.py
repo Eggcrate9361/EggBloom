@@ -1,15 +1,15 @@
 # -*- coding: utf-8 -*-
 """戳一戳「回复路径可选项」回归（1.6.0 正式版，2026-11-10）。
 
-两个场景各自独立三态。反戳成功时本次互动已经完成，不再进入文本生成；
-只有反戳失败才按下面的模式做文本降级：
+两个场景各自独立三态。收到戳后不再自动反戳，而是按下面的模式进入生成；
+模型只有主动输出 [POKE] 才执行反戳，否则可以回话、只发表情或沉默：
 
     群聊  poke_group_mode   = pipeline（视同点名，forced=True）
                             | gated（同一条主链，forced=False，过决策器/发言闸）
-                            | off（只反戳不回）
+                            | off（静默）
     私聊  poke_private_mode = standalone（独立小剧场，1.6.0 之前的行为）
                             | mainline（塞回 MSG_QUEUE 走主链，接得上上下文）
-                            | off（只反戳不回）
+                            | off（静默）
 
 钉住的几件事：
   · 群聊文本降级**全部落在现有 pipeline 上**，不新建 1.5.x 已废弃的独立小剧场
@@ -233,7 +233,11 @@ def test_group_modes():
                       "（戳了戳你）" in (kw.get("text") or "")
                       and "第 " not in (kw.get("text") or ""),
                       repr(kw.get("text")))
-            check(f"群聊 {mode}: 仍然反戳", env.poke_back.call_count == 1)
+            check(f"群聊 {mode}: 带模型动作选项",
+                  "[POKE]" in (kw.get("text") or "")
+                  and "不要默认反戳" in (kw.get("text") or ""),
+                  repr(kw.get("text")))
+            check(f"群聊 {mode}: 不自动反戳", env.poke_back.call_count == 0)
             check(f"群聊 {mode}: 不旁生独立小剧场",
                   env.deepseek.call_count == 0 and env.send.call_count == 0
                   and env.queue.put.call_count == 0)
@@ -248,18 +252,22 @@ def test_group_modes():
                   and env.upsert.call_args.kwargs.get("forced") is True)
 
 
-def test_back_success_is_the_whole_response():
-    """反戳成功后不再走文本降级，群聊和私聊都一样。"""
-    for label, event in (("群聊", group_poke()), ("私聊", private_poke())):
-        with poke_env() as env:
-            env.poke_back.return_value = True
-            bot_core._handle_poke_event(event)
-            check(f"{label}：反戳成功只做一次", env.poke_back.call_count == 1)
-            check(f"{label}：不再进群流水线",
-                  env.upsert.call_count == 0 if label == "群聊" else True)
-            check(f"{label}：不再生成或发送文本",
-                  env.deepseek.call_count == 0 and env.send.call_count == 0)
-            check(f"{label}：不再回灌主链", env.queue.put.call_count == 0)
+def test_model_poke_action():
+    """模型输出动作标记才反戳，而且动作回合不再附带正文。"""
+    clean, wanted = bot_core.parse_poke_intent("[POKE]")
+    check("动作标记可解析", wanted is True and clean == "", repr((clean, wanted)))
+    clean, wanted = bot_core.parse_poke_intent("懒得动 [戳一戳]")
+    check("中文动作标记也可解析", wanted is True and clean == "懒得动", repr((clean, wanted)))
+
+    with poke_env() as env:
+        env.deepseek.return_value = "[POKE]"
+        env.poke_back.return_value = True
+        bot_core._handle_poke_event(private_poke())
+        check("私聊：模型选择后只反戳一次", env.poke_back.call_count == 1)
+        check("私聊：动作回合不发正文",
+              env.send.call_count == 0 and env.queue.put.call_count == 0)
+        check("私聊：动作回合不写 history",
+              "10086001" not in bot_core.chat_history)
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -275,7 +283,7 @@ def test_private_modes():
         check("私聊 standalone: chat_history 补写一对",
               len(bot_core.chat_history.get("10086001", [])) == 2,
               repr(bot_core.chat_history.get("10086001")))
-        check("私聊 standalone: 仍然反戳", env.poke_back.call_count == 1)
+        check("私聊 standalone: 不自动反戳", env.poke_back.call_count == 0)
 
     # mainline：塞回主链，带 _REQUEUE_FLAG，不带次数，不自己生成
     with poke_env({"poke_timeout": 600, "poke_private_mode": "mainline"}) as env:
@@ -300,7 +308,7 @@ def test_private_modes():
               env.deepseek.call_count == 0 and env.send.call_count == 0)
         check("私聊 mainline: 不写 chat_history（由主链统一负责）",
               "10086001" not in bot_core.chat_history)
-        check("私聊 mainline: 仍然反戳", env.poke_back.call_count == 1)
+        check("私聊 mainline: 不自动反戳", env.poke_back.call_count == 0)
 
     # mainline 第二次戳：文案换形态但仍无次数
     with poke_env({"poke_timeout": 600, "poke_private_mode": "mainline"}) as env:
@@ -312,10 +320,10 @@ def test_private_modes():
         check("私聊 mainline: 两次都没有次数",
               all("第 " not in t for t in texts))
 
-    # off：只反戳
+    # off：静默
     with poke_env({"poke_timeout": 600, "poke_private_mode": "off"}) as env:
         bot_core._handle_poke_event(private_poke())
-        check("私聊 off: 只反戳", env.poke_back.call_count == 1)
+        check("私聊 off: 不自动反戳", env.poke_back.call_count == 0)
         check("私聊 off: 不入队 / 不调模型 / 不发送 / 不写 history",
               env.queue.put.call_count == 0 and env.deepseek.call_count == 0
               and env.send.call_count == 0
@@ -352,12 +360,21 @@ def test_requeue_downstream():
     # 反例：普通消息照旧进缓冲，别把放行写成了「无条件不缓冲」
     check("普通私聊消息仍会进合并缓冲",
           bot_core._should_buffer_private("在吗", [], {"message_id": "x"}) is True)
+    check("私聊戳重入队带动作事件标记",
+          "_POKE_EVENT_FLAG = " in src and "_POKE_EVENT_FLAG: True" in src)
+    check("主链只对戳事件接受模型动作",
+          "if msg.get(_POKE_EVENT_FLAG):" in src
+          and "parse_poke_intent(reply)" in src)
+    check("动作说明只进模型输入，不污染 history",
+          "_pm_text_for_ai += _POKE_ACTION_HINT" in src)
+    check("gated 不再被 source=poke 强制放行",
+          'str(_config.get("poke_group_mode") or "pipeline") == "pipeline"' in src)
 
 
 def main():
     test_config_chain()
     test_group_modes()
-    test_back_success_is_the_whole_response()
+    test_model_poke_action()
     test_private_modes()
     test_requeue_downstream()
     print("\n" + "=" * 58)

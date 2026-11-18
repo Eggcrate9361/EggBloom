@@ -67,8 +67,11 @@ try:
                encoding="utf-8", errors="replace").read()
     check("★ self poke returns at event entry",
           "戳一戳自回流忽略（发起者是 Bot）" in src)
-    check("★ successful poke-back suppresses text generation",
-          "反戳成功，本次戳事件已处理，不再生成文本" in src)
+    check("★ poke event entry no longer auto-pokes",
+          "if _send_poke_back(poke_uid, poke_gid):" not in src)
+    check("★ model action marker is wired to poke",
+          "parse_poke_intent(reply)" in src
+          and "_send_poke_back(_poke_owner, group_id)" in src)
     check("★ synthetic poke turns do not enter dialogue memory",
           "戳事件文本降级只入动作账，不写对话历史" in src)
     prox = open(os.path.join(ROOT, "plugins", "proactivity", "__init__.py"),

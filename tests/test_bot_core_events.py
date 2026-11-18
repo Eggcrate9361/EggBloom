@@ -405,12 +405,14 @@ class TestPokeEvent(_EventHandlersBase):
         self.match_meme = mock.Mock(return_value=None)
         self.send_group_image = mock.Mock(return_value=True)
         self.send_image = mock.Mock(return_value=True)
+        self.poke_back = mock.Mock(return_value=True)
         self._poke_patchers = [
             mock.patch.object(bot_core, "call_deepseek", self.call_deepseek),
             mock.patch.object(bot_core, "track_bot_reply", self.track_bot_reply),
             mock.patch.object(bot_core, "match_meme", self.match_meme),
             mock.patch.object(bot_core, "send_group_image", self.send_group_image),
             mock.patch.object(bot_core, "send_image", self.send_image),
+            mock.patch.object(bot_core, "_send_poke_back", self.poke_back),
             mock.patch.object(bot_core, "MEME_OK", False),
         ]
         for p in self._poke_patchers:
@@ -472,12 +474,14 @@ class TestPokeEvent(_EventHandlersBase):
         self.assertEqual(len(bot_core.GROUP_RECENT_MSGS.get("10001", [])), recent_before)
         self.assertEqual(len(bot_core.GROUP_TIMELINE.get("10001", [])), timeline_before)
 
-    def test_poke_back_success_does_not_enqueue_text(self):
+    def test_poke_entry_does_not_auto_poke(self):
         self._reset_group()
-        self.poke_back.return_value = True
         bot_core._handle_poke_event(self._grp_poke())
-        self.poke_back.assert_called_once()
-        self.assertNotIn("10001", bot_core.GROUP_MSG_BUFFER)
+        self.poke_back.assert_not_called()
+        buf = bot_core.GROUP_MSG_BUFFER.get("10001")
+        self.assertIsNotNone(buf)
+        self.assertIn("[POKE]", buf.get("text") or "")
+        self.assertIn("不要默认反戳", buf.get("text") or "")
         self.assertNotIn("10001", bot_core.GROUP_SESSION)
 
     def test_self_poke_reentry_is_filtered_at_entry(self):
@@ -560,7 +564,7 @@ class TestPokeEvent(_EventHandlersBase):
     def test_private_poke_numeric_sends_and_registers_session(self):
         bot_core.PRIVATE_SESSION.clear()
         # 2026-10-28：私聊戳一戳要过私聊名单（与私聊消息同一条门槛）。
-        # 名单内的人戳 → 反戳失败时才走文本降级并登记会话。
+        # 名单内的人戳 → 默认先由模型决定，普通文本回复不附带反戳。
         with mock.patch.object(bot_core, "TARGET_QQS", ["10086001"]):
             bot_core._handle_poke_event({
                 "post_type": "notice", "notice_type": "notify",
@@ -571,8 +575,9 @@ class TestPokeEvent(_EventHandlersBase):
         self.assertIn("10086001", bot_core.PRIVATE_SESSION)
         bot_core.PRIVATE_SESSION.clear()
 
-    def test_private_poke_back_success_stays_silent(self):
+    def test_private_poke_model_can_choose_poke_back(self):
         bot_core.PRIVATE_SESSION.clear()
+        self.call_deepseek.return_value = "[POKE]"
         self.poke_back.return_value = True
         with mock.patch.object(bot_core, "TARGET_QQS", ["10086001"]):
             bot_core._handle_poke_event({
@@ -580,7 +585,8 @@ class TestPokeEvent(_EventHandlersBase):
                 "sub_type": "poke", "user_id": "10086001",
             })
         self.send_message.assert_not_called()
-        self.call_deepseek.assert_not_called()
+        self.call_deepseek.assert_called_once()
+        self.poke_back.assert_called_once()
         self.assertIn("10086001", bot_core.PRIVATE_SESSION)
         bot_core.PRIVATE_SESSION.clear()
 

@@ -12,7 +12,7 @@
 这个文件钉住：
 1. `_qq_of` 能把 `123456` / `昵称(123456)` 收敛成数字 QQ，`u_xxx` 取不到。
 2. 名单外私戳：不调模型、不发送、**不反戳**。
-3. 名单内私戳：一次模型、一次发送、反戳一次、写 chat_history。
+3. 名单内私戳：一次模型、一次发送、不自动反戳、写 chat_history。
 4. 好友「自动回复已关闭」：私戳同样静默。
 5. 群戳也过群名单（这条入口此前同样绕开了 `_group_allowed`）。
 6. 名字不再被猜成 TARGET_QQS[0]（旧 `u_` 兜底会把回复发进主人私聊）。
@@ -57,6 +57,7 @@ class _Ctx:
 
     def __init__(self):
         self.calls = {"ai": 0, "sent": [], "poke_back": 0, "meme": 0}
+        self.ai_reply = "戳我干嘛"
         self._orig = {}
 
     def __enter__(self):
@@ -112,7 +113,7 @@ class _Ctx:
 
     def _fake_ai(self, *a, **kw):
         self.calls["ai"] += 1
-        return "戳我干嘛"
+        return self.ai_reply
 
     def _fake_send(self, text, target_qq=None):
         self.calls["sent"].append((str(target_qq), text))
@@ -172,17 +173,29 @@ def test_stranger_uid_poke_never_hits_owner():
 
 
 def test_whitelisted_private_poke_replies():
-    print("\n[5] 名单内私戳 → 一次模型、一次发送、反戳一次")
+    print("\n[5] 名单内私戳 → 一次模型、一次发送、不自动反戳")
     with _Ctx() as c:
         bot_core._handle_poke_event({"user_id": OWNER, "target_id": ""})
         check("调了一次模型", c.calls["ai"] == 1, c.calls["ai"])
         check("发了一条", len(c.calls["sent"]) == 1, c.calls["sent"])
         check("发给戳的人", c.calls["sent"][0][0] == OWNER, c.calls["sent"])
-        check("反戳一次", c.calls["poke_back"] == 1, c.calls["poke_back"])
+        check("★ 没自动反戳", c.calls["poke_back"] == 0, c.calls["poke_back"])
         hist = bot_core.chat_history.get(OWNER) or []
         check("chat_history 记了这轮", len(hist) == 2, hist)
         check("登记了私聊会话", OWNER in bot_core.PRIVATE_SESSION,
               list(bot_core.PRIVATE_SESSION))
+
+
+def test_model_can_choose_poke_back():
+    print("\n[5b] 模型输出 [POKE] → 只执行反戳，不发正文")
+    with _Ctx() as c:
+        c.ai_reply = "[POKE]"
+        bot_core._handle_poke_event({"user_id": OWNER, "target_id": ""})
+        check("调了一次模型", c.calls["ai"] == 1, c.calls["ai"])
+        check("★ 模型选择后反戳一次", c.calls["poke_back"] == 1, c.calls["poke_back"])
+        check("★ 动作回合不发正文", not c.calls["sent"], c.calls["sent"])
+        check("动作回合不写 chat_history", OWNER not in bot_core.chat_history,
+              list(bot_core.chat_history))
 
 
 def test_friend_restriction_blocks_poke():
@@ -205,7 +218,8 @@ def test_group_poke_group_whitelist():
         check("★ 名单外的群不反戳", c.calls["poke_back"] == 0, c.calls["poke_back"])
         bot_core._handle_poke_event({"user_id": STRANGER, "group_id": GID_OK})
         check("名单内的群照旧建批", len(ups) == 1, ups)
-        check("名单内的群照旧反戳", c.calls["poke_back"] == 1, c.calls["poke_back"])
+        check("★ 名单内的群也不自动反戳",
+              c.calls["poke_back"] == 0, c.calls["poke_back"])
 
 
 def main():
@@ -214,6 +228,7 @@ def main():
     test_stranger_private_poke_blocked()
     test_stranger_uid_poke_never_hits_owner()
     test_whitelisted_private_poke_replies()
+    test_model_can_choose_poke_back()
     test_friend_restriction_blocks_poke()
     test_group_poke_group_whitelist()
 
