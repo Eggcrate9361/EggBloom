@@ -47,7 +47,7 @@ TEXT_RULES = [
     ("media_placeholder", re.compile(
         r"\[(?:图片|表情|动画表情|语音|视频|文件|卡片|分享)\]")),
     ("memory_label", re.compile(
-        r"【(?:成就|核心记忆|日升|群聊近况|联网搜索结果|要求)】")),
+        r"【(?:成就|核心记忆|群聊近况|联网搜索结果|要求)】")),
     ("shell_fragment", re.compile(r"\[引|\[当|\[系|\[图|\[我\(")),
     ("fullwidth_bar", re.compile(r"｜")),
 ]
