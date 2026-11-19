@@ -6293,7 +6293,12 @@ def _should_skip_at_others(*, has_any_at, is_at_bot, has_xiao_a,
         return False
     if not relax:
         return True
-    if quote_me or has_bot_nick or has_reply_seg:
+    # ★ 2026-11-19：`has_reply_seg`（有任意引用段）不再算「指向我的信号」。
+    #   真机 00:30/08:38 多条：群友 `@某成员 参考漫威漫画灭霸线`，
+    #   引用段引用的是别人、注记也写着「不是在叫我，别抢话」，仍被放行给
+    #   决策器，于是 bot 抢答「紫的，穿出去被当靶子」「布鲁斯那么大，是狗吧」。
+    #   引用只有在引用的是 Bot 说话（quote_me）时才算点到我。
+    if quote_me or has_bot_nick:
         return False
     return True
 
