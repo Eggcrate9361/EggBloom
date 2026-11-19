@@ -3630,22 +3630,38 @@ def _restore_kaomoji(text, placeholders):
     return text
 
 
+#: 成对符号：切句时在括号/引号**内部**遇到句末标点不切。
+#: 2026-11-19 真机：私聊拆条把「寿来！寿来！」拆成三条
+#: （「…喊「寿来！」/ 寿来！/ 」，旁边人…），用户看到的是「话说到一半断了」。
+_BRACKET_PAIRS = {"「": "」", "『": "』", "“": "”", "‘": "’",
+                  "（": "）", "(": ")", "【": "】", "《": "》", "[" : "]"}
+
+
 def split_sentences_keep_punct(text: str):
     """按句末标点切句，**标点留在前一句**（1.5.10 E6）。
 
     旧实现 `re.split(r"[。！？!?\n]+")` 把分隔符一起吃掉：
     "吃了吗？吃了。" → ["吃了吗", "吃了"]，问号和句号都没了 ——
     群里连发时语气全靠标点，丢标点等于换了个人说话。
+
+    ★ 2026-11-19：引号/括号内的标点不算句子边界。原来正则不认配对符号，
+    `「寿来！寿来！」` 会被感叹号切开，私聊拆条后变成三条互不相接的残句。
     """
-    parts = re.split(r"([。！？!?；;\n]+)", str(text or ""))
+    s = str(text or "")
     out, buf = [], ""
-    for p in parts:
-        if p and re.fullmatch(r"[。！？!?；;\n]+", p):
-            buf += p                       # 标点/换行归前一句
-        else:
+    stack = []
+    for ch in s:
+        if ch in _BRACKET_PAIRS:
+            stack.append(_BRACKET_PAIRS[ch])
+        elif stack and ch == stack[-1]:
+            stack.pop()
+        if ch in "。！？!?；;\n" and not stack:
+            buf += ch                          # 标点归前一句
             if buf.strip():
                 out.append(buf.strip())
-            buf = p or ""
+            buf = ""
+            continue
+        buf += ch
     if buf.strip():
         out.append(buf.strip())
     return out
