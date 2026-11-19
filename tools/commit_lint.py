@@ -41,13 +41,15 @@ import re
 import subprocess
 import sys
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import privacy_terms
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 POLICY_DOC = os.path.join(ROOT, "CONTRIBUTING.md")
 BEGIN = "<!-- commitlint:begin -->"
 END = "<!-- commitlint:end -->"
 DEBT_FILE = os.path.join(ROOT, "tools", "commit_lint_debt.json")
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from identity_numbers import blocked_digests, blocked_in, is_synthetic, mask  # noqa: E402
 
 #: 规则清单（实现侧）。`enforced` 表示由本文件机器判定；False 的写进规范由人核。
@@ -111,9 +113,7 @@ _RE_NICK = re.compile(r"老大")
 
 def _nick_pattern():
     """内置规则只放通用称呼；真实昵称由本地环境变量提供，不进仓库。"""
-    extra = [x.strip() for x in
-             str(os.environ.get("EGGBLOOM_COMMIT_NICK_BLOCKLIST") or "").split(",")
-             if x.strip()]
+    extra = list(privacy_terms.load_nicknames())
     if not extra:
         return _RE_NICK
     return re.compile(

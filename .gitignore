@@ -101,3 +101,9 @@ backup/
 
 #: 本地昵称黑名单（check_secrets 用，逐行真实群名片/称呼；不进仓库）
 .nicklist
+
+# 插件运行态数据库（测试或误把工作目录当 DB 根时不得入库）
+plugins/memewiki/*.db
+plugins/memewiki/*.db-*
+plugins/memewiki/*.sqlite
+plugins/memewiki/*.sqlite3

@@ -99,6 +99,26 @@ class TestPunctKeptAndPrivateSplit(unittest.TestCase):
         self.assertTrue(all(p.endswith(("？", "。", "！")) for p in parts), parts)
         self.assertEqual(bot_core.split_private_reply("abcdef", 0), ["abcdef"])
 
+    def test_punctuation_inside_quotes_is_not_a_boundary(self):
+        import bot_core
+        got = bot_core.split_sentences_keep_punct(
+            "他喊「寿来！寿来！」然后走了。")
+        self.assertEqual(got, ["他喊「寿来！寿来！」然后走了。"], got)
+
+    def test_punctuation_inside_nested_brackets_is_not_a_boundary(self):
+        import bot_core
+        got = bot_core.split_sentences_keep_punct("他说（真的？）好。走。")
+        self.assertEqual(got, ["他说（真的？）好。", "走。"], got)
+
+    def test_orphan_marks_are_folded_back(self):
+        import bot_core
+        got = bot_core._merge_orphan_marks(
+            ["他喊「寿来！", "寿来！", "」，旁边人笑了。"])
+        self.assertFalse(any(p.lstrip().startswith(("」", "，", "。", "！", "？"))
+                             for p in got), got)
+        self.assertEqual(got[0], "他喊「寿来！", got)
+        self.assertIn("寿来！」，旁边人笑了。", got[1], got)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

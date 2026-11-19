@@ -175,7 +175,8 @@ def scan_refs(refs, since=None, cwd=None, verbose=True):
         if key in seen:
             continue
         seen.add(key)
-        for p, ln, name_, val in cs.scan_text(path or "(无路径)", text, blocked):
+        for p, ln, name_, val in cs.scan_text(
+                path or "(无路径)", text, blocked, historical=True):
             hits.append((ref, path or "(无路径)", ln, name_, val))
 
     # 提交信息 / tag 附注
@@ -190,13 +191,15 @@ def scan_refs(refs, since=None, cwd=None, verbose=True):
                 continue
             csha, _, body = chunk.partition("\x00")
             stats["commits"] += 1
-            for p, ln, name_, val in cs.scan_text("(commit message)", body, blocked):
+            for p, ln, name_, val in cs.scan_text(
+                    "(commit message)", body, blocked, historical=True):
                 hits.append((name, "commit %s" % csha[:7], ln, name_, val))
         try:
             tagmsg = _git(["for-each-ref", "--format=%(contents)", name], cwd=cwd)
         except SystemExit:
             tagmsg = ""
-        for p, ln, name_, val in cs.scan_text("(tag message)", tagmsg, blocked):
+        for p, ln, name_, val in cs.scan_text(
+                "(tag message)", tagmsg, blocked, historical=True):
             hits.append((name, "tag 附注", ln, name_, val))
 
     return hits, stats

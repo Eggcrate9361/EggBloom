@@ -125,6 +125,11 @@ Enforced by:
   directly; only ambiguous cases reach the main model.
 - Poke habits and feedback are stored per group+user, and a successful poke-back has a
   hard one-minute cooldown. Model or action failure defaults to silence.
+- Source scanning and commit-message linting read local nickname terms through the same
+  `tools/privacy_terms.py` module. Generic product titles stay in code; real local names
+  stay in ignored or environment configuration.
+- Sentence splitting treats punctuation inside paired quotes/brackets as content, and
+  orphan closing marks are folded back before either private or group delivery.
 
 Enforced by:
 
@@ -135,6 +140,10 @@ Enforced by:
 - `tests/test_poke_private_mode.py`
 - `tests/test_poke_consistency.py`
 - `tests/test_poke_policy.py`
+- `tests/test_personality_contract.py`
+- `tests/test_privacy_terms.py`
+- `tests/test_smart_send_split.py`
+- `tests/test_at_others_gate.py`
 - `tests/test_recall_contract.py`
 - `tests/test_packaging.py`
 - `tests/test_meme_back.py`

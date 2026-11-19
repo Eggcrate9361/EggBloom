@@ -53,6 +53,7 @@ sys.path.insert(0, os.path.join(ROOT, "tools"))
 # 判据被删/改名时要当场炸，不能静默退化成「没有号码闸」—— 那正是 11-13 的形态。
 import identity_numbers as idn  # noqa: E402
 import persona_tag  # noqa: E402
+import privacy_terms  # noqa: E402
 
 #: 有意随公开项目发布的人设留言。只放行逐字相等的值，其他可逆文本照拦。
 INTENTIONAL_PUBLIC_TEXT = frozenset(persona_tag.PUBLIC_FRAGMENTS)
@@ -113,6 +114,13 @@ INFRA_ALLOW = {
         "包闸/历史闸的夹具：断言「带地址的包会被拦」，IP 用文档段 192.0.2.0/24",
     ("tests/test_release_surface.py", "ubuntu@192.0.2.10"):
         "同上：user@IP 那一条判据的夹具",
+}
+
+#: 已公开历史里的昵称只按“路径 + 摘要”豁免；当前工作树仍会拦截。
+HISTORICAL_NICK_ALLOW = {
+    ("scripts/audit_style_taint.py", "d9706161ac9a098a"),
+    ("plugins/这样脆弱的东西/DESIGN.md", "d9706161ac9a098a"),
+    ("tools/commit_lint.py", "5873102fa0951713"),
 }
 
 
@@ -242,8 +250,6 @@ _IDENT_LABEL = {
 #: 本地昵称黑名单（逐行，`#` 开头为注释）。**不进仓库**，与 `.sensitive-ids` 同性质。
 #: 只登记本机真实的群名片/称呼；没有这个文件时判据关闭 —— 「老大」这类通用词
 #: 不算隐私，不能凭空拦。
-_NICK_FILE = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".nicklist")
 _NICKS = None
 
 
@@ -251,21 +257,11 @@ def _load_nicks():
     global _NICKS
     if _NICKS is not None:
         return _NICKS
-    out = []
-    try:
-        # utf-8-sig：Windows 编辑器存名单常带 BOM，不去掉第一行会整行变成昵称
-        with open(_NICK_FILE, encoding="utf-8-sig") as f:
-            for ln in f:
-                s = ln.strip()
-                if s and not s.startswith("#"):
-                    out.append(s)
-    except Exception:
-        pass
-    _NICKS = out
+    _NICKS = list(privacy_terms.load_nicknames())
     return _NICKS
 
 
-def scan_text(path: str, text: str, blocked=None):
+def scan_text(path: str, text: str, blocked=None, *, historical=False):
     """一段文本里的全部命中。返回 [(path, 行号, 判据名, 值)]。
 
     抽成独立函数是为了让**同一个判据**能扫三处不同来源：工作树文件、git 历史 blob、
@@ -297,6 +293,9 @@ def scan_text(path: str, text: str, blocked=None):
         if nicks:
             for nick in nicks:
                 if nick and nick in line:
+                    digest = privacy_terms.nick_digest(nick)
+                    if historical and (path, digest) in HISTORICAL_NICK_ALLOW:
+                        continue
                     hits.append((path, lineno, "真实昵称/称呼", nick))
                     break
         if any(w in line for w in WHITELIST):

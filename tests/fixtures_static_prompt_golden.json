@@ -1,11 +1,11 @@
 {
  "group": {
-  "len": 3805,
-  "sha256": "ecbadb6738be3720b419dd5e91dd4f84fe8caec7f0fc311cd478ce8788bd7bb2"
+  "len": 3915,
+  "sha256": "60b77576a4cedac780c758f8f76f60dc4ad15320594c513a41cf3afd77991812"
  },
  "private": {
-  "len": 3229,
-  "sha256": "e73c7b3e54ba84a307ff1f019f44d5337a2a06f8ff2f0a4e57c60c20f3356cc6"
+  "len": 3339,
+  "sha256": "876c3c94ffa62b6fa6c37b63239690feaf18360b28f5a795c7d2ee2730d0d5fd"
  },
- "_说明": "2026-11-18 重算：11-18 的人格与看图规则使 group 3683→3805、private 3195→3229。身份块、基础人格文本与 de_ai 段仍按 test_prompt_segments.py 钉死；这里守的是同一固定环境中静态提示词的意外变化。"
+ "_说明": "2026-11-19 重算：新增查询结果直用和禁止编造身体状态规则，group 3805→3915、private 3229→3339。身份块、基础人格文本与 de_ai 段仍按 test_prompt_segments.py 钉死；基础人格里的表演拒绝规则由 test_personality_contract.py 单独约束。"
 }

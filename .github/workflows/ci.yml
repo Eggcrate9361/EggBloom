@@ -40,6 +40,11 @@ jobs:
         run: |
           $tests = @(
             "test_persona_tag",
+            "test_personality_contract",
+            "test_privacy_terms",
+            "test_at_others_gate",
+            "test_reply_time_anchor_leak",
+            "test_smart_send_split",
             "test_dev_watch",
             "test_decider_degrade",
             "test_decider_pacing",

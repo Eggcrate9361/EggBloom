@@ -11,6 +11,7 @@
   · 没有任何指向我的信号时，仍然硬跳（群友互聊还是别插嘴）。
 """
 import io
+import ast
 import os
 import sys
 
@@ -42,7 +43,7 @@ def check(name, cond, extra=""):
 def skip(**kw):
     base = dict(has_any_at=True, is_at_bot=False, has_xiao_a=False,
                 quote_me=False, has_bot_nick=False,
-                has_reply_seg=False, relax=True)
+                relax=True)
     base.update(kw)
     return bc._should_skip_at_others(**base)
 
@@ -54,19 +55,19 @@ def main():
     check("★ 喊了小a → 不跳", not skip(has_xiao_a=True))
     check("★ @别人且毫无指向我的信号 → 仍硬跳", skip())
 
-    print("\n[B] 放宽的三种信号")
+    print("\n[B] 放宽信号只认真正指向 Bot")
     check("★ 引用的是我说过的话 → 放行",
           not skip(quote_me=True))
     check("★ 文本里点到我的名字 → 放行",
           not skip(has_bot_nick=True))
-    check("★ 引用别人来追问 → 放行（真机 17:42 那条）",
-          not skip(has_reply_seg=True))
-    check("★ 多信号叠加也放行",
-          not skip(quote_me=True, has_bot_nick=True, has_reply_seg=True))
+    check("★ 只有引用段、但引用别人 → 仍硬跳",
+          skip())
+    check("★ 引用 Bot + 文本提到 Bot → 放行",
+          not skip(quote_me=True, has_bot_nick=True))
 
     print("\n[C] 开关可回退")
     check("★ relax=False 时退回旧行为（一律硬跳）",
-          skip(has_reply_seg=True, quote_me=True, relax=False))
+          skip(quote_me=True, has_bot_nick=True, relax=False))
     check("★ relax=False 但 at 指向 bot 仍不跳",
           not skip(is_at_bot=True, relax=False))
 
@@ -76,11 +77,20 @@ def main():
     check("★ 主流程调用纯函数", "_should_skip_at_others(" in src)
     check("★ 有配置开关", "group_relax_at_others" in src)
     check("★ 放行只打日志、不 return/continue",
-          "[放宽抢话] @他人但有引用/点到我，交给决策器" in src)
+          "[放宽抢话] @他人但引用或点到了我，交给决策器" in src)
     check("★ 「别抢话」的引用注记仍在（最终闸门没拆）",
           "不是在叫我" in src and "别抢话" in src)
-    check("★ 有 reply 段判据（不依赖可能被配置关掉的 has_quote）",
-          '_has_reply_seg = any(' in src)
+    _tree = ast.parse(src)
+    _fn = next((n for n in _tree.body
+                if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and n.name == "_should_skip_at_others"), None)
+    _arg_names = []
+    if _fn:
+        _arg_names = [a.arg for a in
+                      list(_fn.args.posonlyargs) + list(_fn.args.args)
+                      + list(_fn.args.kwonlyargs)]
+    check("★ 任意 reply 段不再单独构成放行信号",
+          _fn is not None and "has_reply_seg" not in _arg_names, _arg_names)
 
     print("\n" + "=" * 60)
     print(f"通过 {PASS} / 失败 {FAIL}")
