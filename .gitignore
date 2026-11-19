@@ -98,3 +98,6 @@ SEPARATION.pending
 constraints.archive
 backup/
 
+
+#: 本地昵称黑名单（check_secrets 用，逐行真实群名片/称呼；不进仓库）
+.nicklist

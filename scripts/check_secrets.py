@@ -239,6 +239,32 @@ _IDENT_LABEL = {
 }
 
 
+#: 本地昵称黑名单（逐行，`#` 开头为注释）。**不进仓库**，与 `.sensitive-ids` 同性质。
+#: 只登记本机真实的群名片/称呼；没有这个文件时判据关闭 —— 「老大」这类通用词
+#: 不算隐私，不能凭空拦。
+_NICK_FILE = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".nicklist")
+_NICKS = None
+
+
+def _load_nicks():
+    global _NICKS
+    if _NICKS is not None:
+        return _NICKS
+    out = []
+    try:
+        # utf-8-sig：Windows 编辑器存名单常带 BOM，不去掉第一行会整行变成昵称
+        with open(_NICK_FILE, encoding="utf-8-sig") as f:
+            for ln in f:
+                s = ln.strip()
+                if s and not s.startswith("#"):
+                    out.append(s)
+    except Exception:
+        pass
+    _NICKS = out
+    return _NICKS
+
+
 def scan_text(path: str, text: str, blocked=None):
     """一段文本里的全部命中。返回 [(path, 行号, 判据名, 值)]。
 
@@ -252,6 +278,7 @@ def scan_text(path: str, text: str, blocked=None):
     # 判据文件自己的夹具就是违规样例，第二层对它关掉（第一层照查）
     check_identity = not idn.is_judge_file(path)
     check_infra = not is_judge_file(path)
+    nicks = _load_nicks()
     for lineno, line in enumerate(text.splitlines(), 1):
         # 号码判据先跑，且**不吃**下面那条「整行含白名单片段就跳过」的捷径：
         # 一行里同时有 example.com 和一个真号时，整行跳过等于把真号放过去。
@@ -264,6 +291,14 @@ def scan_text(path: str, text: str, blocked=None):
             if not check_infra or (path, val) in INFRA_ALLOW:
                 continue
             hits.append((path, lineno, name, val[:60]))
+        # 真实昵称：与 commit_lint 的 CM-04 同源，但那边只扫提交信息，
+        # 代码注释里的昵称一直是盲区（2026-11-19 真事：修复注释里写了群友昵称）。
+        # 同样不吃 WHITELIST 捷径 —— 昵称旁边带个 example.com 不该豁免。
+        if nicks:
+            for nick in nicks:
+                if nick and nick in line:
+                    hits.append((path, lineno, "真实昵称/称呼", nick))
+                    break
         if any(w in line for w in WHITELIST):
             continue
         for name, pat in PATTERNS:
@@ -314,7 +349,19 @@ def _selftest() -> int:
         ok = got == want
         print(f"  [{'OK' if ok else 'FAIL'}] {line[:52]:<52} 期望 {sorted(want)} 实际 {sorted(got)}")
         bad += 0 if ok else 1
-    print(f"[check_secrets --selftest] {len(SELFTEST) - bad}/{len(SELFTEST)} 通过")
+    # 昵称判据：只在本地登记了名单时生效，通用词与空名单都不拦。
+    global _NICKS
+    _saved = _NICKS
+    _NICKS = ["测试昵称甲"]
+    with_list = any(h[2] == "真实昵称/称呼"
+                    for h in scan_text("selftest.py", "foo 测试昵称甲 bar"))
+    _NICKS = []
+    without_list = not scan_text("selftest.py", "foo 测试昵称甲 bar")
+    _NICKS = _saved
+    ok = with_list and without_list
+    print(f"  [{'OK' if ok else 'FAIL'}] 昵称判据（有名单拦 / 无名单放）")
+    bad += 0 if ok else 1
+    print(f"[check_secrets --selftest] {len(SELFTEST) + 1 - bad}/{len(SELFTEST) + 1} 通过")
     return 0 if not bad else 1
 
 
