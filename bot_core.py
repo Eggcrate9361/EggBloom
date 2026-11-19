@@ -3675,6 +3675,39 @@ def _private_reply_cap() -> int:
         return 0
 
 
+#: 收尾/连接类符号：以它们开头的碎片一定是被切坏的，要并回前一条。
+#: 分两组处理：收尾符号（」））直接拼，连接标点（，。！）去掉前导后拼，
+#: 否则会拼出「第一句。，第二句」这种双标点。
+_ORPHAN_CLOSE = "」』”’）)】》]"
+_ORPHAN_LEAD_RE = re.compile(r"^\s*([」』”’）)】》\]]|[，。！？、；：,.;:!?])")
+_ORPHAN_LEAD_PUNCT_RE = re.compile(r"^\s*[，。！？、；：,.;:!?]+")
+
+
+def _merge_orphan_marks(parts):
+    """把「以标点/收尾符号开头」的碎片并回前一条（拆条兜底）。
+
+    2026-11-19 真机：引号里的感叹号被当句子边界切开后，发出去的是
+    「…喊「寿来！」/ 寿来！/ 」，旁边人…」三条互不相接的残句。
+    切句层已改成配对感知，但**硬切和分行两条路仍可能切在符号上**，
+    这里做最后一道收口。
+    """
+    out = []
+    for p in parts or ():
+        s = str(p or "")
+        if not s.strip():
+            continue
+        m = _ORPHAN_LEAD_RE.match(s) if out else None
+        if m:
+            if m.group(1) in _ORPHAN_CLOSE:
+                out[-1] = out[-1] + s              # 收尾符号：直接拼
+            else:
+                _rest = _ORPHAN_LEAD_PUNCT_RE.sub("", s)
+                out[-1] = out[-1] + _rest          # 连接标点：去前导再拼
+        else:
+            out.append(s)
+    return out
+
+
 def split_private_reply(text: str, limit: int, max_parts: int = 4, hard_limit: int = 0):
     """私聊回复拆条（1.5.10 E1）：按句拼成 ≤ limit 的多条，标点保留。
 
@@ -3706,7 +3739,7 @@ def split_private_reply(text: str, limit: int, max_parts: int = 4, hard_limit: i
             c = c[cut:].lstrip()
         if c:
             out.append(c)
-    return out or [text]
+    return _merge_orphan_marks(out) or [text]
 
 
 def smart_send_group(group_id, text, reply_id: int = 0):
@@ -3818,6 +3851,7 @@ def smart_send_group(group_id, text, reply_id: int = 0):
                     _out_lines.append(_cut)
             else:
                 _out_lines.append(_ln)
+        _out_lines = _merge_orphan_marks(_out_lines)
         # 上限：合并发生在**拆分之后、发送之前**，所以长行被硬切出来的碎片也算在内。
         if len(_out_lines) > GROUP_SEND_MAX_PARTS:
             _n_orig = len(_out_lines)
