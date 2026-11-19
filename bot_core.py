@@ -17478,7 +17478,8 @@ def _pipeline_merge_locked(buffer, *, group_id, sender, text, now,
                            at_bot=False, xiao_a=False, bot_nick=False,
                            quote=False, text_at=False, in_session=False,
                            images=None, forced=False, source="message",
-                           poke_uid=None, poke_allow_action=False, force=False):
+                           poke_uid=None, poke_allow_action=False, force=False,
+                           reply_mid=0):
     """持 _buffer_lock 时把一条事件并进已有批次，返回要启动的 Timer。
 
     返回 None 表示没并（批次已过 deadline，或调用方传了空批次）。
@@ -17514,6 +17515,15 @@ def _pipeline_merge_locked(buffer, *, group_id, sender, text, now,
     buffer["in_session"] = buffer.get("in_session", False) or in_session
     # 任一条被点名，整批都算触发
     buffer["forced"] = buffer.get("forced", False) or forced
+    # ★ 2026-11-19：触发类消息（@我 / 叫名 / 文本 @ / 引用我）进批时，把引用目标
+    #   换成它。原来 message_id 只在**建批**时写死一次，批次里后来 @bot 的那条
+    #   永远成不了引用目标 —— bot 回「你」却引用了几条之前的闲聊，群里看就是
+    #   "胡乱引用"。普通闲聊不覆盖，保持"引用最早那条"的原意。
+    if reply_mid and (at_bot or xiao_a or bot_nick or text_at or quote):
+        try:
+            buffer["message_id"] = int(reply_mid or 0)
+        except Exception:
+            pass
     # 同批多人戳时取最近一条（C2 用它决定追问权给谁）
     if source == "poke" and poke_uid:
         buffer["poke_uid"] = str(poke_uid)
@@ -17609,7 +17619,8 @@ def _pipeline_upsert(group_id, *, sender, text, images=None, flags=None,
             at_bot=at_bot, xiao_a=xiao_a, bot_nick=bot_nick, quote=quote,
             text_at=text_at, in_session=in_session, images=images,
             forced=forced, source=source, poke_uid=poke_uid,
-            poke_allow_action=poke_allow_action, force=force)
+            poke_allow_action=poke_allow_action, force=force,
+            reply_mid=reply_mid)
 
     # ① 有批次且未过 deadline → 并进去
     with _buffer_lock:
