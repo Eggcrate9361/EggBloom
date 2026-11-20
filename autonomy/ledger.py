@@ -193,7 +193,12 @@ def observe_user_message(state: Optional[Dict[str, Any]], event: Dict[str, Any],
         s["named_ts"] = ts
         s["named_text"] = text[:120]
 
-    if bool(e.get("at_bot")):
+    # ★ 2026-11-20：只有"真的在叫我"才记 —— at_only（QQ @ 段）或 named_bot
+    #   （文本里点了名字）；私聊没有 @ 别人的概念，一律算。
+    #   原来用的是合并后的 at_bot，它含 text_at（文本里出现任何 @，包括 @ 别人）。
+    #   于是群友 @ 别人时也被记成"被 @ 了"，主链按规矩跳过，at_dropped 再把它
+    #   判成漏回复，补一句「在，刚没顾上」——群里没人叫它，它却答「我在」。
+    if (not e.get("group_id")) or bool(e.get("at_only")) or bool(e.get("named_bot")):
         s["last_at_ts"] = ts
         s["last_at_text"] = text[:200]
 
