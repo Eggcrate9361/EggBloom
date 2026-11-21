@@ -26,6 +26,7 @@
 from __future__ import annotations
 
 import os
+import re
 import threading
 import time
 from typing import Any, Dict, List, Optional
@@ -336,6 +337,33 @@ def _chat(messages, max_tokens=160):
         return ""
 
 
+#: 主动消息发出前的统一收口判据。
+#: 这些不是"内容好不好"，而是"一眼看得出不是人说的"：
+#:   · 单字应声（在/嗯/哦）—— 没人问就在，答什么
+#:   · 时长数字（四小时/3分钟）—— 工程字段泄漏成台词（见 11-20 22:09）
+#:   · 内部字段名（gap_hours / last_topic 之类）直接出现在正文里
+_SAY_ECHO_RE = re.compile(r"^[\s在嗯哦啊哈额欸诶\-—…、,，。~～!！?？]*$")
+_SAY_DURATION_RE = re.compile(
+    r"(?:\d+|[一二两三四五六七八九十百]+)\s*(?:个)?\s*(?:小时|分钟|秒钟|天|周|星期)")
+_SAY_FIELD_RE = re.compile(
+    r"gap_hours|last_topic|at_dropped|no_reply|pending_topic|idle_contact"
+    r"|resume_topic|user_burst|image_only|name_dropped")
+
+
+def _sanitize_say(text: str, kind: str = ""):
+    """返回 (clean_text, reason)。reason 非空表示这条不该发出去。"""
+    t = str(text or "").strip()
+    if not t:
+        return "", "empty"
+    if len(t) <= 3 and _SAY_ECHO_RE.match(t):
+        return "", "echo"
+    if _SAY_DURATION_RE.search(t):
+        return "", "duration"
+    if _SAY_FIELD_RE.search(t):
+        return "", "field"
+    return t, ""
+
+
 def _deliver(action: Dict[str, Any]):
     """真正执行动作。成功才记账；失败不记账。
 
@@ -387,6 +415,12 @@ def _deliver(action: Dict[str, Any]):
                 _log("[主动/发送失败] %s %s:%s" % (act, scene, target), "warn")
                 return
         elif act == "say":
+            _clean, _why = _sanitize_say(text, str(obs.get("kind") or ""))
+            if _why:
+                _log("[主动/跳过] %s 正文被判据拦下（%s）: %s"
+                     % (obs.get("kind"), _why, text[:40]), "warn")
+                return
+            text = _clean
             ok = (bool(_ctx.send_text(text, group_id=target)) if scene == "group"
                   else bool(_ctx.send_text(text, target=target)))
             if not ok:

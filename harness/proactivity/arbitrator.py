@@ -330,6 +330,32 @@ def _human_evidence(kind: str, ev: dict) -> str:
             else:
                 out.append("隔了一阵")
             continue
+        # 同一类问题一并收口：这些数值字段原本都会以「连发条数：4」「几张图：2」
+        # 的形态进 prompt，模型照着念就是「你连发了 4 条」「2 张图」。
+        if k == "count":
+            try:
+                _c = int(v)
+            except Exception:
+                continue
+            out.append("连着说了好几条" if _c >= 3 else "连着说了两句")
+            continue
+        if k == "images":
+            try:
+                _n = int(v)
+            except Exception:
+                continue
+            out.append("发了张图" if _n <= 1 else "发了几张图")
+            continue
+        if k in ("in_minutes", "strength"):
+            try:
+                _v = float(v)
+            except Exception:
+                continue
+            if k == "in_minutes":
+                out.append("马上就到点" if _v <= 30 else "快了")
+            else:
+                out.append("感觉还挺强" if _v >= 0.6 else "有点")
+            continue
         key = {"ok": "顺利吗", "feel": "你的状态", "strength": "程度",
                "count": "连发条数", "text": "内容", "at_text": "叫你时说的话",
                "promised_text": "你答应过", "bot_text": "你说过",
