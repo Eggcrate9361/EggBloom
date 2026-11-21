@@ -283,7 +283,9 @@ _KIND_VOICE = {
     "autonomy_done": "你刚弄完点东西，可能只是自己看了个视频。像顺口提起，不是汇报，"
                      "别提完成/结果/任务。",
     "state_change": "群里有点变化。可以随口一嘴，也可以不说话。",
-    "idle_contact": "很久没说话了。可以开口，也可以只戳一下。别硬找话题。",
+    "idle_contact": "很久没说话了。想开口就随便说点具体的（看到什么、想到什么、"
+                    "群里刚在聊什么），不想开口就跳过。"
+                    "**别只应一声「在」「嗯」「在呢」**—— 没人问你在不在。",
     "schedule_near": "你记得对方接下来有事。顺嘴提一句就行，别用「提醒」这两个字。",
     "care": "你自己状态不太好。说自己的感受，别要对方哄。",
 }
@@ -309,6 +311,24 @@ def _human_evidence(kind: str, ev: dict) -> str:
             continue
         if k == "ok":
             out.append("事情顺利" if v else "事情没成")
+            continue
+        # ★ 2026-11-21：时长不进 prompt 当数字。
+        #   真机 22:09 主动发「四小时就憋出这一句」—— 证据里是 `gap_hours：4`，
+        #   模型把工程数值原样复述成了嘲讽。跟 2026-11-16 那个
+        #   「行吧 59.2 就59.2 不催了」是同一个病因：数值只会变成话题。
+        if k == "gap_hours":
+            try:
+                _g = float(v)
+            except Exception:
+                continue
+            if _g >= 12:
+                out.append("隔了大半天")
+            elif _g >= 6:
+                out.append("隔了好几个小时")
+            elif _g >= 3:
+                out.append("隔了一会儿")
+            else:
+                out.append("隔了一阵")
             continue
         key = {"ok": "顺利吗", "feel": "你的状态", "strength": "程度",
                "count": "连发条数", "text": "内容", "at_text": "叫你时说的话",
