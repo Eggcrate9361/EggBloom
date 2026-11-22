@@ -116,8 +116,15 @@ def main():
     check("超时后出 pending_topic", any(o["kind"] == "pending_topic" for o in pro), pro)
     settled = L.observe_user_message(pr, {"sender": "1000000006", "text": "收到",
                                           "ts": t + 60}, t + 60)
-    check("对方接话后话头不再追", len(L.scan(settled, t + 1300, **args)) == 0,
-          L.scan(settled, t + 1300, **args))
+    # 判据只针对「话头」：对方接话后那句「等下发你」要结清，不能再出 pending_topic。
+    # 2026-11-22：原来写的是 scan(...) == []，把另一条判据也一起断言了 ——
+    #   这条私聊轮次里 bot 之后再没说话，at_dropped（被叫没接）本来就会出，
+    #   于是断言与「话头结清」无关地长期变红。
+    settled_obs = L.scan(settled, t + 1300, **args)
+    check("对方接话后话头不再追",
+          not any(o["kind"] == "pending_topic" for o in settled_obs), settled_obs)
+    check("（同一状态）私聊未答仍会出 at_dropped，属另一条判据",
+          any(o["kind"] == "at_dropped" for o in settled_obs), settled_obs)
 
     print("\n=== E) dedupe 与会话隔离 ===")
     o1 = L.scan(s3, t + 700, **args)[0]

@@ -15,6 +15,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -110,21 +111,26 @@ def main():
         P._pending.clear()
         P._last_sent.clear()
         P._sent_hourly.clear()
+        # ★ 2026-11-22：B/C/D 段原来用 1000/1010/1020 这种「1970 年」的假时间戳，
+        #   而 tick 用的是真实 now —— 对 scan 来说这些事件都发生在 56 年前，
+        #   at_dropped（3 分钟）必然命中，于是 D 段「没有投递」长期变红，
+        #   与「撤回未交棒」这条判据无关。改用相对当前时间的事件时钟。
+        t0 = time.time()
         P.on_event(ctx, "bot.replied", {
             "scene": "private", "user_id": "1000000006", "text": "醒得挺早啊你",
-            "ts": 1000.0, "trace_id": "t1"})
+            "ts": t0, "trace_id": "t1"})
         st = P._ledger.get("private", "1000000006")
         check("bot.replied → pending=True", st.get("pending") is True, st)
         P.on_event(ctx, "message.in", {
             "group_id": "", "sender": "1000000006", "text": "你怎么知道我醒来了",
-            "at_bot": False, "ts": 1010.0})
+            "at_bot": False, "ts": t0 + 10})
         st2 = P._ledger.get("private", "1000000006")
         check("message.in → pending 清空", st2.get("pending") is False, st2)
         check("同步阶段没调模型", ctx.ai_calls == 0, ctx.ai_calls)
         check("同步阶段没发消息", ctx.sent == [], ctx.sent)
         P.on_event(ctx, "notice.recall", {
             "group_id": "", "operator": "1000000006", "message_id": "99",
-            "notice_type": "friend_recall", "ts": 1020.0})
+            "notice_type": "friend_recall", "ts": t0 + 20})
         check("撤回进即时候选队列",
               any(o.get("kind") == "recall" for o in P._pending), P._pending)
         check("撤回也写了 notice 留痕",
