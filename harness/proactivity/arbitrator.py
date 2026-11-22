@@ -75,14 +75,19 @@ BEHAVIORS = {
     # 2026-11-06：吸收 proactive_talk（冷场主动开口）与 proactive_poke
     # （久未互动戳一下）。两者原来各起一个心跳、各算一套闸门，现在合成
     # **一条观察**：「双方都静默很久」，说/戳/算了交给模型选。
-    "idle_contact":  {"enabled": True,  "priority": 20, "fallback": "skip"},
+    # ★ 2026-11-22：三类「没有事由的找话」默认关 —— 冷场找人、久别续接、
+    #   群状态变化。它们的共同点是触发时手头没有任何真实素材，模型只能从
+    #   证据字段和陈年上下文里捞，捞出来就是「在」「四小时就憋出这一句」
+    #   「哟热情得出来了」。留下的都是有具体事由的（叫我没接、答应过的事、
+    #   撤回、任务完成、日程临近、自己的状态）。
+    "idle_contact":  {"enabled": False, "priority": 20, "fallback": "skip"},
     # ── 2026-11-07 P3：把设计清单剩下的补齐 ──────────────────────────
     "user_burst":    {"enabled": True,  "priority": 40, "fallback": "skip"},  # ⑤/⑩
     "image_only":    {"enabled": True,  "priority": 45, "fallback": "skip"},  # ⑥
     "name_dropped":  {"enabled": True,  "priority": 55, "fallback": "skip"},  # ⑦
-    "resume_topic":  {"enabled": True,  "priority": 35, "fallback": "skip"},  # ⑧
+    "resume_topic":  {"enabled": False, "priority": 35, "fallback": "skip"},  # ⑧
     "autonomy_done": {"enabled": True,  "priority": 65, "fallback": "skip"},  # ⑨
-    "state_change":  {"enabled": True,  "priority": 25, "fallback": "skip"},  # ⑫
+    "state_change":  {"enabled": False, "priority": 25, "fallback": "skip"},  # ⑫
     "schedule_near": {"enabled": True,  "priority": 58, "fallback": "skip"},  # ⑬
     "care":          {"enabled": True,  "priority": 43, "fallback": "skip"},  # ⑭
 }
