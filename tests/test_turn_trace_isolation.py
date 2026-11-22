@@ -13,6 +13,7 @@
 """
 import os
 import sys
+import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -52,6 +53,20 @@ def main():
     try:
         os.environ["EGG_TURN_TRACE_DIR"] = alt
         check("A3 改环境变量后立刻生效（未缓存）", T._dir() == alt, T._dir())
+        # 兜底：测试忘了调沙箱时，也不能写进仓库。
+        os.environ.pop("EGG_TURN_TRACE_DIR", None)
+        old_argv = list(sys.argv)
+        try:
+            sys.argv = [os.path.join(ROOT, "tests", "test_whatever.py")]
+            want = os.path.join(tempfile.gettempdir(), "eggbloom_trace_test")
+            check("A4 测试脚本未设环境变量时落到系统临时目录",
+                  os.path.abspath(T._dir()) == os.path.abspath(want), T._dir())
+            sys.argv = [os.path.join(ROOT, "bot_core.py")]
+            check("A5 生产入口仍用仓库目录",
+                  os.path.abspath(T._dir()) == os.path.abspath(os.path.join(ROOT, "data", "trace")),
+                  T._dir())
+        finally:
+            sys.argv = old_argv
     finally:
         if old is None:
             os.environ.pop("EGG_TURN_TRACE_DIR", None)

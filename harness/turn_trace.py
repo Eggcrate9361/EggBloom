@@ -37,8 +37,11 @@ bot_core 已经有 `_new_trace_id()` / `_cur_trace()` / `_phase_set()` 三件套
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import sys
+import tempfile
 import threading
 import time
 from datetime import datetime
@@ -64,17 +67,60 @@ def enabled() -> bool:
 def _dir() -> str:
     """账本目录。
 
-    ★ 2026-11-22：目录必须在**调用时**解析 `EGG_TURN_TRACE_DIR`，不在 import
-    时缓存。生产 `data/trace/turns-20261116.jsonl` 里出现过测试夹具
-    `testturn01`（target=g1 / user=u1），说明测试写过真实账本；测试入口要能
-    把目录指到临时路径，而 import 早于测试设置环境变量，缓存就来不及。
+    ★ 2026-11-22：目录必须在**调用时**解析，不在 import 时缓存。生产
+    `data/trace/turns-20261116.jsonl` 里出现过测试夹具 `testturn01`
+    （target=g1 / user=u1）：测试写过真实账本。三层判定，先命中先用：
+
+      ① `EGG_TURN_TRACE_DIR`（`tests/_sandbox.py` 会设，指到临时目录）
+      ② 以 `python tests/xxx.py` 启动 → 落到系统临时目录（不依赖测试自觉调沙箱）
+      ③ 其余才是仓库 `data/trace`（生产入口是 bot_core / webui_server，argv 不含 tests）
     """
-    return str(os.environ.get("EGG_TURN_TRACE_DIR") or _DIR or "")
+    env = os.environ.get("EGG_TURN_TRACE_DIR")
+    if env:
+        return str(env)
+    try:
+        parts = os.path.abspath(sys.argv[0] or "").replace("\\", "/").split("/")
+        if "tests" in parts:
+            return os.path.join(tempfile.gettempdir(), "eggbloom_trace_test")
+    except Exception:
+        pass
+    return _DIR or ""
 
 
 def _path() -> str:
     day = datetime.now().strftime("%Y%m%d")
     return os.path.join(_dir(), f"turns-{day}.jsonl")
+
+
+def messages_digest(messages) -> str:
+    """prompt 指纹：`role + content` 的 sha256 前 12 位。
+
+    为什么不存正文：正文里有群友原话和长期记忆，抄进账本等于把隐私复制到日志里。
+    指纹只回答「两次请求是不是同一份 prompt」，不回答「里面写了什么」。
+    """
+    h = hashlib.sha256()
+    for m in messages or []:
+        if not isinstance(m, dict):
+            continue
+        h.update(str(m.get("role") or "").encode("utf-8", "ignore"))
+        h.update(b"\x1f")
+        h.update(str(m.get("content") or "").encode("utf-8", "ignore"))
+        h.update(b"\x1e")
+    return h.hexdigest()[:12]
+
+
+def note_prompt(turn_id: str, messages, model: str = "") -> bool:
+    """记一次模型请求的 prompt 指纹（`PROMPT` 阶段）。
+
+    工具链一轮会调多次模型，每次各记一条：想知道「哪一次开始跑偏」，看相邻两条的
+    `hash` 与 `msgs` 即可。只记长度与指纹，不记正文。
+    """
+    if not turn_id:
+        return False
+    msgs = [m for m in (messages or []) if isinstance(m, dict)]
+    chars = sum(len(str(m.get("content") or "")) for m in msgs)
+    return note(turn_id, "PROMPT", hash=messages_digest(msgs),
+                chars=chars, msgs=len(msgs), model=str(model or "")[:40])
 
 
 def note(turn_id: str, phase: str, **fields: Any) -> bool:

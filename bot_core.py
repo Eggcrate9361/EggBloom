@@ -226,6 +226,24 @@ def _report_turn_skipped(*, scene: str, target: str, reason: str,
     })
 
 
+def _note_prompt(turn_id: str, messages, model: str = "") -> None:
+    """把这一轮请求的 prompt 指纹写进 turn 账本（`PROMPT` 阶段）。
+
+    ★ 2026-11-22：在此之前账本里没有任何 prompt 痕迹 —— 改完人格、记忆或注入块，
+    只能靠肉眼对比回复来判断「有没有变」。工具链一轮会调多次模型，每次各记一条，
+    「哪一次开始跑偏」看相邻两条的 `hash` 与 `msgs` 就能定位。写盘失败不影响调用。
+
+    实现放在 `harness.turn_trace`（纯函数，可离线测）；这里只做一次防御性调用。
+    """
+    if not turn_id:
+        return
+    try:
+        from harness import turn_trace as _tt
+        _tt.note_prompt(turn_id, messages, model=model)
+    except Exception:
+        pass
+
+
 def _with_outbound_origin(origin: str, fn, *args, **kwargs):
     """给**一次**出站发送打上来路标记（出站动作账本用）。
 
@@ -15015,6 +15033,8 @@ def _call_chat_sync(messages, runtime_cfg=None, max_tokens=AI_MAX_TOKENS, stream
                     with_tools=True, personality_temperature=None, turn_id=""):
     cfg = _llm_config(runtime_cfg)
     model_name = cfg.get("model_name") or "deepseek-flash"
+    # ★ 2026-11-22：每次模型调用留一条 prompt 指纹（只存 hash，不存正文）。
+    _note_prompt(turn_id, messages, model_name)
     api_url = cfg.get("api_url") or DEEPSEEK_URL
     api_key = cfg.get("api_key") or ""
     effective_temperature = _effective_temperature(personality_temperature)
@@ -19364,7 +19384,12 @@ def _pipeline_step(group_id):
                 try:
                     from harness import turn_trace as _tt_sent
                     _tt_sent.note(_cur_trace(), "SENT", scene="group",
-                                  target=str(group_id), text_len=len(_commit_text or ""))
+                                  target=str(group_id), text_len=len(_commit_text or ""),
+                                  # 2026-11-22：这批回到哪条消息、有没有带引用、合并了几条。
+                                  # 没有 reply_to 时 note() 直接跳过该字段（不写空串）。
+                                  reply_to=str(buffer.get("message_id") or ""),
+                                  quote_id=str(_quote_id or ""),
+                                  merged=int(buffer.get("merged_n") or 0))
                     _tt_sent.note(_cur_trace(), "COMMITTED", scene="group",
                                   target=str(group_id))
                 except Exception:
@@ -21766,9 +21791,12 @@ def main():
                         # ★ 2026-11-16（路线图 3.1）：私聊的发送与提交终点。
                         try:
                             from harness import turn_trace as _tt_ps
-                            _tt_ps.note(_cur_trace(), "SENT", scene="private",
-                                        target=str(sender), text_len=len(_pm_text or ""))
-                            _tt_ps.note(_cur_trace(), "COMMITTED", scene="private",
+                            _tt_ps.note(_ptid, "SENT", scene="private",
+                                        target=str(sender), text_len=len(_pm_text or ""),
+                                        # 2026-11-22：私聊回到哪条消息（合并批次时是
+                                        # 合成/最后一条的 id），与群聊同一口径。
+                                        reply_to=str(msg.get("message_id") or ""))
+                            _tt_ps.note(_ptid, "COMMITTED", scene="private",
                                         target=str(sender))
                         except Exception:
                             pass

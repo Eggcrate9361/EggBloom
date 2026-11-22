@@ -90,6 +90,7 @@ jobs:
         run: |
           $tests = @(
             "test_trace_id",
+            "test_trace_fields",
             "test_group_pipeline",
             "test_bot_core_events",
             "test_poke_policy",
