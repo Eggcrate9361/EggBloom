@@ -348,6 +348,17 @@ _SAY_DURATION_RE = re.compile(
 _SAY_FIELD_RE = re.compile(
     r"gap_hours|last_topic|at_dropped|no_reply|pending_topic|idle_contact"
     r"|resume_topic|user_burst|image_only|name_dropped")
+#: 把"我在判断这该不该接"说出来 —— 真机 11-22 00:46 主动发了
+#: 「叫的是某某，没我啥事」，群友随即引用它问「啥」。
+#: 这类句子是模型自己的内部结论，不该进聊天。
+_SAY_META_RE = re.compile(
+    r"没我啥事|跟我没关系|与我无关|不关我事|不是在叫我|叫的是|在叫别人"
+    r"|不是冲着我|没叫我|关我啥事")
+#: 阴阳式招呼。真机 11-22 15:04 主动发「哟 舍得出来了」——群友只是隔了几小时
+#: 出现，没有任何欠交代。这类话在**主动开口**里几乎只有阴阳这一种用法，
+#: 所以只在这一处拦，不放进主链。
+_SAY_SNARK_RE = re.compile(
+    r"舍得出来|舍得露面|终于来了|终于舍得|还知道回来|稀客|难得啊|可算来了")
 
 
 def _sanitize_say(text: str, kind: str = ""):
@@ -361,6 +372,10 @@ def _sanitize_say(text: str, kind: str = ""):
         return "", "duration"
     if _SAY_FIELD_RE.search(t):
         return "", "field"
+    if _SAY_META_RE.search(t):
+        return "", "meta"
+    if _SAY_SNARK_RE.search(t):
+        return "", "snark"
     return t, ""
 
 
