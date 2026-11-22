@@ -159,18 +159,35 @@ def main():
           == {"act": "poke", "text": "", "reason": ""})
     check("群聊 poke 硬拦（QQ 戳一戳只支持私聊）",
           A.parse_model_decision('{"act":"poke","text":""}', scene="group")["act"] == "skip")
-    check("⑤ 冷场默认开", A.BEHAVIORS["idle_contact"]["enabled"] is True)
-    check("⑤ 可被单行为开关关掉",
+    # poke 只是「有具体事由」时的一种轻动作：叫了没接可以只戳一下，
+    # 答应过的事/日程提醒这类必须说话的场景不给 poke。
+    check("poke 只开给有具体事由的触发",
+          "poke" in A.allowed_acts("no_reply", "private")
+          and "poke" not in A.allowed_acts("pending_topic", "private")
+          and "poke" not in A.allowed_acts("schedule_near", "private"),
+          [A.allowed_acts(k, "private")
+           for k in ("no_reply", "pending_topic", "schedule_near")])
+    # ★ 2026-11-22：冷场找人（idle_contact）默认关 —— 触发时手头没有真实素材，
+    #   模型只能从证据字段里捞，捞出来就是「在」「四小时就憋出这一句」。
+    #   能力本身保留，配置页随时能开回。
+    check("⑤ 冷场默认关（没有事由不找话）",
+          A.BEHAVIORS["idle_contact"]["enabled"] is False,
+          A.BEHAVIORS["idle_contact"])
+    check("⑤ 冷场可被配置开回",
           A.gate(obs("idle_contact", 20),
-                 cfg=base_cfg(proactivity_idle_contact_enable=False),
+                 cfg=base_cfg(proactivity_idle_contact_enable=True),
                  now=now, fired_recently=False, session_last_sent=0.0,
+                 scene_sent_last_hour=0)["ok"] is True)
+    check("⑤ 冷场默认关时闸门不放行",
+          A.gate(obs("idle_contact", 20), cfg=base_cfg(), now=now,
+                 fired_recently=False, session_last_sent=0.0,
                  scene_sent_last_hour=0)["ok"] is False)
     logs2 = []
-    r6 = A.arbitrate([obs("idle_contact", 20)], cfg=base_cfg(), now=now,
+    r6 = A.arbitrate([obs("no_reply", 30)], cfg=base_cfg(), now=now,
                      is_fired=lambda k: False, last_sent=lambda s, t: 0,
                      hourly_count=lambda s: 0,
                      chat_fn=lambda m, max_tokens=160:
-                     '{"act":"poke","text":"","reason":"很久没互动"}',
+                     '{"act":"poke","text":"","reason":"叫了没接"}',
                      log=lambda m: logs2.append(m))
     check("★ 模型选 poke 时仲裁返回 act=poke（不发文字）",
           r6 and r6["act"] == "poke" and r6["text"] == "", r6)
@@ -178,14 +195,23 @@ def main():
 
     print("\n=== I) 拟人：学 MaiBot 的三段式 ===")
     sp = A._system_prompt()
-    check("三段都在（是谁 / 什么时候说 / 什么味）",
-          "平时在网上跟人聊天" in sp and "不想聊的时候就不回" in sp
-          and "说话比较随意" in sp, sp[:220])
-    check("有具体语感，不是形容词堆砌",
-          all(x in sp for x in ("啊？", "刚看到", "刚刷到个视频")), sp[:300])
+    main_raw = A._main_persona()
+    # 11-16 起「是谁」这段由主链人格统一提供，预设只补「什么时候说 / 什么味」。
+    # 这条断言以前绑的是预设里的旧句子，人格换了就红 —— 改成验「来源唯一」。
+    check("「是谁」用主链人格（单一来源）",
+          bool(main_raw) and main_raw in sp, sp[:160])
+    check("预设只补「什么时候说 / 什么味」",
+          A._PERSONAS["xiaoa"]["behavior"] in sp
+          and A._PERSONAS["xiaoa"]["reply"] in sp, sp[:400])
+    check("预设不再自带第二套人设（不双份打架）",
+          A._PERSONAS["xiaoa"]["personality"] not in sp, sp[:300])
+    check("有具体语感锚点，不是形容词堆砌", sp.count("「") >= 3, sp.count("「"))
     check("不刻意：不设定场景、不教演戏",
           not any(x in sp for x in ("手上有别的事", "允许话说一半", "你不是助手")), sp[:300])
-    check("人格短（不堆长清单）", len(sp) < 700, len(sp))
+    # 旧的 <700 字上限是给预设短人格定的；现在「是谁」来自主链人格，
+    # 上限改由 _main_persona(max_chars=1600) 管，这里只防整体失控。
+    check("人格段有上限（不无限堆）",
+          len(main_raw) <= 1600 and len(sp) < 2600, (len(main_raw), len(sp)))
     check("五个预设",
           {"xiaoa", "tsundere", "entertain", "gentle", "sharp"} <= set(A._PERSONAS),
           sorted(A._PERSONAS))
@@ -212,6 +238,13 @@ def main():
         sp2 = A._system_prompt()
         check("单独填的一段会覆盖预设",
               all(x in sp2 for x in ("测试人格", "测试策略", "测试风格")), sp2[:200])
+        # 这条是 config 页承诺的另一半：显式填写优先于主链人格，
+        # 否则「临时换一套说法」只能去改 plugins/personality.txt。
+        check("单独填的「是谁」也压过主链人格",
+              "测试人格" in sp2 and bool(main_raw) and main_raw not in sp2, sp2[:120])
+        _C.load_config = lambda: {"proactivity_persona": "gentle"}
+        check("不填就回落主链人格",
+              bool(main_raw) and main_raw in A._system_prompt())
         _C.load_config = lambda: {"proactivity_style_pool": ["换个味道A"],
                                   "proactivity_style_prob": 1.0}
         check("概率=1 必定注入备用风格", "换个味道A" in A._system_prompt())
@@ -228,7 +261,16 @@ def main():
     _c = _p[1]["content"]
     check("观测写成人话，不是数据表", "观察到" not in _c and "你现在在私聊里" in _c, _c[:80])
     check("工程字段被翻成中文", "mode" not in _c and "看/理解" in _c, _c[:160])
-    check("过去了多久用分钟说", "过去 1 分钟" in _c, _c)
+    # ★ 2026-11-17：时长改成模糊说法。真机出现「376分钟了，失联宣布延迟到什么时候」
+    #   —— 精确分钟会被模型当成话题复述出来，所以这里验的是「不说数」。
+    def dur_prompt(sec):
+        return A.build_prompt({"kind": "no_reply", "scene": "private",
+                               "target": "对方", "elapsed_s": sec,
+                               "evidence": {}}, ("say", "skip"))[1]["content"]
+    check("不到十分钟不提时长",
+          "分钟" not in dur_prompt(90) and "过去" not in dur_prompt(90), dur_prompt(90))
+    check("十分钟说「过去了一会儿」", "过去了一会儿" in dur_prompt(600), dur_prompt(600))
+    check("半小时以上说「好一阵」", "好一阵" in dur_prompt(1800), dur_prompt(1800))
 
     print("\n=== G) say 返回动作 ===")
     r5 = A.arbitrate([obs()], cfg=base_cfg(), now=now,

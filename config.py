@@ -797,8 +797,10 @@ DEFAULT_CONFIG = {
     "proactivity_schedule_enable": True,       # ⑬ 日程临近提醒
     "proactivity_schedule_min": 15,            # 还剩多少分钟内提醒
     "proactivity_care_enable": True,           # ⑭ 累了/孤独了主动关心一句
-    # 主动开口的人格底子：entertain（娱乐向）/ gentle（温柔）/ sharp（毒舌）/ custom
-    # 三段式（学 MaiBot）：是谁 / 什么时候说 / 说出来什么味。留空 = 用预设
+    # 主动开口的人格底子：xiaoa（默认）/ entertain（娱乐向）/ gentle（温柔）/ sharp（毒舌）
+    # 三段式（学 MaiBot）：是谁 / 什么时候说 / 说出来什么味。
+    # 优先顺序：填了 proactivity_personality 就用它 > 主链人格（plugins/personality.txt）
+    #   > 上面选的预设。后两段同理，留空才回落。
     "proactivity_persona": "xiaoa",
     "proactivity_personality": "",
     "proactivity_behavior_style": "",

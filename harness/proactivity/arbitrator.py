@@ -192,7 +192,11 @@ _PERSONAS = {
 
 
 def _persona_of(cfg: dict) -> dict:
-    """按配置取人格预设；三段里任何一段被单独填过，就用填的那段。"""
+    """按 `proactivity_persona` 取预设。
+
+    单段覆盖不在这里做 —— `_system_prompt()` 才是唯一决定「用哪段文字」的地方，
+    否则同一个优先级要在两处各写一遍（2026-11-22 收口）。
+    """
     key = str((cfg or {}).get("proactivity_persona") or "xiaoa").strip()
     return _PERSONAS.get(key) or _PERSONAS["xiaoa"]
 
@@ -251,13 +255,19 @@ def _system_prompt() -> str:
     except Exception:
         cfg = {}
     p = _persona_of(cfg)
-    # ★ 2026-11-16：人格优先用主链那份（含「没有身体，没有现实生活」与全部底线），
-    #   _PERSONAS 只剩「什么时候说 / 怎么说」的补充，不再自带一套人设。
+    # 人格优先级（唯一一份定义，2026-11-22）：
+    #   ① 显式填的 proactivity_personality  >  ② 主链人格  >  ③ 预设
+    # 11-16 把主链人格提上来是为了让主动开口和群聊回复共用一份底线；
+    # 但它当时顺手压掉了配置项，和 config 页「填了就覆盖」的承诺相反。
+    # 现在显式填写重新拥有最高优先级：想临时试一套说法，不必去改主链人格。
+    custom = str(cfg.get("proactivity_personality") or "").strip()
     main_raw = _main_persona()
-    if main_raw:
+    if custom:
+        personality = custom
+    elif main_raw:
         personality = main_raw
     else:
-        personality = str(cfg.get("proactivity_personality") or p["personality"])
+        personality = str(p["personality"])
     behavior = str(cfg.get("proactivity_behavior_style") or p["behavior"])
     reply = str(cfg.get("proactivity_reply_style") or p["reply"])
     txt = _DECIDE_TEMPLATE

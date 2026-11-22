@@ -106,6 +106,7 @@ jobs:
             "test_ego_turn_ratchet",
             "test_prompt_segment_dedup",
             "test_proactivity_ledger",
+            "test_proactivity_arbitrator",
             "test_proactivity_wiring",
             "test_task_center",
             "test_job_persistence",
