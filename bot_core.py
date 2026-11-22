@@ -21496,6 +21496,16 @@ def main():
                     _p_delay = _p_react + (0.5 if len(text) > 50 else 0) + random.uniform(0, 0.5)
                     log(f"私聊[{sender}] [反应延迟] {_p_delay:.1f}s")
                     time.sleep(_p_delay)
+                # ★ 2026-11-22：私聊轮次也记决策阶段。此前 `DECIDED` 只写在群聊
+                #   （scene 写死 "group"），私聊 42 条轮次里 41 条只有「收+发+记」，
+                #   事后回答不了「为什么回 / 为什么这个时候回」。
+                #   私聊没有群聊那套发言闸，走到这里就是要回，故 reason 固定。
+                try:
+                    from harness import turn_trace as _tt_pd
+                    _tt_pd.note(_ptid, "DECIDED", scene="private",
+                                target=str(sender), why="私聊直回")
+                except Exception:
+                    pass
                 # ── A3：能交给 agent 就交给它，拿不到就回落老链路（2026-10-30）──
                 #  传的是**已追加图片描述**的 text：describe 模式下 agent 不必再读一遍图；
                 #  真要看图时（比如问头像）它自己调 vision。
