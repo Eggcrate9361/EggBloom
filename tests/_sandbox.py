@@ -63,6 +63,12 @@ def sandbox_neurobase(prefix="eggbloom_test_nb_") -> str:
     #   报「真的发出去了」失败，日志里多出 `[发送] 重启恢复 2 条未发出的消息`）。
     #   这个键必须在 import harness.outbox 之前设好：_DEFAULT 是模块级常量。
     os.environ["EGGBLOOM_OUTBOX_DB"] = os.path.join(td, "outbox.sqlite3")
+    # ★ 2026-11-22：turn 账本目录同样隔离。
+    #   生产 `data/trace/turns-20261116.jsonl` 第一行是 `testturn01`（target=g1 /
+    #   user=u1），说明测试直接写进了真实账本 —— 之后任何「全量轮次」统计都会被
+    #   夹具污染。`harness/turn_trace.py` 的 `_dir()` 在调用时读这个键。
+    os.environ["EGG_TURN_TRACE_DIR"] = os.path.join(td, "trace")
+    os.makedirs(os.environ["EGG_TURN_TRACE_DIR"], exist_ok=True)
 
     # 2. 若模块已导入，改写其路径常量
     #    （正常情况下本函数在 import 之前调用，这一步是兜底）

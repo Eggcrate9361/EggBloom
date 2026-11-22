@@ -51,7 +51,8 @@ jobs:
             "test_group_decider_logic",
             "test_memory_feed",
             "test_scope_policy_text",
-            "test_prompt_segments"
+            "test_prompt_segments",
+            "test_turn_trace_isolation"
           )
           $failed = @()
           foreach ($t in $tests) {

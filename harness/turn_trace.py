@@ -61,9 +61,20 @@ def enabled() -> bool:
     return _ENABLED
 
 
+def _dir() -> str:
+    """账本目录。
+
+    ★ 2026-11-22：目录必须在**调用时**解析 `EGG_TURN_TRACE_DIR`，不在 import
+    时缓存。生产 `data/trace/turns-20261116.jsonl` 里出现过测试夹具
+    `testturn01`（target=g1 / user=u1），说明测试写过真实账本；测试入口要能
+    把目录指到临时路径，而 import 早于测试设置环境变量，缓存就来不及。
+    """
+    return str(os.environ.get("EGG_TURN_TRACE_DIR") or _DIR or "")
+
+
 def _path() -> str:
     day = datetime.now().strftime("%Y%m%d")
-    return os.path.join(_DIR or "", f"turns-{day}.jsonl")
+    return os.path.join(_dir(), f"turns-{day}.jsonl")
 
 
 def note(turn_id: str, phase: str, **fields: Any) -> bool:
@@ -87,7 +98,7 @@ def note(turn_id: str, phase: str, **fields: Any) -> bool:
     try:
         line = json.dumps(rec, ensure_ascii=False)
         with _LOCK:
-            os.makedirs(_DIR, exist_ok=True)
+            os.makedirs(_dir(), exist_ok=True)
             with open(_path(), "a", encoding="utf-8") as f:
                 f.write(line + "\n")
             _LAST_PHASE[str(turn_id)] = str(phase)
@@ -130,7 +141,7 @@ def tail(n: int = 20, day: Optional[str] = None) -> list:
     """读最近 n 行（调试用；文件不存在返回空表）。"""
     try:
         p = _path() if not day else os.path.join(
-            _DIR or "", f"turns-{day}.jsonl")
+            _dir(), f"turns-{day}.jsonl")
         with open(p, encoding="utf-8") as f:
             lines = f.readlines()[-max(1, int(n)):]
         return [json.loads(x) for x in lines if x.strip()]
