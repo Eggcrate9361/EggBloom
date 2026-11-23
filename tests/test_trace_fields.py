@@ -92,8 +92,8 @@ def main():
     check("D1 模型调用处记指纹", "_note_prompt(turn_id, messages, model_name)" in src)
     check("D2 群聊 SENT 带 reply_to",
           'reply_to=str(buffer.get("message_id") or "")' in src)
-    check("D3 私聊 SENT 带 reply_to",
-          'reply_to=str(msg.get("message_id") or "")' in src)
+    check("D3 私聊 SENT 带 reply_to（优先真实 id）",
+          'msg.get("_reply_to_msg_id")' in src)
     check("D4 群聊 SENT 带引用与合并数",
           'quote_id=str(_quote_id or "")' in src and 'merged=int(buffer.get("merged_n") or 0)' in src)
 

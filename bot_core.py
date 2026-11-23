@@ -1399,6 +1399,8 @@ def _private_flush(sender: str):
         #   时间戳水位线（`_msg_time <= LAST_MSG_TIME` 就丢），而合并后重新入队的
         #   这条 time 必然 <= 之前那条 → 会被自己的去重闸吞掉，表现为"合并了但不回"。
         "message_id": f"_merged_{sender}_{int(time.time() * 1000)}",
+        # ★ 2026-11-23：真实 id 走单独字段，只给账本用，不参与去重。
+        "_reply_to_msg_id": str(rec.get("last_msg_id") or ""),
         "message": _msg["message"],
         _REQUEUE_FLAG: True,
     })
@@ -1461,6 +1463,11 @@ def _buffer_private_message(sender: str, text: str, images, msg) -> bool:
             rec.setdefault("parts", []).append(text)
             if images:
                 rec.setdefault("images", []).extend(images)
+            # ★ 2026-11-23：记住本批**最后一条真实消息 id**。
+            #   合并后重新入队时用的是 `_merged_...` 合成 id（去重需要它唯一），
+            #   真实 id 就这么丢了 —— 账本里的 reply_to 只能指到"哪一批"，
+            #   回不到"哪一条"。这里单独留一份，不进 message_id，避免被入口去重吞掉。
+            rec["last_msg_id"] = str(msg.get("message_id") or "")
             t = rec.get("timer")
             if t:
                 try:
@@ -1472,6 +1479,7 @@ def _buffer_private_message(sender: str, text: str, images, msg) -> bool:
                 "parts": [text] if text else [],
                 "images": list(images or []),
                 "first_time": now,
+                "last_msg_id": str(msg.get("message_id") or ""),
             }
             PRIVATE_MSG_BUFFER[sender] = rec
         # deadline 只算一次。第一版在这里算了两遍（if/else 各一遍），
@@ -21794,8 +21802,9 @@ def main():
                             _tt_ps.note(_ptid, "SENT", scene="private",
                                         target=str(sender), text_len=len(_pm_text or ""),
                                         # 2026-11-22：私聊回到哪条消息（合并批次时是
-                                        # 合成/最后一条的 id），与群聊同一口径。
-                                        reply_to=str(msg.get("message_id") or ""))
+                                        # 合成 id）；11-23 起优先用合批记下的真实 id。
+                                        reply_to=str(msg.get("_reply_to_msg_id")
+                                                     or msg.get("message_id") or ""))
                             _tt_ps.note(_ptid, "COMMITTED", scene="private",
                                         target=str(sender))
                         except Exception:
