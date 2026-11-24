@@ -49,6 +49,23 @@ _PROMISE_RE = re.compile(
 )
 
 
+#: 语气统计用的词表 —— 只数命中，不做语义判断。
+_TONE_NEG = ("滚", "烦", "闭嘴", "傻", "笨", "垃圾", "差劲", "没用", "恶心", "爬")
+_TONE_POS = ("谢谢", "厉害", "可爱", "喜欢", "好棒", "牛", "爱你", "不错", "行啊")
+#: 承诺识别（宽版）：允许省略主语「我」——"等下给你发"也算。
+#: 只用于场景状态记账，**不改** scan 里 `_PROMISE_RE` 的判据（那会动到
+#: pending_topic 的行为）。
+_COMMIT_RE = re.compile(
+    r"(等下|等会|待会|一会|回头|稍后|晚点|过会|明天)"
+    r".{0,8}(给|发|回|看|查|找|弄|说|补|整理)"
+)
+#: 她说自己**已经做完**某事的说法（对账用：没真做就是编，见 C2）
+_CLAIM_DONE_RE = re.compile(
+    r"(发你了|发给你了|已经发了|传过去了|弄好了|改好了|查到了|找到了|"
+    r"放群里了|给你发了|给你传了|已经放到)"
+)
+
+
 def key_of(scene: str, target: str) -> str:
     """统一的会话键。私聊用 QQ，群聊用群号，绝不混在一起。"""
     return "%s:%s" % (str(scene or "private"), str(target or ""))
@@ -90,6 +107,16 @@ def new_state(scene: str, target: str) -> Dict[str, Any]:
         "delivery_ok_ts": 0.0,      # 最近一次发送成功
         "last_skip_ts": 0.0,        # 主链明确选择不接这条
         "last_skip_reason": "",
+        # ── 2026-11-24 场景状态（拟人主线第 2 步）──────────────────────
+        # 全部是**可观测统计**，不是情绪推断（见模块头「明确不做」）：
+        # tone 只由字数、标点、夸/骂词命中算出；relation 只做外部值的透传 +
+        # 最近一次互动是夸还是骂。没有任何"她此刻开心吗"的猜测。
+        "tone": 0.0,                # -1..1，最近若干条入站的语气统计（负=冲，正=软）
+        "tone_n": 0,                # 参与统计的样本数
+        "relation_level": None,     # 外部传入的亲密度（好感度），None = 不知道
+        "last_kind": "",            # 最近一次互动性质：被夸 / 被骂 / ""
+        "unresolved": [],           # [{ts, text, kind, status}] 欠着的：答应过、没做
+        "facts": [],                # [{ts, text, kind}] 她说自己做过的事（对账用）
         "updated_at": 0.0,
     }
 
@@ -98,6 +125,115 @@ def _clone(state: Optional[Dict[str, Any]], scene: str, target: str) -> Dict[str
     if isinstance(state, dict) and state:
         return copy.deepcopy(state)
     return new_state(scene, target)
+
+
+def _pick(now: float, options: List[str]) -> str:
+    """同一状态换着说法，避免简报本身变成新八股（每 10 分钟换一次）。"""
+    if not options:
+        return ""
+    return options[int(now // 600) % len(options)]
+
+
+def _update_tone(s: Dict[str, Any], text: str, ts: float) -> None:
+    """按字数/标点/夸骂词更新语气统计。**只统计可观测特征**，不推断情绪。"""
+    t = str(text or "")
+    if not t.strip():
+        return
+    neg = min(2, sum(1 for w in _TONE_NEG if w in t))
+    pos = min(2, sum(1 for w in _TONE_POS if w in t))
+    delta = 0.6 * pos - 0.8 * neg
+    if len(t) <= 2 and not re.search(r"[，。！？~…]", t):
+        delta -= 0.1          # 极短回复：敷衍感
+    if len(t) >= 30 and neg == 0:
+        delta += 0.05         # 愿意多说：投入感
+    old = float(s.get("tone") or 0.0)
+    s["tone"] = max(-1.0, min(1.0, 0.7 * old + 0.3 * delta))
+    s["tone_n"] = int(s.get("tone_n") or 0) + 1
+    if neg:
+        s["last_kind"] = "被骂"
+    elif pos:
+        s["last_kind"] = "被夸"
+
+
+def _update_commitments(s: Dict[str, Any], bot_text: str, ts: float) -> None:
+    """从**她自己的话**里记两件事：欠着的（承诺）、说做过的（对账）。
+
+    只认明确的说法，不猜。承诺用 `_PROMISE_RE`；"已经做完"用 `_CLAIM_DONE_RE`。
+    """
+    t = str(bot_text or "")
+    if not t:
+        return
+    if _PROMISE_RE.search(t) or _COMMIT_RE.search(t):
+        rows = [r for r in (s.get("unresolved") or [])
+                if ts - float(r.get("ts") or 0) < 86400]
+        rows.append({"ts": ts, "text": t[:60], "kind": "promise", "status": "open"})
+        s["unresolved"] = rows[-6:]
+    if _CLAIM_DONE_RE.search(t):
+        rows = [r for r in (s.get("facts") or [])
+                if ts - float(r.get("ts") or 0) < 86400]
+        rows.append({"ts": ts, "text": t[:60], "kind": "claim"})
+        s["facts"] = rows[-8:]
+        # 说了"发你了/弄好了"，就把最早一条欠着的标成已了结
+        for r in (s.get("unresolved") or []):
+            if r.get("status") == "open":
+                r["status"] = "done"
+                r["done_ts"] = ts
+                break
+
+
+def render_state_brief(state: Dict[str, Any], now: Optional[float] = None,
+                       *, max_chars: int = 120) -> str:
+    """把场景状态压成**人话**，最多三行、120 字，不出现字段名。
+
+    给生成端当"她现在"用，不是给程序读的。没有内容就返回空串（整块不出现），
+    绝不输出「无」「暂无」这类占位——那本身就是新的机器味。
+    """
+    s = state or {}
+    if not s.get("target"):
+        return ""
+    now = float(now if now is not None else time.time())
+    lines: List[str] = []
+
+    kind = str(s.get("last_kind") or "")
+    tone = float(s.get("tone") or 0.0)
+    lvl = s.get("relation_level")
+    if kind == "被骂":
+        lines.append(_pick(now, ["刚被怼了一句，还没顺过来",
+                                 "上一条挺冲，别当她没脾气",
+                                 "刚被人呛了一下"]))
+    elif kind == "被夸":
+        lines.append(_pick(now, ["刚被夸了一句，心情还挂着",
+                                 "刚被人捧了一下"]))
+    elif tone <= -0.4:
+        lines.append(_pick(now, ["这几句都挺冲", "气氛有点僵"]))
+    elif lvl is not None:
+        try:
+            lv = int(lvl)
+        except (TypeError, ValueError):
+            lv = 0
+        if lv >= 80:
+            lines.append("跟这个人很熟")
+        elif lv <= 20:
+            lines.append("跟这个人不熟")
+
+    open_rows = [r for r in (s.get("unresolved") or []) if r.get("status") == "open"]
+    if open_rows:
+        r = open_rows[0]
+        mins = int(max(0.0, now - float(r.get("ts") or now)) / 60)
+        tail = "，到现在没做" if mins >= 10 else "，还没做"
+        lines.append("答应过「%s」%s" % (str(r.get("text") or "")[:16], tail))
+
+    # 她是"隔了很久才回来"吗 —— 用观测时记下的间隔，不用渲染时刻现算
+    # （渲染时 last_activity 已经被这条消息刷新了，现算永远是 0）。
+    try:
+        gap_h = float(s.get("resume_gap_h") or 0.0)
+    except (TypeError, ValueError):
+        gap_h = 0.0
+    if gap_h >= 6:
+        lines.append("隔了 %s 小时才又说话" % gap_h)
+
+    text = "\n".join([x for x in lines if x][:3])
+    return text[:max_chars]
 
 
 def observe_bot_reply(state: Optional[Dict[str, Any]], event: Dict[str, Any],
@@ -136,6 +272,8 @@ def observe_bot_reply(state: Optional[Dict[str, Any]], event: Dict[str, Any],
                 if now - float(r.get("ts") or 0) < 86400]
         rows.append({"ts": ts, "text": text[:120]})
         s["promises"] = rows[-8:]
+    # 2026-11-24：把承诺/声称做完的事记成可对账的条目（C2 世界事实）
+    _update_commitments(s, text, ts)
     return s
 
 
@@ -181,6 +319,13 @@ def observe_user_message(state: Optional[Dict[str, Any]], event: Dict[str, Any],
     s["pending_trace"] = ""
     # 对方接话了，之前那句"等下给你"算兑现（不区分是不是同一件事，保守清理）
     s["promises"] = []
+    # 2026-11-24：语气统计与关系快照（都来自可观测输入）
+    _update_tone(s, text, ts)
+    try:
+        if e.get("affection") is not None:
+            s["relation_level"] = int(e.get("affection"))
+    except (TypeError, ValueError):
+        pass
     s["updated_at"] = now
 
     # ⑥ 只发了图/文件、一个字没配

@@ -9616,6 +9616,39 @@ def _apply_scope_registry(kind, sid, tools, *, registry=None):
 #: 好感度档位缓存：{"gid:uid": (ts, (tier, note, score))}，TTL 300 秒
 _RELATION_CACHE: Dict[str, Tuple[float, tuple]] = {}
 
+#: 好感度**原始分**缓存（供场景状态用）：{"gid|'':uid": (ts, score)}，TTL 300 秒。
+#: 与档位缓存分开：档位只给群聊且要转文字，这里要数字、私聊也要。
+_AFFECTION_SCORE_CACHE: Dict[str, Tuple[float, int]] = {}
+
+
+def _affection_score(gid: str, uid: str):
+    """读好感度原始分；私聊（gid 传空）也读。读不到返回 None，不编 0。
+
+    0 和 None 必须分开：0 是"确实冷淡"，None 是"读不到"，后者不该被当成
+    关系快照写进场景状态 —— 那会让她的态度凭空变冷。
+    """
+    if not uid:
+        return None
+    key = "%s:%s" % (str(gid or ""), str(uid))
+    now = time.time()
+    hit = _AFFECTION_SCORE_CACHE.get(key)
+    if hit and now - hit[0] < 300:
+        return hit[1]
+    try:
+        if not SELF_LEARN_OK or self_learn is None:
+            return None
+        aff = getattr(self_learn, "affection", None)
+        if aff is None or not hasattr(aff, "get_affection"):
+            return None
+        got = aff.get_affection(str(gid or ""), str(uid)) or {}
+        if not got:
+            return None
+        score = int(got.get("score") or 0)
+    except Exception:
+        return None
+    _AFFECTION_SCORE_CACHE[key] = (now, score)
+    return score
+
 #: 好感度 → 四档关系。阈值沿用 self_learning.get_context_for_llm 的分档口径
 #: （>50 友好 / >20 普通 / 其余冷淡），只把"友好"再切一刀成"好"与"特别好"。
 _RELATION_TIERS = (
@@ -17684,6 +17717,9 @@ def _pipeline_upsert(group_id, *, sender, text, images=None, flags=None,
             "quote_me": bool(quote_me),
             "in_session": bool(in_session),
             "trace_id": _tid,
+            # ★ 2026-11-24：好感度原始分，给场景状态算「关系快照」用。
+            #   读不到是 None（不是 0）—— 0 会被当成「确实冷淡」。
+            "affection": _affection_score(group_id, sender),
         })
 
     def _merge(buf, force=False):
@@ -21273,6 +21309,31 @@ def main():
                 
                 if not text:
                     text = "看看这张图片"
+
+                # ★ 2026-11-24：私聊入站也发 `message.in`。
+                #   订阅方（主动性 / 场景状态）的代码早就按 `gid==""` 处理 private，
+                #   但主链只有群聊发这个事件 —— 私聊的 `last_user_text`、语气统计、
+                #   连发计数因此从来没更新过，私聊侧的观测一直是半盲的。
+                #   放在合并之前：被合批吞掉的那几条也要被看见。
+                try:
+                    _emit_plugin_event("message.in", {
+                        "group_id": "",
+                        "sender": str(sender),
+                        "text": str(text),
+                        "ts": time.time(),
+                        # 私聊没有"@ 别人"的概念，一律算在对我说
+                        "at_bot": True,
+                        "at_only": True,
+                        "named_bot": False,
+                        "has_image": bool(images),
+                        "image_count": len(images or []),
+                        "quote": bool(quoted_text),
+                        "quote_me": False,
+                        "in_session": True,
+                        "affection": _affection_score("", sender),
+                    })
+                except Exception:
+                    pass
 
                 # ── 私聊消息合并（2026-10-25）──────────────────────────
                 # 放在这里的理由（顺序很关键）：
