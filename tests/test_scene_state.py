@@ -59,6 +59,14 @@ def main():
     check("A5 极短敷衍略降", s3["tone"] < 0, s3["tone"])
     check("A6 样本数累计", say(s3, "嗯", 5)["tone_n"] == 2)
 
+    print("\n=== A2) 情绪会过期（回放发现：一次被骂，两小时内每条简报都在说被怼）===")
+    sneg = say(None, "你个傻子")
+    b_now = L.render_state_brief(sneg, T + 60)
+    b_old = L.render_state_brief(sneg, T + 900)
+    check("A2-1 刚被骂时提这件事", ("怼" in b_now or "呛" in b_now or "顶" in b_now), b_now)
+    check("A2-2 十五分钟后不再说被骂",
+          not any(k in b_old for k in ("怼", "呛", "顶")), b_old)
+
     print("\n=== B) 关系快照 ===")
     check("B1 没给亲密度就是 None", say(None, "在吗")["relation_level"] is None)
     check("B2 给了就存下来", say(None, "在吗", affection=85)["relation_level"] == 85)
