@@ -343,6 +343,10 @@ def observe_user_message(state: Optional[Dict[str, Any]], event: Dict[str, Any],
     #   原来用的是合并后的 at_bot，它含 text_at（文本里出现任何 @，包括 @ 别人）。
     #   于是群友 @ 别人时也被记成"被 @ 了"，主链按规矩跳过，at_dropped 再把它
     #   判成漏回复，补一句「在，刚没顾上」——群里没人叫它，它却答「我在」。
+    # ★ 2026-11-24：私聊也算「被叫」。补上 `message.in` 之后，这条路径第一次
+    #   在私聊真正生效。不用担心变成"没话找话"：主动选择不回的路径都会写
+    #   `last_skip`（AI 决定不回复 / 冷却跳过都在 11-24 补齐），scan 见到
+    #   `last_skip >= last_at` 就不会再报 at_dropped。剩下的命中都是"真漏了"。
     if (not e.get("group_id")) or bool(e.get("at_only")) or bool(e.get("named_bot")):
         s["last_at_ts"] = ts
         s["last_at_text"] = text[:200]
