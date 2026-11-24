@@ -226,6 +226,26 @@ def _report_turn_skipped(*, scene: str, target: str, reason: str,
     })
 
 
+def _outbound_text(payload) -> str:
+    """从发送请求体里取出纯文本。
+
+    `message` 可能是 str（私聊常见），也可能是消息段 list（群聊带引用时）。
+    老写法只认 str，导致群聊的 `bot.replied.text` 一直是空串。
+    图片/表情段没有文字，跳过；结果裁到 400 字，避免账本里塞整段长文。
+    """
+    msg = (payload or {}).get("message") if isinstance(payload, dict) else None
+    if isinstance(msg, str):
+        return msg[:400]
+    if isinstance(msg, list):
+        out = "".join(
+            str((seg.get("data") or {}).get("text") or "")
+            for seg in msg
+            if isinstance(seg, dict) and seg.get("type") == "text"
+        )
+        return out[:400]
+    return ""
+
+
 def _note_prompt(turn_id: str, messages, model: str = "") -> None:
     """把这一轮请求的 prompt 指纹写进 turn 账本（`PROMPT` 阶段）。
 
@@ -3071,7 +3091,10 @@ def api_call(endpoint: str, data: Optional[Dict] = None, timeout: float = 15) ->
         if endpoint in ("send_private_msg", "send_group_msg") and isinstance(resp, dict) \
                 and resp.get("retcode") == 0:
             _msg = (data or {}).get("message")
-            _text = _msg if isinstance(_msg, str) else ""
+            # ★ 2026-11-24：群聊发的是**消息段**（带引用时 `message` 是 list），
+            #   老写法只认 str，于是群聊的 `bot.replied.text` 一直是空串 ——
+            #   账本里 `last_bot_text` 空、承诺识别在群聊全部失效。
+            _text = _outbound_text(data)
             _gid = str((data or {}).get("group_id") or "")
             # ★ 2026-11-06（主动性行为地基）：原来只带 group_id，而私聊发的
             #   参数是 user_id → 私聊事件里 group_id="" 且没有收件人，订阅方

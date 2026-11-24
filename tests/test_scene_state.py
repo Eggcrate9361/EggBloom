@@ -87,14 +87,26 @@ def main():
     # 用"还欠着一件事"的状态测：这时候简报必须有内容
     s_open = reply(say(None, "帮我弄下图"), "行，等下给你发", 5)
     b = L.render_state_brief(s_open, T + 120)
-    check("D0 全了结且无情绪时不出简报", L.render_state_brief(s, T + 120) == "",
-          L.render_state_brief(s, T + 120))
+    # 只有一条普通入站、没有语气变化/没等回复 → 不该有简报
+    _quiet = say(None, "在吗")
+    check("D0 无事可说时不出简报", L.render_state_brief(_quiet, T + 120) == "",
+          L.render_state_brief(_quiet, T + 120))
     check("D1 非空", bool(b), b)
     check("D2 不超过三行", len(b.splitlines()) <= 3, b)
     check("D3 不超过 120 字", len(b) <= 120, len(b))
     bad = [w for w in ("tone", "unresolved", "facts", "relation_level", "mood") if w in b]
     check("D4 不含字段名", not bad, bad)
     check("D5 空状态返回空串", L.render_state_brief({}, T) == "")
+
+    print("\n=== D2) 话头没接上（比答应过的事更可靠）===")
+    s2 = say(None, "在吗")
+    s2 = reply(s2, "刚翻到你说的那个梗", 0)
+    b2 = L.render_state_brief(s2, T + 10 * 60)
+    check("D2-1 一分钟后才提", "上一条" in b2 or "刚说过" in b2, b2)
+    check("D2-2 不带出原文前半截以外的内容", len(b2) <= 120, len(b2))
+    b3 = L.render_state_brief(s2, T + 20)
+    check("D2-3 一分钟内不提（别把正常节奏说成没人理）",
+          "上一条" not in b3 and "刚说过" not in b3, b3)
 
     print("\n=== E) 换说法 ===")
     s2 = say(None, "你真烦，滚")
@@ -112,6 +124,17 @@ def main():
     check("F3 入站事件带好感度快照",
           src.count('"affection": _affection_score(') >= 2,
           src.count('"affection": _affection_score('))
+
+    print("\n=== G) 出站文本提取（群聊是消息段）===")
+    import bot_core as B
+    check("G1 私聊 str 直接取", B._outbound_text({"message": "吃饭呢"}) == "吃饭呢")
+    check("G2 群聊段拼文本",
+          B._outbound_text({"message": [
+              {"type": "text", "data": {"text": "在的"}},
+              {"type": "image", "data": {"file": "x"}},
+              {"type": "text", "data": {"text": "，等下给你发"}}]}) == "在的，等下给你发")
+    check("G3 没有 message 返回空", B._outbound_text({}) == "")
+    check("G4 长文裁到 400", len(B._outbound_text({"message": "字" * 900})) == 400)
 
     print("\n" + "=" * 56)
     print(f"通过 {PASS} / 失败 {FAIL}")

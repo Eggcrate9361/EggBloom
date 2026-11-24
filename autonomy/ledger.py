@@ -222,6 +222,17 @@ def render_state_brief(state: Dict[str, Any], now: Optional[float] = None,
         elif lv <= 20:
             lines.append("跟这个人不熟")
 
+    # 「话头没接上」：她说过话、对方一直没回。这是**真实每天都有**的状态，
+    # 比"答应过的事"可靠得多（后者在 151 条真实语料里 0 命中）。
+    # 只在她说完超过 1 分钟后才提，否则会把正常对话节奏说成"没人理我"。
+    pending_since = float(s.get("pending_since") or 0.0)
+    last_bot = str(s.get("last_bot_text") or "")
+    if s.get("pending") and last_bot and pending_since and now - pending_since >= 60:
+        mins = int((now - pending_since) / 60)
+        tail = last_bot[:12]
+        lines.append(_pick(now, ["上一条「%s」还没人接", "刚说过「%s」，没人应"]) % tail
+                     + ("，%d 分钟了" % mins if mins >= 5 else ""))
+
     open_rows = [r for r in (s.get("unresolved") or []) if r.get("status") == "open"]
     if open_rows:
         r = open_rows[0]
