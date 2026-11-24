@@ -50,7 +50,8 @@ _PROMISE_RE = re.compile(
 
 
 #: 语气统计用的词表 —— 只数命中，不做语义判断。
-_TONE_NEG = ("滚", "烦", "闭嘴", "傻", "笨", "垃圾", "差劲", "没用", "恶心", "爬")
+_TONE_NEG = ("滚", "烦", "闭嘴", "傻", "笨", "垃圾", "差劲", "没用", "恶心", "爬",
+             "没意思", "讨厌", "烦人", "臭", "蠢", "白痴", "废物")
 _TONE_POS = ("谢谢", "厉害", "可爱", "喜欢", "好棒", "牛", "爱你", "不错", "行啊",
              "宠", "爱人", "宝贝", "乖")
 #: 承诺识别（宽版）：允许省略主语「我」——"等下给你发"也算。
@@ -214,7 +215,10 @@ def render_state_brief(state: Dict[str, Any], now: Optional[float] = None,
         lines.append(_pick(now, ["刚被怼了一句，还没顺过来",
                                  "上一条挺冲，别当她没脾气",
                                  "刚被人呛了一下",
-                                 "被顶了一句，脾气还没下去"]))
+                                 "被顶了一句，脾气还没下去"]
+                            if s.get("scene") != "group" else
+                            ["群里刚有人呛起来", "群里气氛有点冲",
+                             "刚才那几句不太客气", "有人说话带刺"]))
     elif kind == "被夸":
         lines.append(_pick(now, ["刚被夸了一句，心情还挂着",
                                  "刚被人捧了一下",
@@ -257,7 +261,12 @@ def render_state_brief(state: Dict[str, Any], now: Optional[float] = None,
     except (TypeError, ValueError):
         gap_h = 0.0
     if gap_h >= 6:
-        lines.append("隔了 %s 小时才又说话" % gap_h)
+        if gap_h >= 24 * 3:
+            lines.append("好几天没说话了")
+        elif gap_h >= 24:
+            lines.append("隔了 %d 天没说话" % int(round(gap_h / 24.0)))
+        else:
+            lines.append("隔了 %d 小时没说话" % int(round(gap_h)))
 
     text = "\n".join([x for x in lines if x][:3])
     return text[:max_chars]
