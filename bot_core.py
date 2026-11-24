@@ -20295,6 +20295,11 @@ def main():
                             #   2026-10-27 实测：私聊每条都是「入缓冲 等 5.0s（本批 1 条）」，
                             #   一条都不回，日志里连「收到:」都没有。
                             _REQUEUE_FLAG: bool(ev.get(_REQUEUE_FLAG)),
+                            # ★ 2026-11-24：真实消息 id 也要一起穿过这一层。
+                            #   11-23 的修复把它挂在重新入队的那条消息上，但这一处
+                            #   按固定字段重建，字段被丢掉 → 账本里的 reply_to 仍然
+                            #   只能指到 `_merged_...`，修复等于没生效。
+                            "_reply_to_msg_id": str(ev.get("_reply_to_msg_id") or ""),
                         })
                         if is_group:
                             event_msgs[-1]["group_id"] = group_id
