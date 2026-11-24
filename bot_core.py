@@ -21299,6 +21299,11 @@ def main():
                     elapsed = time.time() - RECALL_FEEDBACK_TIME[recall_key]
                     if elapsed < 5:
                         log(f"撤回反馈冷却中（{elapsed:.1f}s），跳过本条消息")
+                        # 2026-11-24：静默也要留原因。此前这里直接 continue，
+                        # 账本里只有「收」，事后分不清「不想回」和「冷却没回」。
+                        _report_turn_skipped(scene="private", target=str(sender),
+                                             reason=f"冷却：撤回反馈 {elapsed:.1f}s",
+                                             sender=str(sender))
                         continue
 
                 # 聊天面板：记录收到的私聊消息
@@ -21317,6 +21322,9 @@ def main():
                 # 2. 启动冷却检查
                 if time.time() - startup_time < STARTUP_COOLDOWN:
                     log(f"开机冷却中（{int(time.time() - startup_time)}s/{STARTUP_COOLDOWN}s），跳过私聊")
+                    _report_turn_skipped(scene="private", target=str(sender),
+                                         reason=f"冷却：开机 {int(time.time() - startup_time)}s",
+                                         sender=str(sender))
                     continue
 
                 # 3. 私聊回复速率限制
@@ -21324,6 +21332,9 @@ def main():
                     elapsed = time.time() - PRIVATE_REPLY_COOLDOWN[sender]
                     if elapsed < PRIVATE_REPLY_INTERVAL:
                         log(f"私聊冷却中（{elapsed:.1f}s/{PRIVATE_REPLY_INTERVAL}s），跳过")
+                        _report_turn_skipped(scene="private", target=str(sender),
+                                             reason=f"冷却：私聊速率 {elapsed:.1f}s",
+                                             sender=str(sender))
                         continue
                 PRIVATE_REPLY_COOLDOWN[sender] = time.time()
 

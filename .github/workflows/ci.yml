@@ -104,6 +104,7 @@ jobs:
             "test_capability_view",
             "test_persona_tone",
             "test_private_reply_target",
+            "test_silence_reason",
             "test_humanness_engineering",
             "test_ego_topic_real",
             "test_ego_turn_ratchet",
