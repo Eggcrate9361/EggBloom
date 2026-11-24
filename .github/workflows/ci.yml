@@ -45,6 +45,7 @@ jobs:
             "test_at_others_gate",
             "test_reply_time_anchor_leak",
             "test_smart_send_split",
+            "test_typing_delay",
             "test_dev_watch",
             "test_decider_degrade",
             "test_decider_pacing",

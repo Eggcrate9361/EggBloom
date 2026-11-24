@@ -3378,6 +3378,29 @@ def _trim_incomplete(text, truncated=False):
     return trimmed or text
 
 
+def _typing_delay(n_chars: int, cps: float, cap: float) -> float:
+    """「开始敲字」要等的秒数 = min(上限, 字数 ÷ 打字速度)。
+
+    ★ 2026-11-24：上限从写死的 4.0 改成配置项 `reply_typing_delay_max`。
+      起因是真机一轮 12.3 秒里，**发送本身只占 0.5 秒，剩下 4 秒在模拟打字**；
+      而 4.0 是硬上限，长回复一律顶满，"慢"的体感有一半来自这里。
+      两个键都支持调：`reply_typing_speed`（字/秒，默认 6）决定斜率，
+      `reply_typing_delay_max`（秒，默认 4）决定天花板。
+      任一为 0 或负数 = 不模拟打字，直接发（线上排障时用）。
+
+    纯函数：不读配置、不睡，测试可以直接打。
+    """
+    try:
+        n = int(n_chars or 0)
+        cps = float(cps or 0)
+        cap = float(cap or 0)
+    except (TypeError, ValueError):
+        return 0.0
+    if n <= 0 or cps <= 0 or cap <= 0:
+        return 0.0
+    return min(cap, n / cps)
+
+
 def smart_send(text, target_qq=None):
     """AI 回复专用：按句子拆分逐条发送，模拟真人对话节奏"""
     if target_qq is None:
@@ -3430,11 +3453,12 @@ def smart_send(text, target_qq=None):
     #    真人是"想一下 → 开始敲 → 敲完发"，这里补上"开始敲"的那段时间，
     #    和下面的句间延迟接成一个完整的打字过程。按全文字数算，
     #    约 6 字/秒（比真人略快，等太久反而像卡住）。
+    #    2026-11-24：上限进配置（reply_typing_delay_max），长回复不再一律顶满 4 秒。
     _cps = float(_config.get("reply_typing_speed", 6.0))
-    if _cps > 0:
-        _type_delay = min(4.0, len(text) / _cps)
-        if _type_delay > 0.3:
-            time.sleep(_type_delay)
+    _cap = float(_config.get("reply_typing_delay_max", 4.0))
+    _type_delay = _typing_delay(len(text or ""), _cps, _cap)
+    if _type_delay > 0.3:
+        time.sleep(_type_delay)
 
     # 如果只有一句话 → 直接发
     #   2026-11-05：发的是**并条之后**的那句。旧版发 `text`，条数闸收到 1 时
@@ -3831,11 +3855,12 @@ def smart_send_group(group_id, text, reply_id: int = 0):
     # ── 打字延迟（2026-10-22，与 smart_send 同款）──
     #    群聊原来也是"生成完立刻发"，第一句之前 0 等待。补上和句间节奏
     #    （0.3~1.0s）相接的"开始敲"时间，让连发看起来是一个连续动作。
+    #    2026-11-24：同 smart_send，上限进配置（reply_typing_delay_max）。
     _cps = float(_config.get("reply_typing_speed", 6.0))
-    if _cps > 0:
-        _type_delay = min(4.0, effective_len / _cps)
-        if _type_delay > 0.3:
-            time.sleep(_type_delay)
+    _cap = float(_config.get("reply_typing_delay_max", 4.0))
+    _type_delay = _typing_delay(effective_len, _cps, _cap)
+    if _type_delay > 0.3:
+        time.sleep(_type_delay)
 
     # 多人 @ 回复：按 @ 行分块，每个 @ 块（含后续非 @ 行）单独发送
     lines = [l.strip() for l in text.split('\n') if l.strip()]
