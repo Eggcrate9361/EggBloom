@@ -94,6 +94,43 @@ def main():
     check("D1 SENT 优先取 _reply_to_msg_id", 'msg.get("_reply_to_msg_id")' in src)
     check("D2 合批时写入该字段", '"_reply_to_msg_id": str(rec.get("last_msg_id") or "")' in src)
 
+    print("\n=== E) 中间层：内部字段必须整体穿过 ===")
+    # 2026-11-24 线上教训：A/B 段（flush 端）和 D 段（账本端）都过了，
+    # 中间的「事件重建」按固定字段新造 dict，字段在这儿消失 —— 用例全绿，
+    # 线上 reply_to 仍然是合成 id。所以这里直接测这一层。
+    ev = {"_reply_to_msg_id": "100003", "_REQUEUE_FLAG": True,
+          "_future_marker": "x", "message_id": 1, "text": "不该带",
+          "_type": "private", "_group_id": "g1"}
+    kept = B._carry_internal_fields(ev)
+    check("E1 真实 id 穿过重建层", kept.get("_reply_to_msg_id") == "100003", kept)
+    check("E2 重入队标记穿过", kept.get("_REQUEUE_FLAG") is True, kept)
+    check("E3 未来新增的内部字段也穿过（不再逐字段补）",
+          kept.get("_future_marker") == "x", kept)
+    check("E4 结构字段与普通字段不混进来",
+          "_type" not in kept and "_group_id" not in kept and "text" not in kept, kept)
+    check("E5 重建处用的是整体透传",
+          "**_carry_internal_fields(ev)" in src)
+
+    # 把 flush 的产物直接喂给这一层，闭合「两头都测了、中间没测」的缝
+    q2 = FakeQ()
+    orig_q2 = B.MSG_QUEUE
+    B.MSG_QUEUE = q2
+    B.PRIVATE_MSG_BUFFER.clear()
+    try:
+        B._buffer_private_message(sender, "缝隙测试", [], {"message_id": 777888999})
+        r = B.PRIVATE_MSG_BUFFER.get(sender) or {}
+        tm = r.get("timer")
+        B._private_flush(sender)
+        if tm:
+            tm.cancel()
+        queued = q2.items[0] if q2.items else {}
+        reborn = B._carry_internal_fields(queued)
+        check("E6 flush → 重建 全程不丢真实 id",
+              reborn.get("_reply_to_msg_id") == "777888999", reborn)
+    finally:
+        B.MSG_QUEUE = orig_q2
+        B.PRIVATE_MSG_BUFFER.clear()
+
     print("\n" + "=" * 56)
     print(f"通过 {PASS} / 失败 {FAIL}")
     for x in FAILURES:

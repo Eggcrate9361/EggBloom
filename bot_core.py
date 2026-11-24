@@ -1406,6 +1406,26 @@ def _private_flush(sender: str):
     })
 
 
+def _carry_internal_fields(ev: dict) -> dict:
+    """收集入口事件里 `_` 前缀的内部字段，供事件重建时**原样**带上。
+
+    ★ 为什么需要（2026-11-24）：入口重建那一步是「按固定字段新造一个 dict」，
+    没写进去的字段就消失。已经因此丢过两次：
+
+      - 10-27 丢 `_REQUEUE_FLAG` → 合批后重新入队又被拦进缓冲，永远不回；
+      - 11-23 丢 `_reply_to_msg_id` → 账本里的 `reply_to` 只剩 `_merged_...` 合成 id。
+
+    两次的修法都是「再补一行」，于是下一次加字段还会再丢一次。这里改成按前缀
+    整体透传：以后新增任何内部标记，不需要再动这一层。
+
+    只收字符串键以 `_` 开头的项，并排除重建时自己会写的 `_type` / `_group_id`
+    （它们是内部字典的结构字段，不是入口事件的标记）。
+    """
+    return {k: v for k, v in (ev or {}).items()
+            if isinstance(k, str) and k.startswith("_")
+            and k not in ("_type", "_group_id")}
+
+
 def _should_buffer_private(text: str, images, msg) -> bool:
     """这条私聊该不该先攒进缓冲（而不是立刻处理）。
 
@@ -20294,12 +20314,11 @@ def main():
                             #   当成新消息拦进缓冲 → 永远等不到回复。
                             #   2026-10-27 实测：私聊每条都是「入缓冲 等 5.0s（本批 1 条）」，
                             #   一条都不回，日志里连「收到:」都没有。
+                            # ★ 2026-11-24：不再逐个补字段，`_` 前缀的内部标记整体透传。
+                            #   11-23 的 `_reply_to_msg_id` 就是在这里被丢掉的 ——
+                            #   补一行只能治一次，透传才能治这一类。
+                            **_carry_internal_fields(ev),
                             _REQUEUE_FLAG: bool(ev.get(_REQUEUE_FLAG)),
-                            # ★ 2026-11-24：真实消息 id 也要一起穿过这一层。
-                            #   11-23 的修复把它挂在重新入队的那条消息上，但这一处
-                            #   按固定字段重建，字段被丢掉 → 账本里的 reply_to 仍然
-                            #   只能指到 `_merged_...`，修复等于没生效。
-                            "_reply_to_msg_id": str(ev.get("_reply_to_msg_id") or ""),
                         })
                         if is_group:
                             event_msgs[-1]["group_id"] = group_id
