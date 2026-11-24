@@ -72,6 +72,17 @@ def main():
           (s.get("unresolved") or [{}])[0].get("status") == "done", s.get("unresolved"))
     check("C3 同时留一条对账事实", len(s.get("facts") or []) == 1, s.get("facts"))
 
+    print("\n=== C2) 承诺识别的精度（用真实语料校准过）===")
+    for label, txt, want in (
+            ("等下发你", "行，等下发你", True),
+            ("回头帮你问问", "我回头帮你问问", True),
+            ("自述明天再说（曾误报）", "那我也睡了，明天再说", False),
+            ("回头再说（太泛）", "回头再说吧", False),
+            ("等我看看（太泛，宁可漏）", "等我看看", False)):
+        st = reply(say(None, "帮我看看这个"), txt, 5)
+        got = any(r.get("status") == "open" for r in (st.get("unresolved") or []))
+        check("C2-%s" % label, got == want, (got, txt))
+
     print("\n=== D) 简报是人话 ===")
     # 用"还欠着一件事"的状态测：这时候简报必须有内容
     s_open = reply(say(None, "帮我弄下图"), "行，等下给你发", 5)
