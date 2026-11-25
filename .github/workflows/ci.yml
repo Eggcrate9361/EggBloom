@@ -107,6 +107,7 @@ jobs:
             "test_private_reply_target",
             "test_silence_reason",
             "test_scene_state",
+            "test_action_policy",
             "test_humanness_engineering",
             "test_ego_topic_real",
             "test_ego_turn_ratchet",
