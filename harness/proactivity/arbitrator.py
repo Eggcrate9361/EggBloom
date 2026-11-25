@@ -564,6 +564,34 @@ def parse_model_decision(raw: str, scene: str = "",
             "reason": str(d.get("reason") or "")[:120]}
 
 
+def premodel_skip(obs: Dict[str, Any]) -> str:
+    """进模型之前用规则就能否掉的，别花一次调用。返回原因；空串 = 放行给模型。
+
+    2026-11-25 生产数据（24 小时）：`no_reply` 进模型 **73 次，模型一次都没 say**。
+    而且我们自己的 prompt 第 288 行就写着「多数时候该安静——对方可能在忙」。
+    既然规则能得出同一个结论，就没有必要每次问一遍。
+
+    只在**确知她上一条说了什么**时才拦：
+      - 上一条是问句（对方没答，可以再问一次 / 换个说法）
+      - 上一条是承诺（"等下给你" —— 该补）
+    这两类放给模型。其余（陈述、吐槽、表情）直接判不说。
+
+    `bot_text` 为空时不拦 —— 不知道她说了什么就别替她决定。
+    群聊的 `bot_text` 在 11-24 那个修复上线前可能是空的，那些轮次继续走模型，
+    与今天行为一致，不会更差。
+    """
+    if str(obs.get("kind") or "") != "no_reply":
+        return ""
+    text = str((obs.get("evidence") or {}).get("bot_text") or "").strip()
+    if not text:
+        return ""
+    if text.endswith(("？", "?", "吗", "呢", "么")):
+        return ""
+    if any(w in text for w in ("等下", "等会", "回头", "稍后", "晚点")):
+        return ""
+    return "规则：上一条不是问句也不是承诺，对方没回就不追问"
+
+
 def model_decide(obs: Dict[str, Any], chat_fn, *, max_tokens: int = 160) -> Dict[str, Any]:
     """调一次轻量模型。chat_fn(messages, max_tokens=...) -> str；失败一律 skip。"""
     if not callable(chat_fn):
@@ -616,6 +644,15 @@ def arbitrate(observations: List[Dict[str, Any]], *, cfg: Dict[str, Any], now: f
     if not cands:
         return None
     chosen = cands[0]        # ★ 同一轮只发一个，多个触发器不许叠加
+    # ★ 2026-11-25：规则能定的不调模型。no_reply 占生产里 100% 的模型 skip，
+    #   而且模型一次都没 say —— 白白花调用换一个"不说"的结论。
+    _pre = premodel_skip(chosen)
+    if _pre:
+        log("[主动/跳过] %s %s:%s — %s" % (
+            chosen.get("kind"), chosen.get("scene"), chosen.get("target"), _pre))
+        if callable(mark_fired):
+            mark_fired(str(chosen.get("dedupe_key") or ""), now)
+        return None
     d = model_decide(chosen, chat_fn)
     act = str(d.get("act") or "skip")
     if act not in ("say", "poke"):

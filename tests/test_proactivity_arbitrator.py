@@ -43,7 +43,7 @@ def check(name, cond, extra=""):
 def obs(kind="no_reply", priority=30, scene="private", target="1000000006"):
     return {"kind": kind, "scene": scene, "target": target, "since": 1000.0,
             "elapsed_s": 600.0, "dedupe_key": "%s:%s" % (kind, target),
-            "evidence": {"bot_text": "醒得挺早啊你"}, "priority": priority}
+            "evidence": {"bot_text": "醒得挺早啊你？"}, "priority": priority}
 
 
 def base_cfg(**kw):

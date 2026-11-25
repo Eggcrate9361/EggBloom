@@ -176,7 +176,7 @@ def main():
         past = _t.time() - 700          # 11 分钟前发的，对方一直没回
         P.on_event(ctx2, "bot.replied", {
             "scene": "private", "user_id": "1000000005",
-            "text": "醒得挺早啊你", "ts": past, "trace_id": "e2e-1"})
+            "text": "醒得挺早啊你？", "ts": past, "trace_id": "e2e-1"})
         P._tick_once()                  # 真实后台线程投递，等一下
         for _ in range(30):
             if ctx2.sent:
