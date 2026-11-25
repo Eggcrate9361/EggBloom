@@ -17956,6 +17956,9 @@ def _batch_snapshot(group_id, batch):
     return _upto(_recent), _upto(_breps)
 
 
+from harness import action_policy as _AP
+
+
 def _decide(group_id, batch):
     """群回复的唯一决策点。返回 {"act", "reason", "ctx", "after"}。
 
@@ -17978,7 +17981,9 @@ def _decide(group_id, batch):
             and str(_config.get("poke_group_mode") or "pipeline") == "pipeline"):
         forced = True   # pipeline 视同点名；gated 仍交给决策器和发言闸
     if forced:
-        return {"act": "reply", "reason": "触发", "ctx": "", "after": 0}
+        # 2026-11-25（拟人第 3 步）：动作统一走 harness.action_policy 的词表。
+        # 值仍是 "reply"，老比较/日志/JSON 全部照旧；只是以后新增动作时有地方登记。
+        return {"act": _AP.Action.TEXT, "reason": "触发", "ctx": "", "after": 0}
 
     quote_forces = bool(batch.get("has_quote") and batch.get("quote_me"))
     _go = False
@@ -18061,10 +18066,10 @@ def _decide(group_id, batch):
         except Exception as e:
             log(f"群[{group_id}] [决策插件] 无触发预判异常: {e}")
     if _go:
-        return {"act": "reply", "reason": "决策放行", "ctx": _ctx, "after": 0}
+        return {"act": _AP.Action.TEXT, "reason": "决策放行", "ctx": _ctx, "after": 0}
     if _after > 0 and group_id not in GROUP_OBSERVE:
-        return {"act": "observe", "reason": _reason, "ctx": _ctx, "after": _after}
-    return {"act": "skip", "reason": _reason, "ctx": "", "after": 0}
+        return {"act": _AP.Action.OBSERVE, "reason": _reason, "ctx": _ctx, "after": _after}
+    return {"act": _AP.Action.SKIP, "reason": _reason, "ctx": "", "after": 0}
 
 
 def _cooldown_log_tick(elapsed: int, total: int) -> bool:
