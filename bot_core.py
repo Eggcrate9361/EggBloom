@@ -21436,6 +21436,10 @@ def main():
                 # 1. 先尝试控制指令
                 if not images and try_execute_command(text, sender):
                     log("  → 匹配控制指令，已处理")
+                    # 2026-11-25 S2b-2：指令执行此前只有 log，self_actions 里查不到。
+                    # 记成 tool（动作词表里 TOOL），与 Agent / 画图同一类。
+                    _note_self_action("tool", scene="private", target=str(sender),
+                                      detail="指令:" + str(text)[:24])
                     save_instruction(text, "[系统指令已执行]")
                     save_state()
                     time.sleep(1)

@@ -76,6 +76,11 @@ _ALIASES: Dict[str, Action] = {
     "meme": Action.MEME,
     "tool": Action.TOOL,
     "task": Action.TOOL,
+    "admin": Action.TOOL,
+    "command": Action.TOOL,
+    # self_actions 里已有的两种：发图 = 表情/图片动作；提示语 = 说话
+    "image": Action.MEME,
+    "notice": Action.TEXT,
 }
 
 

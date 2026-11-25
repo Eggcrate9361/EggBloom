@@ -54,6 +54,13 @@ def main():
     check("C2 from_group_act 保守当 skip", from_group_act("nonsense") is Action.SKIP)
     check("C3 已经是 Action 就原样返回", Action.of(Action.POKE) is Action.POKE)
 
+    print("\n=== B2) self_actions 的实际 kind 也要能翻译 ===")
+    for kind, want in (("say", Action.TEXT), ("meme", Action.MEME),
+                       ("poke", Action.POKE), ("image", Action.MEME),
+                       ("notice", Action.TEXT), ("tool", Action.TOOL),
+                       ("command", Action.TOOL), ("admin", Action.TOOL)):
+        check("B2-%s → %s" % (kind, want.name), Action.of(kind) is want, Action.of(kind))
+
     print("\n=== D) 群聊决策点已接线 ===")
     src = open(os.path.join(ROOT, "bot_core.py"), encoding="utf-8").read()
     check("D1 四个返回都走词表", src.count('"act": _AP.Action.') == 4,
