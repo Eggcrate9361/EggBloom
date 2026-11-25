@@ -17957,6 +17957,7 @@ def _batch_snapshot(group_id, batch):
 
 
 from harness import action_policy as _AP
+from harness import private_policy as _PP
 
 
 def _decide(group_id, batch):
@@ -21374,7 +21375,12 @@ def main():
                 # 判"该不该拦"在 _should_buffer_private 里（纯函数，测试能直接打）；
                 # 这里只看返回值 —— 返回值 False 表示不该拦，继续走原流程。
                 try:
-                    if _buffer_private_message(sender, text, images, msg):
+                    # 2026-11-25 S2b-1：判定集中在 harness.private_policy，
+                    # 这里只取 flag、执行结果。
+                    _pdec_buf = _PP.decide_private(
+                        stage="buffer",
+                        should_buffer=_should_buffer_private(text, images, msg))
+                    if _pdec_buf.is_wait and _buffer_private_message(sender, text, images, msg):
                         continue
                 except Exception as _bf_e:
                     # 合并机制自己坏了不能让私聊整个不回 —— 退化成旧行为
@@ -21411,7 +21417,9 @@ def main():
                 recall_key = f"private_{sender}"
                 if recall_key in RECALL_FEEDBACK_TIME:
                     elapsed = time.time() - RECALL_FEEDBACK_TIME[recall_key]
-                    if elapsed < 5:
+                    _pdec_rc = _PP.decide_private(stage="recall",
+                                                  recall_left=5 - elapsed)
+                    if _pdec_rc.is_skip:
                         log(f"撤回反馈冷却中（{elapsed:.1f}s），跳过本条消息")
                         # 2026-11-24：静默也要留原因。此前这里直接 continue，
                         # 账本里只有「收」，事后分不清「不想回」和「冷却没回」。
@@ -21434,7 +21442,9 @@ def main():
                     continue
 
                 # 2. 启动冷却检查
-                if time.time() - startup_time < STARTUP_COOLDOWN:
+                _startup_left = STARTUP_COOLDOWN - (time.time() - startup_time)
+                _pdec_st = _PP.decide_private(stage="startup", startup_left=_startup_left)
+                if _pdec_st.is_skip:
                     log(f"开机冷却中（{int(time.time() - startup_time)}s/{STARTUP_COOLDOWN}s），跳过私聊")
                     _report_turn_skipped(scene="private", target=str(sender),
                                          reason=f"冷却：开机 {int(time.time() - startup_time)}s",
@@ -21444,7 +21454,9 @@ def main():
                 # 3. 私聊回复速率限制
                 if sender in PRIVATE_REPLY_COOLDOWN:
                     elapsed = time.time() - PRIVATE_REPLY_COOLDOWN[sender]
-                    if elapsed < PRIVATE_REPLY_INTERVAL:
+                    _pdec_rt = _PP.decide_private(
+                        stage="rate", rate_left=PRIVATE_REPLY_INTERVAL - elapsed)
+                    if _pdec_rt.is_skip:
                         log(f"私聊冷却中（{elapsed:.1f}s/{PRIVATE_REPLY_INTERVAL}s），跳过")
                         _report_turn_skipped(scene="private", target=str(sender),
                                              reason=f"冷却：私聊速率 {elapsed:.1f}s",
