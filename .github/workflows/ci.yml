@@ -58,8 +58,16 @@ jobs:
           $failed = @()
           foreach ($t in $tests) {
             Write-Host "::group::$t"
-            python "tests/$t.py"
-            if ($LASTEXITCODE -ne 0) { $failed += $t }
+            # 2026-11-26：失败时把具体哪一条挂到 annotation 上。
+            # 此前只有 "失败: test_xxx"，看不到断言内容，而 job 日志要 admin
+            # 权限才能下（403），于是红一次就只剩猜。
+            $out = python "tests/$t.py" 2>&1 | Out-String
+            Write-Host $out
+            if ($LASTEXITCODE -ne 0) {
+              $failed += $t
+              ($out -split "`r?`n") | Where-Object { $_ -match '\[FAIL\]' } |
+                Select-Object -First 5 | ForEach-Object { Write-Host "::error::$t $_" }
+            }
             Write-Host "::endgroup::"
           }
           if ($failed.Count -gt 0) {
@@ -160,8 +168,16 @@ jobs:
           $failed = @()
           foreach ($t in $tests) {
             Write-Host "::group::$t"
-            python "tests/$t.py"
-            if ($LASTEXITCODE -ne 0) { $failed += $t }
+            # 2026-11-26：失败时把具体哪一条挂到 annotation 上。
+            # 此前只有 "失败: test_xxx"，看不到断言内容，而 job 日志要 admin
+            # 权限才能下（403），于是红一次就只剩猜。
+            $out = python "tests/$t.py" 2>&1 | Out-String
+            Write-Host $out
+            if ($LASTEXITCODE -ne 0) {
+              $failed += $t
+              ($out -split "`r?`n") | Where-Object { $_ -match '\[FAIL\]' } |
+                Select-Object -First 5 | ForEach-Object { Write-Host "::error::$t $_" }
+            }
             Write-Host "::endgroup::"
           }
           if ($failed.Count -gt 0) {
