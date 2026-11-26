@@ -1,11 +1,11 @@
 {
  "group": {
-  "len": 3915,
-  "sha256": "60b77576a4cedac780c758f8f76f60dc4ad15320594c513a41cf3afd77991812"
+  "len": 3920,
+  "sha256": "21f856d8f5f12fb27e5fc5444c696bca939dba9e1620524cdc0958c2f4ba45b2"
  },
  "private": {
-  "len": 3339,
-  "sha256": "876c3c94ffa62b6fa6c37b63239690feaf18360b28f5a795c7d2ee2730d0d5fd"
+  "len": 3344,
+  "sha256": "76f4d5ebf61bf7936ecbb23b6e23808095edc633a0393b54ece8420136ade3b2"
  },
  "_说明": "2026-11-19 重算：新增查询结果直用和禁止编造身体状态规则，group 3805→3915、private 3229→3339。身份块、基础人格文本与 de_ai 段仍按 test_prompt_segments.py 钉死；基础人格里的表演拒绝规则由 test_personality_contract.py 单独约束。"
 }
