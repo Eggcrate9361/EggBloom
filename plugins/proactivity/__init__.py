@@ -458,6 +458,8 @@ def _deliver(action: Dict[str, Any]):
             hk = _hour_key(scene)
             _sent_hourly[hk] = int(_sent_hourly.get(hk) or 0) + 1
             _recent.append({"ts": now, "kind": obs.get("kind"), "act": act,
+                            # 2026-11-26 S3：统一动作，和群聊/私聊/主动层同一套词
+                            "action": str(action.get("action") or act),
                             "target": "%s:%s" % (scene, target),
                             "text": text[:80],
                             "reason": str(action.get("reason") or "")[:60]})

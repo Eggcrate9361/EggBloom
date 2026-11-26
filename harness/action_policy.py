@@ -94,6 +94,19 @@ def from_proactive_kind(kind: Any) -> Action:
     return Action.of(kind, Action.SKIP)
 
 
+def from_proactive_act(act: Any) -> Action:
+    """主动层的 `act` → 动作。
+
+    注意 `image` / `video`：在主动层它们是「任务产物直发」，不是发表情包，
+    所以归 TOOL；self_actions 里同名的 `image` 才是"发了张图"（归 MEME）。
+    同一个词在不同层含义不同，映射必须分开写，不能塞进同一张别名表。
+    """
+    a = str(act or "").strip().lower()
+    if a in ("image", "video"):
+        return Action.TOOL
+    return Action.of(a, Action.SKIP)
+
+
 def describe(action: Action) -> str:
     """给日志用的一句话。**不要**把这张表塞进 prompt。"""
     return {

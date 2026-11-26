@@ -28,6 +28,8 @@ from __future__ import annotations
 import json
 import os
 import random
+
+from ..action_policy import Action, from_proactive_act
 import time
 from typing import Any, Dict, List, Optional
 
@@ -670,6 +672,13 @@ def arbitrate(observations: List[Dict[str, Any]], *, cfg: Dict[str, Any], now: f
         if callable(mark_fired):
             mark_fired(str(chosen.get("dedupe_key") or ""), now)
         return None
+    # 2026-11-26 S3：主动层也吐统一动作，不再只有自己的 act 字符串。
+    # `act` 保留（下游、日志、用例都在用），`action` 是给账本与仲裁比较用的。
+    _action = from_proactive_act(act)
     return {"obs": chosen, "act": act, "text": d.get("text") or "",
             "artifact": str(chosen.get("artifact") or ""),
-            "reason": d.get("reason") or ""}
+            "reason": d.get("reason") or "",
+            "action": _action,
+            "decision": {"action": _action, "by": "model",
+                         "kind": str(chosen.get("kind") or ""),
+                         "reason": str(d.get("reason") or "")[:120]}}
