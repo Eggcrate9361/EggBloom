@@ -461,7 +461,8 @@ def scan(state: Dict[str, Any], now: float, *, no_reply_s: float,
          at_dropped_s: float, promise_s: float, idle_s: float = 0.0,
          burst_n: int = 3, burst_s: float = 120.0, image_s: float = 120.0,
          named_s: float = 120.0, resume_s: float = 180.0,
-         resume_gap_h: float = 6.0, delivery_hold_s: float = 300.0
+         resume_gap_h: float = 6.0, delivery_hold_s: float = 300.0,
+         no_reply_stale_s: float = 6 * 3600.0
          ) -> List[Dict[str, Any]]:
     """从状态里产出**候选**观察（不是决定）。纯函数，按时间只读。"""
     s = state or {}
@@ -479,8 +480,13 @@ def scan(state: Dict[str, Any], now: float, *, no_reply_s: float,
         return []
 
     # ① 发出后无人回应
+    # ★ 2026-11-27：加了「过期」——`pending` 没有自然失效机制。
+    #   生产实测：某个群最后一条是 60 小时前说的，`pending` 仍是 True，
+    #   于是每小时都产出一条 no_reply 去问模型「要不要补一句」，
+    #   一天 20 次调用换回 20 个 skip。60 小时的旧账不该再算欠着。
+    #   6 小时之后这条对话就当结束了；真实场景里没人会隔一天才等回复。
     if (s.get("pending") and last_bot > 0 and last_user < last_bot
-            and now - last_bot >= no_reply_s):
+            and no_reply_s <= now - last_bot < no_reply_stale_s):
         out.append({
             "kind": "no_reply", "scene": scene, "target": target,
             "since": float(s.get("pending_since") or last_bot),

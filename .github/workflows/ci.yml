@@ -118,6 +118,7 @@ jobs:
             "test_action_policy",
             "test_proactive_premodel",
             "test_proactive_action",
+            "test_pending_stale",
             "test_private_policy",
             "test_humanness_engineering",
             "test_ego_topic_real",
