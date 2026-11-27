@@ -41,6 +41,7 @@ jobs:
           $tests = @(
             "test_persona_tag",
             "test_personality_contract",
+            "test_persona_scope",
             "test_privacy_terms",
             "test_at_others_gate",
             "test_reply_time_anchor_leak",

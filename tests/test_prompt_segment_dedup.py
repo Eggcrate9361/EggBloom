@@ -67,7 +67,10 @@ def main():
     total = sum(len(v) for v in rendered.values())
 
     print("[0] 文件里每个块都进了 prompt（不再有死文字）")
-    _all = "".join(rendered.values())
+    # 2026-11-27：块现在可以带 scope=group/private。判"有没有死文字"要看两个场景的
+    # 并集——否则私聊专属的块会被误判成没注入。
+    _all = "".join(rendered.values()) + "".join(
+        dict(bc.render_prompt_segments(False)).values())
     # 用每块正文的前 16 个字符判存在：块名不一定等于块内小标题
     # （例如「认账」块的正文是【没说过就顶回去】…）
     _missing = [k for k, v in blocks.items() if (v or "").strip()[:16] not in _all]
@@ -204,7 +207,10 @@ def main():
     # 2026-11-18：新增「看图别报菜名」，de_ai 同步加入“禁止旁白复述画面”。
     #   怎么接话 489→522，两段合计上界 1000→1100；段总量 3861→4053，
     #   上限 3900→4200，仍保留明确硬顶。
-    check("全部段合计 ≤ 4200 字符", total <= 4200, total)
+    # 2026-11-27：4200 → 4300。加的是两条**分场景**的干活边界
+    # （群里不接活、私聊能聊活），直接回应用户「AI 味太重」的反馈。
+    # 删等量的字就只能删掉这两条本身，所以调线并记账。
+    check("全部段合计 ≤ 4300 字符", total <= 4300, total)
     print(f"       实测：别怕不体面 {len(rude)} / 怎么接话 {len(take)} / 合计 {total}")
 
     print("\n" + "=" * 56)
